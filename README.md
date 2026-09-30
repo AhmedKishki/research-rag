@@ -11,6 +11,7 @@ Everything runs on your machine, on one CPU, with no service to sign up for.
 - **A browser workspace.** Search your corpus, read results with their page numbers and citations, open the original PDF or EPUB beside a passage, and record reviewed metadata or an exclusion for each source.
 - **An agent surface.** Seven operations and one resource over MCP, served at `/mcp` on the same port as the workspace. An agent's answer is the same payload the workspace renders, projected down to the fields an agent acts on, which is about half the size.
 - **One command line.** `research-rag search` and `research-rag status` reach the same running app, so a terminal answer and a workspace answer cannot disagree.
+- **Many projects, one install.** Each project is a directory with its own corpus, its own app process, and its own port; `init` records them, `research-rag projects` lists them, and `--project <name>` names one instead of repeating its path.
 - **Clients you can see and drop, from either place.** The workspace's status view lists the agents attached to the app and can end one; `research-rag clients` and `research-rag disconnect` do the same from a terminal, over the same registry, so a drop in the browser is a drop the command line can see. A client that cannot open a socket gets the same surface through `research-rag mcp`, which speaks stdio and proxies to the running app.
 - **Immutable generations.** A rebuild writes a new generation and switches to it only when every index is complete, so a failed build leaves the previous generation searchable.
 - **Reviewed metadata as first-class state.** Categories, projects, keywords, language, title, and authors are editable plain JSON, applied at read time with no rebuild.
@@ -117,6 +118,15 @@ research-rag init --name "Fetishism of Technology"
 ```
 
 `init` records the project identity, generates the workspace launcher under `.research-rag/bin/`, and links it into the project root as `open-research-rag-ui.sh`. It never overwrites an existing file or symlink, and `status.ui_launcher` reports what it found. Delete the symlink to opt out.
+
+`init` also records the project in this installation's project register, so one command can serve many projects and name them:
+
+```bash
+research-rag projects
+research-rag --project "Fetishism of Technology" status
+```
+
+The register is a pointer file, `projects.json` in the account settings directory, holding each project's id, name, and root. It carries no corpus and no state, so deleting it costs nothing but the names, and `init` rebuilds it. Run `init` again on a project that moved and the record follows it there.
 
 ## First use
 
@@ -345,7 +355,7 @@ The retrieval controls the measurements already answered are not in the workspac
 `STORAGE.md` is the storage contract: every file, every field, what is portable, what is rebuilt, and how a hand edit behaves. Two facts matter most here:
 
 - `sources/` is the authority for exact quotation, and nothing in the app edits it.
-- The only state shared between projects is the model cache at `~/.cache/research-ultra-rag-mcp/models/`. Document text, embeddings, indexes, logs, and query state never cross project roots.
+- The only state shared between projects is the model cache at `~/.cache/research-ultra-rag-mcp/models/` and the project register at `~/.config/research-ultra-rag-mcp/projects.json`, which names projects and nothing else. Document text, embeddings, indexes, logs, and query state never cross project roots.
 
 The user settings directory is `~/.config/research-ultra-rag-mcp/`. Both names are the MCP server's, retained deliberately so the app and that server read one user's settings and one model cache; `tests/test_data_roots.py` states why.
 
@@ -365,7 +375,8 @@ Continue in one place at a time. Two processes pointed at the same project root,
 
 | Command | What it answers |
 |---|---|
-| `init` | the project identity, and the app launcher |
+| `projects` | every project this installation registered, and whether an app is serving it |
+| `init` | the project identity, the app launcher, and the project's place in the register |
 | `status` | the readiness answer, or the complete payload with `--verbose` |
 | `ingest` | the current generation, a checkpointed build's progress, or a new complete generation |
 | `search` | hybrid reranked evidence, with filters applied from reviewed metadata |
@@ -381,7 +392,9 @@ Continue in one place at a time. Two processes pointed at the same project root,
 | `serve` | the app in the foreground, which is what the launcher runs |
 | `stop` | the app, and optionally any process of this app still building |
 
-The workspace and the command line always get the complete service payload: the ranking scores, the candidate counts, and the withheld-candidate reasons that explain an empty answer are part of the answer, and a person reading them needs all three. An agent's tool answer is projected to the fields an agent acts on, which is the one place a projection has a reader, and the mode is the `runtime.tool_detail` setting.
+`status` is the exception a person reads most, so it prints the same lean verdict an agent gets and takes `--verbose` for the complete payload; every other command prints the complete payload. An agent's tool answer is projected to the fields an agent acts on, and the mode is the `runtime.tool_detail` setting.
+
+Every command takes `--project <name-or-id>` in place of `--project-root <path>`, so one shell can work on several projects without repeating paths. The two together are refused rather than resolved by precedence.
 
 ## How it works under the hood
 

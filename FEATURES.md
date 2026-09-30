@@ -138,6 +138,7 @@ The upstream interface is bound to upstream pipeline and session state, and it e
 | Feature | What it does | Why it matters |
 |---|---|---|
 | One project per process | A `--project-root` defines the boundary; all state lives under `<project>/.research-rag`. | Two projects cannot read each other's documents or indexes, and a workspace can never serve a project it was not started for. |
+| Many projects under one install (added here) | `init` records each project in an account-wide register of ids, names, and roots; `projects` lists them with the app state of each, and `--project <name-or-id>` selects one in place of a path. | One install serves a body of work spread over several directories, without each project needing its own configuration, and without one project's state ever reaching another. |
 | Portable versus derived state | Reviewed decisions (`project.json`, metadata, exclusions, catalog) are portable. Generations, staging, logs, and locks are derived and rebuildable. | You can back up what a human decided, and regenerate the rest. |
 | Reviewed inclusions and exclusions | A source can be excluded as a duplicate and later restored. The original file is never deleted or modified. | Review stays reversible, and the server never destroys evidence. |
 | Immutable generations | Each build produces a new generation. The active pointer moves only after both indexes validate. | A failed or interrupted build leaves the previous generation searchable. |
@@ -197,7 +198,7 @@ Read this as two profiles rather than a scoreboard. It reflects that project's R
 | Metadata, citations, locators | Resolved title, authors, year, DOI with per-field provenance and warnings in the full-detail payload, plus original-file locators and a reviewed-metadata overlay | Not part of the documented feature set |
 | Index lifecycle | Immutable generations, validated before activation, resumable builds, reusable per-document and per-chunk work | Sequential indexing with progress reporting, plus per-document and whole-index removal |
 | Cancellation and restart behaviour | Checkpointed: a build resumes where it stopped | Progress is reported; resumability is not documented |
-| Interface | A browser workspace, seven MCP tools and one resource, and one command line, all over one running app on one port | Five MCP tools and four MCP resources (`rag://documents`, `rag://document/{path}`, `rag://query-document/{chunks}/{query}`, `rag://embedding/status`) |
+| Interface | A browser workspace, seven MCP tools and one resource, and one command line, all over one running app on one port, and one install that serves as many projects as you register | Five MCP tools and four MCP resources (`rag://documents`, `rag://document/{path}`, `rag://query-document/{chunks}/{query}`, `rag://embedding/status`), over one store per connection |
 | Human review | Reviewed metadata corrections and reversible exclusions in the UI | Not part of the documented feature set |
 | Retrieval evaluation | Measured: 32 known-item judged queries on one reference corpus, reported per mode and per query class, with pooled recall still pending | Not part of the documented feature set |
 | Licence | Apache-2.0 for this repository's own code, which is recorded in `NOTICE` | MIT |
