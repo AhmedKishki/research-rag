@@ -41,7 +41,7 @@ Two roots carry the name of the MCP server this app was seeded from rather than 
 
 `tests/test_data_roots.py` asserts both, with the reason each is retained. Renaming either is a migration, not a refactor.
 
-Everything else inside `.research-rag/` is byte-compatible with `research-ultra-rag-mcp`. The app names no product in the on-disk state, so both products read and write the same project while both ship.
+Everything else inside `.research-rag/` is byte-compatible with `research-ultra-rag-mcp`, which is frozen and still installed on the machines that carry it. The app names no product in the on-disk state, so both read and write the same project. A field or schema version this app changes is read by that product too, so the format is frozen until it is not installed.
 
 ## Portable state
 

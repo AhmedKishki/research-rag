@@ -231,6 +231,56 @@ async def test_the_control_api_and_the_agent_surface_share_one_service(
         await app.stop()
 
 
+async def test_the_agent_surface_declares_the_schema_an_agent_reads(
+    project: Path,
+) -> None:
+    """The names are pinned elsewhere; this pins what an agent is actually told.
+
+    A tool that keeps its name while losing a parameter is invisible to a name
+    check and fatal to a client, and a tool that stops saying it is destructive
+    turns a call an agent must confirm into one it may fire without asking.
+    """
+
+    config = resolve_config(project, vanilla_executable=sys.executable)
+    app = App(config, port=free_port())
+    app.service = FakeService()  # type: ignore[assignment]
+    await app.start()
+    try:
+        await wait_until_ready(app)
+        async with Client(app.mcp_url, timeout=30) as client:
+            tools = {tool.name: tool for tool in await client.list_tools()}
+            assert tuple(tools) == OPERATIONS
+            assert tuple(tools["search"].inputSchema["properties"]) == (
+                "query",
+                "top_k",
+                "categories_any",
+                "projects_any",
+                "keywords",
+                "languages_any",
+                "authors_any",
+                "titles_any",
+                "source_ids",
+                "exclude_source_ids",
+            )
+            assert set(tools["search"].inputSchema["required"]) == {"query"}
+            assert set(tools["ingest"].inputSchema["properties"]) == {"force_recompute"}
+            # Only the two operations that change a project's review state are
+            # announced as writes, and only the exclusion is announced as
+            # destructive: a client that prompts on the wrong one of these
+            # either nags a reader or fires a removal unasked.
+            assert tools["status"].annotations.readOnlyHint is True
+            assert tools["search"].annotations.readOnlyHint is True
+            assert tools["get_passage"].annotations.readOnlyHint is True
+            assert tools["ingest"].annotations.readOnlyHint is False
+            assert tools["set_source_metadata"].annotations.readOnlyHint is False
+            assert tools["set_source_inclusion"].annotations.destructiveHint is True
+            assert tools["set_source_metadata"].annotations.destructiveHint is False
+            instructions = client.initialize_result.instructions or ""
+            assert "status" in instructions
+    finally:
+        await app.stop()
+
+
 async def test_the_control_api_refuses_a_search_it_cannot_serve(project: Path) -> None:
     config = resolve_config(project, vanilla_executable=sys.executable)
     app = App(config, port=free_port())

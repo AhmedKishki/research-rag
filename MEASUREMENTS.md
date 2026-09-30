@@ -211,7 +211,7 @@ succ@50 90.6%, MRR 0.717, nDCG@50 0.759, doc@50 100.0%. Paraphrase reach rises f
 
 A number here is only comparable with another measured by the same engine, because a process answering from a different checkout reads a different reviewed-metadata field set and can refuse the project's own state. `doctor` reports the two directories when they differ, `scripts/update.sh` names the processes left running the pre-update code, and the reviewed-metadata file records the fields its writer understood, so an older process refuses the file by cause instead of naming a field the caller never typed.
 
-Two products read and write the same project while the migration runs, which adds one limit this file does not resolve on its own: a figure measured by `research-rag` and a figure measured by `research-ultra-rag-mcp` are the same measurement, because both call one unchanged engine, but a figure measured by a third checkout is not comparable until `doctor` reports the two trees as the same.
+`research-rag` and the frozen `research-ultra-rag-mcp` read and write the same project, which adds one limit this file does not resolve on its own: a figure measured by one and a figure measured by the other are the same measurement, because both call one unchanged engine, but a figure measured by a third checkout is not comparable until `doctor` reports the two trees as the same. Only `research-rag` changes, so a figure here is measured against an engine the frozen product still matches.
 
 ### The reranker model: the default against `jinaai/jina-reranker-v1-turbo-en`
 

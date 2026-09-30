@@ -1,0 +1,24 @@
+// Paste the entry a project prints for itself:
+//   research-rag --project-root <project> doctor --mcp-entry
+// and check one that is already in place without editing it:
+//   research-rag --project-root <project> doctor --check-entry <this file>
+//
+// The entry is the stdio bridge, so it starts the app for the project if it is
+// not already up. Add `--runtime-root` only when a project keeps its derived
+// state on a different device.
+{
+  "mcp": {
+    "research-rag": {
+      "type": "local",
+      "command": [
+        "/ABSOLUTE/PATH/TO/research-rag/.venv/bin/research-rag",
+        "--project-root",
+        "/ABSOLUTE/PATH/TO/MY-RESEARCH-PROJECT",
+        "mcp"
+      ],
+      "environment": {},
+      "enabled": true,
+      "timeout": 3600000
+    }
+  }
+}

@@ -40,7 +40,7 @@ uv run python scripts/evaluate_retrieval.py --project /path/to/project --deep-to
 
 Defaults: modes `bm25,dense,hybrid,hybrid+rerank` at `top_k=10`, plus a deep pass for `hybrid` at `top_k=50`, all 32 queries. `--deep-top-k 0` skips the deep pass. `--reranker-model NAME` may be repeated, and the reranked row is then measured once per model over the same queries in one run — that is how the model comparison in `MEASUREMENTS.md` was taken; without the option the row measures the model the app is configured with (`--reranker-model` or `RESEARCH_ULTRARAG_RERANKER_MODEL`, default `Xenova/ms-marco-MiniLM-L-6-v2`). `--offline` works when the runtime and both model caches are already present. Every mode passes `rerank` explicitly, so these numbers do not depend on the app's default; reranking is the default, so the `hybrid+rerank` row is what an ordinary search returns.
 
-The harness never writes inside the project. It calls `status` and `search` over stdio, and reads the generation's canonical `chunks.jsonl` and `manifest.json` **read-only** to resolve judged targets; that read is measurement-only and is not part of the retrieval path. Searches pass `include_staleness=false`, so no result in the report depends on a freshness verdict.
+The harness never writes inside the project. It calls `status` and `search` in process through the same `ResearchService` the three surfaces share, and reads the generation's canonical `chunks.jsonl` and `manifest.json` **read-only** to resolve judged targets; that read is measurement-only and is not part of the retrieval path. Searches pass `include_staleness=false`, so no result in the report depends on a freshness verdict.
 
 ## Output
 
