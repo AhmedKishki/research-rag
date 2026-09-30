@@ -1,0 +1,145 @@
+UPSTREAM ATTRIBUTION
+
+research-rag is an independent research workspace built on the UltraRAG project
+through vanilla-ultra-rag-mcp-server:
+
+    UltraRAG
+    https://github.com/OpenBMB/UltraRAG
+    https://ultrarag.openbmb.cn/
+
+    vanilla-ultra-rag-mcp-server
+    https://github.com/AhmedKishki/vanilla-ultra-rag-mcp-server
+
+UltraRAG's upstream README identifies it as a joint project of THUNLP at
+Tsinghua University, NEUIR at Northeastern University, OpenBMB, and AI9stars,
+together with the wider UltraRAG contributor community:
+
+    https://nlp.csai.tsinghua.edu.cn/
+    https://neuir.github.io/
+    https://www.openbmb.cn/home
+    https://github.com/AI9Stars
+    https://github.com/OpenBMB/UltraRAG/graphs/contributors
+
+This server depends on UltraRAG's MCP architecture, corpus chunker, and BM25
+retriever. Its pinned dependency chain currently resolves to:
+
+    vanilla-ultra-rag-mcp-server commit
+    05ae4b155d38a294260a36017f6429ce73b1641b
+
+    UltraRAG version 0.3.0.2
+    commit 3a709a2aea3fbe46acca59c422621c94b6e86857
+    https://github.com/OpenBMB/UltraRAG/tree/3a709a2aea3fbe46acca59c422621c94b6e86857
+
+UltraRAG is distributed under the Apache License, Version 2.0. Its license file
+contains the notice "Copyright 2023 OpenBMB":
+
+    https://github.com/OpenBMB/UltraRAG/blob/3a709a2aea3fbe46acca59c422621c94b6e86857/LICENSE.txt
+    https://www.apache.org/licenses/LICENSE-2.0
+
+The verified UltraRAG source snapshot installed by the vanilla gateway retains
+the upstream LICENSE.txt and all upstream notices.
+
+ADDITIONAL RETRIEVAL COMPONENTS
+
+The hybrid retrieval implementation also depends on:
+
+    Qdrant Python client 1.19.1 (Apache License 2.0)
+    https://github.com/qdrant/qdrant-client
+
+    FastEmbed 0.8.0 (Apache License 2.0)
+    https://github.com/qdrant/fastembed
+
+    BAAI/bge-small-en-v1.5 embedding model (MIT License)
+    https://huggingface.co/BAAI/bge-small-en-v1.5
+
+    Qdrant's FastEmbed ONNX artifact for BAAI/bge-small-en-v1.5
+    artifact revision 52398278842ec682c6f32300af41344b1c0b0bb2
+    https://huggingface.co/qdrant/bge-small-en-v1.5-onnx-q
+
+    Xenova/ms-marco-MiniLM-L-6-v2 reranker model (Apache License 2.0)
+    artifact revision a09144355adeed5f58c8ed011d209bf8ee5a1fec
+    https://huggingface.co/Xenova/ms-marco-MiniLM-L-6-v2
+
+DOCUMENT EXTRACTION COMPONENTS
+
+PDF page extraction and EPUB section extraction depend on components that are
+NOT permissively licensed. A recipient or redistributor must satisfy their
+terms, which are separate from whatever license this repository's own code
+carries:
+
+    PyMuPDF 1.28.2
+    Dual licensed: GNU Affero General Public License 3.0, or a commercial
+    license from Artifex Software.
+    https://github.com/pymupdf/PyMuPDF
+    https://www.gnu.org/licenses/agpl-3.0.html
+
+    EbookLib 0.20
+    GNU Affero General Public License 3.0 or later.
+    https://github.com/aerkalov/ebooklib
+
+Both are imported directly by this app's extraction code. The AGPL's
+obligations therefore apply to anyone who distributes or operates a covered
+combination of them with this app, independently of this repository's own
+license. The repository's own license terms do not change those obligations.
+
+LICENSE OF THIS REPOSITORY
+
+The code in this repository is licensed under the Apache License, Version 2.0.
+The full text is in LICENSE. That grant covers this repository's own code only;
+every upstream project, model, and extraction component named above keeps its
+own license and terms, which are listed so a recipient can satisfy them.
+
+These dependencies and model files retain their respective authorship and
+licenses. They are not bundled as source files in this repository; the Python
+packages are installed by the package manager and model files are downloaded
+to a shared user cache on first use.
+
+SHARED USER INTERFACE
+
+The browser workspace uses the independently versioned shared UI package at this
+pinned revision:
+
+    ui-ultra-rag-mcp
+    commit 4f3f7b60c258df66b108119c4f6afeab9b25f0c2
+    https://github.com/AhmedKishki/ui-ultra-rag-mcp
+
+This app owns its adapter, its source authorization, and the process that hosts
+the workspace. The shared package owns only the browser workspace and loopback
+HTTP boundary; it does not store or retrieve research data.
+
+PROVENANCE
+
+This repository was created from `research-ultra-rag-mcp-server`, an independent
+MCP server over the same engine. The app answers in process and exposes no MCP
+surface; the server still exists and still reads and writes the same projects.
+The on-disk state format is byte-compatible with the server's, so both products
+may serve one project while the migration runs.
+
+    research-ultra-rag-mcp-server
+    seed commit 0f5da3d611ae12b9807bae93c7f270b7d303b35f
+    https://github.com/AhmedKishki/research-ultra-rag-mcp-server
+
+The retrieval, extraction, generation, and storage code is that project's, unchanged
+by this fork; the changes are the product surface, the command names, the launcher
+and settings names described in `AGENTS.md`, and the documents. The upstream
+project's own history remains there.
+
+SUGGESTED SOFTWARE CITATION
+
+The pinned UltraRAG revision does not include a dedicated UltraRAG BibTeX entry.
+When citing the software, a suitable repository citation is:
+
+    UltraRAG contributors. UltraRAG, version 0.3.0.2, commit
+    3a709a2aea3fbe46acca59c422621c94b6e86857. OpenBMB/UltraRAG.
+    https://github.com/OpenBMB/UltraRAG
+
+For subject-specific academic citations, consult the Publications section in
+UltraRAG's upstream README and cite the relevant original paper rather than
+attributing those papers to this extension.
+
+INDEPENDENT PROJECT NOTICE
+
+This repository is not an official UltraRAG release and is not affiliated with
+or endorsed by OpenBMB, THUNLP, NEUIR, AI9stars, or the UltraRAG contributors.
+The UltraRAG name is used only to identify the upstream software on which this
+app depends.

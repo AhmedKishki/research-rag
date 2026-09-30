@@ -1,0 +1,43 @@
+name: test
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    env:
+      # Every uv step below reads this, so one version governs the whole leg.
+      UV_PYTHON: ${{ matrix.python-version }}
+    strategy:
+      # One version's failure must not hide the other's, or 3.11 stops being
+      # tested the first time 3.12 breaks.
+      fail-fast: false
+      matrix:
+        # The range `pyproject.toml` declares, and nothing wider: 3.11 is
+        # supported and untested, and 3.13 is not claimed until the matrix
+        # says it is green.
+        python-version: ["3.11", "3.12"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+      # UV_PYTHON is required, not a convenience: the checkout carries a
+      # `.python-version` file, and uv gives that file precedence over the
+      # interpreter setup-python installed. Passing `--python` to `uv sync`
+      # alone is not enough either, because the later `uv run` steps re-resolve
+      # the environment the same way and would put 3.12 back. The variable
+      # reaches every uv invocation, so the whole leg stays on one version.
+      # Without it both legs resolve 3.12 and 3.11 is a duplicate reporting green.
+      - run: uv sync --frozen
+      - name: Report the interpreter the matrix leg actually resolved
+        run: uv run python -VV
+      - run: uv run ruff format --check .
+      - run: uv run ruff check .
+      - run: uv run python -m compileall -q src tests
+      - run: uv run pytest -q

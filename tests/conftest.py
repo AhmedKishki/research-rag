@@ -1,0 +1,87 @@
+from __future__ import annotations
+
+from pathlib import Path
+from typing import Any
+
+import pymupdf
+import pytest
+from ebooklib import epub
+
+from research_rag.config import ResearchConfig
+from research_rag.storage import (
+    load_metadata_overrides,
+    write_metadata_overrides,
+)
+
+
+def write_reviewed_metadata(
+    config: ResearchConfig,
+    relative_path: str,
+    metadata: dict[str, Any],
+) -> None:
+    """Write one reviewed-metadata override the way a person edits the file."""
+
+    overrides = load_metadata_overrides(config.metadata_path)
+    if metadata:
+        overrides[relative_path] = metadata
+    else:
+        overrides.pop(relative_path, None)
+    write_metadata_overrides(config.metadata_path, overrides)
+
+
+def write_pdf(path: Path, pages: list[str], *, title: str = "Test PDF") -> None:
+    document = pymupdf.open()
+    document.set_metadata({"title": title, "author": "Test Author"})
+    for text in pages:
+        page = document.new_page()
+        page.insert_textbox(
+            pymupdf.Rect(72, 72, 540, 760),
+            text,
+            fontsize=11,
+        )
+    document.save(path)
+    document.close()
+
+
+def write_epub(path: Path, text: str, *, title: str = "Test EPUB") -> None:
+    book = epub.EpubBook()
+    book.set_identifier("test-identifier")
+    book.set_title(title)
+    book.set_language("en")
+    book.add_author("EPUB Author")
+    chapter = epub.EpubHtml(
+        title="Opening Chapter",
+        file_name="chapter-1.xhtml",
+        lang="en",
+    )
+    chapter.content = f"<h1>Opening Chapter</h1><p>{text}</p>"
+    book.add_item(chapter)
+    book.add_item(epub.EpubNcx())
+    book.add_item(epub.EpubNav())
+    book.toc = (epub.Link("chapter-1.xhtml", "Opening Chapter", "chapter-1"),)
+    book.spine = ["nav", chapter]
+    epub.write_epub(str(path), book)
+
+
+@pytest.fixture(autouse=True)
+def _no_collapsed_repetitions_in_the_suite(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Declare that this suite's embedder cannot tell a repeat from a theme.
+
+    Every build and every search here runs on a hand-written embedder, and that
+    embedder cannot tell a passage repeated from two passages about one subject:
+    a test corpus of two related sentences is a corpus the cosine would collapse
+    to one. A number no cosine can reach says exactly that — nothing is close
+    enough — and the tests about the rule pass their own threshold, which is a
+    stronger statement than this one.
+    """
+
+    monkeypatch.setenv("RESEARCH_ULTRARAG_RETRIEVAL_DUPLICATE_COSINE", "2.0")
+
+
+@pytest.fixture
+def project(tmp_path: Path) -> Path:
+    root = tmp_path / "research-project"
+    (root / "sources").mkdir(parents=True)
+    return root

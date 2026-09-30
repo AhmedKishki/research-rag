@@ -1,0 +1,37 @@
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+*.egg-info/
+.ultrarag/
+*.log
+build/
+dist/
+.env
+.env.*
+!.env.example
+# Generated retrieval-evaluation reports (regenerate with scripts/evaluate_retrieval.py).
+evaluation/*-report.json
+
+# Original documents never belong in this repository; the originals are the
+# quote authority and stay in the project that owns them.
+*.pdf
+*.epub
+!tests/fixtures/**/*.pdf
+!tests/fixtures/**/*.epub
+
+# A research corpus copied in whole, and one project's own state.
+/sources/
+/projects/
+/.research-rag/
+# The launcher a project's own `init` writes at its root. This repository is one
+# of those project roots, so it has one.
+/open-research-rag-ui.sh
+
+# Personal notes, writing, and skill folders.
+/obsidian-vault/
+/zettlr/
+/agent-skills/
+draft-writing*.zip
+

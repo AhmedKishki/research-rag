@@ -1,0 +1,346 @@
+## Purpose
+
+`research-rag` is a browser workspace for reviewing evidence from a project's own PDF and EPUB corpus. You point it at a directory of original documents, build a searchable generation from them, and read every passage beside its source, its locator, and the bibliographic metadata you reviewed. You stay the one who concludes anything: the workspace retrieves cleaned semantic evidence and never writes an answer, and the untouched original file is the only authority for a quotation.
+
+Everything runs on your machine, on one CPU, with no service to sign up for.
+
+## What the app provides
+
+- **A browser workspace.** Search your corpus, read results with their page numbers and citations, open the original PDF or EPUB beside a passage, and record reviewed metadata or an exclusion for each source.
+- **One command line.** `research-rag search` and `research-rag status` print exactly the same payload the workspace renders, because both call the same service in this process.
+- **Immutable generations.** A rebuild writes a new generation and switches to it only when every index is complete, so a failed build leaves the previous generation searchable.
+- **Reviewed metadata as first-class state.** Categories, projects, keywords, language, title, and authors are editable plain JSON, applied at read time with no rebuild.
+- **Honest provenance.** Every passage carries its source, its locator, and whether its text is cleaned semantic content rather than a transcript.
+- **Explicit exclusions.** Exclude a reviewed source from every retrieval surface immediately, reversibly, without touching the file.
+
+There is no MCP surface, no agent client to configure, and no second front door to the same data.
+
+## Install once
+
+```bash
+git clone https://github.com/AhmedKishki/research-rag.git
+cd research-rag
+uv sync
+```
+
+`uv sync` installs Python, the pinned dependencies, and one console command:
+
+```text
+research-rag
+```
+
+The first ingestion downloads the pinned UltraRAG runtime, the embedding model, and the reranker into caches on your machine. After that, `--offline` works.
+
+## Settings
+
+Every tunable lives in one registry, and every default value lives in the packaged `default.toml`. Read the merged settings, with the layer each value came from:
+
+```bash
+research-rag --project-root /path/to/project config
+```
+
+A layer names only the keys it changes, in this order, each one overriding the one before it:
+
+| Layer | Where |
+|---|---|
+| packaged default | inside the installed package |
+| per-user file | `~/.config/research-ultra-rag-mcp/config.toml` |
+| extra file | `--config PATH` |
+| project file | `<project>/.research-rag/config.toml` |
+| environment | `RESEARCH_ULTRARAG_*` variables |
+| command line | `--set KEY=VALUE`, repeatable |
+
+```toml
+# <project>/.research-rag/config.toml — only the keys you want to change.
+[retrieval]
+source_diversity_penalty = 0.15
+
+[dense]
+embedding_model = "BAAI/bge-small-en-v1.5"
+```
+
+```bash
+# One run, without editing any file.
+research-rag --project-root /path/to/project \
+  --set retrieval.source_diversity_penalty=0.2 search "does the state own the machine"
+
+# A project that always uses a different reranker and a tighter dense gate.
+research-rag --project-root /path/to/project \
+  --set reranker_model=Xenova/ms-marco-MiniLM-L-12-v2 \
+  --set retrieval.dense_relative_similarity_margin=0.12 \
+  search "fetishism of technology"
+```
+
+An unknown key, an out-of-range value, or a value of the wrong type is refused in every layer, and `config` names the layer a value came from, so a setting that is not taking effect is visible rather than mysterious.
+
+### Working in another language
+
+The corpus language selects BM25's stopword list and is part of the ranking policy, so changing it makes the next build produce a new generation.
+
+```toml
+[language]
+corpus = "french"
+```
+
+A language the embedding model does not cover is reported rather than silently embedded. See `research_rag/embeddings.py` for each model's covered languages and required prefixes.
+
+## Update an existing installation
+
+```bash
+scripts/update.sh                      # pull, sync, and report
+scripts/update.sh --check              # report only; change nothing
+scripts/update.sh --check --offline    # report without touching the network
+scripts/update.sh /path/to/project     # also restart that project's workspace
+```
+
+The script reports the declared version, the installed version, how far the checkout is behind, and whether an update would change the environment. A workspace is a process, so an update never reaches a running one: stop it and start it again, and `status.version.restart_required` then reads `false`.
+
+## Create an isolated research project
+
+```bash
+# A project that does not exist yet.
+research-rag init /path/to/new-project --name "Fetishism of Technology"
+
+# A directory you already work in: only .research-rag is added, nothing moves.
+cd /path/to/existing-project
+research-rag init --name "Fetishism of Technology"
+```
+
+`init` records the project identity, generates the workspace launcher under `.research-rag/bin/`, and links it into the project root as `open-research-rag-ui.sh`. It never overwrites an existing file or symlink, and `status.ui_launcher` reports what it found. Delete the symlink to opt out.
+
+## First use
+
+```bash
+research-rag --project-root /path/to/project init --name "My project"
+cp ~/Downloads/*.pdf ~/Downloads/*.epub /path/to/project/sources/
+research-rag --project-root /path/to/project ingest
+research-rag --project-root /path/to/project ui
+```
+
+`ingest` extracts every included PDF and EPUB, chunks the text, embeds it, and builds a BM25 and a dense index. The current generation stays active the whole time. `ui` starts the workspace and prints its URL.
+
+## Read the answer, then open the original
+
+A search answers with its passages and the `generation_id` they came from, and with a field only when it has news: `stale` when the corpus moved on, `rerank_fallback` when the reranker did not run, and `generation_upgrade_required` when this generation cannot serve the request. An absent field is the ordinary case, not missing data.
+
+- **`text`** is cleaned semantic text for comprehension and paraphrase. It is never a transcript.
+- **`source_relative_path`** and **`locator`** say where to open the original. The locator is the position alone: a page, carrying `page_label` only where the printed label differs from the physical page, or a section for an EPUB.
+- **`citation`** is the reference to attach to a claim.
+- **`direct_quote_safe`** is `false` on every passage the app builds.
+
+For exact wording, open the original at that locator and quote from it. `direct_quote_safe` is the machine-readable form of the same rule, and it is the only place the rule appears per passage.
+
+### How retrieval is chosen
+
+Retrieval is not a choice you make, and that is deliberate.
+
+- Every search is hybrid with CPU cross-encoder reranking, always. BM25 (weighted `1.25`) and dense (`1.0`) ranks are fused, candidates are gated, and the reranker reorders at most 50 of them. On the judged set in `MEASUREMENTS.md` this is the best of the measured modes, so there is no mode to choose.
+- It is the slow path on purpose: about 2.3 s per warm query against 0.17 s unranked, and it may download a second model on first use. `MEASUREMENTS.md` compares the supported rerankers. When a response carries `rerank_fallback`, the model could not be loaded and the order you received is the plain unranked candidate order.
+- BM25 candidates need at least one query token outside the corpus language's function words, so a query carrying no topic abstains instead of matching on a function word. Dense candidates need cosine `>= 0.72`, with a narrow rescue for a candidate just below the floor when another candidate cleared it.
+- A thin answer is a reason to ask again, not a conclusion. The reranker reorders about twice the number of passages you ask for, so a larger `top_k` deepens the ranking as well as the answer, and the same question in different words is a different search.
+- The fusion weights, relevance gates, candidate caps, chunk size, and reranker model are operator settings, not per-call ones. They come from your settings file or from `--set`.
+
+`research-rag search` also carries `--method {bm25,dense,hybrid}` and `--no-rerank`, which exist to reproduce a row of `MEASUREMENTS.md` on demand. The workspace has no equivalent control, and neither does any answer: those flags are a measurement escape hatch on one command, not a retrieval mode a reader chooses.
+
+### Finding and referring to sources
+
+```bash
+research-rag --project-root /path/to/project sources
+research-rag --project-root /path/to/project passage CHUNK_ID --context-chunks 2
+research-rag --project-root /path/to/project metadata "evidence.pdf" \
+  --title "Reviewed Marsh Evidence" --author "Field Researcher" \
+  --category corrected --year 2025
+research-rag --project-root /path/to/project exclude "evidence.pdf" --reason "Reviewed duplicate"
+research-rag --project-root /path/to/project include "evidence.pdf"
+```
+
+`sources` is the inventory, including `discovered_sources` for files that are not indexed yet. It is also what registers stable source IDs in the project's portable catalog, so an addressable handle survives the original file disappearing.
+
+A metadata edit rewrites only that source's entry, so a hand edit to another entry in the same file survives. Excluding a source removes it from every retrieval surface immediately, without touching the file; the next ingestion omits it from new indexes.
+
+## Research workflow
+
+### What a search can filter on
+
+Six layers are available, all read from the reviewed metadata at query time:
+
+```bash
+research-rag --project-root /path/to/project search "commodity fetishism" \
+  --category "Commodity fetishism" --category marxism \
+  --keyword "fetishism of technology" \
+  --author Harvey --title "Fetish of Technology" \
+  --top-k 15
+```
+
+Categories, projects, languages, authors, and titles match any of their values; keywords match all of theirs. Authors and titles match as case-insensitive substrings, because a name is a phrase rather than a controlled tag.
+
+An empty result with a filter applied means no source in the corpus matches the filter, and the answer names the filters it applied rather than reporting a silent corpus. A filtered-out answer is not a broken index.
+
+### Freshness with every search
+
+Every search re-compares the source directory with the generation and reports `stale`. A stale status names what changed: which sources were added or modified, which are gone from the directory, and whether reviews or exclusions moved. The previous generation remains searchable throughout. Ask whether to re-ingest; a rebuild reuses compatible work rather than starting over.
+
+A reviewed metadata change is not staleness. It is already effective without a rebuild, and the status says `metadata_overlay_active` instead.
+
+### What gets excluded, and what does not
+
+Only regular `.pdf` and `.epub` files beneath the configured source directory are indexed. Markdown, symlinks, and everything outside that directory are ignored. Nothing in the app edits an original.
+
+Corrupt extraction units are omitted whole rather than indexed as garbage, and the count is reported. Script mixing is never a reason to withhold: a foreign-language quotation inside an English source is evidence, and its locator tells you where it is.
+
+## Use the terminal
+
+```bash
+# Create and build.
+research-rag --project-root /path/to/project init --name "My project"
+research-rag --project-root /path/to/project ingest
+
+# Read.
+research-rag --project-root /path/to/project status
+research-rag --project-root /path/to/project search "cobalt heron amber marsh" --top-k 5
+research-rag --project-root /path/to/project sources
+research-rag --project-root /path/to/project passage CHUNK_ID
+
+# Review, which applies to the current generation without rebuilding it.
+research-rag --project-root /path/to/project metadata "evidence.pdf" --year 2025
+research-rag --project-root /path/to/project exclude "evidence.pdf" --reason "Duplicate"
+
+# Browse it, and read the settings that apply.
+research-rag --project-root /path/to/project ui
+research-rag --project-root /path/to/project config
+
+# Stop it, and every process of this app serving this project.
+research-rag --project-root /path/to/project stop --servers
+
+# Find out what is wrong with the installation.
+research-rag --project-root /path/to/project doctor
+```
+
+### Ask the doctor
+
+```bash
+research-rag --project-root /path/to/project doctor
+```
+
+`doctor` prints one line per dependency: ok, warn, blocked, or unchecked. It writes nothing, so it is always safe to run.
+
+```
+blocked  ultrarag_runtime      the managed runtime tree does not match the pinned snapshot
+                                 repair: research-rag doctor --repair-runtime
+warn     code_currency         two checkouts of this package are installed
+ok       dense_backend         exact scan, 58 searchable documents
+```
+
+The two operations that reach the network are flags, and neither implies the other:
+
+```bash
+# Download the pinned models into the shared cache, which --offline then requires.
+research-rag --project-root /path/to/project doctor --prefetch-models
+
+# Move a mismatched runtime aside, install the pinned one, and validate it.
+research-rag --project-root /path/to/project doctor --repair-runtime
+```
+
+A repair that discards evidence moves it aside rather than deleting it.
+
+## Use the workspace
+
+```bash
+research-rag --project-root /path/to/project ui            # start and print the URL
+research-rag --project-root /path/to/project ui --open     # and open a browser
+research-rag --project-root /path/to/project ui --stop     # stop it and what it started
+./open-research-rag-ui.sh                                 # the generated launcher
+./open-research-rag-ui.sh --port 5100
+```
+
+The generated launcher claims the first free loopback port at or above the one it was generated with and records the port it chose, so two projects never serve from the same port. It resolves this app's console script beside the running interpreter rather than trusting `PATH`, passes the project's own root and runtime root explicitly, and stops the whole process group on `--stop`.
+
+`research-rag serve` is the same workspace in the foreground on a fixed port. It is what the launcher runs; you only need it when you want to supervise the process yourself.
+
+The workspace binds loopback only. It has no authentication, which is correct for an address no other machine can reach.
+
+The retrieval controls the measurements already answered are not in the workspace: there is no retrieval mode, no reranking switch, and no chunk tuning, because every search is hybrid and reranked. Metadata, source selection, category partitions, and project metadata are all there.
+
+## Where project data is stored
+
+`STORAGE.md` is the storage contract: every file, every field, what is portable, what is rebuilt, and how a hand edit behaves. Two facts matter most here:
+
+- `sources/` is the authority for exact quotation, and nothing in the app edits it.
+- The only state shared between projects is the model cache at `~/.cache/research-ultra-rag-mcp/models/`. Document text, embeddings, indexes, logs, and query state never cross project roots.
+
+The user settings directory is `~/.config/research-ultra-rag-mcp/`. Both names are the MCP server's, retained deliberately so the app and that server read one user's settings and one model cache; `tests/test_data_roots.py` states why.
+
+## Move or back up a project
+
+A project is self-contained. Copy the directory — `sources/` plus `.research-rag/` — and the copy is a complete project on another disk or machine. `runtime/` is disposable and is rebuilt on the next ingestion.
+
+Keep:
+
+- `sources/` — the originals, and the only authority for a quotation;
+- `.research-rag/project.json`, `source-catalog.json`, `source-metadata.json`, `source-exclusions.json` — the project identity and your reviewed decisions;
+- `.research-rag/runtime/` — optional; copying it keeps the project searchable without a rebuild.
+
+Continue in one place at a time. Two processes pointed at the same project root, or at a copy that shares a relocated runtime root, are refused by the project lock rather than silently interleaved.
+
+## Operations
+
+| Command | What it answers |
+|---|---|
+| `init` | the project identity, and the workspace launcher |
+| `status` | readiness, staleness, upgrade reasons, what a prune would consider, the conditions to act on, and the version block |
+| `ingest` | the current generation, a checkpointed build's progress, or a new complete generation |
+| `search` | hybrid reranked evidence, with filters applied from reviewed metadata |
+| `sources` | the corpus inventory, including files not indexed yet |
+| `passage` | one passage and its neighbours |
+| `include` / `exclude` | reversible retrieval decisions, enforced immediately |
+| `metadata` | one source's reviewed bibliographic override |
+| `config` | every effective setting and the layer it came from |
+| `doctor` | one line per dependency, with the command that fixes it |
+| `ui` / `serve` / `stop` | the workspace, started and stopped |
+
+Every operation answers with the complete service payload. There is no lean projection and no detail switch: the ranking scores, the candidate counts, and the withheld-candidate reasons that explain an empty answer are part of the answer, and a projection built for agent token economy has no reader to serve.
+
+## How it works under the hood
+
+```
+Browser ── HTTP ── shared UI ── adapter ── research-rag (one process)
+                                           └── ResearchService
+                                               ├── project and source policy
+                                               ├── PDF page extraction
+                                               ├── EPUB section extraction
+                                               ├── metadata and provenance
+                                               ├── immutable generations
+                                               ├── FastEmbed CPU embeddings
+                                               ├── project-local dense index
+                                               ├── reciprocal-rank fusion
+                                               └── CPU cross-encoder reranking
+                                                   └── stdio MCP ──> vanilla-ultra-rag-mcp
+                                                                     ├── UltraRAG chunker
+                                                                     └── UltraRAG BM25
+```
+
+The terminal and the workspace call the same `ResearchService` in this process, so one capability has one implementation. The vanilla gateway is an implementation dependency below the app, not a second surface.
+
+Retrieval fuses a BM25 rank from UltraRAG with a cosine rank from a project-local dense index, reranks with a CPU cross-encoder, and reports what every gate rejected. The vanilla gateway is only asked for BM25.
+
+## Limitations and troubleshooting
+
+- **A workspace is a process, not a daemon.** It does not survive an update; stop it and start it again.
+- **The first build is slow.** It downloads the pinned UltraRAG runtime and two models, then extracts and embeds every source. `status.ingestion_progress` reports progress and a cancelled build resumes where it stopped.
+- **`--offline` fails if anything is uncached.** Run `doctor --prefetch-models` first.
+- **A build reports "one build at a time".** Another process holds the project lock. `status` names the resident build's phase.
+- **Two checkouts of this package.** `doctor` reports `code_currency` as a warning. Two copies of one version can sit many commits apart, so stop this app's processes and start the checkout you mean.
+- **A generation the app cannot serve.** `status` reports `generation_upgrade_required` with the reason, and the old generation stays searchable with a warning.
+- **A project on slow storage.** Point `--runtime-root` at a fast device. The measured benefit is narrow; see `STORAGE.md`.
+- **A search answers nothing.** Read `withheld_candidates`: it names the gate that dropped each candidate, which is usually the dense floor or the minimum passage length.
+- **The UltraRAG runtime is broken.** `doctor` names the file; `doctor --repair-runtime` moves the old tree aside and installs the pinned one.
+
+## UltraRAG credit and licensing
+
+This app is built on the [UltraRAG](https://github.com/OpenBMB/UltraRAG) project through `vanilla-ultra-rag-mcp-server`, and uses the shared browser workspace package `ui-ultra-rag-mcp`. It depends on UltraRAG's MCP architecture, corpus chunker, and BM25 retriever, and adds PDF/EPUB extraction, project-scoped immutable generations, reviewed metadata, hybrid retrieval, and a browser workspace on top.
+
+UltraRAG's upstream README identifies it as a joint project of THUNLP at Tsinghua University, NEUIR at Northeastern University, OpenBMB, and AI9stars, together with the wider UltraRAG contributor community. `NOTICE` records the upstream project, the pinned revisions, the models, and their licences.
+
+This repository is an independent project. It is not an official UltraRAG release and is not affiliated with or endorsed by OpenBMB, THUNLP, NEUIR, AI9stars, or the UltraRAG contributors. The UltraRAG name is used only to identify the upstream software this app depends on.
+
+The code in this repository is licensed under the Apache License, Version 2.0; see `LICENSE`. PDF and EPUB extraction depend on components under the AGPL, and `NOTICE` states what a recipient must satisfy. This repository's licence does not change those obligations.

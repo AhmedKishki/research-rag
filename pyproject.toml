@@ -1,0 +1,88 @@
+[build-system]
+requires = ["setuptools>=84.0.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "research-rag"
+version = "0.1.0"
+description = "A browser workspace for reviewing research evidence over a project's own PDF and EPUB corpus, built on vanilla UltraRAG"
+readme = "README.md"
+license = "Apache-2.0"
+license-files = ["LICENSE", "NOTICE"]
+requires-python = ">=3.11,<3.13"
+dependencies = [
+    "bm25s @ git+https://github.com/AhmedKishki/bm25s.git@20f6c02612b8114dca4662131ba09d5102c53308",
+    "beautifulsoup4>=4.13,<5",
+    "config-ultra-rag-mcp @ git+https://github.com/AhmedKishki/config-ultra-rag-mcp.git@cbd47bb46efe85340de34f8f8f13fc6516e7fecb",
+    "ebooklib>=0.20,<1",
+    "fastembed==0.8.0",
+    "fastmcp==3.4.0",
+    "filelock>=3.16,<5",
+    "numpy>=1.26,<3",
+    "platformdirs>=4.3,<5",
+    "tokenizers>=0.20,<1",
+    "tokie>=0.1,<1",
+    "pydantic>=2.12,<3",
+    "pymupdf>=1.26,<2",
+    "qdrant-client==1.19.1",
+    "ui-ultra-rag-mcp @ git+https://github.com/AhmedKishki/ui-ultra-rag-mcp.git@4f3f7b60c258df66b108119c4f6afeab9b25f0c2",
+    "vanilla-ultra-rag-mcp @ git+https://github.com/AhmedKishki/vanilla-ultra-rag-mcp-server.git@fc339c259a672ca4dacb525840eba851d01c4b75",
+]
+
+[project.scripts]
+research-rag = "research_rag.cli:main"
+
+[project.urls]
+Repository = "https://github.com/AhmedKishki/research-rag"
+Issues = "https://github.com/AhmedKishki/research-rag/issues"
+"Upstream UltraRAG" = "https://github.com/OpenBMB/UltraRAG"
+"UltraRAG Documentation" = "https://ultrarag.openbmb.cn/pages/en/getting_started/introduction"
+
+[dependency-groups]
+dev = [
+    "pytest",
+    "pytest-timeout>=2.4.0",
+    "ruff>=0.7.3",
+]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+# The default settings ship with the package: the code has no copy of them.
+research_rag = ["default.toml"]
+
+[tool.uv]
+package = true
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+markers = [
+    "integration: starts the real vanilla UltraRAG stdio gateway",
+]
+# A hang has no diagnostic and blocks CI until the GitHub limit, and several
+# tests spawn real subprocesses. The thread method is deliberate: the signal
+# default misses a hang inside a C extension such as ONNX inference. It kills
+# the whole pytest process after dumping every thread's stack, which is what CI
+# wants and not what a developer's long local run wants, so a developer passes
+# `--timeout=0` to turn it off.
+timeout = 300
+timeout_method = "thread"
+
+[tool.ruff]
+# The default set (E4, E7, E9, F) stays selected; these are added on top of it.
+
+[tool.ruff.lint]
+extend-select = ["ASYNC", "BLE001", "C901", "RUF100", "SIM"]
+
+[tool.ruff.lint.mccabe]
+# Permits the 22 functions already between 11 and 23, and fails anything new
+# above 25. The two that exceed it carry a targeted noqa naming the tracked
+# work, so this stays green while a third function cannot slip through.
+max-complexity = 25
+
+[tool.ruff.lint.per-file-ignores]
+# Tests and benchmark harnesses are async coroutines that touch the filesystem
+# by design and serve no concurrent traffic. src/ keeps both rules.
+"tests/**" = ["ASYNC109", "ASYNC240"]
+"scripts/**" = ["ASYNC240"]
