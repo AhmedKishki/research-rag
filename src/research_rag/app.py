@@ -401,7 +401,9 @@ class App:
         mcp_http = create_mcp(
             self.config, connect=self._service, app_state=self.state
         ).http_app(path=MCP_PATH)
-        workspace = create_ui_app(self.config, service=self.service)
+        workspace = create_ui_app(
+            self.config, service=self.service, clients=self.clients
+        )
 
         @asynccontextmanager
         async def lifespan(_: Starlette) -> AsyncIterator[None]:

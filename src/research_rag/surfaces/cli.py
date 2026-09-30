@@ -330,6 +330,21 @@ def _parser() -> argparse.ArgumentParser:
         ),
     )
     examine.add_argument(
+        "--mcp-entry",
+        action="store_true",
+        help=(
+            "Print the MCP client entries for the resolved configuration: the "
+            "URL entry for a client that can open a socket, and the stdio entry "
+            "for one that cannot."
+        ),
+    )
+    examine.add_argument(
+        "--check-entry",
+        metavar="PATH",
+        default=None,
+        help="Report on a client entry file without changing it.",
+    )
+    examine.add_argument(
         "--prefetch-models",
         action="store_true",
         help="Download the pinned embedding and reranker models into the cache.",
@@ -949,16 +964,28 @@ def _disconnect(args: argparse.Namespace, config: ResearchConfig) -> dict[str, A
 async def _doctor(args: argparse.Namespace, config: ResearchConfig) -> CommandResult:
     """Report the installation, and run only the operation the flags name."""
 
-    from ..doctor import run_doctor
+    from ..doctor import mcp_entry_block, mcp_url_block, run_doctor
 
-    # The report is built from the same service call the `status` command makes,
-    # so the two surfaces cannot disagree about this project.
-    async with _service(config) as service:
-        status = await service.status()
+    if args.mcp_entry:
+        # Two entries, because the app is reached two ways. The URL entry names
+        # the port the app claimed, which exists only once it is up; the stdio
+        # entry is complete either way, because the bridge starts the app itself.
+        return CommandResult(
+            text=mcp_url_block(config) + "\n" + mcp_entry_block(config)
+        )
+    entry_check = args.check_entry
+    # A whole report is built from the same service call the `status` command
+    # makes, so the two surfaces cannot disagree about this project. A check of
+    # one entry file needs no project state, so it does not fetch any.
+    status: dict[str, Any] = {}
+    if entry_check is None:
+        async with _operations(config) as operations:
+            status = await operations.status()
     result = run_doctor(
         config,
         status,
         running=_service_processes(config.project_root),
+        entry=entry_check,
         prefetch=args.prefetch_models,
         repair=args.repair_runtime,
     )
