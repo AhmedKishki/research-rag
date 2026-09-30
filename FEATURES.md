@@ -22,7 +22,7 @@ This app deliberately uses only three upstream capabilities, and owns everything
 | BM25 lexical index and search (`retriever_retriever_init`, `retriever_bm25_index`, `retriever_bm25_search`) | Yes | Supplies the lexical half of retrieval, in English, on CPU. |
 | FAISS, Qdrant and Milvus dense index backends (`retriever_init(index_backend=...)`) | No | The dense path is built here instead: FastEmbed CPU embeddings plus either an exact scan of the generation's portable vectors or an embedded Qdrant collection created with the same pinned `qdrant-client` library, chosen per generation and recorded in its manifest. See section 1.1. |
 | Reranking components (`reranker_init`, `reranker_rerank`) | No | A FastEmbed CPU cross-encoder reorders at most 50 candidates and keeps its scores. See section 1.1. |
-| Prompt assembly and answer generation | No | The reader writes the answer. The app returns evidence, not prose. See section 1.2. |
+| Prompt assembly and answer generation | No | The reader writes the answer. The app returns evidence, not prose. See section 1.2, and `ROADMAP.md` under **Answers** for the deferred stage. |
 | Routing, memory, benchmark, evaluation components | No | Not part of this server's contract. Retrieval-quality evaluation is planned as its own work (see section 4 and section 1.2). |
 | Web-search retrieval | No | Out of scope: this server answers from a project's own documents only. See section 1.2. |
 | Upstream web interface | No | This app ships a browser workspace for its own seven operations. See section 1.3. |
@@ -81,7 +81,7 @@ The net position is narrower than it may look. These are not weaker technologies
 
 These upstream components have no custom replacement, because adopting them would change what the server is rather than how it is built.
 
-- **Prompt assembly and answer generation.** Adopting upstream's prompt and generation components would add a model-serving or API dependency and move prose generation into the app. The contract instead has the reader write the answer and cite returned evidence, which is why `search` returns structured passages with provenance rather than an answer string.
+- **Prompt assembly and answer generation.** Adopting upstream's prompt and generation components would add a model-serving or API dependency and move prose generation into the app. The contract instead has the reader write the answer and cite returned evidence, which is why `search` returns structured passages with provenance rather than an answer string. Adding generation later, through a local model or a hosted API, is recorded in `ROADMAP.md` under **Answers**, with the citation contract and the disclosure it would need.
 - **Routing, memory, benchmark, and evaluation.** These serve multi-corpus pipelines, conversational memory, and benchmark scoring with boxed answers. This app is one project, one corpus, and one immutable generation, and retrieval quality is measured offline against a judged query set rather than by an upstream evaluation component.
 - **Web-search retrieval.** It would send a researcher's query to a third-party provider and mix outside text into evidence that must be traceable to a project source, so retrieval stays inside the project's own documents.
 
@@ -168,7 +168,7 @@ The upstream interface is bound to upstream pipeline and session state, and it e
 
 These are choices, not missing pieces. Each one would change what the app is:
 
-- **It does not generate answers.** It returns evidence candidates with provenance; the reader interprets them.
+- **It does not generate answers.** It returns evidence candidates with provenance; the reader interprets them. A generation stage through a local model or a hosted API is deferred work, recorded in `ROADMAP.md` under **Answers**.
 - **It does not provide quote-safe transcripts.** Text comes back cleaned for retrieval, so a quotation is taken from the original.
 - **It does not decide what is true, and never deletes or excludes sources on its own.** Duplicate and metadata decisions are reviewed and reversible.
 - **It does not run OCR.** Scanned PDFs need OCR first; password-protected PDFs are rejected.

@@ -233,6 +233,18 @@ def test_the_workspace_forwards_search_and_the_surviving_mutations(
                 "exclude_source_ids": ["src_2"],
             },
         )
+        filtered = client.post(
+            "/api/search",
+            json={
+                "query": "research question",
+                "languages_any": ["en"],
+                "authors_any": ["Crawford"],
+                "titles_any": ["Atlas of AI"],
+                "keywords": ["desire", "labour"],
+                "projects_any": ["thesis"],
+            },
+        )
+        assert filtered.status_code == 200
         inclusion = client.post(
             "/api/source-inclusion",
             json={
@@ -274,6 +286,31 @@ def test_the_workspace_forwards_search_and_the_surviving_mutations(
             "categories_any": None,
             "projects_any": None,
             "keywords": None,
+            "languages_any": None,
+            "authors_any": None,
+            "titles_any": None,
+            "source_ids": None,
+            "exclude_source_ids": None,
+            "retrieval_method": "hybrid",
+            "rerank": True,
+            "include_staleness": True,
+        },
+    ) in fake.calls
+    # Every reviewed-metadata layer the service offers reaches it from the
+    # browser. A layer that worked in the terminal and was dropped here was a
+    # filter a reader could type but not click, which is the disagreement the
+    # adapter's argument set exists to prevent.
+    assert (
+        "search",
+        {
+            "query": "research question",
+            "top_k": 10,
+            "categories_any": None,
+            "projects_any": ["thesis"],
+            "keywords": ["desire", "labour"],
+            "languages_any": ["en"],
+            "authors_any": ["Crawford"],
+            "titles_any": ["Atlas of AI"],
             "source_ids": None,
             "exclude_source_ids": None,
             "retrieval_method": "hybrid",
@@ -343,18 +380,33 @@ def test_an_unserved_search_argument_never_reaches_the_service(
 
     adapter = ResearchUIAdapter(resolve_config(project), FakeResearchService())  # type: ignore[arg-type]
 
+    # The retrieval switches are the app's engine decisions and the workspace
+    # hides them, so they are dropped rather than forwarded as arguments the
+    # app would ignore.
     assert adapter._arguments(
         "search",
         {
             "query": "q",
-            "authors_any": ["Crawford"],
-            "titles_any": ["Atlas of AI"],
             "categories": ["theory"],
             "retrieval_method": "bm25",
             "rerank": False,
             "top_k": 5,
         },
     ) == {"query": "q", "top_k": 5}
+    assert adapter._arguments(
+        "search",
+        {
+            "query": "q",
+            "authors_any": ["Crawford"],
+            "titles_any": ["Atlas of AI"],
+            "languages_any": ["en"],
+        },
+    ) == {
+        "query": "q",
+        "authors_any": ["Crawford"],
+        "titles_any": ["Atlas of AI"],
+        "languages_any": ["en"],
+    }
     assert set(_OPERATION_ARGUMENTS) == {
         "status",
         "ingest",

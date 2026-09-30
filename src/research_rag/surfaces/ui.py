@@ -88,6 +88,12 @@ RESEARCH_UI_PROFILE = UIProfile(
 # The arguments each workspace operation accepts, by name. The shared UI sends
 # its full optional set for every route, so an argument absent here is one this
 # app does not serve and must not forward.
+#
+# The six filter layers the service supports are all here. A layer the app
+# serves and the workspace drops is a filter a reader can type into the command
+# line and cannot type into the browser, which is the disagreement this file
+# exists to prevent, so the set is the service's own and the profile below
+# decides what the browser offers.
 _SEARCH_ARGUMENTS = frozenset(
     {
         "query",
@@ -95,6 +101,9 @@ _SEARCH_ARGUMENTS = frozenset(
         "categories_any",
         "projects_any",
         "keywords",
+        "languages_any",
+        "authors_any",
+        "titles_any",
         "source_ids",
         "exclude_source_ids",
     }
@@ -245,6 +254,9 @@ class ResearchUIAdapter:
                 categories_any=_string_list(arguments.get("categories_any")),
                 projects_any=_string_list(arguments.get("projects_any")),
                 keywords=_string_list(arguments.get("keywords")),
+                languages_any=_string_list(arguments.get("languages_any")),
+                authors_any=_string_list(arguments.get("authors_any")),
+                titles_any=_string_list(arguments.get("titles_any")),
                 source_ids=_string_list(arguments.get("source_ids")),
                 exclude_source_ids=_string_list(arguments.get("exclude_source_ids")),
                 # Hybrid retrieval with reranking is the only way this app

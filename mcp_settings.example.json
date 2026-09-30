@@ -1,0 +1,16 @@
+{
+  "mcpServers": {
+    "research-rag": {
+      "command": "/ABSOLUTE/PATH/TO/research-rag/.venv/bin/research-rag",
+      "args": [
+        "--project-root",
+        "/ABSOLUTE/PATH/TO/MY-RESEARCH-PROJECT",
+        "mcp"
+      ],
+      "env": {},
+      "disabled": false,
+      "autoApprove": [],
+      "timeout": 1800
+    }
+  }
+}

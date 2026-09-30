@@ -1,12 +1,15 @@
-"""The names this app shares with the MCP server it was seeded from.
+"""The names this app inherited, and the ones that are its own.
 
-Both products read and write the same projects while the migration runs, so four
-locations carry the MCP server's name rather than this app's, and three of them
-are invisible in a diff: a renamed user settings directory is read by neither
-product, a renamed model cache re-downloads about 150 MB on the first build, and
-a renamed launcher state file lets two launchers stop each other's process.
-Renaming any of them is a one-line change that costs a user their settings, their
-models, or a running workspace, and nothing fails until then.
+Three locations carry the MCP server's name rather than this app's. It is frozen
+and still installed on the machines that have it, and it reads those paths: a
+renamed user settings directory is read by neither product, a renamed model
+cache re-downloads about 150 MB on the first build, and a renamed launcher state
+file leaves the frozen product's pid file with nothing to stop it. Renaming any
+of them costs a user their settings, their models, or a running workspace, and
+nothing fails until then.
+
+The rest are this app's own and must stay that way, so a second product can
+never stop this one's process or land beside it in a project.
 
 Every constant here is asserted, so a later rename has to delete its assertion
 and state the migration that makes it safe. It is the same review either way.
@@ -28,10 +31,14 @@ LEGACY_ENVIRONMENT_PREFIX = "RESEARCH_ULTRARAG_"
 
 
 def test_the_user_settings_directory_is_the_mcp_servers() -> None:
+    """The frozen product resolves its own settings layer by this name."""
+
     assert settings_module.USER_CONFIG_DIRECTORY == LEGACY
 
 
 def test_the_settings_environment_prefix_is_the_mcp_servers() -> None:
+    """Every `RESEARCH_ULTRARAG_*` variable the frozen product reads is one of these."""
+
     assert settings_module.SETTINGS_ENVIRONMENT_PREFIX == LEGACY_ENVIRONMENT_PREFIX
 
 
@@ -54,7 +61,7 @@ def test_the_project_state_root_names_neither_product() -> None:
 
 
 def test_the_generated_launcher_and_its_link_are_the_apps_own() -> None:
-    """The MCP server's launcher sits in the same project under the same names."""
+    """The frozen product's launcher sits in the same project under the same names."""
 
     assert launcher_module.LAUNCHER_NAME == "open-research-rag-ui.sh"
     assert launcher_module.LINK_NAME == "open-research-rag-ui.sh"
@@ -90,10 +97,11 @@ def test_the_launcher_runs_this_apps_own_command() -> None:
 def test_the_agent_answer_detail_is_declared_and_used() -> None:
     """The one setting that is not a project, corpus, or machine tunable.
 
-    A settings file the MCP server wrote names it, and the layer stack refuses an
-    undeclared key in every layer, so the key cannot be removed while that server
-    ships. Removing it is also the one change that would make an agent's answers
-    stop being projectable, so the test names the reader as well as the key.
+    A settings file the frozen product wrote names it, and the layer stack refuses
+    an undeclared key in every layer, so the key cannot be dropped while that
+    product is installed. Removing it is also the one change that would make an
+    agent's answers stop being projectable, so the test names the reader as well
+    as the key.
     """
 
     keys = {setting.key for setting in SETTINGS}

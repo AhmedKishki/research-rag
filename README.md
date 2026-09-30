@@ -110,7 +110,7 @@ The script reports the declared version, the installed version, how far the chec
 
 ```bash
 # A project that does not exist yet.
-research-rag init /path/to/new-project --name "Fetishism of Technology"
+research-rag --project-root /path/to/new-project init --name "Fetishism of Technology"
 
 # A directory you already work in: only .research-rag is added, nothing moves.
 cd /path/to/existing-project
@@ -181,6 +181,22 @@ Set `RESEARCH_ULTRARAG_CLIENT_NAME` to something that names the agent, so the ap
   }
 }
 ```
+
+### Print the entry for a project
+
+A port is chosen at start and recorded, so a hard-coded URL above goes stale the first time the port moves. Let the project print the entry for the machine it runs on:
+
+```bash
+research-rag --project-root /path/to/project doctor --mcp-entry
+```
+
+That prints both shapes, so you can copy whichever your client wants. To check an entry that is already in place without editing it:
+
+```bash
+research-rag --project-root /path/to/project doctor --check-entry ~/.config/kilo/kilo.jsonc
+```
+
+The output depends on the client's own configuration format, so `doctor` reports which shape it recognises and what it expects. Two ready-to-copy templates are in this repository: `mcp_settings.example.json` for a client that uses an `mcpServers` object, and `kilo-mcp.example.jsonc` for one that uses a Kilo-style `mcp` object. Replace the two absolute paths in either one and the entry is complete.
 
 What an agent gets is the same service the workspace uses, with a projected answer: `status`, `ingest`, `search`, `find_source`, `get_passage`, `set_source_inclusion`, `set_source_metadata`, and the `research://status` resource. `status` also reports where the workspace is and how many agents are attached.
 
@@ -357,7 +373,7 @@ The retrieval controls the measurements already answered are not in the workspac
 - `sources/` is the authority for exact quotation, and nothing in the app edits it.
 - The only state shared between projects is the model cache at `~/.cache/research-ultra-rag-mcp/models/` and the project register at `~/.config/research-ultra-rag-mcp/projects.json`, which names projects and nothing else. Document text, embeddings, indexes, logs, and query state never cross project roots.
 
-The user settings directory is `~/.config/research-ultra-rag-mcp/`. Both names are the MCP server's, retained deliberately so the app and that server read one user's settings and one model cache; `tests/test_data_roots.py` states why.
+The user settings directory is `~/.config/research-ultra-rag-mcp/`. Both names are inherited from the frozen `research-ultra-rag-mcp`, which is still installed on the machines that carry it and resolves the same paths; renaming them would cost every such user their settings and about 150 MB of model downloads. `tests/test_data_roots.py` states why.
 
 ## Move or back up a project
 
@@ -370,6 +386,15 @@ Keep:
 - `.research-rag/runtime/` — optional; copying it keeps the project searchable without a rebuild.
 
 Continue in one place at a time. Two processes pointed at the same project root, or at a copy that shares a relocated runtime root, are refused by the project lock rather than silently interleaved.
+
+## One project, one app
+
+A project has at most one app. The command line, the browser workspace, and an agent's tools are three front ends to that one process, so all three read one index, one review state, and one set of models.
+
+- `research-rag start` and `research-rag ui` bring it up; `ui` also opens a browser. The workspace is served by the same process, so starting a UI from a terminal and then driving the terminal is one instance, not two.
+- A second app for the same project is refused rather than started alongside. The port is claimed by binding it before the server exists, so two apps racing for one port cannot both believe they won, and the failure names the port and the fix.
+- Two projects need two apps and two ports. That is expected: the launcher claims the first free port at or above the one it was generated with, and records what it chose, so no two projects collide.
+- Any front end can bring the app up. A command that needs the app and finds none starts it; the stdio bridge does the same, so an MCP client is handed a running project rather than an error.
 
 ## Operations
 
