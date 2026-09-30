@@ -15,7 +15,7 @@ app does not serve from travelling as an argument the app ignores.
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import replace
 from typing import TYPE_CHECKING, Any
 
@@ -30,6 +30,7 @@ from ui_ultra_rag_mcp import create_ui_app as create_shared_ui_app
 if TYPE_CHECKING:  # pragma: no cover - typing only
     from starlette.applications import Starlette
 
+from ..app import ClientError, ClientRegistry
 from ..config import (
     ConfigurationError,
     ResearchConfig,
@@ -77,6 +78,10 @@ RESEARCH_UI_PROFILE = UIProfile(
         retrieval_modes=False,
         reranking=False,
         chunk_settings=False,
+        # The app is a server, so a person in the workspace can see which agents
+        # are attached to it and end one. A host that is not a server leaves this
+        # off and the panel and its routes stay absent.
+        clients=True,
     ),
 )
 
@@ -128,17 +133,61 @@ def _bounded_int(value: Any, *, default: int, maximum: int, name: str) -> int:
 
 
 class ResearchUIAdapter:
-    """Answer the shared UI's workspace operations from one research service."""
+    """Answer the shared UI's workspace operations from one research service.
 
-    def __init__(self, config: ResearchConfig, service: ResearchService) -> None:
+    The service is the app's, so the workspace, the agent, and the command line
+    are three readers of one state. The client methods are the same registry the
+    agent's `status` counts and the command line lists: a person in the browser
+    and a person in a terminal see the same agents and drop the same sessions.
+    """
+
+    def __init__(
+        self,
+        config: ResearchConfig,
+        service: ResearchService,
+        *,
+        clients: ClientRegistry | None = None,
+    ) -> None:
         self.config = config
         self.service = service
+        self.clients = clients
 
     async def health(self) -> Mapping[str, Any]:
         return {
             "project_root": str(self.config.project_root),
             "source_root": str(self.config.source_root),
         }
+
+    def _require_clients(self) -> ClientRegistry:
+        """The registry, or a refusal when this adapter was built without one.
+
+        A test that serves the workspace over a stand-in service has no process
+        behind it, and a stand-in is not a server: naming that is better than
+        reporting an empty list that reads as "no agents are attached".
+        """
+
+        if self.clients is None:
+            raise UIRequestError(
+                "This workspace is not served by a running app, so it has no "
+                "clients to report.",
+                status_code=501,
+            )
+        return self.clients
+
+    async def list_clients(self) -> Sequence[Mapping[str, Any]]:
+        return self._require_clients().report()
+
+    async def disconnect_client(
+        self, session_id: str, reason: str | None = None
+    ) -> Mapping[str, Any]:
+        registry = self._require_clients()
+        try:
+            client = registry.disconnect(
+                session_id, reason or "Disconnected from the workspace."
+            )
+        except ClientError as exc:
+            raise UIRequestError(str(exc)) from exc
+        return client.report()
 
     def _arguments(
         self, operation: str, arguments: Mapping[str, Any]
@@ -272,12 +321,19 @@ def _source_path(arguments: Mapping[str, Any]) -> str:
     return value
 
 
-def create_ui_app(config: ResearchConfig, *, service: ResearchService) -> Starlette:
+def create_ui_app(
+    config: ResearchConfig,
+    *,
+    service: ResearchService,
+    clients: ClientRegistry | None = None,
+) -> Starlette:
     """Create the shared workspace over the app's one service.
 
     The adapter is always handed the service rather than a factory, because the
     app process owns the gateway and there is exactly one of it: a factory here
-    would open a second one for the workspace alone.
+    would open a second one for the workspace alone. The client registry is
+    passed in for the same reason, and is absent when the workspace is served
+    without a process behind it.
     """
 
     # More than one project can be served at the same time, so each one names the
@@ -286,5 +342,5 @@ def create_ui_app(config: ResearchConfig, *, service: ResearchService) -> Starle
     profile = replace(RESEARCH_UI_PROFILE, project_fallback_name=config.project_name)
     return create_shared_ui_app(
         profile=profile,
-        adapter=ResearchUIAdapter(config, service),
+        adapter=ResearchUIAdapter(config, service, clients=clients),
     )

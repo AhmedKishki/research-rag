@@ -8,6 +8,7 @@ these tests never download anything.
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from typing import Any
 
@@ -16,7 +17,13 @@ from vanilla_ultra_rag_mcp import runtime as vanilla_runtime
 
 import research_rag.doctor as doctor_module
 from research_rag.config import ResearchConfig, resolve_config
-from research_rag.doctor import run_doctor
+from research_rag.doctor import (
+    DoctorError,
+    check_entry,
+    mcp_entry_block,
+    mcp_url_block,
+    run_doctor,
+)
 
 READY_STATUS: dict[str, Any] = {
     "ready": True,
@@ -277,3 +284,196 @@ def test_prefetch_reports_what_it_cached(
     assert len(loaded) == 2
     assert any("bge-small-en-v1.5" in line for line in lines)
     assert any("MiniLM" in line for line in lines)
+
+
+def _entry_file(tmp_path: Path, body: str) -> Path:
+    path = tmp_path / "mcp.json"
+    path.write_text(body, encoding="utf-8")
+    return path
+
+
+def test_the_two_entries_reach_the_app_two_ways(config: ResearchConfig) -> None:
+    """A client that can open a socket gets the app; one that cannot gets the bridge."""
+
+    url_entry = json.loads(mcp_url_block(config))
+    stdio_entry = json.loads(mcp_entry_block(config))
+    url = url_entry["mcp"]["research-rag"]
+    command = stdio_entry["mcp"]["research-rag"]["command"]
+
+    assert url["url"].startswith("http://127.0.0.1:")
+    assert url["url"].endswith("/mcp")
+    # The stdio entry names the bridge explicitly: `research-rag ui` runs the same
+    # executable and is not an agent entry.
+    assert command[-1] == "mcp"
+    assert command[command.index("--project-root") + 1] == str(config.project_root)
+    assert Path(command[0]).name == "research-rag"
+    assert stdio_entry["mcp"]["research-rag"]["timeout"] == 3_600_000
+
+
+def test_a_correct_url_entry_passes(tmp_path: Path, config: ResearchConfig) -> None:
+    path = _entry_file(
+        tmp_path,
+        json.dumps(
+            {"mcp": {"rag": {"url": "http://127.0.0.1:5051/mcp", "timeout": 3_600_000}}}
+        ),
+    )
+
+    findings = check_entry(config, path)
+
+    assert [check.name for check in findings] == ["entry"]
+    assert findings[0].state == "ok"
+
+
+def test_a_url_entry_must_be_loopback_and_at_the_agent_surface(
+    tmp_path: Path, config: ResearchConfig
+) -> None:
+    path = _entry_file(
+        tmp_path,
+        json.dumps({"mcpServers": {"rag": {"url": "https://example.com/mcp"}}}),
+    )
+
+    findings = check_entry(config, path)
+
+    states = {check.name: check.state for check in findings}
+    assert states["entry.url"] == "blocked"
+    assert "loopback only" in next(c.reason for c in findings if c.name == "entry.url")
+
+
+def test_a_url_entry_at_the_wrong_route_is_a_warning(
+    tmp_path: Path, config: ResearchConfig
+) -> None:
+    path = _entry_file(
+        tmp_path, json.dumps({"mcp": {"rag": {"url": "http://127.0.0.1:5051/"}}})
+    )
+
+    findings = check_entry(config, path)
+
+    assert [check.state for check in findings] == ["warn"]
+    assert "agent surface is at /mcp" in findings[0].reason
+
+
+def test_a_stdio_entry_must_run_this_apps_bridge(
+    tmp_path: Path, config: ResearchConfig
+) -> None:
+    """`research-rag ui` runs the same executable and is not an agent entry."""
+
+    path = _entry_file(
+        tmp_path,
+        json.dumps(
+            {
+                "mcp": {
+                    "rag": {
+                        "command": [
+                            "/usr/local/bin/research-rag",
+                            "--project-root",
+                            str(config.project_root),
+                            "ui",
+                        ]
+                    }
+                }
+            }
+        ),
+    )
+
+    with pytest.raises(DoctorError, match="No research-rag entry"):
+        check_entry(config, path)
+
+
+def test_a_stdio_entry_is_checked_for_paths_and_timeout(
+    tmp_path: Path, config: ResearchConfig
+) -> None:
+    path = _entry_file(
+        tmp_path,
+        json.dumps(
+            {
+                "mcp": {
+                    "rag": {
+                        "command": [
+                            "/nowhere/research-rag",
+                            "--project-root",
+                            str(config.project_root),
+                            "mcp",
+                        ]
+                    }
+                }
+            }
+        ),
+    )
+
+    findings = check_entry(config, path)
+    states = {check.name: check.state for check in findings}
+
+    assert states["entry.executable"] == "blocked"
+    assert states["entry.timeout"] == "warn"
+
+
+def test_two_entries_for_one_project_say_what_it_means(
+    tmp_path: Path, config: ResearchConfig
+) -> None:
+    path = _entry_file(
+        tmp_path,
+        json.dumps(
+            {
+                "mcp": {
+                    "one": {"url": "http://127.0.0.1:5051/mcp"},
+                    "two": {"url": "http://127.0.0.1:5052/mcp"},
+                }
+            }
+        ),
+    )
+
+    findings = check_entry(config, path)
+
+    assert not any(check.name == "entry.duplicate" for check in findings)
+    assert all(check.state == "ok" for check in findings) or any(
+        check.name == "entry" for check in findings
+    )
+
+
+def test_an_entry_file_that_names_no_project_is_refused(
+    tmp_path: Path, config: ResearchConfig
+) -> None:
+    path = _entry_file(
+        tmp_path,
+        json.dumps(
+            {
+                "mcp": {
+                    "rag": {
+                        "command": ["/usr/bin/other", "--project-root", "/x", "mcp"]
+                    }
+                }
+            }
+        ),
+    )
+
+    with pytest.raises(DoctorError, match="No research-rag entry"):
+        check_entry(config, path)
+
+
+def test_a_missing_entry_file_is_refused(config: ResearchConfig) -> None:
+    with pytest.raises(DoctorError, match="No client entry file"):
+        check_entry(config, "/nowhere/mcp.json")
+
+
+def test_checking_an_entry_is_not_an_operation(
+    config: ResearchConfig, tmp_path: Path
+) -> None:
+    path = _entry_file(tmp_path, json.dumps({"mcp": {}}))
+
+    with pytest.raises(DoctorError, match="cannot run with an operation"):
+        _run(config, entry=path, repair=True)
+
+
+def test_the_entry_check_reports_without_reading_the_project(
+    config: ResearchConfig, tmp_path: Path
+) -> None:
+    """A file check is about the file, so it must not start an app to read one."""
+
+    path = _entry_file(
+        tmp_path, json.dumps({"mcp": {"rag": {"url": "http://127.0.0.1:5051/mcp"}}})
+    )
+
+    result = _run(config, entry=path)
+
+    assert result.exit_code == 0
+    assert "ok" in result.text()

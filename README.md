@@ -11,7 +11,7 @@ Everything runs on your machine, on one CPU, with no service to sign up for.
 - **A browser workspace.** Search your corpus, read results with their page numbers and citations, open the original PDF or EPUB beside a passage, and record reviewed metadata or an exclusion for each source.
 - **An agent surface.** Seven operations and two resources over MCP, served at `/mcp` on the same port as the workspace. An agent's answer is the same payload the workspace renders, projected down to the fields an agent acts on, which is about half the size.
 - **One command line.** `research-rag search` and `research-rag status` reach the same running app, so a terminal answer and a workspace answer cannot disagree.
-- **Clients you can see and drop.** `research-rag clients` lists the agents attached to the app; `research-rag disconnect` ends one. A client that cannot open a socket gets the same surface through `research-rag mcp`, which speaks stdio and proxies to the running app.
+- **Clients you can see and drop, from either place.** The workspace's status view lists the agents attached to the app and can end one; `research-rag clients` and `research-rag disconnect` do the same from a terminal, over the same registry, so a drop in the browser is a drop the command line can see. A client that cannot open a socket gets the same surface through `research-rag mcp`, which speaks stdio and proxies to the running app.
 - **Immutable generations.** A rebuild writes a new generation and switches to it only when every index is complete, so a failed build leaves the previous generation searchable.
 - **Reviewed metadata as first-class state.** Categories, projects, keywords, language, title, and authors are editable plain JSON, applied at read time with no rebuild.
 - **Honest provenance.** Every passage carries its source, its locator, and whether its text is cleaned semantic content rather than a transcript.
@@ -174,12 +174,14 @@ Set `RESEARCH_ULTRARAG_CLIENT_NAME` to something that names the agent, so the ap
 
 What an agent gets is the same service the workspace uses, with a projected answer: `status`, `ingest`, `search`, `list_sources`, `get_passage`, `set_source_inclusion`, `set_source_metadata`, and the `research://status` and `research://sources` resources. `status` also reports where the workspace is and how many agents are attached.
 
-To see who is attached, and to end one:
+To see who is attached, and to end one, from the browser or from a terminal:
 
 ```bash
 research-rag --project-root /path/to/project clients
 research-rag --project-root /path/to/project disconnect SESSION_ID
 ```
+
+In the workspace, the same list is under **Knowledge base status → Attached clients**, with a **Disconnect** action beside each attached agent. Both read the same registry, so a session ended in the browser is gone from the command line too.
 
 ## Read the answer, then open the original
 
@@ -282,6 +284,15 @@ research-rag --project-root /path/to/project stop --servers
 research-rag --project-root /path/to/project doctor
 ```
 
+### Configure a client
+
+```bash
+research-rag --project-root /path/to/project doctor --mcp-entry
+research-rag --project-root /path/to/project doctor --check-entry ~/my-client.json
+```
+
+`--mcp-entry` prints two entries: the URL entry, which points at the app's own port and is what a client that can open a socket should use, and the stdio entry, which runs the bridge beside the running interpreter and is what one that cannot should use. `--check-entry` reads a client file you already have and reports what is wrong with it — an executable that is not a file, a project root that is not this project, a URL that is not loopback or is not the agent surface, a timeout shorter than an ingestion, or two entries for one project. Neither writes anything.
+
 ### Ask the doctor
 
 ```bash
@@ -363,7 +374,7 @@ Continue in one place at a time. Two processes pointed at the same project root,
 | `config` | every effective setting and the layer it came from |
 | `doctor` | one line per dependency, with the command that fixes it |
 | `start` / `ui` | the app, started; `ui` also opens a browser |
-| `clients` / `disconnect` | the agents attached to the app, and ending one |
+| `clients` / `disconnect` | the agents attached to the app, and ending one — the same list the workspace shows |
 | `mcp` | the agent surface on stdio, proxied to the running app |
 | `serve` | the app in the foreground, which is what the launcher runs |
 | `stop` | the app, and optionally any process of this app still building |

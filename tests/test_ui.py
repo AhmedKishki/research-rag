@@ -16,10 +16,11 @@ from typing import Any
 import pytest
 from starlette.testclient import TestClient
 
+from research_rag.app import ClientRegistry
 from research_rag.config import (
     resolve_config,
 )
-from research_rag.surfaces.ui import create_ui_app
+from research_rag.surfaces.ui import RESEARCH_UI_PROFILE, create_ui_app
 
 
 class FakeResearchService:
@@ -412,3 +413,109 @@ def test_a_service_failure_becomes_a_safe_message(project: Path) -> None:
 
     assert response.status_code == 400
     assert "the corpus is on a slow disk" in response.json()["error"]
+
+
+def _registry(*, attached: bool = True) -> ClientRegistry:
+    """A real registry with one session in it, seeded the way the app seeds one."""
+
+    registry = ClientRegistry()
+    if attached:
+        registry._touch("s-1", "reader-agent")
+        registry._touch("s-1", "reader-agent")
+    return registry
+
+
+def _client_client(project: Path, registry: ClientRegistry | None) -> TestClient:
+    config = resolve_config(project, vanilla_executable=sys.executable)
+    return TestClient(
+        create_ui_app(
+            config,
+            service=FakeResearchService(),  # type: ignore[arg-type]
+            clients=registry,
+        )
+    )
+
+
+def test_the_workspace_lists_the_clients_attached_to_the_app(project: Path) -> None:
+    """A person in the browser sees what the command line sees."""
+
+    with _client_client(project, _registry()) as client:
+        response = client.get("/api/clients")
+    assert response.status_code == 200
+    entry = response.json()["clients"][0]
+    assert entry["name"] == "reader-agent"
+    assert entry["attached"] is True
+    assert entry["requests"] == 2
+
+
+def test_the_workspace_can_end_one_client(project: Path) -> None:
+    registry = _registry()
+    with _client_client(project, registry) as client:
+        response = client.post(
+            "/api/clients/s-1/disconnect", json={"reason": "from the workspace"}
+        )
+    assert response.status_code == 200
+    assert response.json()["attached"] is False
+    assert response.json()["detached_reason"] == "from the workspace"
+    # The same registry the command line reads, so a drop from the browser is a
+    # drop the command line can see.
+    assert registry.report()[0]["attached"] is False
+
+
+def test_the_workspace_names_a_session_it_does_not_have(project: Path) -> None:
+    with _client_client(project, _registry()) as client:
+        response = client.post("/api/clients/nope/disconnect", json={})
+    assert response.status_code == 400
+    assert "nope" in response.json()["error"]
+
+
+def test_the_clients_panel_is_offered_because_the_app_is_a_server(
+    project: Path,
+) -> None:
+    config = resolve_config(project, vanilla_executable=sys.executable)
+    with TestClient(create_ui_app(config, service=FakeResearchService())) as client:  # type: ignore[arg-type]
+        profile = client.get("/api/ui").json()
+    assert profile["capabilities"]["clients"] is True
+    assert RESEARCH_UI_PROFILE.capabilities.clients is True
+
+
+def test_a_workspace_with_no_process_behind_it_refuses_rather_than_lying(
+    project: Path,
+) -> None:
+    """A stand-in service is not a server, so it says so instead of reporting none."""
+
+    with _client_client(project, None) as client:
+        response = client.get("/api/clients")
+    assert response.status_code == 501
+    assert "not served by a running app" in response.json()["error"]
+
+
+def test_the_workspace_hides_the_panel_when_no_registry_is_wired(
+    project: Path,
+) -> None:
+    """The capability stays on, because the app is a server; the route refuses."""
+
+    config = resolve_config(project, vanilla_executable=sys.executable)
+    with TestClient(create_ui_app(config, service=FakeResearchService())) as client:  # type: ignore[arg-type]
+        assert client.get("/api/ui").json()["capabilities"]["clients"] is True
+        assert client.get("/api/clients").status_code == 501
+
+
+def test_a_workspace_disconnect_is_held_to_the_write_rules(project: Path) -> None:
+    """Ending a session is a write, so the same rules the other writes carry apply."""
+
+    registry = _registry()
+    with _client_client(project, registry) as client:
+        cross_origin = client.post(
+            "/api/clients/s-1/disconnect",
+            headers={"Origin": "https://example.com"},
+            json={"reason": "x"},
+        )
+        form = client.post(
+            "/api/clients/s-1/disconnect",
+            content=b"reason=x",
+            headers={"Content-Type": "application/x-www-form-urlencoded"},
+        )
+    assert cross_origin.status_code == 403
+    assert form.status_code == 415
+    assert registry.report()[0]["attached"] is True
