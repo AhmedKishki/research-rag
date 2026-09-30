@@ -1,0 +1,180 @@
+# Default settings for research-rag.
+#
+# This file ships inside the package and holds every tunable this app reads.
+# A layer above it names only what it changes; layers win per key, lowest first:
+#
+#   this file  <  ~/.config/research-ultra-rag-mcp/config.toml
+#              <  <project>/.research-rag/config.toml
+#              <  --config PATH
+#              <  RESEARCH_ULTRARAG_* environment variables
+#              <  --set key=value
+#
+# `research-rag config` prints the merged result and names the
+# layer that supplied each value. A key that is not declared here is refused in
+# every layer, so a typo is an error rather than a silent default.
+#
+# A setting whose class is `identity` decides what a generation contains: its
+# value is recorded in the generation (the retrieval-policy fingerprint for
+# ranking, the chunk settings for chunking), and changing it means the next
+# ingestion builds a new generation instead of mixing two. `AGENTS.md` records
+# the constants that deliberately stay in code: schema and policy versions, and
+# the names and paths that make up the project boundary.
+
+[language]
+# The languages the corpus is written in, as ISO 639-1 codes (en, de, fr, ...):
+# one code, or several separated by commas for a corpus in more than one
+# language, most-used-first. Every language named decides whether the embedding
+# model below covers the text, and a mismatch is reported by `status` instead of
+# being silently embedded. Only a language BM25 can tokenize is accepted, because
+# the stopword list comes from it. (identity: part of the ranking policy.)
+corpus = "en"
+# Which language's stopword list BM25 filters with. Empty means the first
+# language named above, because BM25 takes a single list and a corpus in several
+# languages has to point it at one of them; set it to choose another.
+# (identity: part of the ranking policy.)
+bm25_stopwords = ""
+
+[runtime]
+# Require an installed vanilla runtime and already-cached models.
+offline = false
+# debug, info, warn, or error.
+log_level = "warn"
+# Accepted and ignored. It selected the MCP server's answer projection, and a
+# settings file that server wrote may still name it, so the key stays declared.
+tool_detail = "lean"
+# ONNX Runtime threads for the embedding model; 0 leaves the choice to the runtime.
+embedding_threads = 0
+# CPU niceness for this process and its children. 0 leaves priority unchanged;
+# 10 or higher keeps a desktop responsive while a build saturates every core.
+nice = 0
+# Shared FastEmbed model cache; empty means this user's per-user cache.
+model_cache_root = ""
+
+[retrieval]
+# How alike two passages may be before one search answer shows only the
+# better-ranked of them. Two sources can hold the same text — an essay on its own
+# and the same essay inside a book — and a search that answers the same question
+# twice with two copies of one passage is not an answer. The words are compared
+# first and cost nothing; this number decides the part cosine decides, and a
+# number no cosine can reach decides that nothing is close enough rather than
+# turning the check off. (runtime)
+duplicate_cosine = 0.99
+# Reciprocal-rank-fusion constant: higher flattens the rank curve. (identity)
+rrf_k = 60
+# Weight of each rank in the fusion. (identity)
+bm25_weight = 1.25
+dense_weight = 1.0
+# Fewest and most fused candidates a search considers. (identity)
+minimum_candidates = 20
+maximum_candidates = 200
+# A dense candidate below this cosine similarity is withheld, not ranked.
+# Measured: 0.72 is inside the band a fused ranking cannot distinguish, and the
+# value above it starts dropping relevant passages; a dense-only ranking wants a
+# much lower value. (identity)
+dense_minimum_cosine_similarity = 0.72
+# Most candidates the cross-encoder reorders by score; the unranked tail of the
+# fused order is appended after them, so a reference group stays reachable. (identity)
+rerank_max_candidates = 50
+# Depth of the reranked window as a multiple of the requested top_k, and the
+# fewest candidates reordered whatever top_k asks for: the window is
+# max(top_k * rerank_window_multiple, rerank_window_floor), capped by
+# rerank_max_candidates and the fused candidate count. Measured: 20 is the
+# shallowest window that reaches the plateau, and ten more candidates cost about
+# 0.7 s. (identity)
+rerank_window_multiple = 2
+rerank_window_floor = 10
+# Pseudo-relevance feedback: search once, mine terms from the top lexical
+# results, search again with them. Off by default until measured. (identity)
+prf = false
+# How many leaders the terms are mined from, and how many terms are added.
+prf_documents = 5
+prf_terms = 8
+# Withheld candidates quoted per gate reason in a search answer. (identity)
+maximum_withheld_examples = 5
+# Share of a candidate's normalized relevance charged for each candidate
+# already selected from the same source. The charge is taken once per repeat at
+# the final top_k pick, over candidates fusion and reranking already ranked, so
+# it can reorder a result but never add or drop a candidate: 0 keeps the ranked
+# order exactly, and 1 takes every other source before it repeats one. A BM25 or
+# dense ranking without reranking carries no score to charge a repeat against,
+# so it keeps its own order too. On the reference corpus 0.15, 0.25, and 0.4
+# score identically on success, MRR, nDCG, and document success, each costing one
+# query's target a slide from rank 4 to 5, and differ only in spread: mean
+# distinct sources in a top-10 rise from 3.9 to 7.4 at the default, 8.0 at 0.4,
+# and 8.4 at 0.6, where that target slides to rank 9. The default is the middle
+# of those three identical values: 0.4 spreads further, and 0.6 is where the
+# first quality column moves. (runtime)
+source_diversity_penalty = 0.25
+# How far below a query's own best dense similarity a candidate may score and
+# still be admitted when it misses the cosine floor. A one-word query's whole
+# candidate list can sit in a 0.06-wide band under 0.72, where the absolute floor
+# slices arbitrarily: on the reference corpus "waste" kept 6 of 200 candidates and
+# 4 sources, and 0.10 kept 50 candidates over 11 sources. The rescue needs one
+# candidate that cleared the floor, so a query the corpus cannot support still
+# abstains, and it changes no artifact. 0 applies the floor to every candidate.
+# (runtime)
+dense_relative_similarity_margin = 0.10
+# Words a candidate needs before it counts as evidence. Chunks never span
+# extraction units, so a short unit — a five-word index line ("value production
+# chain, 70-71"), a heading, a copyright line — becomes a short chunk that
+# matches a query about its own words while carrying no prose to cite: 16.6% of
+# the reference corpus's chunks are under 12 words and 2.7% of the passages its
+# searches returned were. The reference project sets 12 and no judged target is
+# under 30 words, so the value costs that measured set nothing; 20 also removes
+# 12-to-19-word captions and copyright lines. Off by default, because a corpus
+# of deliberately short passages is a legitimate corpus and this drops them.
+# (runtime)
+minimum_passage_words = 0
+# The same floor in the unit a chunk is built in: a fraction of the generation's
+# recorded `chunking.size`, counted with the tokenizer the generation was chunked
+# by and over the returned text only, so a contextual header cannot enlarge a
+# fragment. A tenth of the packaged 384 tokens is 38, and on the reference corpus
+# that drops 23.6% of the chunks while removing 1.9% of its text; every judged
+# target there is above 168 tokens, so the rule costs the measured set nothing.
+# It is a corpus judgement rather than an improvement, which is why the packaged
+# value is off. (runtime)
+minimum_passage_token_fraction = 0.0
+
+[chunking]
+# Target chunk length in GPT-2 tokens, and the tokens neighbours share. (identity:
+# both are recorded in the generation and decide chunk boundaries.)
+size = 384
+overlap = 64
+# Prepend the source title and the section to the text a chunk is embedded from,
+# never to the text a search returns, so returned text stays quote-clean. A
+# re-ingest with it on recomputes every vector, because vector reuse is keyed on
+# the passage. Measured neutral on the reference corpus, so the default is off and
+# a project opts in. (identity: recorded in the generation.)
+headers = false
+# Extraction units sent to one chunker call. Throughput only: each unit keeps its
+# own durable output file and its own redo boundary.
+batch_units = 16
+
+[ingestion]
+# Soft time budget for one ingest call; exhausting it returns a checkpointed
+# in_progress result rather than losing work. A build larger than one budget needs
+# one call per slice, so a client that stops repeating identical calls needs this
+# set below its own request timeout, high enough that one call carries the build.
+work_budget_seconds = 1800
+# Chunks embedded per gateway call, and PDF pages extracted per call. Throughput only.
+embedding_batch_size = 64
+pdf_page_batch_size = 8
+
+[dense]
+# Embedding model for the dense half of retrieval. Every supported name is pinned to
+# a revision in embeddings.py, which also declares its dimension, its token limit,
+# the languages it covers, and any query/passage prefix it requires. (engine choice,
+# recorded in every generation it builds.)
+embedding_model = "BAAI/bge-small-en-v1.5"
+# Dense index backend for new generations: auto, exact, or qdrant. (engine choice,
+# recorded in every generation it builds.)
+backend = "auto"
+# CPU cross-encoder that reranks every search. Every supported name is pinned to a
+# revision in rerankers.py. (engine choice, recorded in the answer and the manifest.)
+reranker_model = "Xenova/ms-marco-MiniLM-L-6-v2"
+# Sequences per embedding inference. Throughput only: a batch of 1 returns exactly
+# the same floats as a batch of 64 (MEASUREMENTS.md).
+embedding_inference_batch_size = 1
+# Above this many chunks, `auto` selects the embedded ANN index instead of the exact
+# scan. (engine choice, recorded in every generation it builds.)
+exact_backend_chunk_limit = 200000

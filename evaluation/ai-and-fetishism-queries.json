@@ -1,0 +1,473 @@
+{
+  "schema_version": 1,
+  "corpus": {
+    "project_name": "ai-and-fetishism",
+    "project_id": "121304a5-378c-4384-a0c8-9db4476cec47",
+    "measured_generation": "20260918T231548Z-1b7d93cd",
+    "chunk_count": 8102,
+    "indexed_source_count": 53
+  },
+  "protocol": "Known-item judged set. Each target is one chunk of the reference corpus, identified by a verbatim snippet so it can be re-resolved after re-ingestion, and each query is judged relevant to exactly that target chunk. A single-target judgment measures findability of a designated passage, not exhaustive recall; the harness reports document-level success separately so a chunk-level miss is not confused with a document-level one.",
+  "targets": [
+    {
+      "target_id": "t01",
+      "source_path": "sources/Aapti Institute, Invisible Workers, Visible Harms - Perils and Precarities of AI Labour.pdf",
+      "source_relative_path": "Aapti Institute, Invisible Workers, Visible Harms - Perils and Precarities of AI Labour.pdf",
+      "document_id": "doc_40eca053260ab739615feb61",
+      "locator": {
+        "page": 30,
+        "page_label": "30",
+        "type": "pdf_page"
+      },
+      "snippet": "Classify tasks by exposure risk level",
+      "chunk_id_at_measurement": "chk_c3cfe62948c280fd18c02d31",
+      "note": "The Aapti Institute report's recommended exposure-risk controls for content moderation work."
+    },
+    {
+      "target_id": "t02",
+      "source_path": "sources/Alpine et al., AI-Driven Productivity Gains Enable More CO2 Emissions Than They Avoid in a Global Energy-Economy Model.pdf",
+      "source_relative_path": "Alpine et al., AI-Driven Productivity Gains Enable More CO2 Emissions Than They Avoid in a Global Energy-Economy Model.pdf",
+      "document_id": "doc_1a96000c70f2c8879f02fa61",
+      "locator": {
+        "page": 8,
+        "page_label": "8",
+        "type": "pdf_page"
+      },
+      "snippet": "expand U.S. shale reserves by 8",
+      "chunk_id_at_measurement": "chk_344381c53b7b1a72309b0d2b",
+      "note": "Goldman Sachs estimate of AI-driven expansion of recoverable shale resources."
+    },
+    {
+      "target_id": "t03",
+      "source_path": "sources/Ampuja, The Blind Spots of Digital Innovation Fetishism.pdf",
+      "source_relative_path": "Ampuja, The Blind Spots of Digital Innovation Fetishism.pdf",
+      "document_id": "doc_a3076fa42e60165f392c1df7",
+      "locator": {
+        "page": 13,
+        "page_label": "43",
+        "type": "pdf_page"
+      },
+      "snippet": "s of capitalist business, such as modern corporations or financial markets, are not the only sites of systemat",
+      "chunk_id_at_measurement": "chk_481d62c3993dd5b29c74cc7a",
+      "note": "Ampuja's account of finance capital escaping regulation for quick returns."
+    },
+    {
+      "target_id": "t04",
+      "source_path": "sources/Dant, Fetishism and the Social Value of Objects.pdf",
+      "source_relative_path": "Dant, Fetishism and the Social Value of Objects.pdf",
+      "document_id": "doc_e7c9224c5fe4218ad0a4a4f5",
+      "locator": {
+        "page": 14,
+        "page_label": "14",
+        "type": "pdf_page"
+      },
+      "snippet": "Baudrillard does not comment on the (at least partially) gendered distinction",
+      "chunk_id_at_measurement": "chk_5813ad8c139b7bbc52fe405e",
+      "note": "Dant's criticism that Baudrillard's fetishised body overlooks the gendered split between labour power and beauty."
+    },
+    {
+      "target_id": "t05",
+      "source_path": "sources/Foster et al., The Theory of Unequal Ecological Exchange - A Marx-Odum Dialectic.pdf",
+      "source_relative_path": "Foster et al., The Theory of Unequal Ecological Exchange - A Marx-Odum Dialectic.pdf",
+      "document_id": "doc_371e1b1c1cd433b8b2a03012",
+      "locator": {
+        "page": 19,
+        "page_label": "19",
+        "type": "pdf_page"
+      },
+      "snippet": "Emergy values for products from rural countries",
+      "chunk_id_at_measurement": "chk_952730bba38cc94658030f25",
+      "note": "Foster et al. quoting Odum and Scienceman on emergy and rural-export prices."
+    },
+    {
+      "target_id": "t06",
+      "source_path": "sources/Foster, The Fetishism of AI.pdf",
+      "source_relative_path": "Foster, The Fetishism of AI.pdf",
+      "document_id": "doc_36f13330c6d8245ee7a5eb4e",
+      "locator": {
+        "page": 9,
+        "page_label": "9",
+        "type": "pdf_page"
+      },
+      "snippet": "The announcement of the Trump administration",
+      "chunk_id_at_measurement": "chk_bde291fda81b07b29e3c69db",
+      "note": "Foster's account of the Stargate initiative and its beneficiaries."
+    },
+    {
+      "target_id": "t07",
+      "source_path": "sources/Gabrys, Digital Rubbish.pdf",
+      "source_relative_path": "Gabrys, Digital Rubbish.pdf",
+      "document_id": "doc_9a7b1f0ddc8776c4e51f7bff",
+      "locator": {
+        "page": 2,
+        "page_label": "2",
+        "type": "pdf_page"
+      },
+      "snippet": "the lifecycle of manufacture, consumption, repair and disposal. These wastes are toxic, difficult to classify,",
+      "chunk_id_at_measurement": "chk_ac861917ab0a5d5b293cfe92",
+      "note": "Gabrys on digital media as material-ecological processes revealed by waste."
+    },
+    {
+      "target_id": "t08",
+      "source_path": "sources/Gambetta et al., Learning by Surprise - Adaptive Mitigation of Model Collapse in Large Language Models.pdf",
+      "source_relative_path": "Gambetta et al., Learning by Surprise - Adaptive Mitigation of Model Collapse in Large Language Models.pdf",
+      "document_id": "doc_f031463c91f0775352c11d6c",
+      "locator": {
+        "page": 16,
+        "page_label": "16",
+        "type": "pdf_page"
+      },
+      "snippet": "perplexity-based filtering strategy effectively helps prevent model collapse",
+      "chunk_id_at_measurement": "chk_aa9c85024a5a1b49c6f7168c",
+      "note": "Gambetta et al.'s perplexity-based data selection result."
+    },
+    {
+      "target_id": "t09",
+      "source_path": "sources/Gidwani et al., The Waste-Value Dialectic - Lumpen Urbanization in Contemporary India.pdf",
+      "source_relative_path": "Gidwani et al., The Waste-Value Dialectic - Lumpen Urbanization in Contemporary India.pdf",
+      "document_id": "doc_441660300937cf1026112839",
+      "locator": {
+        "page": 11,
+        "page_label": "122",
+        "type": "pdf_page"
+      },
+      "snippet": "Sheikh Inayat, a small-scrap trader, says he came to the city as a young boy",
+      "chunk_id_at_measurement": "chk_0548e05392f9a00b81d46821",
+      "note": "Gidwani et al.'s interview material on scrap traders' working lives."
+    },
+    {
+      "target_id": "t10",
+      "source_path": "sources/Gidwani, Six Theses on Waste, Value, and Commons.pdf",
+      "source_relative_path": "Gidwani, Six Theses on Waste, Value, and Commons.pdf",
+      "document_id": "doc_b81e1a1707f2f4dfec4809cd",
+      "locator": {
+        "page": 8,
+        "page_label": "8",
+        "type": "pdf_page"
+      },
+      "snippet": "discipline workers to conserve their psychosocial and sexual energies",
+      "chunk_id_at_measurement": "chk_21338bcdd8274aef962f40a3",
+      "note": "Gidwani's reading of Gramsci on Fordist discipline of workers' energies."
+    },
+    {
+      "target_id": "t11",
+      "source_path": "sources/Gidwani, The Accumulation of Capital as the Accumulation of Waste - Nine Propositions.pdf",
+      "source_relative_path": "Gidwani, The Accumulation of Capital as the Accumulation of Waste - Nine Propositions.pdf",
+      "document_id": "doc_e629546880161fe72a1f2f64",
+      "locator": {
+        "page": 8,
+        "page_label": "8",
+        "type": "pdf_page"
+      },
+      "snippet": "it generates the illusion of progress without confronting the steep environmental costs",
+      "chunk_id_at_measurement": "chk_49593875a6eab88b81ce1e34",
+      "note": "Gidwani's proposition that recycling cannot cure consumerism."
+    },
+    {
+      "target_id": "t12",
+      "source_path": "sources/Hall, Race, Articulation and Societies Structured in Dominance.pdf",
+      "source_relative_path": "Hall, Race, Articulation and Societies Structured in Dominance.pdf",
+      "document_id": "doc_7e7a9354f4417f579116422e",
+      "locator": {
+        "page": 24,
+        "page_label": "24",
+        "type": "pdf_page"
+      },
+      "snippet": "Their sequence is determined, rather, by their relation to one another in modern bourgeois society",
+      "chunk_id_at_measurement": "chk_a5996b640f7f73483555ddd9",
+      "note": "Hall quoting Marx on the ordering of economic categories."
+    },
+    {
+      "target_id": "t13",
+      "source_path": "sources/Hatton-Proulx, The Afterlives of Toxic Waste Sites - Tracking the Longitudinal Urban Development Outcomes of Contaminated Soils.pdf",
+      "source_relative_path": "Hatton-Proulx, The Afterlives of Toxic Waste Sites - Tracking the Longitudinal Urban Development Outcomes of Contaminated Soils.pdf",
+      "document_id": "doc_9590b9c8320754da215a28e7",
+      "locator": {
+        "page": 10,
+        "page_label": "10",
+        "type": "pdf_page"
+      },
+      "snippet": "ecoming spaces of logistical urbanism in cities of the Global North (Cidell, 2011; Haarstad et al., 2023). The",
+      "chunk_id_at_measurement": "chk_0eab41f714363e230c67725f",
+      "note": "Hatton-Proulx on the reuse of a former waste-oil dump site in Montreal."
+    },
+    {
+      "target_id": "t14",
+      "source_path": "sources/Kimani, Hi-Tech Yet Highly Toxic - Electronics and E-Waste.pdf",
+      "source_relative_path": "Kimani, Hi-Tech Yet Highly Toxic - Electronics and E-Waste.pdf",
+      "document_id": "doc_a79e2e50933a2b734226198c",
+      "locator": {
+        "page": 8,
+        "page_label": "8",
+        "type": "pdf_page"
+      },
+      "snippet": "complemented on 25 March 1994 by a full ban on all exports of hazardous wastes",
+      "chunk_id_at_measurement": "chk_bbc86eb637052a5c8f37c30f",
+      "note": "Kimani on the Basel Ban on hazardous-waste exports from OECD countries."
+    },
+    {
+      "target_id": "t15",
+      "source_path": "sources/Kirk, For a Political Geography of Artificial Intelligence - Fighting Ghost Work, Exploitation, and the Making of a Global Digital Underclass.pdf",
+      "source_relative_path": "Kirk, For a Political Geography of Artificial Intelligence - Fighting Ghost Work, Exploitation, and the Making of a Global Digital Underclass.pdf",
+      "document_id": "doc_caf72dde3542565a3c6d6b3c",
+      "locator": {
+        "page": 4,
+        "page_label": "4",
+        "type": "pdf_page"
+      },
+      "snippet": "a new form of extraction which treats human life itself as a free resource for capital accumulation",
+      "chunk_id_at_measurement": "chk_8a0bbb70fe0c400daf6fa8c9",
+      "note": "Kirk on Couldry and Mejias's concept of data colonialism."
+    },
+    {
+      "target_id": "t16",
+      "source_path": "sources/Kneese, Climate Justice and Labor Rights.pdf",
+      "source_relative_path": "Kneese, Climate Justice and Labor Rights.pdf",
+      "document_id": "doc_d6bc13eae6ff860792d9163c",
+      "locator": {
+        "page": 10,
+        "page_label": "10",
+        "type": "pdf_page"
+      },
+      "snippet": "as Helen A. Hayes and Janna Frenzel argue a strategy of delay",
+      "chunk_id_at_measurement": "chk_cf911026a434c7e9993e4a5a",
+      "note": "Kneese on climate delay strategies that obscure extractive practices."
+    },
+    {
+      "target_id": "t17",
+      "source_path": "sources/Korodi, How Algorithmic Systems Govern Kenya’s Content Moderators.pdf",
+      "source_relative_path": "Korodi, How Algorithmic Systems Govern Kenya’s Content Moderators.pdf",
+      "document_id": "doc_14a03e2e6664a852c335349e",
+      "locator": {
+        "page": 3,
+        "page_label": "3",
+        "type": "pdf_page"
+      },
+      "snippet": "The system started flagging contents that were very ambiguous",
+      "chunk_id_at_measurement": "chk_480d5552abc5bf9593defd65",
+      "note": "Korodi's interview with a moderator assessing Tigray-conflict content."
+    },
+    {
+      "target_id": "t18",
+      "source_path": "sources/Kushner, Doubly Displaced.pdf",
+      "source_relative_path": "Kushner, Doubly Displaced.pdf",
+      "document_id": "doc_d511454d7a225285680a4dd8",
+      "locator": {
+        "page": 12,
+        "page_label": "12",
+        "type": "pdf_page"
+      },
+      "snippet": "e are very much in a climate emergency, and we need to act like it. We need a systemic overhaul of government ",
+      "chunk_id_at_measurement": "chk_0696c42e49af87899bdb05a0",
+      "note": "Kushner quoting a former Nairobi climate official on city government capacity."
+    },
+    {
+      "target_id": "t19",
+      "source_path": "sources/Liu, Flushed but Not Gone - Brainrot and AI Slop as Abject Excess in Data-Intensive Capitalism.pdf",
+      "source_relative_path": "Liu, Flushed but Not Gone - Brainrot and AI Slop as Abject Excess in Data-Intensive Capitalism.pdf",
+      "document_id": "doc_21a541e022ebc8edc2187474",
+      "locator": {
+        "page": 4,
+        "page_label": "4",
+        "type": "pdf_page"
+      },
+      "snippet": "is forced out from the sewage into public view",
+      "chunk_id_at_measurement": "chk_579de9a59d752da762ffcc19",
+      "note": "Liu on Skibidi Toilet staging a forced encounter with the abject."
+    }
+  ],
+  "queries": [
+    {
+      "query_id": "q01",
+      "class": "quote",
+      "target_id": "t01",
+      "query": "classify tasks by exposure risk level and define exposure caps"
+    },
+    {
+      "query_id": "q02",
+      "class": "quote",
+      "target_id": "t02",
+      "query": "AI-driven improvements could expand U.S. shale reserves"
+    },
+    {
+      "query_id": "q03",
+      "class": "quote",
+      "target_id": "t03",
+      "query": "financial elites who circumvent government regulations for quick profits"
+    },
+    {
+      "query_id": "q04",
+      "class": "quote",
+      "target_id": "t04",
+      "query": "Baudrillard gendered distinction fetishised body labour power and beauty"
+    },
+    {
+      "query_id": "q05",
+      "class": "quote",
+      "target_id": "t07",
+      "query": "digital media expanded material-ecological concretizations"
+    },
+    {
+      "query_id": "q06",
+      "class": "quote",
+      "target_id": "t08",
+      "query": "perplexity-based filtering strategy prevents model collapse"
+    },
+    {
+      "query_id": "q07",
+      "class": "quote",
+      "target_id": "t11",
+      "query": "recycling illusion of progress environmental costs of manufacturing"
+    },
+    {
+      "query_id": "q08",
+      "class": "quote",
+      "target_id": "t12",
+      "query": "sequence determined by relation to one another in modern bourgeois society"
+    },
+    {
+      "query_id": "q09",
+      "class": "quote",
+      "target_id": "t18",
+      "query": "Kenya Nairobi not fit for delivering climate action"
+    },
+    {
+      "query_id": "q10",
+      "class": "quote",
+      "target_id": "t06",
+      "query": "Musk Thiel Ellison Silicon Valley billionaires MAGA financing"
+    },
+    {
+      "query_id": "q11",
+      "class": "quote",
+      "target_id": "t15",
+      "query": "trained on unpaid public forums without compensating the writers"
+    },
+    {
+      "query_id": "q12",
+      "class": "paraphrase",
+      "target_id": "t01",
+      "query": "How should employers schedule and limit shifts so that reviewing disturbing material does not damage staff mental health?"
+    },
+    {
+      "query_id": "q13",
+      "class": "paraphrase",
+      "target_id": "t02",
+      "query": "Does more efficient drilling technology make previously uneconomic oil deposits worth extracting?"
+    },
+    {
+      "query_id": "q14",
+      "class": "paraphrase",
+      "target_id": "t03",
+      "query": "How do financiers seeking fast returns damage the wider economy?"
+    },
+    {
+      "query_id": "q15",
+      "class": "paraphrase",
+      "target_id": "t04",
+      "query": "Which theorist's account of the commodified body neglects the difference between waged labour and cosmetic self-presentation?"
+    },
+    {
+      "query_id": "q16",
+      "class": "paraphrase",
+      "target_id": "t07",
+      "query": "Why does electronic waste show how physically substantial digital devices really are?"
+    },
+    {
+      "query_id": "q17",
+      "class": "paraphrase",
+      "target_id": "t08",
+      "query": "Can selecting text by how surprising it is to a language model stop a model from degrading?"
+    },
+    {
+      "query_id": "q18",
+      "class": "paraphrase",
+      "target_id": "t11",
+      "query": "Why is reprocessing materials not a real solution to overconsumption?"
+    },
+    {
+      "query_id": "q19",
+      "class": "paraphrase",
+      "target_id": "t12",
+      "query": "How does Marx argue the ordering of economic categories should be understood?"
+    },
+    {
+      "query_id": "q20",
+      "class": "paraphrase",
+      "target_id": "t18",
+      "query": "What did a former Nairobi climate official say about whether city government can deliver climate policy?"
+    },
+    {
+      "query_id": "q21",
+      "class": "paraphrase",
+      "target_id": "t06",
+      "query": "Which technology executives have bankrolled the political movement around Trump?"
+    },
+    {
+      "query_id": "q22",
+      "class": "paraphrase",
+      "target_id": "t15",
+      "query": "Are the texts used to build large language models taken from their authors without payment?"
+    },
+    {
+      "query_id": "q23",
+      "class": "entity",
+      "target_id": "t06",
+      "query": "What is the Stargate initiative and which companies does it benefit?"
+    },
+    {
+      "query_id": "q24",
+      "class": "entity",
+      "target_id": "t09",
+      "query": "What does scrap trader Sheikh Inayat's biography show about work in Indian cities?"
+    },
+    {
+      "query_id": "q25",
+      "class": "entity",
+      "target_id": "t15",
+      "query": "What do Couldry and Mejias mean by data colonialism?"
+    },
+    {
+      "query_id": "q26",
+      "class": "entity",
+      "target_id": "t13",
+      "query": "What became of the Norco Oil site in Ville Saint-Pierre?"
+    },
+    {
+      "query_id": "q27",
+      "class": "entity",
+      "target_id": "t14",
+      "query": "What is the Basel Ban and which countries agreed to it?"
+    },
+    {
+      "query_id": "q28",
+      "class": "entity",
+      "target_id": "t17",
+      "query": "What does Aman's experience moderating content from Tigray reveal?"
+    },
+    {
+      "query_id": "q29",
+      "class": "entity",
+      "target_id": "t19",
+      "query": "How is Skibidi Toilet used to think about abjection and waste?"
+    },
+    {
+      "query_id": "q30",
+      "class": "entity",
+      "target_id": "t16",
+      "query": "What is the strategy of delay in corporate climate politics?"
+    },
+    {
+      "query_id": "q31",
+      "class": "entity",
+      "target_id": "t10",
+      "query": "How did Gramsci explain the disciplining of workers' energies under Fordism?"
+    },
+    {
+      "query_id": "q32",
+      "class": "entity",
+      "target_id": "t05",
+      "query": "What did Odum and Scienceman criticise about Marx and rural labour?"
+    }
+  ]
+}
