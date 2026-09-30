@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import contextlib
 import json
 import os
 import signal
@@ -25,15 +26,17 @@ import subprocess
 import sys
 import time
 from collections.abc import AsyncIterator, Sequence
-from contextlib import asynccontextmanager
+from contextlib import AbstractContextManager, asynccontextmanager, nullcontext
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, Self
 
 from config_ultra_rag_mcp import describe_settings
 
-from . import launcher as launcher_module
-from .config import (
+from .. import bridge
+from .. import launcher as launcher_module
+from ..app import UI_HOST, App
+from ..config import (
     CLI_COMMAND,
     ConfigurationError,
     ResearchConfig,
@@ -42,13 +45,13 @@ from .config import (
     project_command,
     resolve_config,
 )
-from .launcher import launcher_path, ui_launcher_state
-from .rerankers import RERANKER_MODEL_CHOICES
-from .service import ResearchService
-from .settings import SETTINGS
-from .support import DEFAULT_RETRIEVAL_METHOD, RETRIEVAL_METHODS, ResearchError
-from .ui import UI_HOST
-from .ultrarag import LazyGateway, VanillaUltraRAG
+from ..control import Control, ControlError, connect
+from ..launcher import launcher_path, start_app, ui_launcher_state
+from ..rerankers import RERANKER_MODEL_CHOICES
+from ..service import ResearchService
+from ..settings import SETTINGS
+from ..support import DEFAULT_RETRIEVAL_METHOD, RETRIEVAL_METHODS, ResearchError
+from ..ultrarag import LazyGateway, VanillaUltraRAG
 
 CLI_NAME = CLI_COMMAND
 DEFAULT_DEPTH = 10
@@ -58,6 +61,9 @@ DEFAULT_DEPTH = 10
 VERSION_CONTROL_NOTES = (
     ".research-rag/runtime/",
     ".research-rag/bin/",
+    # Both products may serve one project while the migration runs, and each
+    # generates a launcher link at its own name in the project root.
+    "open-research-rag-ui.sh",
     "open-ui.sh",
 )
 # A process the stop sweep may signal has to name one of these, so a shell or an
@@ -338,19 +344,56 @@ def _parser() -> argparse.ArgumentParser:
     )
 
     browser = commands.add_parser(
-        "ui", help="Start, open, or stop this project's browser workspace."
+        "start", help="Bring this project's app up, and report where it is."
     )
     browser.add_argument(
-        "--open", action="store_true", help="Open it in a browser as well."
-    )
-    browser.add_argument(
-        "--stop", action="store_true", help="Stop it, and what it started."
+        "--open", action="store_true", help="Open the workspace in a browser."
     )
     browser.add_argument("--port", type=int, help="Serve on a different port.")
 
+    open_ui = commands.add_parser(
+        "ui", help="Bring the app up and open the workspace in a browser."
+    )
+    open_ui.add_argument(
+        "--no-open",
+        dest="open",
+        action="store_false",
+        help="Start it without opening a browser.",
+    )
+    open_ui.add_argument("--port", type=int, help="Serve on a different port.")
+
+    commands.add_parser(
+        "clients", help="List the MCP clients attached to this project's app."
+    )
+
+    drop = commands.add_parser(
+        "disconnect", help="Disconnect one attached MCP client, ending its session."
+    )
+    drop.add_argument("session_id", help="The session id reported by `clients`.")
+    drop.add_argument("--reason", default=None, help="Why it is being dropped.")
+
+    bridge_command = commands.add_parser(
+        "mcp",
+        help=(
+            "Serve this project's agent surface on stdio, proxied to the running "
+            "app, for an MCP client that speaks only stdio."
+        ),
+    )
+    bridge_command.add_argument(
+        "--client-name",
+        default=None,
+        help=(
+            "Name this bridge reports itself under, so an app's client list can "
+            "tell agents apart."
+        ),
+    )
+
     host = commands.add_parser(
         "serve",
-        help="Serve the browser workspace in the foreground on one fixed port.",
+        help=(
+            "Serve the app in the foreground on one fixed port: the browser "
+            "workspace, the agent surface, and the control API together."
+        ),
     )
     host.add_argument(
         "--host",
@@ -367,7 +410,7 @@ def _parser() -> argparse.ArgumentParser:
 
     stop = commands.add_parser(
         "stop",
-        help="Stop this project's browser workspace, and optionally its processes.",
+        help="Stop this project's app, and optionally its processes.",
     )
     stop.add_argument(
         "--servers",
@@ -452,35 +495,9 @@ def _init(args: argparse.Namespace) -> dict[str, Any]:
             f"Add PDF or EPUB sources to {config.source_root}.",
             project_command(config.project_root, "ingest"),
             project_command(config.project_root, "search", "your question"),
-            project_command(config.project_root, "ui", "--open"),
+            project_command(config.project_root, "start", "--open"),
         ],
     }
-
-
-def _ui(args: argparse.Namespace, config: ResearchConfig) -> None:
-    """Hand the browser workspace to the project's own generated launcher.
-
-    That launcher already owns the free-port choice, the pid file, and stopping
-    the whole process group, so this command reuses it rather than keeping a
-    second copy of that logic here.
-    """
-
-    script = launcher_path(config.portable_root)
-    if not script.is_file():
-        raise ResearchError(
-            f"This project has no UI launcher at {script}. "
-            f"Run '{CLI_NAME} init' once to generate it."
-        )
-    command = [str(script)]
-    if args.open:
-        command.append("--open")
-    if args.stop:
-        command.append("--stop")
-    if args.port is not None:
-        command.extend(["--port", str(args.port)])
-    status = subprocess.call(command)
-    if status != 0:
-        raise ResearchError(f"The UI launcher exited with status {status}.")
 
 
 def _project_argument(arguments: list[str]) -> str | None:
@@ -500,13 +517,19 @@ def _service_processes(
 ) -> list[tuple[int, str]]:
     """Return the ``(pid, command)`` pairs serving this project.
 
-    A process qualifies when its command line names a research entry point *and*
-    this project as ``--project-root``. Both halves matter: the marker keeps a
-    shell or an editor that merely mentions the path out of the sweep, and the
-    path keeps another project's server out of it. A relative ``--project-root``
-    is not matched, because resolving it would use this process's directory
-    rather than the other one's; every launcher and client configuration passes
-    an absolute path.
+    A process qualifies when it invokes this app by name *and* names this
+    project as ``--project-root``. Both halves matter: the name keeps a shell or
+    an editor that merely mentions the path out of the sweep, and the path keeps
+    another project's process out of it. A relative ``--project-root`` is not
+    matched, because resolving it would use this process's directory rather than
+    the other one's; every launcher and every invocation passes an absolute path.
+
+    The name has to be a whole argument, not a substring of one. This app's own
+    projects all contain ``.research-rag`` in their paths, so a substring test
+    matches every process that touches a project — including the vanilla gateway
+    the other product in this collection starts, whose ``--workspace-root``
+    names the same directory. Sweeping that would kill a gateway serving a
+    server this app was told to leave alone.
     """
 
     try:
@@ -524,14 +547,42 @@ def _service_processes(
         arguments = [
             part for part in raw.decode("utf-8", "replace").split("\0") if part
         ]
-        if not any(
-            marker in argument for argument in arguments for marker in SERVICE_MARKERS
-        ):
+        if not _invokes_this_app(arguments, project_root):
             continue
         if _project_argument(arguments) != str(project_root):
             continue
         found.append((pid, " ".join(arguments)))
     return found
+
+
+def _invokes_this_app(arguments: Sequence[str], project_root: Path) -> bool:
+    """Whether one argument names this app as the program being run.
+
+    A console script passes its own path, ``python -m research_rag`` passes the
+    module, and either may be a relative name resolved against the other
+    process's working directory. Any other argument is a value, not a program:
+    a project path under ``.research-rag`` carries the product name in its
+    directory and must not be mistaken for one.
+    """
+
+    inside = project_root.resolve()
+    for index, argument in enumerate(arguments):
+        if argument == "-m":
+            if index + 1 < len(arguments) and arguments[index + 1] in SERVICE_MARKERS:
+                return True
+            continue
+        if argument in SERVICE_MARKERS:
+            return True
+        if Path(argument).name not in SERVICE_MARKERS:
+            continue
+        try:
+            resolved = Path(argument).resolve()
+        except OSError:
+            continue
+        if resolved == inside or inside in resolved.parents:
+            continue
+        return True
+    return False
 
 
 def _alive(pid: int) -> bool:
@@ -619,19 +670,151 @@ def _metadata_body(args: argparse.Namespace) -> dict[str, Any]:
     return {key: value for key, value in supplied.items() if value is not None}
 
 
+class Local:
+    """Corpus operations answered in this process, for a project with no app up.
+
+    A project nobody is serving has no gateway running for it, so a command that
+    arrives when the app is down is not racing anything: it opens the one
+    service it needs, answers, and closes it. When the app *is* up, the same
+    command goes to it, so there is never a second service holding the project.
+    """
+
+    def __init__(self, config: ResearchConfig) -> None:
+        self._context = _service(config)
+        self._enter: Any = None
+        self.service: ResearchService | None = None
+
+    async def __aenter__(self) -> Self:
+        self._enter = self._context
+        self.service = await self._enter.__aenter__()
+        return self
+
+    async def __aexit__(self, *exc: object) -> None:
+        if self._enter is not None:
+            await self._enter.__aexit__(*exc)
+            self._enter = None
+
+    def _require(self) -> ResearchService:
+        if self.service is None:
+            raise ResearchError("The local service is not open")
+        return self.service
+
+    async def status(self) -> dict[str, Any]:
+        return await self._require().status()
+
+    async def ingest(self, *, force_recompute: bool) -> dict[str, Any]:
+        return await self._require().ingest(force_recompute=force_recompute)
+
+    async def search(self, query: str, **arguments: Any) -> dict[str, Any]:
+        return await self._require().search(query, **arguments)
+
+    async def sources(self) -> dict[str, Any]:
+        return await self._require().list_sources()
+
+    async def passage(self, chunk_id: str, *, context_chunks: int) -> dict[str, Any]:
+        return await self._require().get_passage(
+            chunk_id, context_chunks=context_chunks
+        )
+
+    async def set_source_inclusion(
+        self,
+        *,
+        source_path: str | None,
+        source_id: str | None,
+        included: bool,
+        reason: str | None,
+    ) -> dict[str, Any]:
+        return await self._require().set_source_inclusion(
+            source_path=source_path,
+            source_id=source_id,
+            included=included,
+            reason=reason,
+        )
+
+    async def set_source_metadata(
+        self,
+        *,
+        source_path: str | None,
+        source_id: str | None,
+        metadata: dict[str, Any],
+    ) -> dict[str, Any]:
+        return await self._require().set_source_metadata(
+            metadata, source_path=source_path, source_id=source_id
+        )
+
+
+class Remote:
+    """The running app's operations, awaited.
+
+    `Control` speaks HTTP and is synchronous, because two of the commands that
+    use it are synchronous. This is the same interface `Local` implements, so
+    `_operate` does not know which one answered.
+    """
+
+    def __init__(self, control: Control) -> None:
+        self.control = control
+
+    async def __aenter__(self) -> Self:
+        return self
+
+    async def __aexit__(self, *exc: object) -> None:
+        self.control.close()
+
+    async def status(self) -> dict[str, Any]:
+        return self.control.status()
+
+    async def ingest(self, *, force_recompute: bool) -> dict[str, Any]:
+        return self.control.ingest(force_recompute=force_recompute)
+
+    async def search(self, query: str, **arguments: Any) -> dict[str, Any]:
+        return self.control.search(query, **arguments)
+
+    async def sources(self) -> dict[str, Any]:
+        return self.control.sources()
+
+    async def passage(self, chunk_id: str, *, context_chunks: int) -> dict[str, Any]:
+        return self.control.passage(chunk_id, context_chunks=context_chunks)
+
+    async def set_source_inclusion(
+        self,
+        *,
+        source_path: str | None,
+        source_id: str | None,
+        included: bool,
+        reason: str | None,
+    ) -> dict[str, Any]:
+        return self.control.set_source_inclusion(
+            source_path=source_path,
+            source_id=source_id,
+            included=included,
+            reason=reason,
+        )
+
+    async def set_source_metadata(
+        self,
+        *,
+        source_path: str | None,
+        source_id: str | None,
+        metadata: dict[str, Any],
+    ) -> dict[str, Any]:
+        return self.control.set_source_metadata(
+            source_path=source_path, source_id=source_id, metadata=metadata
+        )
+
+
 async def _operate(
     args: argparse.Namespace,
-    service: ResearchService,
-) -> tuple[str, dict[str, Any]]:
-    """Call the one operation this command names, and report its tool name."""
+    operations: Local | Remote,
+) -> dict[str, Any]:
+    """Call the one operation this command names, and return its payload."""
 
     command = args.command
     if command == "status":
-        return "status", await service.status()
+        return await operations.status()
     if command == "ingest":
-        return "ingest", await service.ingest(force_recompute=args.force_recompute)
+        return await operations.ingest(force_recompute=args.force_recompute)
     if command == "search":
-        return "search", await service.search(
+        return await operations.search(
             args.query,
             top_k=args.top_k,
             categories_any=args.category,
@@ -646,24 +829,23 @@ async def _operate(
             rerank=not args.no_rerank,
         )
     if command == "sources":
-        return "list_sources", await service.list_sources()
+        return await operations.sources()
     if command == "passage":
-        return "get_passage", await service.get_passage(
-            args.chunk_id,
-            context_chunks=args.context_chunks,
+        return await operations.passage(
+            args.chunk_id, context_chunks=args.context_chunks
         )
     if command in {"include", "exclude"}:
-        return "set_source_inclusion", await service.set_source_inclusion(
-            args.source,
+        return await operations.set_source_inclusion(
+            source_path=args.source,
             source_id=args.source_id,
             included=command == "include",
             reason=args.reason,
         )
     if command == "metadata":
-        return "set_source_metadata", await service.set_source_metadata(
-            _metadata_body(args),
+        return await operations.set_source_metadata(
             source_path=args.source,
             source_id=args.source_id,
+            metadata=_metadata_body(args),
         )
     raise ResearchError(f"Unknown command: {command}")
 
@@ -678,35 +860,96 @@ class CommandResult:
 
 
 async def _serve(args: argparse.Namespace, config: ResearchConfig) -> CommandResult:
-    """Serve the browser workspace in the foreground until this process is stopped.
+    """Serve the app in the foreground until this process is stopped.
 
     The generated launcher runs this, so it takes an explicit port and never
-    chooses one. A caller running it by hand omits ``--port`` and gets the first
-    free port at or above the default, claimed by binding before uvicorn starts
-    so two workspaces cannot both believe they hold it.
+    chooses one: the launcher already made that choice while holding the lock
+    that makes it exclusive. A caller running it by hand omits `--port` and gets
+    the first free port at or above the default, claimed by binding before
+    uvicorn starts so two apps cannot both believe they hold it.
     """
 
-    from .ui import Workspace
-
-    if args.port is not None and not 1 <= args.port <= 65535:
-        raise ResearchError("--port must be between 1 and 65535")
-    workspace = Workspace(config, port=args.port or launcher_module.DEFAULT_UI_PORT)
-    await workspace.start()
-    if workspace.error is not None:
-        raise ResearchError(workspace.error)
+    port = args.port or launcher_module.DEFAULT_UI_PORT
+    app = App(config, port=port)
+    await app.start()
+    if app.error is not None:
+        raise ResearchError(app.error)
+    print(app.url, flush=True)
     try:
-        await workspace.wait()
+        await app.wait()
     except (KeyboardInterrupt, asyncio.CancelledError):
         pass
     finally:
-        await workspace.stop()
+        await app.stop()
     return CommandResult()
+
+
+def _start(args: argparse.Namespace, config: ResearchConfig) -> dict[str, Any]:
+    """Bring the app up, and say where it is and who is attached."""
+
+    outcome = start_app(config, port=args.port, open_browser=args.open)
+    if args.open and outcome.get("url"):
+        _open_browser(outcome["url"])
+    if not outcome.get("running"):
+        detail = outcome.get("stderr") or outcome.get("stdout") or ""
+        raise ResearchError(
+            f"The app for {config.project_root} did not start: {detail} "
+            f"(log: {outcome.get('log')})"
+        )
+    return outcome
+
+
+def _open_browser(url: str) -> None:
+    """Open a browser, and say so when this machine has none to open."""
+
+    import webbrowser
+
+    # A machine with no desktop session has no browser to open, and a browser
+    # that fails to start is not a reason to fail the command: the URL is the
+    # answer either way.
+    with contextlib.suppress(Exception):
+        if webbrowser.open(url):
+            return
+    print(f"Open {url} in a browser.", file=sys.stderr)
+
+
+def _clients(config: ResearchConfig) -> dict[str, Any]:
+    """List the agents attached to the app, or say that there is no app."""
+
+    with _control(config) as control:
+        if control is None:
+            return {
+                "running": False,
+                "clients": [],
+                "note": "No app is running for this project; start it with "
+                f"'{CLI_NAME} start'.",
+            }
+        return {
+            "running": True,
+            "url": control.base_url,
+            "mcp_url": f"{control.base_url}/mcp",
+            "clients": control.clients(),
+        }
+
+
+def _disconnect(args: argparse.Namespace, config: ResearchConfig) -> dict[str, Any]:
+    """Drop one attached agent, which ends its session."""
+
+    with _control(config) as control:
+        if control is None:
+            raise ResearchError(
+                f"No app is running for {config.project_root}, so no client is "
+                f"attached. Start it with '{CLI_NAME} start'."
+            )
+        return control.disconnect(
+            args.session_id, args.reason or "Disconnected by request."
+        )
 
 
 async def _doctor(args: argparse.Namespace, config: ResearchConfig) -> CommandResult:
     """Report the installation, and run only the operation the flags name."""
 
-    from .doctor import run_doctor
+    from ..doctor import run_doctor
 
     # The report is built from the same service call the `status` command makes,
     # so the two surfaces cannot disagree about this project.
@@ -720,6 +963,25 @@ async def _doctor(args: argparse.Namespace, config: ResearchConfig) -> CommandRe
         repair=args.repair_runtime,
     )
     return CommandResult(text=result.text(), exit_code=result.exit_code)
+
+
+@contextlib.asynccontextmanager
+async def _operations(config: ResearchConfig) -> AsyncIterator[Local | Remote]:
+    """Reach the app when it is up, and build the one service when it is not."""
+
+    handle = connect(config)
+    if handle is not None:
+        async with Remote(handle) as remote:
+            yield remote
+        return
+    async with Local(config) as local:
+        yield local
+
+
+def _control(config: ResearchConfig) -> AbstractContextManager[Control | None]:
+    """A synchronous handle on the app, for the commands that only read."""
+
+    return nullcontext(connect(config))
 
 
 async def _run(args: argparse.Namespace) -> CommandResult:
@@ -736,25 +998,51 @@ async def _run(args: argparse.Namespace) -> CommandResult:
             )
         )
         return CommandResult()
+    if args.command == "start":
+        return CommandResult(payload=_start(args, config))
     if args.command == "ui":
-        _ui(args, config)
-        return CommandResult()
+        return CommandResult(payload=_start(args, config))
+    if args.command == "clients":
+        return CommandResult(payload=_clients(config))
+    if args.command == "disconnect":
+        return CommandResult(payload=_disconnect(args, config))
     if args.command == "serve":
         return await _serve(args, config)
     if args.command == "stop":
         return CommandResult(payload=_stop(args, config))
     if args.command == "doctor":
         return await _doctor(args, config)
-    async with _service(config) as service:
-        _tool, payload = await _operate(args, service)
+    async with _operations(config) as operations:
+        payload = await _operate(args, operations)
     return CommandResult(payload=payload)
 
 
 def main(argv: Sequence[str] | None = None) -> None:
     args = _parser().parse_args(argv)
+    if args.command == "mcp":
+        # The bridge owns stdio and its own event loop, so it runs before this
+        # process starts one rather than inside it.
+        try:
+            config = _resolve(args)
+        except (
+            ConfigurationError,
+            ControlError,
+            ResearchError,
+            OSError,
+            ValueError,
+        ) as exc:
+            raise SystemExit(f"{CLI_NAME}: {exc}") from exc
+        bridge.main(config, name=args.client_name)
+        return
     try:
         result = asyncio.run(_run(args))
-    except (ConfigurationError, ResearchError, OSError, ValueError) as exc:
+    except (
+        ConfigurationError,
+        ControlError,
+        ResearchError,
+        OSError,
+        ValueError,
+    ) as exc:
         raise SystemExit(f"{CLI_NAME}: {exc}") from exc
     if result.text is not None:
         sys.stdout.write(result.text)

@@ -31,7 +31,7 @@ def _installed_commands() -> set[str]:
 
     import argparse
 
-    from research_rag.cli import _parser
+    from research_rag.surfaces.cli import _parser
 
     return {
         name
@@ -71,10 +71,16 @@ def test_the_distribution_and_the_documentation_agree_on_one_command() -> None:
     assert project["project"]["version"]
 
 
-def test_the_product_is_described_as_a_workspace_and_not_an_mcp_server() -> None:
+def test_the_product_is_described_as_a_server_with_three_front_ends() -> None:
+    """It is a server product that also has a browser, and the manual must say so."""
+
     assert "research-rag" in README
-    for client_surface in ("MCP client", "mcpServers", "mcp_settings", "client entry"):
-        assert client_surface not in README, client_surface
+    for front_end in ("start", "clients", "disconnect", "mcp", "ui"):
+        assert front_end in README, front_end
+    assert "mcp" in README.lower()
+    # A reader must be able to configure an agent, which is a capability a
+    # workspace-only product cannot document.
+    assert "stdio" in README
 
 
 def test_the_upstream_credit_survives_in_the_readme_and_the_notice() -> None:
@@ -93,15 +99,16 @@ def test_the_upstream_credit_survives_in_the_readme_and_the_notice() -> None:
     assert "AGPL" in notice
 
 
-def test_the_agent_guide_became_a_storage_contract() -> None:
-    """A no-MCP product owes its reader a state format, not an agent manual."""
+def test_the_agent_surface_ships_with_its_instructions_and_its_projection() -> None:
+    """The agent surface is a feature, so the two things it needs are checked."""
 
     assert not (ROOT / "AGENT_GUIDE.md").exists()
-    storage = (ROOT / "STORAGE.md").read_text(encoding="utf-8")
-
-    assert "research-rag" in storage
-    assert not (ROOT / "src/research_rag/instructions.py").exists()
-    assert not (ROOT / "src/research_rag/tool_views.py").exists()
+    instructions = (ROOT / "src/research_rag/instructions.py").read_text(
+        encoding="utf-8"
+    )
+    projection = (ROOT / "src/research_rag/tool_views.py").read_text(encoding="utf-8")
+    assert "AGENT_INSTRUCTIONS" in instructions
+    assert "present_tool_response" in projection
 
 
 def test_the_storage_contract_names_every_project_file_the_app_writes() -> None:
@@ -173,19 +180,18 @@ def test_the_no_mcp_surface_rule_holds_in_the_source_as_well_as_the_contract() -
     assert declared == {}, f"an MCP surface reappeared: {declared}"
 
 
-def test_the_documented_mcp_boundaries_are_actually_gone() -> None:
-    """Three modules existed only to serve the MCP surface; they must not return."""
+def test_the_process_lives_in_the_app_and_not_in_a_surface() -> None:
+    """A surface that started a process would be a second instance of the app."""
 
-    package = ROOT / "src" / "research_rag"
+    package = ROOT / "src/research_rag"
 
-    for name in (
-        "server.py",
-        "transport.py",
-        "verify.py",
-        "tool_views.py",
-        "instructions.py",
-    ):
-        assert not (package / name).exists(), name
+    assert not (package / "server.py").exists()
+    assert not (package / "transport.py").exists()
+    assert not (package / "verify.py").exists()
+    assert not (package / "surfaces" / "server.py").exists()
+    assert (package / "app.py").is_file()
+    assert (package / "bridge.py").is_file()
+    assert (package / "surfaces" / "mcp.py").is_file()
 
 
 @pytest.mark.parametrize(
@@ -200,11 +206,15 @@ def test_the_documented_mcp_boundaries_are_actually_gone() -> None:
         "STORAGE.md",
     ],
 )
-def test_no_document_credits_the_removed_projection(document: str) -> None:
-    """`tool_views` and the lean answer are gone; a reader must not chase them."""
+def test_no_document_names_a_surface_that_moved(document: str) -> None:
+    """A document naming a path that no longer exists sends a reader looking for it."""
 
     text = (ROOT / document).read_text(encoding="utf-8")
 
-    for retired in ("tool_views", "create_research_transport", "SERVER_INSTRUCTIONS"):
-        assert retired not in text, f"{document} still documents {retired}"
-    assert "--tool-detail" not in text, document
+    for retired in (
+        "research_rag/cli.py",
+        "research_rag/ui.py",
+        "research_rag/server.py",
+    ):
+        assert retired not in text, f"{document} still names {retired}"
+    assert "create_research_transport" not in text, document

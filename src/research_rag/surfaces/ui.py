@@ -15,17 +15,11 @@ app does not serve from travelling as an argument the app ignores.
 
 from __future__ import annotations
 
-import asyncio
-import contextlib
-import socket
-from collections.abc import AsyncIterator, Mapping
-from contextlib import asynccontextmanager
+from collections.abc import Mapping
 from dataclasses import replace
 from typing import TYPE_CHECKING, Any
 
-import uvicorn
 from ui_ultra_rag_mcp import (
-    AdapterFactory,
     SourceFile,
     UICapabilities,
     UIProfile,
@@ -33,24 +27,23 @@ from ui_ultra_rag_mcp import (
 )
 from ui_ultra_rag_mcp import create_ui_app as create_shared_ui_app
 
-from .config import (
+if TYPE_CHECKING:  # pragma: no cover - typing only
+    from starlette.applications import Starlette
+
+from ..config import (
     ConfigurationError,
     ResearchConfig,
     resolve_source_reference,
 )
-from .service import ResearchService
-from .sources import SourcePolicyError, scan_sources
-from .ultrarag import LazyGateway, VanillaUltraRAG
-from .version import version_label
+from ..service import ResearchService
+from ..sources import SourcePolicyError, scan_sources
+from ..version import version_label
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
     from starlette.applications import Starlette
 
 UI_NAME = "research-rag-ui"
 MAX_ERROR_LENGTH = 1200
-# Matches uvicorn's own default accept backlog, so a claimed socket is in the
-# state uvicorn would have created for itself.
-_CLAIM_BACKLOG = 2048
 # The passed passages a browser request may ask for, and the neighbours it may
 # read around a hit. The bounds are the search workflow's own: a browser is not
 # a place where an unbounded budget belongs.
@@ -279,200 +272,19 @@ def _source_path(arguments: Mapping[str, Any]) -> str:
     return value
 
 
-def create_service(config: ResearchConfig) -> tuple[ResearchService, LazyGateway]:
-    """Build the service and the gateway it opens on first use."""
+def create_ui_app(config: ResearchConfig, *, service: ResearchService) -> Starlette:
+    """Create the shared workspace over the app's one service.
 
-    gateway = LazyGateway(config)
-    return ResearchService(config, VanillaUltraRAG(gateway, config)), gateway
+    The adapter is always handed the service rather than a factory, because the
+    app process owns the gateway and there is exactly one of it: a factory here
+    would open a second one for the workspace alone.
+    """
 
-
-def _adapter_factory(config: ResearchConfig) -> AdapterFactory:
-    @asynccontextmanager
-    async def adapter_context() -> AsyncIterator[ResearchUIAdapter]:
-        service, gateway = create_service(config)
-        try:
-            yield ResearchUIAdapter(config, service)
-        finally:
-            # The gateway is a child process this app started, and the workspace
-            # is the only thing that knows when to stop it.
-            await gateway.aclose()
-
-    return adapter_context
-
-
-def create_ui_app(
-    config: ResearchConfig,
-    *,
-    service: ResearchService | None = None,
-) -> Starlette:
-    """Create the shared UI over one research project."""
-
-    # More than one project can serve a workspace at the same time, so each one
-    # names the project it serves instead of showing a generic label: a browser
-    # window must be able to say which knowledge base it belongs to.
-    profile = replace(
-        RESEARCH_UI_PROFILE,
-        project_fallback_name=config.project_name,
-    )
-    if service is not None:
-        return create_shared_ui_app(
-            profile=profile,
-            adapter=ResearchUIAdapter(config, service),
-        )
+    # More than one project can be served at the same time, so each one names the
+    # project it serves instead of showing a generic label: a browser window
+    # must be able to say which knowledge base it belongs to.
+    profile = replace(RESEARCH_UI_PROFILE, project_fallback_name=config.project_name)
     return create_shared_ui_app(
         profile=profile,
-        adapter_factory=_adapter_factory(config),
+        adapter=ResearchUIAdapter(config, service),
     )
-
-
-UI_HOST = "127.0.0.1"
-
-
-def _claim_loopback_port(host: str, port: int) -> socket.socket:
-    """Bind and listen on the loopback port, and return the socket that holds it.
-
-    The claim is the bind and the listen, not a probe followed by a bind, so two
-    workspaces that start at the same time cannot both believe they hold the
-    port: the loser gets an ``OSError`` here, before any server exists, and
-    reports it. Listening is what makes the claim exclusive — a socket that is
-    bound but not listening can still be bound again under ``SO_REUSEADDR``,
-    which Linux uses to allow binding over a socket that is not accepting.
-    ``SO_REUSEADDR`` is set anyway, matching what uvicorn sets for itself, so a
-    port whose connections are still in ``TIME_WAIT`` after a stop is not
-    mistaken for one another process holds.
-    """
-
-    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    try:
-        sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-        sock.bind((host, port))
-        sock.listen(_CLAIM_BACKLOG)
-    except OSError:
-        sock.close()
-        raise
-    return sock
-
-
-class Workspace:
-    """The workspace served on one claimed loopback port.
-
-    The host is fixed to loopback and no browser is opened here: the generated
-    launcher owns choosing the port and opening a browser. This object exists so
-    a caller embedding the workspace in its own process — a test, or a future
-    desktop shell — can start and stop it without a launcher, and so a bind
-    failure is reported with its reason instead of raised from a background task
-    nobody is watching.
-
-    The workspace shares this process's event loop, so every blocking operation
-    it triggers must keep going through ``asyncio.to_thread`` the way the service
-    already does; a synchronous call on the loop would stall the workspace it
-    serves.
-
-    The port is claimed by binding it before uvicorn is created, so a workspace
-    that cannot claim its port says why instead of failing after a successful
-    probe, and the claim is released with the socket.
-    """
-
-    def __init__(self, config: ResearchConfig, *, port: int) -> None:
-        if not 1 <= port <= 65535:
-            raise ConfigurationError("port must be between 1 and 65535")
-        self.config = config
-        self.host = UI_HOST
-        self.port = port
-        self.error: str | None = None
-        self._server: uvicorn.Server | None = None
-        self._task: asyncio.Task[None] | None = None
-        self._socket: socket.socket | None = None
-
-    @property
-    def url(self) -> str:
-        return f"http://{self.host}:{self.port}"
-
-    @property
-    def ready(self) -> bool:
-        """Whether the workspace is serving right now.
-
-        uvicorn sets ``Server.started`` once and never clears it, so the live
-        task is part of the test: after ``stop`` and after a bind failure the
-        task is finished and the workspace is not serving.
-        """
-
-        return (
-            self._server is not None
-            and bool(self._server.started)
-            and self._task is not None
-            and not self._task.done()
-        )
-
-    async def start(self, *, service: ResearchService | None = None) -> None:
-        """Serve the workspace for the life of this process."""
-
-        try:
-            claim = _claim_loopback_port(self.host, self.port)
-        except OSError as exc:
-            reason = exc.strerror or str(exc)
-            self.error = (
-                f"Port {self.port} is already in use on {self.host}, so the "
-                f"workspace was not started; choose another --port ({reason})."
-            )
-            return
-        self._socket = claim
-        self._server = uvicorn.Server(
-            uvicorn.Config(
-                create_ui_app(self.config, service=service),
-                host=self.host,
-                port=self.port,
-                log_level="warning",
-                access_log=False,
-            )
-        )
-        self._task = asyncio.create_task(self._server.serve(sockets=[claim]))
-        self._task.add_done_callback(self._task_finished)
-
-    def _task_finished(self, task: asyncio.Task[None]) -> None:
-        """Record a workspace that ended on its own, and release its claim.
-
-        uvicorn can end the task by raising, which a probe-then-bind order hides
-        behind an empty ``error``; the reason is kept here instead of showing a
-        dead workspace with no explanation.
-        """
-
-        if not task.cancelled():
-            failure = task.exception()
-            if failure is not None:
-                self.error = (
-                    f"The workspace on {self.host}:{self.port} stopped: "
-                    f"{failure.__class__.__name__}: {failure}"
-                )
-        self._release_claim()
-
-    def _release_claim(self) -> None:
-        """Close the claimed socket, which uvicorn also closes on shutdown."""
-
-        claim, self._socket = self._socket, None
-        if claim is not None:
-            with contextlib.suppress(OSError):
-                claim.close()
-
-    async def wait(self) -> None:
-        """Block until the serving task ends, whether it served or it failed."""
-
-        task = self._task
-        if task is not None:
-            with contextlib.suppress(asyncio.CancelledError, Exception):
-                await task
-
-    async def stop(self) -> None:
-        """Ask the workspace to stop and wait for its task to finish.
-
-        A workspace that fails must not take this process down with it: whatever
-        ended the task is recorded by ``_task_finished``, so it is not re-raised.
-        """
-
-        if self._server is not None:
-            self._server.should_exit = True
-        if self._task is not None:
-            task, self._task = self._task, None
-            with contextlib.suppress(asyncio.CancelledError, Exception):
-                await task
-        self._release_claim()

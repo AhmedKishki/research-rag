@@ -7,7 +7,7 @@ uv run python scripts/benchmark_write_pattern.py --root /path/on/target/disk
 uv run python scripts/evaluate_retrieval.py --project /path/to/project --offline
 ```
 
-The retrieval numbers were measured against the pinned engine this app runs. Removing the MCP surface changed no ranking, no index, and no payload: the shared workspace already requested the complete service payload, so the answer it renders is byte-for-byte the answer this engine produced.
+The retrieval numbers were measured against the pinned engine this app runs, and the service layer is that project's code unchanged. The agent surface is the previous one: the same seven operations, the same two resources, and the same lean/full projection, so every payload figure below is the figure that project produced.
 
 ## 1. Workload and design envelope
 
@@ -114,11 +114,12 @@ That is 10.3× cheaper at the 200 candidates a reference-view query can reach, a
 
 ### What a reader waits for
 
-The terminal and the workspace resolve settings and start answering before the retrieval stack is imported and before the gateway is opened, so a project reads fine on a machine where the UltraRAG runtime is not installed yet. Measured on the reference project, from spawning `research-rag` to the first answer:
+One app process serves the workspace, the agent, and the command line, and it resolves settings and starts answering before the retrieval stack is imported and before the gateway is opened, so a project reads fine on a machine where the UltraRAG runtime is not installed yet. Measured on the reference project, from spawning `research-rag` to the first answer:
 
 | What | Cost |
 |---|---|
 | process start to a `status` answer, no gateway yet | **0.27 s** |
+| process start to a workspace, agent surface, and control API, all on one port | **0.41 s** |
 | first answer that needs the gateway (`ingest`, or `search` on a built generation) | 2.16 s, once per process |
 | first `search`, which loads the embedding and reranking models | **11.37 s**, once per process |
 | every later `search` | 1.06 s |
