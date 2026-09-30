@@ -214,6 +214,10 @@ research-rag \
 - Only derived state moves. Your portable review state stays in `<project>/.research-rag`.
 - `status.runtime_root` reports the effective location, and `null` when the default is in use. Drop the option and relocate the directory to move back.
 
+## Outside the project
+
+One account's project register lives beside its settings, at `~/.config/research-ultra-rag-mcp/projects.json`: one entry per project holding its `project_id`, `project_name`, `project_root`, and `registered_at`. It is deliberately outside the project directory, because a register that travelled inside a project could not list the projects that had none. It holds no corpus, no index, no review, and no derived state, so a project that is deleted costs only its name in that file, and a register that is deleted costs only the names, which `research-rag init` restores. Deleting the file is always safe; a damaged one is reported rather than guessed at, and an entry that is not a pointer is skipped so one unreadable project cannot hide the rest.
+
 ## Versioned state
 
 `schema_version` appears in every portable JSON file and is `1`. Any other value is refused, so an unknown version stops the app rather than being read on a guess.

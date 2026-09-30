@@ -35,7 +35,7 @@ from config_ultra_rag_mcp import describe_settings
 
 from .. import bridge
 from .. import launcher as launcher_module
-from ..app import UI_HOST, App
+from ..app import UI_HOST, App, running_url
 from ..config import (
     CLI_COMMAND,
     ConfigurationError,
@@ -47,6 +47,10 @@ from ..config import (
 )
 from ..control import Control, ControlError, connect
 from ..launcher import launcher_path, start_app, ui_launcher_state
+from ..registry import load as load_registry
+from ..registry import register as register_project
+from ..registry import registered_at_label, registry_path
+from ..registry import resolve as resolve_registered
 from ..rerankers import RERANKER_MODEL_CHOICES
 from ..service import ResearchService
 from ..settings import SETTINGS
@@ -96,9 +100,20 @@ def _parser() -> argparse.ArgumentParser:
         ),
     )
     parser.add_argument(
+        # None rather than "." so that a call naming a registered project has not
+        # also named a path; the current directory is what an absent value means,
+        # and it is resolved where it is used.
         "--project-root",
-        default=os.environ.get("RESEARCH_ULTRARAG_PROJECT_ROOT", "."),
+        default=os.environ.get("RESEARCH_ULTRARAG_PROJECT_ROOT"),
         help="Project root holding .research-rag (default: the current directory).",
+    )
+    parser.add_argument(
+        "--project",
+        default=os.environ.get("RESEARCH_ULTRARAG_PROJECT"),
+        help=(
+            "Name or id of a project this installation registered, in place of "
+            "--project-root. `research-rag projects` lists them."
+        ),
     )
     parser.add_argument(
         "--runtime-root",
@@ -174,6 +189,13 @@ def _parser() -> argparse.ArgumentParser:
         help="Project-relative source directory to create (default: sources).",
     )
 
+    commands.add_parser(
+        "projects",
+        help=(
+            "List every project this installation registered, and whether its app "
+            "is up."
+        ),
+    )
     status = commands.add_parser(
         "status", help="Report readiness and what changed since the generation."
     )
@@ -449,7 +471,24 @@ def _parser() -> argparse.ArgumentParser:
 
 
 def _project_path(args: argparse.Namespace) -> Path:
-    return Path(args.project_root).expanduser().resolve()
+    """Return the project this call names, by registry selector or by path.
+
+    `--project` and `--project-root` are two ways to say the same thing, so a
+    call that supplies both is refused rather than resolved by precedence: a
+    command that ran against the wrong project is worse than one that did not
+    run.
+    """
+
+    selector = getattr(args, "project", None)
+    named_root = getattr(args, "project_root", None)
+    if selector and named_root:
+        raise ConfigurationError(
+            f"--project {selector!r} and --project-root {str(named_root)!r} name "
+            "two projects; pass one."
+        )
+    if selector:
+        return resolve_registered(selector).project_root
+    return Path(named_root or ".").expanduser().resolve()
 
 
 def _config_kwargs(args: argparse.Namespace) -> dict[str, Any]:
@@ -507,6 +546,17 @@ def _init(args: argparse.Namespace) -> dict[str, Any]:
     if not config.source_root.exists():
         config.source_root.mkdir(parents=True)
         created.append("source_root")
+    try:
+        registered = register_project(
+            config.project_id, config.project_name, config.project_root
+        )
+    except (OSError, ResearchError) as exc:
+        raise ConfigurationError(
+            f"The project at {config.project_root} was created, but this "
+            f"installation could not record it ({exc}). Keep addressing it with "
+            "--project-root until the record at "
+            f"{registry_path()} can be written."
+        ) from exc
     return {
         "status": "ready",
         "project_root": str(config.project_root),
@@ -514,6 +564,8 @@ def _init(args: argparse.Namespace) -> dict[str, Any]:
         "project_name": config.project_name,
         "source_root": str(config.source_root),
         "created": created,
+        "registered": registered.as_record(),
+        "registry_path": str(registry_path()),
         "launcher": ui_launcher_state(config.project_root, config.portable_root),
         "keep_out_of_version_control": list(VERSION_CONTROL_NOTES),
         "next_steps": [
@@ -879,6 +931,79 @@ async def _operate(
     raise ResearchError(f"Unknown command: {command}")
 
 
+async def _projects(args: argparse.Namespace) -> dict[str, Any]:
+    """Report every registered project, and whether an app is serving it.
+
+    The record is the account's, so this command names no project and opens none:
+    each entry is read from the record, checked against the directory, and asked
+    over loopback only where an app is already up. A project whose app is not
+    running is reported as such rather than started, because a listing is a
+    question about what exists and nothing more.
+    """
+
+    entries: list[dict[str, Any]] = []
+    for project in load_registry():
+        entry: dict[str, Any] = {
+            "project_name": project.project_name,
+            "project_id": project.project_id,
+            "project_root": str(project.project_root),
+            "registered_at": registered_at_label(project),
+            "root_exists": (project.project_root / ".research-rag").is_dir(),
+            "app": {"running": False, "url": None, "port": None},
+            "attached_clients": 0,
+        }
+        if entry["root_exists"]:
+            try:
+                entry.update(_project_app_state(project.project_root))
+            except (ConfigurationError, ResearchError) as exc:
+                entry["error"] = str(exc)
+        entries.append(entry)
+    answer: dict[str, Any] = {
+        "registry_path": str(registry_path()),
+        "project_count": len(entries),
+        "projects": entries,
+    }
+    if not entries:
+        answer["message"] = (
+            "No project is registered yet. Run 'research-rag --project-root "
+            "<path> init' once per project, and this install can address each one "
+            "by name."
+        )
+    return answer
+
+
+def _project_app_state(project_root: Path) -> dict[str, Any]:
+    """Ask one project's running app what it is serving, or say that nothing is."""
+
+    config = resolve_config(project_root)
+    url = running_url(config)
+    state: dict[str, Any] = {
+        "app": {"running": url is not None, "url": url, "port": _port_of(url)},
+        "attached_clients": 0,
+    }
+    if url is None:
+        return state
+    try:
+        with Control(url, timeout=10.0) as handle:
+            verdict = lean_status(handle.status())
+            clients = handle.clients()
+    except ControlError as exc:
+        state["error"] = str(exc)
+        return state
+    state["attached_clients"] = len(clients)
+    for key in ("ready", "stale", "requires"):
+        if key in verdict:
+            state[key] = verdict[key]
+    return state
+
+
+def _port_of(url: str | None) -> int | None:
+    if not url:
+        return None
+    _, _, port = url.rpartition(":")
+    return int(port) if port.isdigit() else None
+
+
 @dataclass(frozen=True, slots=True)
 class CommandResult:
     """What one command printed, and the exit code that follows from it."""
@@ -1028,6 +1153,8 @@ def _control(config: ResearchConfig) -> AbstractContextManager[Control | None]:
 async def _run(args: argparse.Namespace) -> CommandResult:
     """Resolve the project, run the named command, and return what to print."""
 
+    if args.command == "projects":
+        return CommandResult(payload=await _projects(args))
     if args.command == "init":
         return CommandResult(payload=_init(args))
     config = _resolve(args)

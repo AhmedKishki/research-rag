@@ -22,6 +22,7 @@ from conftest import write_pdf
 import research_rag.surfaces.cli as cli_module
 import research_rag.ultrarag as ultrarag_module
 from research_rag import launcher as launcher_module
+from research_rag import registry
 from research_rag.config import ConfigurationError
 from research_rag.support import ResearchError
 from research_rag.surfaces.cli import (
@@ -177,6 +178,126 @@ def test_init_creates_a_project_and_records_the_name_it_was_given(
     }
     assert (project / ".research-rag" / "bin" / "open-research-rag-ui.sh").is_file()
     assert Path(report["launcher"]["link_path"]).is_symlink()
+
+
+def test_init_records_the_project_so_the_install_can_name_it(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    home = tmp_path / "account"
+    home.mkdir()
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(home / "config"))
+    monkeypatch.setenv("HOME", str(home))
+    project = tmp_path / "thesis"
+
+    report = _init(_args("--project-root", str(project), "init"))
+
+    # The project owns its state; the record is a pointer to it, written beside
+    # the settings this account already has, so one install can name the project.
+    assert report["registered"] == {
+        "project_id": report["project_id"],
+        "project_name": "thesis",
+        "project_root": str(project),
+        "registered_at": report["registered"]["registered_at"],
+    }
+    assert report["registry_path"].endswith("projects.json")
+    assert [entry.project_id for entry in registry.load()] == [report["project_id"]]
+
+
+def test_a_command_can_name_a_registered_project_instead_of_its_path(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    home = tmp_path / "account"
+    home.mkdir()
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(home / "config"))
+    monkeypatch.setenv("HOME", str(home))
+    project = tmp_path / "thesis"
+    report = _init(_args("--project-root", str(project), "init"))
+
+    assert _resolve(_args("--project", "thesis", "status")).project_root == project
+    assert (
+        _resolve(_args("--project", report["project_id"], "status")).project_root
+        == project
+    )
+    # The current directory is still what a call that names no project means.
+    assert _resolve(_args("status")).project_root == Path.cwd()
+    assert (
+        _resolve(_args("--project-root", str(project), "status")).project_root
+        == project
+    )
+
+
+def test_a_call_that_names_two_projects_is_refused(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    home = tmp_path / "account"
+    home.mkdir()
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(home / "config"))
+    monkeypatch.setenv("HOME", str(home))
+    project = tmp_path / "thesis"
+    _init(_args("--project-root", str(project), "init"))
+
+    with pytest.raises(ConfigurationError, match="name two projects"):
+        _resolve(_args("--project", "thesis", "--project-root", str(project), "status"))
+    with pytest.raises(ResearchError, match="No registered project"):
+        _resolve(_args("--project", "no-such-project", "status"))
+
+
+def test_the_projects_listing_names_every_registered_project(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    home = tmp_path / "account"
+    home.mkdir()
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(home / "config"))
+    monkeypatch.setenv("HOME", str(home))
+
+    empty = asyncio.run(cli_module._run(_args("projects")))
+    assert empty.payload is not None
+    assert empty.payload["projects"] == []
+    assert "No project is registered yet" in empty.payload["message"]
+
+    first = tmp_path / "thesis"
+    second = tmp_path / "layout-thesis"
+    for project in (first, second):
+        _init(_args("--project-root", str(project), "init"))
+
+    listing = asyncio.run(cli_module._run(_args("projects")))
+    assert listing.payload is not None
+    assert listing.payload["project_count"] == 2
+    assert [entry["project_name"] for entry in listing.payload["projects"]] == [
+        "layout-thesis",
+        "thesis",
+    ]
+    # Nothing was started to produce the listing: each project is only asked what
+    # is on disk, and an app that is not up is reported as not up.
+    for entry in listing.payload["projects"]:
+        assert entry["root_exists"] is True
+        assert entry["app"] == {"running": False, "url": None, "port": None}
+        assert entry["attached_clients"] == 0
+        assert "ready" not in entry
+
+
+def test_the_projects_listing_reports_a_project_whose_directory_is_gone(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    home = tmp_path / "account"
+    home.mkdir()
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(home / "config"))
+    monkeypatch.setenv("HOME", str(home))
+    project = tmp_path / "moved-away"
+    _init(_args("--project-root", str(project), "init"))
+    for path in sorted(project.rglob("*"), reverse=True):
+        path.unlink() if path.is_file() else path.rmdir()
+    project.rmdir()
+
+    listing = asyncio.run(cli_module._run(_args("projects")))
+    assert listing.payload is not None
+    assert listing.payload["projects"][0]["root_exists"] is False
+    assert "error" not in listing.payload["projects"][0]
 
 
 def test_init_defaults_the_name_to_the_directory(tmp_path: Path) -> None:
