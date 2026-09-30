@@ -23,6 +23,12 @@ from .storage import (
 )
 from .support import ResearchError, _effective_documents, _public_document, _utc_now
 
+# How many sources one lookup returns by default, and the ceiling a caller can ask
+# for. The answer is a lookup rather than an inventory, so it stays small whatever
+# the corpus holds.
+DEFAULT_FIND_SOURCE_LIMIT = 10
+FIND_SOURCE_MAX_MATCHES = 50
+
 
 class ReviewWorkflow:
     def _sync_source_catalog(
@@ -434,6 +440,132 @@ class ReviewWorkflow:
                 "source_file_changed": False,
                 "effective_immediately": bool(normalized) and indexed,
                 "generation_rebuild_recommended": False,
+                "message": message,
+            }
+
+    async def find_source(
+        self,
+        query: str,
+        limit: int = DEFAULT_FIND_SOURCE_LIMIT,
+    ) -> dict[str, Any]:
+        """Return the sources one name resolves to, and whether each is searchable.
+
+        A lookup rather than an inventory: the caller asks about a filename, a
+        title, or an author, and the answer is the handful of sources that answer
+        it, each with the stable ID and the source-relative path the inclusion
+        and metadata operations take.
+
+        The lookup covers every source this project can name: the files in the
+        source directory, the sources of the selected generation, and the sources
+        a review record kept addressable after their file was removed. A source
+        that is absent from the corpus is exactly the one a reader asks about, so
+        it is answered rather than hidden.
+        """
+
+        term = query.strip()
+        if not term:
+            raise ResearchError("Provide a filename, title, or author to look up.")
+        bounded = max(1, min(int(limit), FIND_SOURCE_MAX_MATCHES))
+        needle = term.casefold()
+        async with self._operation():
+            current = self._load_current_optional()
+            try:
+                scan = scan_sources(self.config)
+            except SourcePolicyError as exc:
+                raise ResearchError(str(exc)) from exc
+            exclusions = self._source_exclusions()
+            metadata = self._metadata()
+            known = self._known_sources(
+                scan,
+                current,
+                exclusions=exclusions,
+                metadata=metadata,
+            )
+            manifest = current[1] if current is not None else {}
+            documents = {
+                str(document.get("source_relative_path") or ""): _public_document(
+                    document
+                )
+                for document in (
+                    _effective_documents(manifest, metadata).values()
+                    if current is not None
+                    else []
+                )
+            }
+            matches: list[dict[str, Any]] = []
+            for relative, record in known.items():
+                override = metadata.get(relative, {})
+                document = documents.get(relative, {})
+                title = str(
+                    document.get("title")
+                    or override.get("title")
+                    or Path(relative).stem
+                )
+                authors = [
+                    str(author)
+                    for author in (
+                        document.get("authors") or override.get("authors") or []
+                    )
+                ]
+                indexed = bool(record.get("indexed_in_current_generation"))
+                if not any(
+                    needle in value.casefold()
+                    for value in (relative, title, *authors)
+                    if value
+                ):
+                    continue
+                matches.append(
+                    {
+                        "source_id": record["source_id"],
+                        "source_relative_path": relative,
+                        "title": title,
+                        "authors": authors,
+                        "exists": bool(record.get("exists")),
+                        "included": relative not in exclusions,
+                        "indexed_in_current_generation": indexed,
+                        "has_reviewed_metadata": relative in metadata,
+                        "searchable": indexed and relative not in exclusions,
+                    }
+                )
+            matches.sort(
+                key=lambda item: (
+                    not item["searchable"],
+                    not item["indexed_in_current_generation"],
+                    item["source_relative_path"],
+                )
+            )
+            shown = matches[:bounded]
+            total = len(matches)
+            searchable = sum(1 for item in matches if item["searchable"])
+            if total == 0:
+                message = (
+                    f"No source matches {term!r}. The lookup covers the source "
+                    "directory, the selected generation, and every source a review "
+                    "record kept addressable."
+                )
+            elif searchable == 0:
+                message = (
+                    f"{total} sources match {term!r} and none is searchable: each "
+                    "needs ingesting, or a reviewed exclusion is in force."
+                )
+            else:
+                message = (
+                    f"Every one of the {total} sources matching {term!r} is "
+                    "searchable now."
+                    if searchable == total
+                    else f"{searchable} of the {total} sources matching {term!r} "
+                    "are searchable now."
+                )
+            return {
+                "ready": current is not None,
+                "generation_id": (
+                    manifest.get("generation_id") if current is not None else None
+                ),
+                "query": term,
+                "match_count": total,
+                "searchable_match_count": searchable,
+                "truncated": total > len(shown),
+                "matches": shown,
                 "message": message,
             }
 

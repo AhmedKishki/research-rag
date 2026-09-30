@@ -633,8 +633,9 @@ class SearchWorkflow:
             if requested_source_ids and not source_include_document_ids:
                 raise ResearchError(
                     "source_ids matched no document in the current generation: "
-                    f"{', '.join(unknown_source_ids)}. Use list_sources for current "
-                    "IDs; a renamed or moved source receives a new source_id."
+                    f"{', '.join(unknown_source_ids)}. Use find_source to resolve "
+                    "the current IDs; a renamed or moved source receives a new "
+                    "source_id."
                 )
             # Reviewed exclusions always win over a search-level exclusion, and a
             # search-level include can never re-admit an excluded source.

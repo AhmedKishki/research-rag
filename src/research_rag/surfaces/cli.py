@@ -51,6 +51,7 @@ from ..rerankers import RERANKER_MODEL_CHOICES
 from ..service import ResearchService
 from ..settings import SETTINGS
 from ..support import DEFAULT_RETRIEVAL_METHOD, RETRIEVAL_METHODS, ResearchError
+from ..tool_views import lean_status
 from ..ultrarag import LazyGateway, VanillaUltraRAG
 
 CLI_NAME = CLI_COMMAND
@@ -173,8 +174,17 @@ def _parser() -> argparse.ArgumentParser:
         help="Project-relative source directory to create (default: sources).",
     )
 
-    commands.add_parser(
+    status = commands.add_parser(
         "status", help="Report readiness and what changed since the generation."
+    )
+    status.add_argument(
+        "--verbose",
+        action="store_true",
+        help=(
+            "Print the complete status payload instead of the readiness answer: "
+            "the corpus counts, the retained generations, the retrieval policy, "
+            "and every dependency check."
+        ),
     )
 
     refresh = commands.add_parser(
@@ -825,7 +835,11 @@ async def _operate(
 
     command = args.command
     if command == "status":
-        return await operations.status()
+        payload = await operations.status()
+        # The terminal is an agent's second bounded reader: the same projection,
+        # so the two cannot answer differently, and `--verbose` is where a person
+        # goes for the complete payload the workspace reads.
+        return dict(payload) if args.verbose else lean_status(payload)
     if command == "ingest":
         return await operations.ingest(force_recompute=args.force_recompute)
     if command == "search":

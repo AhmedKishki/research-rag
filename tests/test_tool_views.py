@@ -264,32 +264,24 @@ def _values(payload: object) -> list[str]:
     return [payload] if isinstance(payload, str) else []
 
 
-def test_status_lean_keeps_the_current_generation_and_no_inventory() -> None:
+def test_status_lean_states_the_verdict_and_nothing_else() -> None:
     payload = _status_payload()
     lean = present_tool_response("status", payload, detail=LEAN_TOOL_DETAIL)
 
-    # Readiness, the generation, and the message. The corpus inventory is
-    # `list_sources`, the generation's date answers a question of its own, and
-    # what a prune would consider is a full-detail reader.
-    # The two retention numbers stay: the agent guide has an agent answer a
-    # disk-use question from them, so a documented workflow is not waste.
-    assert set(lean) == {
-        "generation_id",
-        "retained_generation_count",
-        "retained_generation_bytes",
-        "message",
-    }
+    # A verdict and the work it implies: two booleans the caller can act on, the
+    # generation they describe, and the sentence that explains them. Nothing else
+    # — the corpus inventory is `find_source` one source at a time, and the
+    # retrieval policy, and the per-check detail are the command line's answer.
+    assert set(lean) == {"ready", "stale", "generation_id", "message"}
+    assert lean["ready"] is True
+    assert lean["stale"] is False
     assert lean["generation_id"] == "20260101T000000Z-abcdef"
-    assert lean["retained_generation_count"] == 1
-    assert lean["retained_generation_bytes"] == 4096
-    # A generation this tool can serve is the ordinary case and says nothing.
-    assert "ready" not in lean
-    assert "hybrid_ready" not in lean
-    # A generation this tool can serve says nothing about methods.
-    assert "hybrid_ready" not in lean
+    # A generation that serves the corpus needs nothing from the caller.
+    assert "requires" not in lean
 
-    # A generation that predates dense support is stated plainly, with the
-    # upgrade advice, rather than as a list of methods to pick from.
+    # A generation that predates dense support is one call away from serving this
+    # tool, and the answer says which call rather than listing retrieval methods
+    # as if they were a choice.
     legacy = present_tool_response(
         "status",
         _status_payload(
@@ -301,9 +293,12 @@ def test_status_lean_keeps_the_current_generation_and_no_inventory() -> None:
         ),
         detail=LEAN_TOOL_DETAIL,
     )
-    assert legacy["hybrid_ready"] is False
-    assert legacy["generation_upgrade_required"] is True
-    assert legacy["upgrade_reasons"] == ["bm25_only_generation"]
+    assert legacy["ready"] is True
+    assert legacy["stale"] is False
+    assert legacy["requires"] == ["ingest"]
+    assert "hybrid_ready" not in legacy
+    assert "generation_upgrade_required" not in legacy
+    assert "upgrade_reasons" not in legacy
     assert "available_retrieval_methods" not in legacy
 
     # The retained generations, the categories, and the projects are inventories:
@@ -323,10 +318,10 @@ def test_status_lean_keeps_the_current_generation_and_no_inventory() -> None:
         "indexed_source_count",
         "searchable_source_count",
         "excluded_source_count",
+        "retained_generation_count",
+        "retained_generation_bytes",
         "generations",
     ):
-        if key == "generations":
-            continue
         assert key not in serialized
         assert key in present_tool_response("status", payload, detail=FULL_TOOL_DETAIL)
     # A field whose value is the harmless default is left out entirely.
@@ -339,6 +334,9 @@ def test_status_lean_keeps_the_current_generation_and_no_inventory() -> None:
     assert "excluded_sources" not in lean
     assert "generation_upgrade_required" not in lean
     assert "upgrade_reasons" not in lean
+    # The overlay is applied at read time, so it is not a condition the caller
+    # acts on; reviewed sources the generation has not indexed are a call, and
+    # `requires` says so.
     assert "metadata_overlay_active" not in lean
     assert "metadata_pending_source_paths" not in lean
     assert "metadata_pending_source_count" not in lean
@@ -347,7 +345,37 @@ def test_status_lean_keeps_the_current_generation_and_no_inventory() -> None:
     assert "version" not in lean
     assert "restart_required" not in lean
 
-    # A required restart is actionable state, so it survives the projection.
+
+def test_status_names_every_call_the_verdict_requires() -> None:
+    # Every condition that a rebuild closes names that one call, so a caller
+    # never reads four fields to learn that it should ingest.
+    for overrides in (
+        {"stale": True},
+        {"generation_upgrade_required": True, "upgrade_reasons": ["retrieval_policy"]},
+        {"hybrid_ready": False},
+        {"metadata_pending_source_paths": ["a.pdf", "b.pdf"]},
+        {"ingestion_progress": {"phase": "embedding", "progress": 0.4}},
+        {"stale": True, "changes": {"source_exclusions_changed": True}},
+    ):
+        lean = present_tool_response(
+            "status", _status_payload(**overrides), detail=LEAN_TOOL_DETAIL
+        )
+        assert lean["requires"] == ["ingest"], overrides
+
+    # Reviewed metadata for sources outside the generation is a rebuild, and the
+    # count of those sources is not news beside the call it implies.
+    pending = present_tool_response(
+        "status",
+        _status_payload(metadata_pending_source_paths=["a.pdf", "b.pdf"]),
+        detail=LEAN_TOOL_DETAIL,
+    )
+    assert pending["ready"] is True
+    assert pending["stale"] is False
+    assert pending["requires"] == ["ingest"]
+    assert "metadata_pending_source_count" not in pending
+
+    # A running app older than the installed code needs the client to restart it,
+    # and the version block itself is a full-detail reader.
     restarting = present_tool_response(
         "status",
         _status_payload(
@@ -360,8 +388,24 @@ def test_status_lean_keeps_the_current_generation_and_no_inventory() -> None:
         ),
         detail=LEAN_TOOL_DETAIL,
     )
-    assert restarting["restart_required"] is True
+    assert restarting["requires"] == ["restart_app"]
     assert "version" not in restarting
+
+    # Both at once is both calls, not the first one found.
+    both = present_tool_response(
+        "status",
+        _status_payload(
+            stale=True,
+            version={
+                "server": "0.15.0",
+                "installed": "0.16.0",
+                "ui": None,
+                "restart_required": True,
+            },
+        ),
+        detail=LEAN_TOOL_DETAIL,
+    )
+    assert both["requires"] == ["ingest", "restart_app"]
 
 
 def test_status_counts_available_source_changes_and_names_missing_ones() -> None:
@@ -385,6 +429,8 @@ def test_status_counts_available_source_changes_and_names_missing_ones() -> None
         ),
         detail=LEAN_TOOL_DETAIL,
     )
+    assert stale["stale"] is True
+    assert stale["requires"] == ["ingest"]
     assert stale["changes"] == {
         "added_source_count": 3,
         "modified_source_count": 1,
@@ -414,14 +460,14 @@ def test_status_before_the_first_ingestion_states_what_is_missing() -> None:
     }
     lean = present_tool_response("status", payload, detail=LEAN_TOOL_DETAIL)
 
-    # Stale is news here: there is no generation at all, which is a different
-    # condition from a stale one and is what `message` says. `ready` is false in
-    # every answer that is not ready and true in every answer that is, so it
-    # travels only when it is false. The counts of what was discovered are the
-    # inventory `list_sources` returns.
-    assert set(lean) == {"ready", "stale", "message"}
+    # The verdict is stated, not inferred from an absence: no generation is
+    # `ready: false`, the corpus it would hold is `stale: true`, and the call
+    # that fixes both is named. The counts of what was discovered are the
+    # inventory `find_source` looks one source up in.
+    assert set(lean) == {"ready", "stale", "requires", "message"}
     assert lean["ready"] is False
     assert lean["stale"] is True
+    assert lean["requires"] == ["ingest"]
     assert "generations" not in lean
     assert "categories" not in lean
     assert "projects" not in lean
@@ -432,43 +478,67 @@ def test_status_before_the_first_ingestion_states_what_is_missing() -> None:
     assert lean["message"] == "No knowledge-base generation exists; call ingest."
 
 
-def test_list_sources_lean_keeps_handles_and_overrides() -> None:
+def test_find_source_lean_keeps_handles_and_availability() -> None:
     lean = present_tool_response(
-        "list_sources", _list_sources_payload(), detail=LEAN_TOOL_DETAIL
+        "find_source", _find_source_payload(), detail=LEAN_TOOL_DETAIL
     )
 
-    assert lean["sources"] == [
+    # One lookup, and each match answers whether a search can reach the source.
+    # `included` and `exists` appear only where they withhold it.
+    assert lean["query"] == "crawford"
+    assert lean["generation_id"] == "20260101T000000Z-abcdef"
+    assert lean["match_count"] == 2
+    assert "truncated" not in lean
+    assert lean["matches"] == [
         {
             "source_id": "src_one",
             "source_relative_path": "evidence.pdf",
             "title": "Citable Evidence",
             "authors": ["A. Researcher"],
-        }
-    ]
-    assert lean["discovered_sources"] == [
-        {
-            "source_id": "src_one",
-            "source_relative_path": "evidence.pdf",
-            "included": True,
             "indexed_in_current_generation": True,
-        }
-    ]
-    assert lean["excluded_sources"] == [
+            "has_reviewed_metadata": True,
+        },
         {
             "source_id": "src_two",
-            "source_relative_path": "duplicate.pdf",
-            "reason": "Reviewed duplicate.",
+            "source_relative_path": "archive/duplicate.pdf",
+            "title": "Citable Evidence",
+            "authors": ["A. Researcher"],
+            "exists": False,
+            "included": False,
             "indexed_in_current_generation": False,
-        }
+        },
     ]
-    assert lean["reviewed_metadata_sources"] == [
+
+    # A cap that hid matches is stated, so an empty remainder is not read as the
+    # whole answer.
+    capped = present_tool_response(
+        "find_source",
+        _find_source_payload(match_count=12, truncated=True),
+        detail=LEAN_TOOL_DETAIL,
+    )
+    assert capped["truncated"] is True
+    assert capped["match_count"] == 12
+
+
+def test_find_source_lean_states_an_empty_lookup() -> None:
+    lean = present_tool_response(
+        "find_source",
         {
-            "source_id": "src_one",
-            "source_relative_path": "evidence.pdf",
-            "metadata": {"title": "Citable Evidence"},
-        }
-    ]
-    assert "known_sources" not in lean
+            "ready": True,
+            "generation_id": "20260101T000000Z-abcdef",
+            "query": "nobody",
+            "match_count": 0,
+            "searchable_match_count": 0,
+            "truncated": False,
+            "matches": [],
+            "message": "No source matches 'nobody'.",
+        },
+        detail=LEAN_TOOL_DETAIL,
+    )
+
+    assert set(lean) == {"generation_id", "query", "message", "matches"}
+    assert lean["matches"] == []
+    assert "match_count" not in lean
 
 
 def test_ingest_lean_discloses_anomalies_only_when_they_happened() -> None:
@@ -830,70 +900,44 @@ def _status_payload(**overrides: object) -> dict[str, object]:
     return payload
 
 
-def _list_sources_payload() -> dict[str, object]:
-    return {
+def _find_source_payload(**overrides: object) -> dict[str, object]:
+    payload: dict[str, object] = {
         "ready": True,
         "generation_id": "20260101T000000Z-abcdef",
-        "source_count": 1,
-        "sources": [
-            {
-                **_hit(),
-                "sha256": "d" * 64,
-                "mtime_ns": 1789753677157890786,
-                "size": 103548,
-                "format": "pdf",
-                "extracted_units": 4,
-                "empty_units": 0,
-                "physical_pages": 4,
-                "excluded_corrupt_unit_count": 0,
-                "removed_repeated_margin_blocks": 0,
-            }
-        ],
-        "discovered_source_count": 2,
-        "discovered_sources": [
+        "query": "crawford",
+        "match_count": 2,
+        "searchable_match_count": 1,
+        "truncated": False,
+        "matches": [
             {
                 "source_id": "src_one",
                 "source_relative_path": "evidence.pdf",
                 "source_path": "sources/evidence.pdf",
-                "format": "pdf",
-                "included": True,
-                "indexed_in_current_generation": True,
-            }
-        ],
-        "known_source_count": 2,
-        "known_sources": [
-            {
-                "source_id": "src_one",
-                "source_relative_path": "evidence.pdf",
+                "title": "Citable Evidence",
+                "authors": ["A. Researcher"],
                 "exists": True,
                 "included": True,
                 "indexed_in_current_generation": True,
                 "has_reviewed_metadata": True,
-            }
-        ],
-        "excluded_source_count": 1,
-        "excluded_sources": [
+                "searchable": True,
+            },
             {
                 "source_id": "src_two",
-                "source_relative_path": "duplicate.pdf",
-                "source_path": "sources/duplicate.pdf",
-                "reason": "Reviewed duplicate.",
-                "excluded_at": "2026-01-01T00:00:00Z",
-                "exists": True,
+                "source_relative_path": "archive/duplicate.pdf",
+                "source_path": "sources/archive/duplicate.pdf",
+                "title": "Citable Evidence",
+                "authors": ["A. Researcher"],
+                "exists": False,
+                "included": False,
                 "indexed_in_current_generation": False,
-            }
+                "has_reviewed_metadata": False,
+                "searchable": False,
+            },
         ],
-        "reviewed_metadata_source_count": 1,
-        "reviewed_metadata_sources": [
-            {
-                "source_id": "src_one",
-                "source_relative_path": "evidence.pdf",
-                "source_path": "sources/evidence.pdf",
-                "metadata": {"title": "Citable Evidence"},
-                "indexed_in_current_generation": True,
-            }
-        ],
+        "message": "1 of the 2 sources matching 'crawford' are searchable now.",
     }
+    payload.update(overrides)
+    return payload
 
 
 def _ingest_payload(**overrides: object) -> dict[str, object]:
@@ -937,7 +981,7 @@ def _every_tool_payload() -> dict[str, dict[str, object]]:
         "status": _status_payload(),
         "ingest": _ingest_payload(),
         "search": _search_payload(),
-        "list_sources": _list_sources_payload(),
+        "find_source": _find_source_payload(),
         "get_passage": {
             "generation_id": "20260101T000000Z-abcdef",
             "requested_chunk_id": "chk_one",

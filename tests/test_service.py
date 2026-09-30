@@ -1073,6 +1073,107 @@ def test_source_ids_address_reviewed_sources(project: Path) -> None:
     asyncio.run(_assert_source_ids_address_reviewed_sources(project))
 
 
+async def _assert_find_source_answers_for_one_source(project: Path) -> None:
+    first = project / "sources" / "crawford-atlas.pdf"
+    second = project / "sources" / "crawford-notes.pdf"
+    write_pdf(first, ["Cobalt evidence about archives and borders."])
+    write_pdf(second, ["Cobalt evidence about a different archive."])
+    config = resolve_config(project, vanilla_executable=sys.executable)
+    service = ResearchService(  # type: ignore[arg-type]
+        config,
+        FakeUltraRAG(),
+        dense=FakeDenseBackend(),
+    )
+
+    # Before an ingestion the files are known and neither is searchable, so the
+    # answer says the call that changes that.
+    before = await service.find_source("crawford")
+    assert before["ready"] is False
+    assert before["match_count"] == 2
+    assert before["truncated"] is False
+    assert before["message"] == (
+        "2 sources match 'crawford' and none is searchable: each needs "
+        "ingesting, or a reviewed exclusion is in force."
+    )
+    assert all(record["searchable"] is False for record in before["matches"])
+    assert {record["source_relative_path"] for record in before["matches"]} == {
+        "crawford-atlas.pdf",
+        "crawford-notes.pdf",
+    }
+
+    await service.ingest(chunk_size=50, chunk_overlap=10)
+
+    by_path = await service.find_source("crawford-atlas")
+    assert by_path["match_count"] == 1
+    assert by_path["matches"][0]["source_relative_path"] == "crawford-atlas.pdf"
+    assert by_path["matches"][0]["indexed_in_current_generation"] is True
+    assert by_path["matches"][0]["searchable"] is True
+    assert by_path["matches"][0]["source_id"].startswith("src_")
+
+    # The title and the authors of a reviewed override are matchable names too.
+    write_reviewed_metadata(
+        config,
+        "crawford-notes.pdf",
+        {"title": "Reviewed Atlas Notes", "authors": ["R. Researcher"]},
+    )
+    by_title = await service.find_source("atlas notes")
+    assert by_title["matches"][0]["source_relative_path"] == "crawford-notes.pdf"
+    assert by_title["matches"][0]["authors"] == ["R. Researcher"]
+    by_author = await service.find_source("RESEARCHER")
+    assert by_author["match_count"] == 1
+
+    # A reviewed exclusion is reported as one, because it withholds retrieval
+    # even though the source is indexed.
+    await service.set_source_inclusion(
+        source_path="crawford-atlas.pdf",
+        included=False,
+        reason="Reviewed duplicate.",
+    )
+    excluded = await service.find_source("crawford-atlas")
+    assert excluded["matches"][0]["included"] is False
+    assert excluded["matches"][0]["indexed_in_current_generation"] is True
+    assert excluded["matches"][0]["searchable"] is False
+    assert excluded["searchable_match_count"] == 0
+
+    # A source whose file is gone stays answerable, and says so.
+    second.unlink()
+    gone = await service.find_source("crawford-notes")
+    assert gone["match_count"] == 1
+    assert gone["matches"][0]["exists"] is False
+    assert gone["matches"][0]["indexed_in_current_generation"] is True
+
+    missing = await service.find_source("nobody at all")
+    assert missing["match_count"] == 0
+    assert missing["matches"] == []
+    assert missing["message"].startswith("No source matches 'nobody at all'.")
+
+    # A cap that hid matches is disclosed rather than read as the whole answer.
+    for index in range(4):
+        write_pdf(
+            project / "sources" / f"crawford-note-{index}.pdf",
+            [f"Cobalt evidence number {index}."],
+        )
+    capped = await service.find_source("crawford", limit=2)
+    assert len(capped["matches"]) == 2
+    assert capped["truncated"] is True
+    assert capped["match_count"] == 6
+    # One indexed source is excluded and four are new files, so only the ingested,
+    # included one is searchable.
+    assert capped["message"] == (
+        "1 of the 6 sources matching 'crawford' are searchable now."
+    )
+    one = await service.find_source("crawford", limit=1)
+    assert one["matches"] == capped["matches"][:1]
+    assert one["match_count"] == 6
+
+    with pytest.raises(ResearchError, match="look up"):
+        await service.find_source("   ")
+
+
+def test_find_source_answers_for_one_source(project: Path) -> None:
+    asyncio.run(_assert_find_source_answers_for_one_source(project))
+
+
 async def _assert_reviewed_metadata_survives_source_removal(
     project: Path,
 ) -> None:

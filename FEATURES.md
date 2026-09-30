@@ -197,7 +197,7 @@ Read this as two profiles rather than a scoreboard. It reflects that project's R
 | Metadata, citations, locators | Resolved title, authors, year, DOI with per-field provenance and warnings in the full-detail payload, plus original-file locators and a reviewed-metadata overlay | Not part of the documented feature set |
 | Index lifecycle | Immutable generations, validated before activation, resumable builds, reusable per-document and per-chunk work | Sequential indexing with progress reporting, plus per-document and whole-index removal |
 | Cancellation and restart behaviour | Checkpointed: a build resumes where it stopped | Progress is reported; resumability is not documented |
-| Interface | A browser workspace, seven MCP tools and two resources, and one command line, all over one running app on one port | Five MCP tools and four MCP resources (`rag://documents`, `rag://document/{path}`, `rag://query-document/{chunks}/{query}`, `rag://embedding/status`) |
+| Interface | A browser workspace, seven MCP tools and one resource, and one command line, all over one running app on one port | Five MCP tools and four MCP resources (`rag://documents`, `rag://document/{path}`, `rag://query-document/{chunks}/{query}`, `rag://embedding/status`) |
 | Human review | Reviewed metadata corrections and reversible exclusions in the UI | Not part of the documented feature set |
 | Retrieval evaluation | Measured: 32 known-item judged queries on one reference corpus, reported per mode and per query class, with pooled recall still pending | Not part of the documented feature set |
 | Licence | Apache-2.0 for this repository's own code, which is recorded in `NOTICE` | MIT |
