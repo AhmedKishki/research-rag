@@ -39,8 +39,9 @@ bm25_stopwords = ""
 offline = false
 # debug, info, warn, or error.
 log_level = "warn"
-# Accepted and ignored. It selected the MCP server's answer projection, and a
-# settings file that server wrote may still name it, so the key stays declared.
+# Detail of the answers an agent's tool calls receive: 'lean' is what an agent
+# acts on, 'full' is the complete payload. The workspace and the command line
+# always print the complete one.
 tool_detail = "lean"
 # ONNX Runtime threads for the embedding model; 0 leaves the choice to the runtime.
 embedding_threads = 0

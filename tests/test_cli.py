@@ -11,6 +11,7 @@ from __future__ import annotations
 import asyncio
 import json
 import signal
+import subprocess
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, ClassVar, Self
@@ -18,9 +19,12 @@ from typing import Any, ClassVar, Self
 import pytest
 from conftest import write_pdf
 
-import research_rag.cli as cli_module
+import research_rag.surfaces.cli as cli_module
 import research_rag.ultrarag as ultrarag_module
-from research_rag.cli import (
+from research_rag import launcher as launcher_module
+from research_rag.config import ConfigurationError
+from research_rag.support import ResearchError
+from research_rag.surfaces.cli import (
     _init,
     _metadata_body,
     _operate,
@@ -28,12 +32,10 @@ from research_rag.cli import (
     _resolve,
     _run,
     _service_processes,
+    _start,
     _stop,
     _terminate,
-    _ui,
 )
-from research_rag.config import ConfigurationError
-from research_rag.support import ResearchError
 from research_rag.ultrarag import LazyGateway
 
 
@@ -47,7 +49,7 @@ def _descriptor(project: Path) -> dict[str, Any]:
 
 
 class RecordingService:
-    """A stand-in that records the one call a command makes."""
+    """A stand-in that records the one service call a command makes."""
 
     def __init__(self) -> None:
         self.calls: list[tuple[str, dict[str, Any]]] = []
@@ -104,6 +106,56 @@ class RecordingService:
         return self._record(
             "set_source_metadata",
             {"metadata": metadata, "source_path": source_path, "source_id": source_id},
+        )
+
+
+class Operations:
+    """The two implementations `_run` chooses between, as one object.
+
+    The command line does not know or care whether an answer came from the app
+    over loopback or from a service it opened itself, so the test double for the
+    surface is a stand-in for the *interface*, not for either implementation.
+    """
+
+    def __init__(self) -> None:
+        self.service = RecordingService()
+
+    async def status(self) -> dict[str, Any]:
+        return await self.service.status()
+
+    async def ingest(self, *, force_recompute: bool) -> dict[str, Any]:
+        return await self.service.ingest(force_recompute=force_recompute)
+
+    async def search(self, query: str, **arguments: Any) -> dict[str, Any]:
+        return await self.service.search(query, **arguments)
+
+    async def sources(self) -> dict[str, Any]:
+        return await self.service.list_sources()
+
+    async def passage(self, chunk_id: str, *, context_chunks: int) -> dict[str, Any]:
+        return await self.service.get_passage(chunk_id, context_chunks=context_chunks)
+
+    async def set_source_inclusion(
+        self,
+        *,
+        source_path: str | None,
+        source_id: str | None,
+        included: bool,
+        reason: str | None,
+    ) -> dict[str, Any]:
+        return await self.service.set_source_inclusion(
+            source_path, source_id=source_id, included=included, reason=reason
+        )
+
+    async def set_source_metadata(
+        self,
+        *,
+        source_path: str | None,
+        source_id: str | None,
+        metadata: dict[str, Any],
+    ) -> dict[str, Any]:
+        return await self.service.set_source_metadata(
+            metadata, source_path=source_path, source_id=source_id
         )
 
 
@@ -186,28 +238,36 @@ def test_init_refuses_a_name_that_cannot_be_recorded(tmp_path: Path) -> None:
 
 
 def test_the_command_line_routes_each_command_to_its_service_operation() -> None:
-    service = RecordingService()
+    service = Operations()
 
     status = asyncio.run(_operate(_args("status"), service))
-    assert status == ("status", {"operation": "status", "arguments": {}})
+    assert status["operation"] == "status"
 
     refresh = asyncio.run(_operate(_args("ingest", "--force-recompute"), service))
-    assert refresh[0] == "ingest"
-    assert refresh[1]["arguments"] == {"force_recompute": True}
+    assert refresh["arguments"] == {"force_recompute": True}
 
     sources = asyncio.run(_operate(_args("sources"), service))
-    assert sources[0] == "list_sources"
+    assert sources["operation"] == "list_sources"
 
     passage = asyncio.run(
         _operate(_args("passage", "abc123", "--context-chunks", "2"), service)
     )
-    assert passage[1]["arguments"] == {"chunk_id": "abc123", "context_chunks": 2}
+    assert passage["arguments"] == {"chunk_id": "abc123", "context_chunks": 2}
+
+    restored = asyncio.run(
+        _operate(
+            _args("include", "a.pdf"),
+            service,
+        )
+    )
+    assert restored["arguments"]["included"] is True
+    assert restored["arguments"]["source_path"] == "a.pdf"
 
 
 def test_search_carries_its_filters_and_reranks_by_default() -> None:
     service = RecordingService()
 
-    tool, payload = asyncio.run(
+    payload = asyncio.run(
         _operate(
             _args(
                 "search",
@@ -227,7 +287,6 @@ def test_search_carries_its_filters_and_reranks_by_default() -> None:
         )
     )
 
-    assert tool == "search"
     assert payload["arguments"] == {
         "query": "articulation",
         "top_k": 12,
@@ -247,14 +306,12 @@ def test_search_carries_its_filters_and_reranks_by_default() -> None:
 def test_excluding_a_source_records_the_reason_it_was_given() -> None:
     service = RecordingService()
 
-    tool, payload = asyncio.run(
+    payload = asyncio.run(
         _operate(
             _args("exclude", "a.pdf", "--reason", "superseded by the reprint"),
             service,
         )
     )
-
-    assert tool == "set_source_inclusion"
     assert payload["arguments"] == {
         "source_path": "a.pdf",
         "source_id": None,
@@ -386,6 +443,85 @@ def test_the_stop_sweep_finds_only_processes_serving_this_project(
     assert found[0][1].startswith("python -m research_rag --project-root")
 
 
+def test_the_stop_sweep_reads_a_path_as_a_path_not_as_a_program(tmp_path: Path) -> None:
+    """`.research-rag` is in every project path, so a substring test lies.
+
+    A marker test that looks for the product name inside an argument reads a
+    project directory as though it were the program being run. The name has to
+    be a whole argument, or the sweep's second half, which exists to keep
+    another project's process out of it, is undone by its first.
+    """
+
+    from research_rag.surfaces.cli import _invokes_this_app
+
+    project = tmp_path / "research-rag"
+    state = project / ".research-rag" / "runtime"
+
+    assert not _invokes_this_app(
+        ["--project-root", str(project), "--runtime-root", str(state)], project
+    )
+    assert _invokes_this_app(
+        ["/srv/research-rag/.venv/bin/research-rag", "--project-root", str(project)],
+        project,
+    )
+    assert _invokes_this_app(["python", "-m", "research_rag"], project)
+    assert not _invokes_this_app(["python", "-m", "research_ultra_rag_mcp"], project)
+
+
+def test_the_stop_sweep_leaves_the_other_products_processes_alone(
+    tmp_path: Path,
+) -> None:
+    """Both products may serve one project while the migration runs.
+
+    The MCP server names this project root, and its gateway names a directory
+    under `.research-rag`. Neither is this app's process, so `stop --servers`
+    must leave both running: a sweep that ended them would stop a server a
+    reader started on purpose.
+    """
+
+    project = tmp_path / "ai-and-fetishism"
+    proc_root = tmp_path / "proc"
+    proc_root.mkdir()
+    server = "/srv/research-ultra-rag-mcp-server/.venv/bin"
+    state = project / ".research-rag" / "runtime" / "ultrarag-runtime"
+    _fake_process(
+        proc_root,
+        31,
+        [
+            "/srv/research-ultra-rag-mcp-server/.venv/bin/python",
+            f"{server}/research-ultra-rag-mcp",
+            "--project-root",
+            str(project),
+        ],
+    )
+    _fake_process(
+        proc_root,
+        32,
+        [
+            f"{server}/python",
+            f"{server}/vanilla-ultra-rag-mcp",
+            "--workspace-root",
+            str(state),
+            "--log-level",
+            "warn",
+        ],
+    )
+    _fake_process(
+        proc_root,
+        33,
+        [
+            "/srv/research-rag/.venv/bin/research-rag",
+            "--project-root",
+            str(project),
+            "serve",
+        ],
+    )
+
+    found = [pid for pid, _command in _service_processes(project, proc_root)]
+
+    assert found == [33]
+
+
 def test_the_stop_sweep_accepts_the_equals_form_of_the_option(tmp_path: Path) -> None:
     project = tmp_path / "project"
     proc_root = tmp_path / "proc"
@@ -416,7 +552,7 @@ def test_stopping_asks_first_and_kills_only_the_survivors(
     assert forced == [2]
 
 
-def test_stop_without_servers_only_stops_the_workspace(
+def test_stop_without_servers_only_stops_the_app(
     project: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -425,7 +561,7 @@ def test_stop_without_servers_only_stops_the_workspace(
     def record(command: list[str], **_options: Any) -> SimpleNamespace:
         recorded.append(command)
         return SimpleNamespace(
-            returncode=0, stdout="No workspace is running for this project."
+            returncode=0, stdout="No app is running for this project."
         )
 
     monkeypatch.setattr(cli_module, "subprocess", SimpleNamespace(run=record))
@@ -438,7 +574,7 @@ def test_stop_without_servers_only_stops_the_workspace(
     assert recorded[0][1:] == ["--stop"]
     assert report["ui_launcher_status"] == 0
     # The launcher's message is captured, so stdout stays a single JSON report.
-    assert report["ui_launcher_output"] == "No workspace is running for this project."
+    assert report["ui_launcher_output"] == "No app is running for this project."
     assert "servers" not in report
 
 
@@ -481,34 +617,79 @@ def test_set_overrides_reach_the_settings_by_resolving_in_this_process(
     assert config.settings_provenance["retrieval.rrf_k"] == "command line"
 
 
-def test_ui_hands_over_to_the_project_launcher(
-    project: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
+def _launched(project: Path, monkeypatch: pytest.MonkeyPatch, returncode: int = 0):
+    """Generate the launcher, and record the commands the launcher is called with."""
+
     recorded: list[list[str]] = []
 
-    def record(command: list[str]) -> int:
+    def record(command: list[str], **_: Any) -> subprocess.CompletedProcess[str]:
         recorded.append(command)
-        return 0
+        return subprocess.CompletedProcess(command, returncode, "", "")
 
-    monkeypatch.setattr(cli_module, "subprocess", SimpleNamespace(call=record))
-    args = _args("--project-root", str(project), "ui", "--open", "--port", "5099")
-    config = _resolve(args)
-
-    _ui(args, config)
-
-    assert len(recorded) == 1
-    assert recorded[0][0].endswith(".research-rag/bin/open-research-rag-ui.sh")
-    assert recorded[0][1:] == ["--open", "--port", "5099"]
+    monkeypatch.setattr(launcher_module.subprocess, "run", record)
+    return recorded
 
 
-def test_ui_reports_a_launcher_that_fails(
+def test_start_hands_over_to_the_project_launcher(
     project: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr(cli_module, "subprocess", SimpleNamespace(call=lambda _: 3))
+    """The launcher owns the port choice, the lock, and the pid file."""
+
+    recorded = _launched(project, monkeypatch)
+    args = _args("--project-root", str(project), "start", "--port", "5099")
+    config = _resolve(args)
+    launcher_module.ensure_ui_launcher(
+        project_root=config.project_root,
+        portable_root=config.portable_root,
+        state_root=config.state_root,
+        project_name=config.project_name,
+    )
+
+    outcome = _start(args, config)
+
+    assert outcome["running"] is True
+    assert recorded[0][0].endswith(".research-rag/bin/open-research-rag-ui.sh")
+    assert recorded[0][1:] == ["--port", "5099"]
+
+
+def test_ui_starts_the_app_and_opens_a_browser(
+    project: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    recorded = _launched(project, monkeypatch)
+    opened: list[str] = []
+    monkeypatch.setattr(cli_module, "_open_browser", opened.append)
     args = _args("--project-root", str(project), "ui")
     config = _resolve(args)
+    launcher_module.ensure_ui_launcher(
+        project_root=config.project_root,
+        portable_root=config.portable_root,
+        state_root=config.state_root,
+        project_name=config.project_name,
+    )
 
-    with pytest.raises(ResearchError, match="exited with status 3"):
-        _ui(args, config)
+    _start(args, config)
+
+    assert recorded[0][1:] == ["--open"]
+
+
+def test_start_reports_a_launcher_that_fails(
+    project: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A start that failed names what failed and where the reason was written."""
+
+    _launched(project, monkeypatch, returncode=3)
+    args = _args("--project-root", str(project), "start")
+    config = _resolve(args)
+    launcher_module.ensure_ui_launcher(
+        project_root=config.project_root,
+        portable_root=config.portable_root,
+        state_root=config.state_root,
+        project_name=config.project_name,
+    )
+
+    with pytest.raises(ResearchError, match="did not start") as failure:
+        _start(args, config)
+    assert "research-rag-ui.log" in str(failure.value)

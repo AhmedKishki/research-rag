@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import http.client
+import json
 import os
 import shutil
 import subprocess
@@ -255,7 +257,7 @@ def test_launcher_starts_and_stops_the_whole_process_group(tmp_path: Path) -> No
             check=False,
         )
         assert idle.returncode == 0
-        assert "No workspace is running" in idle.stdout
+        assert "No app is running" in idle.stdout
     finally:
         subprocess.run(
             [str(script), "--stop"],
@@ -401,7 +403,7 @@ def test_two_launchers_serve_two_ports_and_stop_independently(
             )
 
 
-def test_stop_refuses_a_pid_that_is_not_this_projects_workspace(tmp_path: Path) -> None:
+def test_stop_refuses_a_pid_that_is_not_this_projects_app(tmp_path: Path) -> None:
     """A reused pid number is not a reason to signal an unrelated process."""
 
     script, state, environment = _stub_launcher(tmp_path, stub_body="sleep 30\n")
@@ -418,10 +420,63 @@ def test_stop_refuses_a_pid_that_is_not_this_projects_workspace(tmp_path: Path) 
             check=False,
         )
         assert stopped.returncode == 0
-        assert "is not this project's workspace" in stopped.stderr
+        assert "is not this project's app" in stopped.stderr
         assert bystander.poll() is None
         assert not (state / "research-rag-ui.pid").exists()
         assert not (state / "research-rag-ui.port").exists()
     finally:
         bystander.terminate()
         bystander.wait(timeout=30)
+
+
+@pytest.mark.integration
+def test_the_generated_launcher_starts_and_stops_the_real_workspace(
+    project: Path,
+) -> None:
+    """The generated script, run as written, must serve and stop this project.
+
+    Every other test in this file replaces the launcher's body with a stub, so
+    none of them can see that the command the script builds is one the installed
+    parser accepts. That gap is what let the options sit after the subcommand
+    through: the script ran, the port never opened, and every test passed.
+    """
+
+    config = resolve_config(project, vanilla_executable=sys.executable)
+    generated = ensure_ui_launcher(
+        project_root=config.project_root,
+        portable_root=config.portable_root,
+        state_root=config.state_root,
+        project_name=config.project_name,
+        runtime_root=config.runtime_root,
+    )
+    script = launcher_path(config.portable_root)
+    assert generated["link_state"] in {"linked", "created"}
+    state = config.state_root
+    log = state / "logs" / "research-rag-ui.log"
+
+    started = subprocess.run(
+        [script], capture_output=True, text=True, timeout=180, check=False
+    )
+    try:
+        assert started.returncode == 0, started.stderr or log.read_text(
+            encoding="utf-8"
+        )
+        assert "Started the app for this project" in started.stdout
+        assert "URL: http://127.0.0.1:" in started.stdout
+        assert (state / "research-rag-ui.pid").is_file()
+        port = int((state / "research-rag-ui.port").read_text(encoding="utf-8"))
+        connection = http.client.HTTPConnection("127.0.0.1", port, timeout=30)
+        try:
+            connection.request("GET", "/api/health")
+            response = connection.getresponse()
+            body = json.loads(response.read().decode("utf-8"))
+        finally:
+            connection.close()
+        assert response.status == 200
+        assert body["project_root"] == str(project)
+    finally:
+        stopped = subprocess.run(
+            [script, "--stop"], capture_output=True, text=True, timeout=180, check=False
+        )
+        assert stopped.returncode == 0, stopped.stderr
+    assert not (state / "research-rag-ui.pid").exists()

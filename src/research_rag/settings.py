@@ -70,12 +70,9 @@ PROJECT_CONFIG_RELATIVE = Path(".research-rag") / "config.toml"
 SETTINGS_ENVIRONMENT_PREFIX = "RESEARCH_ULTRARAG_"
 
 
-# `runtime.tool_detail` selected which projection the MCP tool answers carried,
-# and this app has one answer shape per operation, so nothing reads it. The key
-# stays registered because a settings file the MCP server wrote may still name
-# it, and the layer stack refuses an undeclared key in every layer — removing it
-# would make that file an error instead of a file this app reads. Keep it until
-# the MCP server retires.
+# The answer detail an agent's tool call receives. The browser workspace and the
+# command line always want the complete payload; the projection exists for the
+# one reader whose context is bounded, and `MEASUREMENTS.md` carries both sizes.
 LEAN_TOOL_DETAIL = "lean"
 FULL_TOOL_DETAIL = "full"
 TOOL_DETAIL_MODES = (LEAN_TOOL_DETAIL, FULL_TOOL_DETAIL)
@@ -322,9 +319,9 @@ SETTINGS: tuple[Setting, ...] = (
         layer="runtime",
         normalize_case=True,
         doc=(
-            "Accepted and ignored. It selected the MCP server's answer "
-            "projection; this app always returns the complete payload. "
-            "Retained so a settings file written by that server still resolves."
+            "Agent answer detail: 'lean' returns the fields an agent acts on, "
+            "'full' returns the complete payload for debugging retrieval or "
+            "ingestion. The workspace and the command line always use 'full'."
         ),
         choices=TOOL_DETAIL_MODES,
         env="RESEARCH_ULTRARAG_TOOL_DETAIL",

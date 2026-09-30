@@ -76,13 +76,25 @@ def test_the_launcher_runs_this_apps_own_command() -> None:
     assert launcher_module.UI_COMMAND == "research-rag"
     assert launcher_module.SERVE_COMMAND == "serve"
     template = launcher_module._TEMPLATE
-    assert '"$UI_COMMAND" @SERVE@' in template
+    # Every option is global, so the subcommand goes last; argparse reads them
+    # in front of the command they belong to.
+    # A global option belongs in front of the subcommand and a subcommand's own
+    # option behind it, so the generated command is the one the parser accepts.
+    assert '"$UI_COMMAND" --project-root "$PROJECT_ROOT"' in template
+    assert '@SERVE@ --port "$PORT"' in template
+    assert "@SERVE@ --project-root" not in template
+    assert '--port "$PORT" @SERVE@' not in template
     assert "research-ultra-rag" not in template
 
 
-def test_the_inert_tool_detail_key_is_still_declared() -> None:
-    """A settings file the MCP server wrote may still name it, and the stack
-    refuses an undeclared key in every layer."""
+def test_the_agent_answer_detail_is_declared_and_used() -> None:
+    """The one setting that is not a project, corpus, or machine tunable.
+
+    A settings file the MCP server wrote names it, and the layer stack refuses an
+    undeclared key in every layer, so the key cannot be removed while that server
+    ships. Removing it is also the one change that would make an agent's answers
+    stop being projectable, so the test names the reader as well as the key.
+    """
 
     keys = {setting.key for setting in SETTINGS}
     assert "runtime.tool_detail" in keys
@@ -90,17 +102,15 @@ def test_the_inert_tool_detail_key_is_still_declared() -> None:
     defaults = tomllib.loads(
         (ROOT / "src/research_rag/default.toml").read_text(encoding="utf-8")
     )
-    assert "tool_detail" in defaults["runtime"]
+    assert defaults["runtime"]["tool_detail"] == "lean"
 
-
-def test_no_module_reads_the_inert_tool_detail_key() -> None:
-    """Nothing projects an answer any more, so the key must select nothing."""
-
-    package = ROOT / "src/research_rag"
-    readers = [
-        path.name
-        for path in sorted(package.glob("*.py"))
+    readers = sorted(
+        path.relative_to(ROOT).as_posix()
+        for path in ROOT.glob("src/research_rag/**/*.py")
         if "tool_detail" in path.read_text(encoding="utf-8")
-        and path.name not in {"settings.py", "config.py"}
-    ]
-    assert readers == [], f"modules still reading tool_detail: {readers}"
+    )
+    assert readers == [
+        "src/research_rag/config.py",
+        "src/research_rag/settings.py",
+        "src/research_rag/surfaces/mcp.py",
+    ], readers

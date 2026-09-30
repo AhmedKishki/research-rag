@@ -1,4 +1,4 @@
-"""The browser workspace: the shared UI over one in-process research service.
+"""The browser workspace: the shared UI over the app's one service.
 
 The shared UI sends its full optional argument set for every route, so most of
 these tests are about what the adapter forwards: an argument this app does not
@@ -8,10 +8,7 @@ serve must not reach the service as a value the service would ignore.
 from __future__ import annotations
 
 import asyncio
-import http.client
 import json
-import os
-import socket
 import sys
 from pathlib import Path
 from typing import Any
@@ -20,13 +17,9 @@ import pytest
 from starlette.testclient import TestClient
 
 from research_rag.config import (
-    MANAGED_CHILD_ENV,
-    TOP_LEVEL_ONLY_ENV,
-    child_process_environment,
     resolve_config,
 )
-from research_rag.ui import Workspace, create_ui_app
-from research_rag.ultrarag import create_vanilla_transport
+from research_rag.surfaces.ui import create_ui_app
 
 
 class FakeResearchService:
@@ -345,7 +338,7 @@ def test_an_unserved_search_argument_never_reaches_the_service(
 ) -> None:
     """A control the workspace hides must not travel as an ignored argument."""
 
-    from research_rag.ui import _OPERATION_ARGUMENTS, ResearchUIAdapter
+    from research_rag.surfaces.ui import _OPERATION_ARGUMENTS, ResearchUIAdapter
 
     adapter = ResearchUIAdapter(resolve_config(project), FakeResearchService())  # type: ignore[arg-type]
 
@@ -373,7 +366,7 @@ def test_an_unserved_search_argument_never_reaches_the_service(
 
 
 def test_an_unknown_operation_is_refused(project: Path) -> None:
-    from research_rag.ui import ResearchUIAdapter, UIRequestError
+    from research_rag.surfaces.ui import ResearchUIAdapter, UIRequestError
 
     adapter = ResearchUIAdapter(resolve_config(project), FakeResearchService())  # type: ignore[arg-type]
 
@@ -419,155 +412,3 @@ def test_a_service_failure_becomes_a_safe_message(project: Path) -> None:
 
     assert response.status_code == 400
     assert "the corpus is on a slow disk" in response.json()["error"]
-
-
-def _free_loopback_port() -> int:
-    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as probe:
-        probe.bind(("127.0.0.1", 0))
-        return int(probe.getsockname()[1])
-
-
-async def _wait_until_ready(workspace: Workspace) -> None:
-    for _ in range(300):
-        if workspace.ready:
-            return
-        await asyncio.sleep(0.05)
-    raise AssertionError(f"the workspace never became ready: {workspace.error}")
-
-
-def _get_json(url_host: str, port: int, path: str) -> tuple[int, dict[str, Any]]:
-    connection = http.client.HTTPConnection(url_host, port, timeout=10)
-    try:
-        connection.request("GET", path)
-        response = connection.getresponse()
-        return response.status, json.loads(response.read().decode("utf-8"))
-    finally:
-        connection.close()
-
-
-async def _assert_the_workspace_serves_and_stops(project: Path) -> None:
-    config = resolve_config(project, vanilla_executable=sys.executable)
-    port = _free_loopback_port()
-    workspace = Workspace(config, port=port)
-
-    assert workspace.url == f"http://127.0.0.1:{port}"
-    assert workspace.ready is False
-    assert workspace.error is None
-
-    await workspace.start(service=FakeResearchService())  # type: ignore[arg-type]
-    try:
-        await _wait_until_ready(workspace)
-        # The HTTP call must not run on this loop: the hosted server shares it,
-        # so a blocking request here would deadlock the very server it calls.
-        status_code, payload = await asyncio.to_thread(
-            _get_json, workspace.host, port, "/api/health"
-        )
-        assert status_code == 200
-        assert payload["status"] == "ok"
-    finally:
-        await workspace.stop()
-
-    assert workspace.ready is False
-
-
-def test_the_workspace_serves_loopback_and_stops(project: Path) -> None:
-    asyncio.run(_assert_the_workspace_serves_and_stops(project))
-
-
-async def _assert_the_workspace_reports_a_used_port(project: Path) -> None:
-    config = resolve_config(project, vanilla_executable=sys.executable)
-    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as busy:
-        busy.bind(("127.0.0.1", 0))
-        busy.listen(1)
-        port = int(busy.getsockname()[1])
-        workspace = Workspace(config, port=port)
-        await workspace.start(service=FakeResearchService())  # type: ignore[arg-type]
-
-    # A taken port is reported, never raised: the process keeps serving.
-    assert workspace.ready is False
-    assert workspace.error is not None
-    assert str(port) in workspace.error
-
-
-def test_the_workspace_reports_a_used_port(project: Path) -> None:
-    asyncio.run(_assert_the_workspace_reports_a_used_port(project))
-
-
-@pytest.mark.parametrize("port", [0, 65536, -1])
-def test_a_port_outside_the_range_is_refused(project: Path, port: int) -> None:
-    from research_rag.config import ConfigurationError
-
-    with pytest.raises(ConfigurationError):
-        Workspace(resolve_config(project), port=port)
-
-
-def test_child_environment_is_marked_and_drops_top_level_settings(
-    monkeypatch,
-) -> None:
-    monkeypatch.setenv("RESEARCH_ULTRARAG_UI_PORT", "5151")
-    monkeypatch.delenv(MANAGED_CHILD_ENV, raising=False)
-
-    environment = child_process_environment()
-
-    for name in TOP_LEVEL_ONLY_ENV:
-        assert name not in environment
-    assert environment[MANAGED_CHILD_ENV] == "1"
-    assert environment["PATH"] == os.environ["PATH"]
-
-
-def test_the_gateway_transport_carries_the_marker(project: Path, monkeypatch) -> None:
-    monkeypatch.setenv("RESEARCH_ULTRARAG_UI_PORT", "5151")
-    monkeypatch.delenv(MANAGED_CHILD_ENV, raising=False)
-    config = resolve_config(project, vanilla_executable=sys.executable)
-
-    transport = create_vanilla_transport(config)
-
-    assert transport.env is not None
-    for name in TOP_LEVEL_ONLY_ENV:
-        assert name not in transport.env
-    assert transport.env[MANAGED_CHILD_ENV] == "1"
-    assert transport.env["PATH"] == os.environ["PATH"]
-
-
-async def _assert_the_port_claim_is_exclusive_and_released(project: Path) -> None:
-    config = resolve_config(project, vanilla_executable=sys.executable)
-    port = _free_loopback_port()
-    first = Workspace(config, port=port)
-    second = Workspace(config, port=port)
-
-    await first.start(service=FakeResearchService())  # type: ignore[arg-type]
-    try:
-        await _wait_until_ready(first)
-        # The claim is exclusive because it listens: a socket that is only bound
-        # can still be bound again under SO_REUSEADDR, which is the trap a plain
-        # probe-before-bind falls into.
-        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as probe:
-            probe.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-            with pytest.raises(OSError):
-                probe.bind(("127.0.0.1", port))
-
-        await second.start(service=FakeResearchService())  # type: ignore[arg-type]
-
-        # The claim is the bind and the listen, so the loser of a simultaneous
-        # start fails before it serves anything and says why instead of reporting
-        # nothing: the message is the claim's, not a downstream uvicorn failure.
-        assert second.ready is False
-        assert second.error is not None
-        assert "already in use" in second.error
-        assert str(port) in second.error
-    finally:
-        await first.stop()
-
-    # The verdict is not cached: a released port is claimable again.
-    third = Workspace(config, port=port)
-    await third.start(service=FakeResearchService())  # type: ignore[arg-type]
-    try:
-        await _wait_until_ready(third)
-        assert third.ready is True
-        assert third.error is None
-    finally:
-        await third.stop()
-
-
-def test_the_port_claim_is_exclusive_and_released(project: Path) -> None:
-    asyncio.run(_assert_the_port_claim_is_exclusive_and_released(project))

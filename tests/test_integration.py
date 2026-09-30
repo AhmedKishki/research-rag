@@ -426,7 +426,7 @@ def test_the_terminal_and_the_workspace_answer_the_same_payload(project: Path) -
             direct = await service.search(
                 "cobalt heron", top_k=2, retrieval_method="hybrid", rerank=True
             )
-            from research_rag.ui import ResearchUIAdapter
+            from research_rag.surfaces.ui import ResearchUIAdapter
 
             adapter = ResearchUIAdapter(service.config, service)
             through_workspace = await adapter.call(

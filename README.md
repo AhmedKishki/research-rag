@@ -1,19 +1,21 @@
 ## Purpose
 
-`research-rag` is a browser workspace for reviewing evidence from a project's own PDF and EPUB corpus. You point it at a directory of original documents, build a searchable generation from them, and read every passage beside its source, its locator, and the bibliographic metadata you reviewed. You stay the one who concludes anything: the workspace retrieves cleaned semantic evidence and never writes an answer, and the untouched original file is the only authority for a quotation.
+`research-rag` reviews evidence from a project's own PDF and EPUB corpus. You point it at a directory of original documents, build a searchable generation from them, and read every passage beside its source, its locator, and the bibliographic metadata you reviewed. You stay the one who concludes anything: the app retrieves cleaned semantic evidence and never writes an answer, and the untouched original file is the only authority for a quotation.
 
 Everything runs on your machine, on one CPU, with no service to sign up for.
 
 ## What the app provides
 
+**One app, one port, three ways in.** The app is a server. When it is up you have a browser workspace, an agent surface, and a command line over the same project, the same project lock, and the same search index. When it is down you have none of them. That is the whole state model: one process owns the project, and everything else is a front end to it.
+
 - **A browser workspace.** Search your corpus, read results with their page numbers and citations, open the original PDF or EPUB beside a passage, and record reviewed metadata or an exclusion for each source.
-- **One command line.** `research-rag search` and `research-rag status` print exactly the same payload the workspace renders, because both call the same service in this process.
+- **An agent surface.** Seven operations and two resources over MCP, served at `/mcp` on the same port as the workspace. An agent's answer is the same payload the workspace renders, projected down to the fields an agent acts on, which is about half the size.
+- **One command line.** `research-rag search` and `research-rag status` reach the same running app, so a terminal answer and a workspace answer cannot disagree.
+- **Clients you can see and drop.** `research-rag clients` lists the agents attached to the app; `research-rag disconnect` ends one. A client that cannot open a socket gets the same surface through `research-rag mcp`, which speaks stdio and proxies to the running app.
 - **Immutable generations.** A rebuild writes a new generation and switches to it only when every index is complete, so a failed build leaves the previous generation searchable.
 - **Reviewed metadata as first-class state.** Categories, projects, keywords, language, title, and authors are editable plain JSON, applied at read time with no rebuild.
 - **Honest provenance.** Every passage carries its source, its locator, and whether its text is cleaned semantic content rather than a transcript.
 - **Explicit exclusions.** Exclude a reviewed source from every retrieval surface immediately, reversibly, without touching the file.
-
-There is no MCP surface, no agent client to configure, and no second front door to the same data.
 
 ## Install once
 
@@ -27,6 +29,14 @@ uv sync
 
 ```text
 research-rag
+```
+
+To install it as a package on a machine with no checkout — which is how it is meant to run once you have a project:
+
+```bash
+uv tool install research-rag
+# or, into a project-local environment:
+uv pip install research-rag
 ```
 
 The first ingestion downloads the pinned UltraRAG runtime, the embedding model, and the reranker into caches on your machine. After that, `--offline` works.
@@ -117,7 +127,59 @@ research-rag --project-root /path/to/project ingest
 research-rag --project-root /path/to/project ui
 ```
 
-`ingest` extracts every included PDF and EPUB, chunks the text, embeds it, and builds a BM25 and a dense index. The current generation stays active the whole time. `ui` starts the workspace and prints its URL.
+`ingest` extracts every included PDF and EPUB, chunks the text, embeds it, and builds a BM25 and a dense index. The current generation stays active the whole time. `ui` brings the app up and opens the workspace in a browser, which is the same as `start --open`.
+
+To give an agent the same corpus:
+
+```bash
+# The app is already up, so this reaches it.
+research-rag --project-root /path/to/project clients
+```
+
+## Connect an agent
+
+The app serves MCP at `/mcp` on its own port, so a client that can open a socket needs nothing but the URL:
+
+```json
+{
+  "mcpServers": {
+    "research-rag": { "url": "http://127.0.0.1:5051/mcp" }
+  }
+}
+```
+
+A client that only speaks stdio uses the bridge, which makes sure the app is up and then proxies to it:
+
+```json
+{
+  "mcpServers": {
+    "research-rag": { "command": "research-rag", "args": ["mcp"] }
+  }
+}
+```
+
+Set `RESEARCH_ULTRARAG_CLIENT_NAME` to something that names the agent, so the app's client list can tell them apart:
+
+```json
+{
+  "mcpServers": {
+    "research-rag": {
+      "command": "research-rag",
+      "args": ["mcp", "--project-root", "/path/to/project"],
+      "env": { "RESEARCH_ULTRARAG_CLIENT_NAME": "claude" }
+    }
+  }
+}
+```
+
+What an agent gets is the same service the workspace uses, with a projected answer: `status`, `ingest`, `search`, `list_sources`, `get_passage`, `set_source_inclusion`, `set_source_metadata`, and the `research://status` and `research://sources` resources. `status` also reports where the workspace is and how many agents are attached.
+
+To see who is attached, and to end one:
+
+```bash
+research-rag --project-root /path/to/project clients
+research-rag --project-root /path/to/project disconnect SESSION_ID
+```
 
 ## Read the answer, then open the original
 
@@ -194,6 +256,10 @@ Corrupt extraction units are omitted whole rather than indexed as garbage, and t
 # Create and build.
 research-rag --project-root /path/to/project init --name "My project"
 research-rag --project-root /path/to/project ingest
+
+# Bring the app up, and look at it.
+research-rag --project-root /path/to/project start
+research-rag --project-root /path/to/project clients
 
 # Read.
 research-rag --project-root /path/to/project status
@@ -286,7 +352,7 @@ Continue in one place at a time. Two processes pointed at the same project root,
 
 | Command | What it answers |
 |---|---|
-| `init` | the project identity, and the workspace launcher |
+| `init` | the project identity, and the app launcher |
 | `status` | readiness, staleness, upgrade reasons, what a prune would consider, the conditions to act on, and the version block |
 | `ingest` | the current generation, a checkpointed build's progress, or a new complete generation |
 | `search` | hybrid reranked evidence, with filters applied from reviewed metadata |
@@ -296,36 +362,49 @@ Continue in one place at a time. Two processes pointed at the same project root,
 | `metadata` | one source's reviewed bibliographic override |
 | `config` | every effective setting and the layer it came from |
 | `doctor` | one line per dependency, with the command that fixes it |
-| `ui` / `serve` / `stop` | the workspace, started and stopped |
+| `start` / `ui` | the app, started; `ui` also opens a browser |
+| `clients` / `disconnect` | the agents attached to the app, and ending one |
+| `mcp` | the agent surface on stdio, proxied to the running app |
+| `serve` | the app in the foreground, which is what the launcher runs |
+| `stop` | the app, and optionally any process of this app still building |
 
-Every operation answers with the complete service payload. There is no lean projection and no detail switch: the ranking scores, the candidate counts, and the withheld-candidate reasons that explain an empty answer are part of the answer, and a projection built for agent token economy has no reader to serve.
+The workspace and the command line always get the complete service payload: the ranking scores, the candidate counts, and the withheld-candidate reasons that explain an empty answer are part of the answer, and a person reading them needs all three. An agent's tool answer is projected to the fields an agent acts on, which is the one place a projection has a reader, and the mode is the `runtime.tool_detail` setting.
 
 ## How it works under the hood
 
 ```
-Browser ── HTTP ── shared UI ── adapter ── research-rag (one process)
-                                           └── ResearchService
-                                               ├── project and source policy
-                                               ├── PDF page extraction
-                                               ├── EPUB section extraction
-                                               ├── metadata and provenance
-                                               ├── immutable generations
-                                               ├── FastEmbed CPU embeddings
-                                               ├── project-local dense index
-                                               ├── reciprocal-rank fusion
-                                               └── CPU cross-encoder reranking
-                                                   └── stdio MCP ──> vanilla-ultra-rag-mcp
-                                                                     ├── UltraRAG chunker
-                                                                     └── UltraRAG BM25
+MCP client ── HTTP /mcp ─┐
+                         │
+stdio client ── bridge ──┤
+                         ├── research-rag (one process, one port, one lock)
+Local browser ── HTTP ───┤      │
+                         │      ├── ResearchService
+Terminal ── control ─────┘      ├── shared workspace
+                                ├── agent tools and resources
+                                ├── control API
+                                ├── client registry
+                                │
+                                ├── project and source policy
+                                ├── PDF page extraction
+                                ├── EPUB section extraction
+                                ├── metadata and provenance
+                                ├── immutable generations
+                                ├── FastEmbed CPU embeddings
+                                ├── project-local dense index
+                                ├── reciprocal-rank fusion
+                                └── CPU cross-encoder reranking
+                                    └── stdio MCP ──> vanilla-ultra-rag-mcp
+                                                       ├── UltraRAG chunker
+                                                       └── UltraRAG BM25
 ```
 
-The terminal and the workspace call the same `ResearchService` in this process, so one capability has one implementation. The vanilla gateway is an implementation dependency below the app, not a second surface.
+The workspace and the agent surface are routes on the same application, and the command line reaches it over the control API on the same port, so one capability has one implementation and one project lock. The vanilla gateway is an implementation dependency below the app, not a second surface.
 
 Retrieval fuses a BM25 rank from UltraRAG with a cosine rank from a project-local dense index, reranks with a CPU cross-encoder, and reports what every gate rejected. The vanilla gateway is only asked for BM25.
 
 ## Limitations and troubleshooting
 
-- **A workspace is a process, not a daemon.** It does not survive an update; stop it and start it again.
+- **The app is a process, not a daemon.** It does not survive an update; stop it and start it again. An agent attached to a stopped app has no session, and `clients` says so rather than listing a stale one.
 - **The first build is slow.** It downloads the pinned UltraRAG runtime and two models, then extracts and embeds every source. `status.ingestion_progress` reports progress and a cancelled build resumes where it stopped.
 - **`--offline` fails if anything is uncached.** Run `doctor --prefetch-models` first.
 - **A build reports "one build at a time".** Another process holds the project lock. `status` names the resident build's phase.
