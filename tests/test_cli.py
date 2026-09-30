@@ -240,8 +240,17 @@ def test_init_refuses_a_name_that_cannot_be_recorded(tmp_path: Path) -> None:
 def test_the_command_line_routes_each_command_to_its_service_operation() -> None:
     service = Operations()
 
+    # The terminal reads the same lean verdict an agent does, and asks for the
+    # complete payload explicitly.
     status = asyncio.run(_operate(_args("status"), service))
-    assert status["operation"] == "status"
+    assert status == {
+        "ready": False,
+        "stale": False,
+        "requires": ["ingest"],
+        "message": None,
+    }
+    verbose = asyncio.run(_operate(_args("status", "--verbose"), service))
+    assert verbose["operation"] == "status"
 
     refresh = asyncio.run(_operate(_args("ingest", "--force-recompute"), service))
     assert refresh["arguments"] == {"force_recompute": True}

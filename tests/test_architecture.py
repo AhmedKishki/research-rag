@@ -189,13 +189,18 @@ def test_the_agent_surface_is_declared_once() -> None:
         if names:
             declaring[_relative(path.relative_to(PACKAGE).as_posix())] = names
     assert list(declaring) == ["surfaces/mcp.py"], declaring
-    assert len(declaring["surfaces/mcp.py"]) == 9, (
+    assert len(declaring["surfaces/mcp.py"]) == 8, (
         declaring
-    )  # seven tools, two resources
+    )  # seven tools, one resource
 
 
-def test_the_answer_projection_is_used_by_exactly_one_surface() -> None:
-    """The projection exists for an agent; the workspace and the CLI do not need it."""
+def test_the_answer_projection_is_shared_by_the_two_bounded_readers() -> None:
+    """An agent and a terminal read one projection; the workspace reads the payload.
+
+    A second reader of the lean answer must read this projection rather than
+    write its own, and the workspace, which has the whole screen, must not reach
+    for it at all.
+    """
 
     callers = sorted(
         _relative(path.relative_to(PACKAGE).as_posix())
@@ -204,6 +209,15 @@ def test_the_answer_projection_is_used_by_exactly_one_surface() -> None:
         and path.name != "tool_views.py"  # the module that defines it
     )
     assert callers == ["surfaces/mcp.py"], callers
+    # The command line reaches the projection directly because it selects the
+    # mode per run rather than through the MCP server's own configuration.
+    lean_callers = sorted(
+        _relative(path.relative_to(PACKAGE).as_posix())
+        for path in _modules()
+        if "lean_status" in path.read_text(encoding="utf-8")
+        and path.name != "tool_views.py"
+    )
+    assert lean_callers == ["surfaces/cli.py"], lean_callers
 
 
 # The layer stack, the registry's `Setting` type, the coercion, the provenance,

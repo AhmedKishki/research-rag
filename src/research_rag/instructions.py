@@ -13,11 +13,17 @@ same project, so the corpus, the reviews, and the exclusions you record are the
 same state the user sees. `status` names the workspace URL and counts the agents
 attached; a search the workspace also runs cannot disagree with yours.
 
+Your tools answer about one question at a time and return one source at a time.
+Nothing here lists the corpus, so ask about a name with find_source rather than
+asking what the project holds; the workspace and `research-rag sources` are where
+a person reads the inventory.
+
 Order of work:
-1. status — is a generation ready, current, and able to serve the search?
-   Read blocked_by and degraded before promising an answer: each entry names the
-   condition and the command that fixes it, and both are absent when the project
-   is ready.
+1. status — is a generation ready, current, and able to serve the search? It
+   answers `ready`, `stale`, and the `requires` list naming the calls that close
+   the gap. Read blocked_by and degraded before promising an answer: each entry
+   names the condition and the command that fixes it, and both are absent when
+   the project is ready.
 2. ingest — only with the user's agreement. It writes persistent state and may
    download a model; a long build returns in_progress, so call it again.
 3. search — one query per question. When an answer is thin, ask again in
@@ -26,8 +32,9 @@ Order of work:
    or titles_any. A filter decides which sources count: an empty answer that
    carries applied_filters is a filtered answer, which is a different finding
    from a corpus that holds nothing.
-4. get_passage to read around a hit, list_sources for filenames and inclusion
-   state, set_source_inclusion to record a reviewed exclusion or restore it.
+4. get_passage to read around a hit, find_source to look up one work by filename,
+   title, or author and learn whether it is searchable, set_source_inclusion to
+   record a reviewed exclusion or restore it.
 
 What the user is owed:
 - Evidence, never invention. No invented source, title, author, year, DOI, page,

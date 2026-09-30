@@ -11,6 +11,12 @@ caller must know about; the query it sent, the timing, the scores that ordered
 the passages, and the counts it could make for itself are not. A field whose
 value is the ordinary case is left out, so the answer says what happened rather
 than what is usual.
+
+A status answer is the strictest case of that rule, because an agent reads it
+before anything else: it is a verdict and the work the verdict implies. `ready`
+and `stale` are stated as booleans rather than by their absence, `requires`
+names the calls that close the gap, and every other field the command line and
+the workspace need is not here.
 """
 
 from __future__ import annotations
@@ -25,8 +31,8 @@ __all__ = [
     "FULL_TOOL_DETAIL",
     "LEAN_TOOL_DETAIL",
     "TOOL_DETAIL_MODES",
+    "lean_find_source",
     "lean_ingest",
-    "lean_list_sources",
     "lean_passage",
     "lean_passage_context",
     "lean_search",
@@ -158,48 +164,64 @@ def lean_passage_context(payload: Mapping[str, Any]) -> dict[str, Any]:
     return result
 
 
-def lean_status(payload: Mapping[str, Any]) -> dict[str, Any]:
-    """Return whether this project can be served, and what a caller must act on.
+# The two calls a status verdict can ask for. Each name is the call it maps to:
+# `ingest` is a tool this surface serves, and `restart_app` is the client
+# restarting the process that is running it.
+INGEST = "ingest"
+RESTART_APP = "restart_app"
 
-    The answer is a readiness statement: `ready`, `generation_id`, `message`,
-    and whatever condition changes what a caller may conclude — `stale` when the
-    corpus has moved, `blocked_by` and `degraded` when a check is not green, an
-    upgrade note when this generation cannot serve, a change list when the
-    generation is stale, a restart the installed version needs, and an ingestion
-    still in progress.
 
-    What is here is what the caller acts on. The counts of documents, chunks and
-    sources are the corpus inventory and `list_sources` is that inventory; the
-    project's own name and the generation's date answer questions of their own and
-    belong to `--tool-detail full`.
+def _required_actions(payload: Mapping[str, Any]) -> list[str]:
+    """Return the calls that close the gap between this generation and the corpus.
+
+    Every condition that needs one is a rebuild: a missing generation, a corpus
+    that moved on, a generation built by an older policy, one that predates the
+    dense index this tool searches, reviewed sources it has never indexed, an
+    exclusion the indexes still hold, and a build that stopped part-way. The
+    answer names them once, so a caller never has to read four fields to learn
+    that it should ingest.
     """
 
-    result: dict[str, Any] = {}
-    # `ready` travels only when it is false. Readiness is the ordinary case in an
-    # answer that has anything to say at all, and its absence is the condition a
-    # caller has to act on, which is also what the message states.
-    if payload.get("ready") is False:
-        result["ready"] = False
+    changes = payload.get("changes") or {}
+    actions: list[str] = []
+    if (
+        payload.get("ready") is not True
+        or payload.get("stale")
+        or payload.get("generation_upgrade_required")
+        or payload.get("hybrid_ready") is False
+        or payload.get("ingestion_progress")
+        or payload.get("metadata_pending_source_paths")
+        or changes.get("source_exclusions_changed")
+    ):
+        actions.append(INGEST)
+    if (payload.get("version") or {}).get("restart_required"):
+        actions.append(RESTART_APP)
+    return actions
+
+
+def lean_status(payload: Mapping[str, Any]) -> dict[str, Any]:
+    """Return whether this project can be searched, and what must happen first.
+
+    The answer is a verdict and its consequence. `ready` says a generation
+    exists, `stale` says its sources still match the directory, and `requires`
+    names the calls that make it serve what the project holds; `message` says why
+    in one sentence. `changes`, `ingestion_progress`, `blocked_by`, and `degraded`
+    appear only while they hold, because each is something the caller acts on.
+
+    The corpus counts, the retained generations, the retrieval policy, and the
+    per-check detail are the command line's and the workspace's answer, and the
+    reviewed-metadata overlay is not news: it is already applied at read time and
+    the message says so when reviewed sources are still waiting to be indexed.
+    """
+
+    result: dict[str, Any] = {
+        "ready": bool(payload.get("ready")),
+        "stale": bool(payload.get("stale")),
+    }
     _add(result, "generation_id", payload.get("generation_id"))
-    if payload.get("stale"):
-        result["stale"] = True
-    # The tool always searches hybrid, so the answer says whether this
-    # generation can serve that and never lists methods as if they were a
-    # choice. A generation that predates dense support is stated plainly,
-    # with `generation_upgrade_required` and `upgrade_reasons` beside it.
-    if payload.get("hybrid_ready") is False:
-        result["hybrid_ready"] = False
-    _add(
-        result,
-        "generation_upgrade_required",
-        payload.get("generation_upgrade_required"),
-    )
-    _add(result, "upgrade_reasons", payload.get("upgrade_reasons"))
-    _add(result, "metadata_overlay_active", payload.get("metadata_overlay_active"))
-    pending_paths = payload.get("metadata_pending_source_paths")
-    if pending_paths:
-        result["metadata_pending_source_count"] = len(pending_paths)
-    _add(result, "ingestion_progress", payload.get("ingestion_progress"))
+    required = _required_actions(payload)
+    if required:
+        result["requires"] = required
     if payload.get("stale"):
         changes = payload.get("changes") or {}
         lean_changes: dict[str, Any] = {}
@@ -214,18 +236,10 @@ def lean_status(payload: Mapping[str, Any]) -> dict[str, Any]:
         # has and the directory does not is named, because that is what a
         # researcher has to act on.
         _add(lean_changes, "removed_sources", changes.get("removed"))
-        for key in ("metadata_changed", "source_exclusions_changed"):
-            _add(lean_changes, key, changes.get(key))
+        _add(lean_changes, "metadata_changed", changes.get("metadata_changed"))
         if lean_changes:
             result["changes"] = lean_changes
-    version = payload.get("version") or {}
-    _add(result, "restart_required", version.get("restart_required"))
-    # What a prune would consider stays in the lean answer: the agent guide has an
-    # agent answer a disk-use question from these two numbers, and a number a
-    # documented workflow needs is not waste. The list of generations they refer to
-    # is a full-detail reader.
-    for key in ("retained_generation_count", "retained_generation_bytes"):
-        _add(result, key, payload.get(key))
+    _add(result, "ingestion_progress", payload.get("ingestion_progress"))
     for key in ("blocked_by", "degraded"):
         entries = payload.get(key) or []
         if entries:
@@ -271,58 +285,48 @@ def lean_ingest(payload: Mapping[str, Any]) -> dict[str, Any]:
     return result
 
 
-def lean_source_record(record: Mapping[str, Any]) -> dict[str, Any]:
-    """Return one searchable source's handle, title, and authors."""
+def lean_source_match(record: Mapping[str, Any]) -> dict[str, Any]:
+    """Return one source's handle, its bibliography, and whether it is searchable.
+
+    `indexed_in_current_generation` always travels, because whether a source can
+    answer a search is the question the lookup was made to settle; `included` and
+    `exists` appear only when they withhold it, and a reviewed override only
+    when one exists.
+    """
 
     result: dict[str, Any] = {}
     for key in ("source_id", "source_relative_path", "title", "authors"):
         _add(result, key, record.get(key))
+    if record.get("exists") is False:
+        result["exists"] = False
+    if record.get("included") is False:
+        result["included"] = False
+    result["indexed_in_current_generation"] = bool(
+        record.get("indexed_in_current_generation")
+    )
+    if record.get("has_reviewed_metadata"):
+        result["has_reviewed_metadata"] = True
     return result
 
 
-def lean_list_sources(payload: Mapping[str, Any]) -> dict[str, Any]:
-    """Return source handles, inclusion state, and saved metadata overrides.
+def lean_find_source(payload: Mapping[str, Any]) -> dict[str, Any]:
+    """Return the sources one name resolved to, and how many were withheld.
 
-    `sources` holds the bibliography of what is searchable now and
-    `discovered_sources` every live PDF/EPUB with its index state, so a handle
-    exists before the first ingestion. The lists are the inventory, so no count
-    travels beside them: a caller can count the rows it was given.
+    The lookup itself, its match count, and whether the cap hid matches, so an
+    empty answer says whether the name matched nothing or matched more than the
+    caller asked to see.
     """
 
     result: dict[str, Any] = {}
-    _add(result, "ready", payload.get("ready"))
     _add(result, "generation_id", payload.get("generation_id"))
-    result["sources"] = [
-        lean_source_record(record) for record in payload.get("sources") or []
+    result["query"] = payload.get("query")
+    _add(result, "match_count", payload.get("match_count"))
+    if payload.get("truncated"):
+        result["truncated"] = True
+    result["matches"] = [
+        lean_source_match(record) for record in payload.get("matches") or []
     ]
-    result["discovered_sources"] = [
-        _copy(
-            record,
-            (
-                "source_id",
-                "source_relative_path",
-                "included",
-                "indexed_in_current_generation",
-            ),
-        )
-        for record in payload.get("discovered_sources") or []
-    ]
-    result["excluded_sources"] = [
-        _copy(
-            record,
-            (
-                "source_id",
-                "source_relative_path",
-                "reason",
-                "indexed_in_current_generation",
-            ),
-        )
-        for record in payload.get("excluded_sources") or []
-    ]
-    result["reviewed_metadata_sources"] = [
-        _copy(record, ("source_id", "source_relative_path", "metadata"))
-        for record in payload.get("reviewed_metadata_sources") or []
-    ]
+    result["message"] = payload.get("message")
     return result
 
 
@@ -366,7 +370,7 @@ _PROJECTORS: dict[str, Callable[[Mapping[str, Any]], dict[str, Any]]] = {
     "status": lean_status,
     "ingest": lean_ingest,
     "search": lean_search,
-    "list_sources": lean_list_sources,
+    "find_source": lean_find_source,
     "get_passage": lean_passage_context,
     "set_source_inclusion": lean_source_inclusion,
     "set_source_metadata": lean_source_metadata,

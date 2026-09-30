@@ -36,12 +36,12 @@ OPERATIONS = (
     "status",
     "ingest",
     "search",
-    "list_sources",
+    "find_source",
     "get_passage",
     "set_source_inclusion",
     "set_source_metadata",
 )
-RESOURCES = ("research://status", "research://sources")
+RESOURCES = ("research://status",)
 
 
 def free_port() -> int:
@@ -125,8 +125,8 @@ class FakeService:
     async def search(self, query: str, **arguments: Any) -> dict[str, Any]:
         return self._record("search", {"query": query, **arguments})
 
-    async def list_sources(self) -> dict[str, Any]:
-        return self._record("list_sources", {})
+    async def find_source(self, query: str, **arguments: Any) -> dict[str, Any]:
+        return self._record("find_source", {"query": query, **arguments})
 
     async def get_passage(
         self, chunk_id: str, *, context_chunks: int = 1

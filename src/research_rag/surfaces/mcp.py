@@ -1,4 +1,4 @@
-"""The agent surface: seven operations and two resources over one project.
+"""The agent surface: seven operations and one resource over one project.
 
 This module is the whole of what an agent sees. It builds a `FastMCP` instance
 whose tools and resources call the app's one `ResearchService`, and it owns the
@@ -23,6 +23,7 @@ from pydantic import Field
 
 from ..config import ResearchConfig
 from ..instructions import AGENT_INSTRUCTIONS
+from ..review import DEFAULT_FIND_SOURCE_LIMIT
 from ..tool_views import present_tool_response
 from ..version import APP_VERSION
 
@@ -69,7 +70,7 @@ SourceIdFilter: TypeAlias = Annotated[
     Field(
         description=(
             "Stable source IDs to include; a result may match any supplied ID. "
-            "Obtain IDs from list_sources. A source ID survives a change to the "
+            "Obtain IDs from find_source. A source ID survives a change to the "
             "file's bytes and changes when the file is renamed or moved. Omit or "
             "pass null to search every source."
         )
@@ -91,10 +92,10 @@ CategoriesAnyFilter: TypeAlias = Annotated[
         description=(
             "Case-insensitive 'any of' category filters; a result must contain at "
             "least one supplied category. Use it to search a set of corpus "
-            "partitions in one call, and combine it with `categories` to require "
-            "all of one set and any of another. Categories come from reviewed "
-            "source metadata and `status.categories` lists the current inventory. "
-            "Omit or pass null for no filter."
+            "partitions in one call. Categories come from reviewed source "
+            "metadata, which a review sets with set_source_metadata, and a "
+            "category no source carries returns no passage. Omit or pass null "
+            "for no filter."
         )
     ),
 ]
@@ -113,9 +114,9 @@ LanguagesAnyFilter: TypeAlias = Annotated[
         description=(
             "Case-insensitive 'any of' language filters; a result must be written "
             "in at least one supplied ISO 639 code. A source carries the language "
-            "detected while extracting it and the language a review set instead, "
-            "and `status.languages` lists the current inventory. Use it to search "
-            "one language of a mixed corpus. Omit or pass null for no filter."
+            "detected while extracting it and the language a review set instead. "
+            "Use it to search one language of a mixed corpus. Omit or pass null "
+            "for no filter."
         )
     ),
 ]
@@ -127,7 +128,7 @@ AuthorsAnyFilter: TypeAlias = Annotated[
             "at least one supplied name inside one of its author strings, so a "
             "surname finds its author without the bibliography's punctuation. Read "
             "reviewed authors where a review exists and extracted ones otherwise; "
-            "`list_sources` reports the authors each source carries. Combine with "
+            "`find_source` reports the authors each source carries. Combine with "
             "`titles_any` to pin one work. Omit or pass null for no filter."
         )
     ),
@@ -139,7 +140,7 @@ TitlesAnyFilter: TypeAlias = Annotated[
             "Case-insensitive 'any of' title filters; a result's source title must "
             "contain at least one supplied phrase, so a remembered fragment finds "
             "the work without reproducing its subtitle. Reviewed titles win over "
-            "extracted ones, and `list_sources` reports the title each source "
+            "extracted ones, and `find_source` reports the title each source "
             "carries. A filter that matches no source returns no passages and says "
             "so in `applied_filters` rather than searching everything. Omit or pass "
             "null for no filter."
@@ -167,10 +168,29 @@ SourcePath: TypeAlias = Annotated[
     Field(
         description=(
             "PDF or EPUB path relative to the configured sources directory. Use "
-            "list_sources.source_relative_path; absolute and escaping paths are "
-            "rejected."
+            "the `source_relative_path` find_source reports for it; absolute and "
+            "escaping paths are rejected."
         ),
         min_length=1,
+    ),
+]
+SourceQuery: TypeAlias = Annotated[
+    str,
+    Field(
+        description=(
+            "A filename, a title, or an author to look up. Matched "
+            "case-insensitively against every source this project can name, "
+            "including one whose file is gone or whose metadata was reviewed."
+        ),
+        min_length=1,
+    ),
+]
+FindLimit: TypeAlias = Annotated[
+    int,
+    Field(
+        description="Maximum number of matching sources to return (1-50).",
+        ge=1,
+        le=50,
     ),
 ]
 InclusionFlag: TypeAlias = Annotated[
@@ -279,11 +299,14 @@ def create_mcp(
         }
     )
     async def status() -> dict[str, Any]:
-        """Report readiness, the selected generation, and whether it is current.
+        """Report whether this project can be searched, and what must happen first.
 
         Call this first, and before telling the user their corpus is up to date.
-        No generation means nothing can be searched yet; `stale` and
-        `generation_upgrade_required` say what moved and whether to ingest again.
+        `ready` says a generation exists and `stale` says its sources still match
+        the directory, so `ready: false` or `stale: true` means the corpus is not
+        what the user has. `requires` names the calls that close the gap:
+        `ingest` rebuilds the generation, `restart_app` restarts this process so
+        it runs the installed code. It is absent when nothing is required.
 
         `blocked_by` and `degraded` name what stands between this project and a
         search that answers, each with the reason and the command that fixes it.
@@ -305,23 +328,6 @@ def create_mcp(
     )
     async def status_resource() -> str:
         return json.dumps(await _status_payload(), ensure_ascii=False, indent=2)
-
-    @app.resource(
-        "research://sources",
-        name="source inventory",
-        description=(
-            "Every discovered source with its review and index state: the same "
-            "answer the list_sources tool gives, and the inventory to read before "
-            "naming a source in set_source_inclusion or set_source_metadata."
-        ),
-        mime_type="application/json",
-    )
-    async def sources_resource() -> str:
-        payload = _present(
-            "list_sources",
-            await _service_call(lambda instance: instance.list_sources()),
-        )
-        return json.dumps(payload, ensure_ascii=False, indent=2)
 
     @app.tool(
         annotations={
@@ -413,16 +419,30 @@ def create_mcp(
             "openWorldHint": False,
         }
     )
-    async def list_sources() -> dict[str, Any]:
-        """List the project's sources: filenames, inclusion, and index state.
+    async def find_source(
+        query: SourceQuery,
+        limit: FindLimit = DEFAULT_FIND_SOURCE_LIMIT,
+    ) -> dict[str, Any]:
+        """Look up one source by filename, title, or author, and say if it is searchable.
 
-        The corpus inventory, and the answer also works before any ingestion.
-        Use the filename it reports to name a source in set_source_inclusion.
+        Call it before naming a source in set_source_inclusion or
+        set_source_metadata, and when a user asks whether a work is in the
+        project. It returns the matches with the `source_relative_path` and
+        `source_id` those two operations take, and `indexed_in_current_generation`
+        says whether a search can reach the source: a source that is only on disk
+        or only reviewed needs `ingest` first.
+
+        It is a lookup and not a listing: ask about a name rather than for the
+        corpus. A source whose file is gone or whose metadata was reviewed is
+        still answerable, and a match count above the returned rows means `limit`
+        hid some.
         """
 
         return _present(
-            "list_sources",
-            await _service_call(lambda instance: instance.list_sources()),
+            "find_source",
+            await _service_call(
+                lambda instance: instance.find_source(query=query, limit=limit)
+            ),
         )
 
     @app.tool(

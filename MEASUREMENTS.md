@@ -7,7 +7,7 @@ uv run python scripts/benchmark_write_pattern.py --root /path/on/target/disk
 uv run python scripts/evaluate_retrieval.py --project /path/to/project --offline
 ```
 
-The retrieval numbers were measured against the pinned engine this app runs, and the service layer is that project's code unchanged. The agent surface is the previous one: the same seven operations, the same two resources, and the same lean/full projection, so every payload figure below is the figure that project produced.
+The retrieval numbers were measured against the pinned engine this app runs, and the service layer is that project's code unchanged. The engine and its payloads are the previous ones: the same seven operations behind the same lean/full projection, so every payload figure below is the figure that project produced.
 
 ## 1. Workload and design envelope
 

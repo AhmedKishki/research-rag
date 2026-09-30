@@ -9,7 +9,7 @@ Everything runs on your machine, on one CPU, with no service to sign up for.
 **One app, one port, three ways in.** The app is a server. When it is up you have a browser workspace, an agent surface, and a command line over the same project, the same project lock, and the same search index. When it is down you have none of them. That is the whole state model: one process owns the project, and everything else is a front end to it.
 
 - **A browser workspace.** Search your corpus, read results with their page numbers and citations, open the original PDF or EPUB beside a passage, and record reviewed metadata or an exclusion for each source.
-- **An agent surface.** Seven operations and two resources over MCP, served at `/mcp` on the same port as the workspace. An agent's answer is the same payload the workspace renders, projected down to the fields an agent acts on, which is about half the size.
+- **An agent surface.** Seven operations and one resource over MCP, served at `/mcp` on the same port as the workspace. An agent's answer is the same payload the workspace renders, projected down to the fields an agent acts on, which is about half the size.
 - **One command line.** `research-rag search` and `research-rag status` reach the same running app, so a terminal answer and a workspace answer cannot disagree.
 - **Clients you can see and drop, from either place.** The workspace's status view lists the agents attached to the app and can end one; `research-rag clients` and `research-rag disconnect` do the same from a terminal, over the same registry, so a drop in the browser is a drop the command line can see. A client that cannot open a socket gets the same surface through `research-rag mcp`, which speaks stdio and proxies to the running app.
 - **Immutable generations.** A rebuild writes a new generation and switches to it only when every index is complete, so a failed build leaves the previous generation searchable.
@@ -172,7 +172,9 @@ Set `RESEARCH_ULTRARAG_CLIENT_NAME` to something that names the agent, so the ap
 }
 ```
 
-What an agent gets is the same service the workspace uses, with a projected answer: `status`, `ingest`, `search`, `list_sources`, `get_passage`, `set_source_inclusion`, `set_source_metadata`, and the `research://status` and `research://sources` resources. `status` also reports where the workspace is and how many agents are attached.
+What an agent gets is the same service the workspace uses, with a projected answer: `status`, `ingest`, `search`, `find_source`, `get_passage`, `set_source_inclusion`, `set_source_metadata`, and the `research://status` resource. `status` also reports where the workspace is and how many agents are attached.
+
+An agent's tools answer one question at a time. `status` is a verdict — `ready`, `stale`, and the `requires` list naming the calls that close the gap — and `find_source` looks up one work by filename, title, or author instead of listing the corpus. The command line prints the same lean `status` answer, and `status --verbose` prints the complete payload; `research-rag sources` and the workspace are where a person reads the inventory.
 
 To see who is attached, and to end one, from the browser or from a terminal:
 
@@ -242,9 +244,9 @@ An empty result with a filter applied means no source in the corpus matches the 
 
 ### Freshness with every search
 
-Every search re-compares the source directory with the generation and reports `stale`. A stale status names what changed: which sources were added or modified, which are gone from the directory, and whether reviews or exclusions moved. The previous generation remains searchable throughout. Ask whether to re-ingest; a rebuild reuses compatible work rather than starting over.
+Every search re-compares the source directory with the generation and reports `stale`. A stale status names what changed: how many sources were added or modified, which are gone from the directory, and whether reviews or exclusions moved. The previous generation remains searchable throughout. Ask whether to re-ingest; a rebuild reuses compatible work rather than starting over.
 
-A reviewed metadata change is not staleness. It is already effective without a rebuild, and the status says `metadata_overlay_active` instead.
+A reviewed metadata change is not staleness. It is already effective without a rebuild, and the complete status payload reports `metadata_overlay_active` for it.
 
 ### What gets excluded, and what does not
 
@@ -364,7 +366,7 @@ Continue in one place at a time. Two processes pointed at the same project root,
 | Command | What it answers |
 |---|---|
 | `init` | the project identity, and the app launcher |
-| `status` | readiness, staleness, upgrade reasons, what a prune would consider, the conditions to act on, and the version block |
+| `status` | the readiness answer, or the complete payload with `--verbose` |
 | `ingest` | the current generation, a checkpointed build's progress, or a new complete generation |
 | `search` | hybrid reranked evidence, with filters applied from reviewed metadata |
 | `sources` | the corpus inventory, including files not indexed yet |
@@ -420,7 +422,7 @@ Retrieval fuses a BM25 rank from UltraRAG with a cosine rank from a project-loca
 - **`--offline` fails if anything is uncached.** Run `doctor --prefetch-models` first.
 - **A build reports "one build at a time".** Another process holds the project lock. `status` names the resident build's phase.
 - **Two checkouts of this package.** `doctor` reports `code_currency` as a warning. Two copies of one version can sit many commits apart, so stop this app's processes and start the checkout you mean.
-- **A generation the app cannot serve.** `status` reports `generation_upgrade_required` with the reason, and the old generation stays searchable with a warning.
+- **A generation the app cannot serve.** `status` puts `ingest` in `requires`, and `status --verbose` reports `generation_upgrade_required` with the reason. The old generation stays searchable with a warning.
 - **A project on slow storage.** Point `--runtime-root` at a fast device. The measured benefit is narrow; see `STORAGE.md`.
 - **A search answers nothing.** Read `withheld_candidates`: it names the gate that dropped each candidate, which is usually the dense floor or the minimum passage length.
 - **The UltraRAG runtime is broken.** `doctor` names the file; `doctor --repair-runtime` moves the old tree aside and installs the pinned one.
