@@ -1,41 +1,53 @@
+"""`scripts/update.sh` is a delegation, not a second implementation.
+
+The script keeps the flags it had so an existing habit still works, and every
+one of them now reaches `research-rag update`, which is the only place an update
+is implemented. The check runs offline, so this test never reaches a network.
+"""
+
 from __future__ import annotations
 
+import json
 import subprocess
 from pathlib import Path
 
 SCRIPT = Path(__file__).resolve().parents[1] / "scripts" / "update.sh"
 
 
-def test_update_script_is_executable_and_documented() -> None:
+def _run(*arguments: str) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        [str(SCRIPT), *arguments], capture_output=True, text=True, check=False
+    )
+
+
+def test_the_script_is_executable_and_documents_the_flags_it_keeps() -> None:
     assert SCRIPT.is_file()
     assert SCRIPT.stat().st_mode & 0o111
 
-    result = subprocess.run(
-        [str(SCRIPT), "--help"], capture_output=True, text=True, check=False
-    )
+    result = _run("--help")
 
     assert result.returncode == 0
-    assert "--check" in result.stdout
-    assert "restart" in result.stdout.lower()
+    for flag in ("--check", "--offline"):
+        assert flag in result.stdout
+    assert "research-rag update" in result.stdout
 
 
-def test_update_script_check_offline_changes_nothing() -> None:
-    result = subprocess.run(
-        [str(SCRIPT), "--check", "--offline"],
-        capture_output=True,
-        text=True,
-        check=False,
-    )
+def test_check_offline_delegates_and_changes_nothing() -> None:
+    result = _run("--check", "--offline")
 
     assert result.returncode == 0
-    assert "declared in pyproject:" in result.stdout
-    assert "not fetched" in result.stdout
+    report = json.loads(result.stdout)
+    assert report["command"] == "update"
+    assert report["applied"] is False
+    assert report["install"]["shape"] == "checkout"
+    # Offline is an answer rather than an error, and it changes nothing.
+    assert report["remote"]["reachable"] is False
+    assert "--offline" in report["remote"]["detail"]
+    assert report["plan"]["would_run"] == []
 
 
-def test_update_script_rejects_unknown_options() -> None:
-    result = subprocess.run(
-        [str(SCRIPT), "--nonsense"], capture_output=True, text=True, check=False
-    )
+def test_the_script_rejects_unknown_options() -> None:
+    result = _run("--nonsense")
 
     assert result.returncode == 2
     assert "unknown option" in result.stderr

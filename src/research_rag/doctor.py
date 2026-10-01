@@ -21,7 +21,7 @@ from typing import Any
 
 from .config import ResearchConfig, project_command
 from .embeddings import resolve_embedding_model
-from .health import Check, HealthReport, health_report
+from .health import WARN, Check, HealthReport, health_report
 from .rerankers import resolve_reranker_model
 
 _HASH_IN_MESSAGE = re.compile(r"got\s+([0-9a-f]{8,64})")
@@ -522,6 +522,47 @@ def _server_lines(config: ResearchConfig, running: list[tuple[int, str]]) -> lis
     return lines
 
 
+def desktop_entry_checks() -> list[Check]:
+    """Every menu entry this app wrote that no longer opens anything.
+
+    A desktop entry whose project root has been deleted still appears in the
+    menu and still starts, and it opens nothing at all, which is a failure with
+    no output anywhere else. Only entries carrying this app's marker are read: a
+    file the user wrote is theirs.
+    """
+
+    from .installation import desktop_entries
+
+    findings: list[Check] = []
+    for entry in desktop_entries():
+        remedy = project_command(
+            entry.project_root, "install", "--desktop", "--uninstall"
+        )
+        if not entry.project_root.is_dir():
+            findings.append(
+                Check(
+                    "desktop_entry",
+                    WARN,
+                    f"The menu entry {entry.path.name} opens "
+                    f"{entry.project_root}, which no longer exists, so clicking "
+                    "it starts nothing.",
+                    remedy,
+                )
+            )
+            continue
+        if not entry.launcher.is_file():
+            findings.append(
+                Check(
+                    "desktop_entry",
+                    WARN,
+                    f"The menu entry {entry.path.name} runs {entry.launcher}, "
+                    "which is not there, so clicking it starts nothing.",
+                    remedy,
+                )
+            )
+    return findings
+
+
 def run_doctor(
     config: ResearchConfig,
     status: dict[str, Any],
@@ -563,4 +604,5 @@ def run_doctor(
             + ". An unchecked dependency is not a healthy one."
         )
     lines.extend(_server_lines(config, running))
+    lines.extend(_check_line(check) for check in desktop_entry_checks())
     return DoctorResult(tuple(lines), 1 if report.has_blocker else 0)
