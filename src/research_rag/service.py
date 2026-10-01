@@ -30,6 +30,7 @@ from .generation import value_fingerprint  # noqa: F401
 from .ingestion import IngestionWorkflow
 from .review import ReviewWorkflow
 from .search import SearchWorkflow
+from .settings_document import SettingsWorkflow
 from .sources import (
     SourcePolicyError,
     scan_sources,  # noqa: F401
@@ -114,6 +115,7 @@ class ResearchService(
     IngestionWorkflow,
     ReviewWorkflow,
     SearchWorkflow,
+    SettingsWorkflow,
     StatusWorkflow,
 ):
     def __init__(
@@ -184,8 +186,12 @@ class ResearchService(
         ) = None
 
     @asynccontextmanager
-    async def _operation(self) -> AsyncIterator[None]:
-        """Serialize project access across MCP and UI server processes."""
+    async def _operation(self, *, busy_command: str = "") -> AsyncIterator[None]:
+        """Serialize project access across MCP and UI server processes.
+
+        `busy_command` names a command that reports what holds the lock, for the
+        operation whose reader is waiting on the answer rather than on the work.
+        """
 
         async with self._lock:
             try:
@@ -195,8 +201,13 @@ class ResearchService(
                 raise ResearchError(
                     "Another research process is working on this project"
                     + self._resident_build_note()
-                    + ". Its work is not lost: call this again once it finishes, or "
-                    "stop that process first."
+                    + (
+                        f". Nothing was written. Read {busy_command} to see what "
+                        "is holding it, or wait for it to finish."
+                        if busy_command
+                        else ". Its work is not lost: call this again once it "
+                        "finishes, or stop that process first."
+                    )
                 ) from exc
 
     def _resident_build_note(self) -> str:

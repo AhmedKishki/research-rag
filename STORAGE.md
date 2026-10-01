@@ -14,7 +14,8 @@ my-research-project/
     ├── source-catalog.json               durable source-id-to-path registry
     ├── source-metadata.json              authoritative reviewed metadata overlay
     ├── source-exclusions.json            reviewed decisions, when present
-    └── runtime/                          disposable derived state
+    ├── config.toml                    this project's settings layer
+    └── runtime/                       disposable derived state
         ├── current.json                  selected generation pointer
         ├── project.lock
         ├── logs/
@@ -45,11 +46,12 @@ Everything else inside `.research-rag/` is byte-compatible with `research-ultra-
 
 ## Portable state
 
-These four files are your decisions about the project, the part worth backing up, and the part that survives a rebuild.
+These five files are your decisions about the project, the part worth backing up, and the part that survives a rebuild.
 
 | File | What it holds | Keyed by |
 |---|---|---|
 | `project.json` | project name, stable id, sources directory | — |
+| `config.toml` | this project's settings layer, one key per setting | setting key |
 | `source-catalog.json` | the durable source-id registry | normalized source-relative path |
 | `source-metadata.json` | the reviewed metadata overlay | normalized source-relative path |
 | `source-exclusions.json` | each exclusion decision and its reason | normalized source-relative path |
@@ -62,12 +64,18 @@ These four files are your decisions about the project, the part worth backing up
 {
   "schema_version": 1,
   "project_id": "c0ffee...",
-  "project_name": "My research project",
+  "name": "My research project",
   "source_directory": "sources"
 }
 ```
 
 `project_id` is authoritative and never rewritten. `source_directory` is relative to the project root, and every command reuses it when `--source-directory` is omitted; a differing explicit value is refused rather than quietly accepted.
+
+### config.toml
+
+The project's own settings layer, written by hand or by the workspace in the browser. Each key is a `SETTING` in `src/research_rag/default.toml` under a table named by its section, so `[retrieval]` holds `retrieval.rrf_k`. The browser rewrites the whole file from the values it read, so keys it does not know about are preserved and comments are not.
+
+A key the environment, the command line, or `--config` supplied cannot be written here, because those layers outrank this file. `research-rag config` prints every value with the layer it came from and what a change to it costs.
 
 ## Derived state
 
