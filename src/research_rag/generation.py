@@ -1,5 +1,3 @@
-"""Compatibility checks and reusable state for immutable generations."""
-
 from __future__ import annotations
 
 import hashlib
@@ -24,8 +22,6 @@ from .storage import StorageError, iter_jsonl
 
 
 def value_fingerprint(value: Any) -> str:
-    """Return a stable fingerprint for one JSON-compatible policy value."""
-
     encoded = json.dumps(
         value,
         ensure_ascii=False,
@@ -48,8 +44,6 @@ def generation_is_reusable(
     chunk_headers: bool,
     embedding: EmbeddingModel,
 ) -> bool:
-    """Require exact processing and model compatibility before any reuse."""
-
     chunking = manifest.get("chunking", {})
     dense = manifest.get("retrieval", {}).get("dense", {})
     return bool(
@@ -73,8 +67,6 @@ def generation_is_reusable(
 
 @dataclass(frozen=True, slots=True)
 class ReuseSnapshot:
-    """Validated reusable records from the selected generation."""
-
     root: Path
     manifest: dict[str, Any]
     source_files: dict[str, dict[str, Any]]
@@ -227,9 +219,9 @@ def source_set_matches(
 ) -> bool:
     """Compare source bytes and generation-affecting portable state.
 
-    Reviewed metadata is a portable read-time overlay. It does not affect
-    extraction text, chunk identity, embeddings, or either retrieval index, so
-    a metadata-only correction must not force a new immutable generation.
+    Reviewed metadata does not affect extraction text, chunk identity,
+    embeddings, or either retrieval index, so a metadata-only correction must not
+    force a new immutable generation.
     """
 
     if snapshot.manifest.get("metadata_storage_policy") != metadata_storage_policy:

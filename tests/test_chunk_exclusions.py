@@ -1,11 +1,8 @@
-"""A decision about one passage: what it withholds, and what it does not.
+"""A `chunk_id` is derived from content, so a decision outlives a rebuild of unchanged bytes.
 
-The file is the second review state, and everything here follows from one fact:
-a `chunk_id` is derived from content, so the same passage keeps it across a
-rebuild of unchanged bytes and anything else changes it. A decision is therefore
-enforced by the retrieval filter, which sees the same identifier whatever the
-generation holds, and reported with the generation it was recorded in, which is
-the only thing that tells a reader whether it is withholding anything now.
+The retrieval filter enforces it, because it sees the same identifier whatever the
+generation holds, and the report names the generation it was recorded in, because
+that is the only thing telling a reader whether it withholds anything now.
 """
 
 from __future__ import annotations
@@ -65,11 +62,10 @@ def _write_exclusion_file(project: Path, value: object) -> Path:
 def test_a_decision_about_one_passage_withholds_it_from_every_retrieval_half(
     project: Path,
 ) -> None:
-    """One predicate serves both halves, so neither can answer with the passage.
+    """Neither BM25 nor the dense index may answer with the passage.
 
-    BM25 and the dense index rank the same candidates and merge them afterwards,
-    which is why a filter added to only one of them would show up as a passage
-    that reappears whenever the other half wins.
+    They rank the same candidates and merge them afterwards, so a filter added to only
+    one half would show up as a passage reappearing whenever the other half wins.
     """
 
     async def exercise() -> None:
@@ -98,17 +94,15 @@ def test_a_decision_about_one_passage_withholds_it_from_every_retrieval_half(
 def test_an_excluded_passage_is_refused_by_name_and_kept_as_a_neighbour(
     project: Path,
 ) -> None:
-    """A reader asking for it is asking for evidence; a neighbour is context.
-
-    Hiding a neighbour would remove the shape of the argument to a decision about
-    one passage inside it, and a reader who opened a passage to see what
-    surrounds it has asked a question the exclusion never answered.
+    """Hiding a neighbour would remove the shape of the argument to a decision about one
+    passage inside it, and a reader who opened a passage to see what surrounds it asked a
+    question the exclusion never answered.
     """
 
     async def exercise() -> None:
         service, hits = await _service(project, pages=3)
-        # Which two passages are neighbours is asked of the corpus, because a
-        # ranking says which passage is strongest and not what sits beside it.
+        # Which two passages are neighbours is asked of the corpus, because a ranking
+        # says which passage is strongest and not what sits beside it.
         adjacent = [
             (passage["chunk_id"], hit["chunk_id"])
             for hit in hits
@@ -152,8 +146,8 @@ def test_a_decision_is_reversible_and_the_answer_names_what_it_did(
         assert excluded["locator"].startswith("p. ")
         assert excluded["in_current_generation"] is True
         assert excluded["effective_immediately"] is True
-        # A filter applies the decision to the generation on screen and to every
-        # one built after it, so nothing has to be rebuilt for it to hold.
+        # A filter applies the decision to the generation on screen and to every one built
+        # after it, so nothing has to be rebuilt for it to hold.
         assert excluded["generation_rebuild_recommended"] is False
         assert "no ingestion is needed" in excluded["message"]
 
@@ -184,9 +178,8 @@ def test_a_decision_about_a_passage_this_generation_does_not_hold_is_reported(
 ) -> None:
     """A removed chunk cannot come back, so the answer says so instead of failing.
 
-    The status payload counts it beside the source exclusions and says it in one
-    sentence, and it does not make the project stale: `stale` names `ingest` as
-    the call that closes the gap, and no ingestion brings a removed chunk back.
+    `stale` names `ingest` as the call that closes the gap, and no ingestion brings a
+    removed chunk back.
     """
 
     async def exercise() -> None:
@@ -227,8 +220,8 @@ def test_a_decision_about_a_passage_this_generation_does_not_hold_is_reported(
         assert status["stale"] is False
         assert (await service.status())["ready"] is True
         assert "another generation" in status["message"]
-        # The search is unaffected: an entry naming a chunk this generation does
-        # not hold removes nothing from the passages a reader can reach.
+        # An entry naming a chunk this generation does not hold removes nothing
+        # from the passages a reader can reach.
         assert len((await service.search("labour evidence", rerank=False))["hits"]) == 1
 
     asyncio.run(exercise())
@@ -259,11 +252,10 @@ def test_a_project_with_no_generation_refuses_to_record_a_passage_decision(
 
 
 def test_top_k_counts_the_passages_a_reader_kept(project: Path, monkeypatch) -> None:
-    """An exclusion must not shrink the answer, or empty it.
+    """The lexical window widens while a filter is in force, so an exclusion must not shrink
+    the answer, or empty it.
 
-    The lexical window is widened while a filter is in force, so a decision that
-    removes the candidates one window happened to hold reaches past it. Without
-    that, a search answers with fewer passages than the corpus still offers, and
+    Without that, a search answers with fewer passages than the corpus still offers, and
     with none while the whole window is excluded.
     """
 
@@ -279,8 +271,8 @@ def test_top_k_counts_the_passages_a_reader_kept(project: Path, monkeypatch) -> 
         )
         assert len(ranked["hits"]) == 12
 
-        # One window holds four candidates per passage the search is asked for,
-        # so ten exclusions leave the last two passages of the corpus outside it.
+        # One window holds four candidates per passage the search is asked for, so ten
+        # exclusions leave the last two passages of the corpus outside it.
         for hit in ranked["hits"][:10]:
             await service.set_chunk_inclusion(
                 hit["chunk_id"], included=False, reason="Reviewed fragment."
@@ -306,10 +298,9 @@ def test_the_dense_window_is_narrowed_by_the_candidates_a_query_will_drop(
 ) -> None:
     """A post-query drop must not be paid for out of the answer.
 
-    The dense backend filters by document only, so an excluded chunk is still
-    returned and dropped here. The window it is asked for is therefore one
-    narrower than the active chunk count, which is the same compensation the
-    lexical half gets from widening.
+    The dense backend filters by document only, so an excluded chunk is still returned and
+    dropped here. The window it is asked for is therefore one narrower than the active
+    chunk count, the same compensation the lexical half gets from widening.
     """
 
     async def exercise() -> None:
@@ -390,7 +381,7 @@ def test_the_review_file_refuses_a_field_it_does_not_name(project: Path) -> None
         with pytest.raises(ResearchError, match="Invalid chunk-exclusion mapping"):
             await service.status()
 
-        # A project with no file at all is the ordinary case, not a failure.
+        # A project with no file at all is the ordinary case.
         path.unlink()
         assert load_chunk_exclusions(path) == {}
         assert (await service.status())["excluded_chunk_count"] == 0
@@ -435,10 +426,8 @@ def test_an_entry_edited_by_hand_survives_a_service_write(project: Path) -> None
 def test_a_chunk_id_is_not_permanent_across_a_rebuild(project: Path) -> None:
     """Unchanged text keeps the id, and the decision with it, for the next build.
 
-    A chunk id is derived from content, so re-ingesting a corpus whose bytes did
-    not change must neither lose the decision nor re-record it against the new
-    generation. Content that did change gets a new id, and the old entry then names
-    a chunk this generation does not hold.
+    Content that did change gets a new id, and the old entry then names a chunk this
+    generation does not hold.
     """
 
     async def exercise() -> None:
@@ -457,8 +446,8 @@ def test_a_chunk_id_is_not_permanent_across_a_rebuild(project: Path) -> None:
         stored = load_chunk_exclusions(service.config.chunk_exclusions_path)
         assert stored[target]["generation_id"] == first
         listed = await service.list_chunk_exclusions()
-        # The generation changed, but the passage is still the same text, so the
-        # decision still withholds it and the row says so.
+        # The generation changed, but the passage is still the same text, so the decision
+        # still withholds it and the row says so.
         assert listed["exclusions"][0]["in_current_generation"] is True
         status = await service.status()
         assert status["chunk_exclusion_other_generation_count"] == 1
@@ -512,11 +501,9 @@ def test_the_serialiser_writes_only_the_fields_the_schema_names(
 def test_an_exclusion_is_a_decision_about_evidence_and_not_about_quoting(
     project: Path,
 ) -> None:
-    """`direct_quote_safe` is false on every passage, excluded or not.
-
-    An exclusion is a reader's decision about whether a passage is evidence, not
-    about what may be quoted from it, so the flag keeps its one meaning and no
-    per-passage field is added for it.
+    """An exclusion is a decision about whether a passage is evidence, not about what may be
+    quoted from it, so `direct_quote_safe` keeps its one meaning and no per-passage field
+    is added for it.
     """
 
     async def exercise() -> None:

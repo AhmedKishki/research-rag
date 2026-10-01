@@ -1,14 +1,10 @@
-"""Updating: the check that writes nothing, and the update that will not break a build.
+"""The decision under test is the release one: whether this checkout is at, behind, or
+ahead of the latest published release.
 
-Nothing here reaches a network. Every external command goes through an injected
-runner that answers from a recorded table, so a test can put the remote anywhere
-it likes, including out of reach, and the decision it checks is the one the
-command makes in production. `tests/test_release.py` holds the tests that need
-real tags, and builds them in a temporary repository.
+The branch head is reported beside that answer and never decides it.
 
-The decision under test is the release one: whether this checkout is at, behind,
-or ahead of the latest published release. The branch head is reported beside that
-answer and never decides it.
+Nothing here reaches a network: every external command goes through an injected runner
+that answers from a recorded table, so a test can put the remote anywhere it likes.
 """
 
 from __future__ import annotations
@@ -39,10 +35,8 @@ RELEASE_COMMIT = "c" * 40
 
 
 class Recorder:
-    """A runner that answers from a table and remembers every call.
-
-    A command the table does not name fails the way a missing tool does, so a
-    test that forgets one finds out rather than reaching a real binary.
+    """A command the table does not name fails the way a missing tool does, so a test that
+    forgets one finds out rather than reaching a real binary.
     """
 
     def __init__(self, answers: dict[Any, Any] | None = None) -> None:
@@ -70,14 +64,10 @@ class Recorder:
 
 
 def _tag_listing(*tags: tuple[str, str]) -> str:
-    """What `git ls-remote --tags origin` prints for the tags it is given."""
-
     return "".join(f"{commit}\trefs/tags/{tag}\n" for tag, commit in tags)
 
 
 def _published(*versions: str) -> ReleaseSet:
-    """The release set a remote whose tags are these versions publishes."""
-
     if not versions:
         return ReleaseSet(
             NONE,
@@ -101,8 +91,6 @@ def _checkout(
     changed: str = "README.md",
     versions: tuple[str, ...] = ("0.1.0",),
 ) -> Recorder:
-    """The answers one git checkout gives, as `git -C <root> ...`."""
-
     return Recorder(
         {
             f"git -C {root} rev-parse --abbrev-ref HEAD": "main",
@@ -143,14 +131,10 @@ def _run(*arguments: str) -> Any:
 
 @pytest.fixture
 def as_an_installed_distribution(monkeypatch: pytest.MonkeyPatch) -> None:
-    """This installation has no git metadata at or above it."""
-
     monkeypatch.setattr(update_module, "nearest_checkout", lambda: None)
 
 
 def _a_dead_pid() -> int:
-    """A process id nothing is running under any more."""
-
     finished = subprocess.Popen(["true"])
     finished.wait()
     return finished.pid
@@ -159,8 +143,6 @@ def _a_dead_pid() -> int:
 def test_a_checkout_behind_a_release_plans_to_detach_onto_the_release_tag(
     tmp_path: Path,
 ) -> None:
-    """The plan moves to the release itself, and names the tag it moves to."""
-
     plan = update_module.plan_update(
         _local(tmp_path),
         update_module.RemoteState(
@@ -226,8 +208,6 @@ def test_a_checkout_at_the_release_has_nothing_to_apply(tmp_path: Path) -> None:
 
 
 def test_the_release_version_decides_and_not_the_branch_head(tmp_path: Path) -> None:
-    """A branch ahead of its upstream is still at the release it declares."""
-
     plan = update_module.plan_update(
         _local(tmp_path),
         update_module.RemoteState(
@@ -244,8 +224,6 @@ def test_the_release_version_decides_and_not_the_branch_head(tmp_path: Path) -> 
 def test_a_checkout_ahead_of_the_release_reports_unreleased_work(
     tmp_path: Path,
 ) -> None:
-    """Ahead is a fact about this checkout, and it is never a reason to change one."""
-
     plan = update_module.plan_update(
         _local(tmp_path, declared="0.3.0"),
         update_module.RemoteState(
@@ -384,15 +362,12 @@ def test_the_probe_reads_the_release_tags_and_the_branch_head_and_nothing_more(
     assert remote.behind == 2
     assert remote.releases.version == "0.1.0"
     assert plan.available is False
-    # A check asks the remote and stops there: no checkout, no lock, no sync.
     assert not run.ran("git", "checkout", "--detach", "v0.1.0")
     assert not run.ran("uv", "lock")
     assert not run.ran("uv", "sync")
 
 
 def test_the_probe_reports_the_untracked_files_nothing_else(tmp_path: Path) -> None:
-    """Only tracked paths block a move; an untracked file is left where it is."""
-
     run = Recorder(
         {
             f"git -C {tmp_path} status --porcelain --untracked-files=no": (
@@ -603,8 +578,6 @@ def _project_with_a_running_build(root: Path, phase: str = "embedding") -> Any:
 def test_a_project_lock_held_by_a_build_refuses_the_whole_update(
     tmp_path: Path,
 ) -> None:
-    """The refusal names the project, its phase, and the command that reports it."""
-
     project = _project_with_a_running_build(tmp_path)
 
     held = update_module.held_projects([project])
@@ -629,8 +602,6 @@ def test_a_lock_nobody_holds_is_not_a_refusal(tmp_path: Path) -> None:
 
 
 def test_stopping_an_app_uses_the_projects_own_launcher(tmp_path: Path) -> None:
-    """The launcher owns the pid, the port, and the process group."""
-
     project = update_module.ProjectState(tmp_path / "thesis", "thesis")
     script = project.portable_root / "bin" / "open-research-rag-ui.sh"
     script.parent.mkdir(parents=True)
@@ -660,8 +631,6 @@ def test_a_project_with_no_app_is_left_alone(tmp_path: Path) -> None:
 
 
 def test_the_portable_state_digest_ignores_the_runtime_root(tmp_path: Path) -> None:
-    """Stopping an app writes its pid under `runtime/`; nothing else is touched."""
-
     project = tmp_path / "thesis"
     (project / ".research-rag" / "runtime" / "logs").mkdir(parents=True)
     (project / ".research-rag" / "runtime" / "logs" / "app.log").write_text(
@@ -718,8 +687,6 @@ def test_the_command_refuses_an_update_while_a_build_holds_the_lock(
 def test_applying_stops_every_app_and_prints_the_command_that_starts_it_again(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Graceful means the launcher stops it, and the reader starts it."""
-
     project = update_module.ProjectState(tmp_path / "thesis", "thesis")
     script = project.portable_root / "bin" / "open-research-rag-ui.sh"
     script.parent.mkdir(parents=True)
@@ -776,8 +743,6 @@ def test_applying_stops_every_app_and_prints_the_command_that_starts_it_again(
 def test_applying_with_nothing_to_apply_stops_nothing(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """An update that would change nothing must not stop a reader's app."""
-
     project = update_module.ProjectState(tmp_path / "thesis", "thesis")
     project.state_root.mkdir(parents=True)
     monkeypatch.setattr(
@@ -806,8 +771,6 @@ def test_applying_with_nothing_to_apply_stops_nothing(
 
 
 def test_a_relocated_runtime_root_is_read_from_the_launcher(tmp_path: Path) -> None:
-    """The lock and the pid live where the launcher says they do."""
-
     elsewhere = tmp_path / "fast-disk"
     project = update_module.ProjectState(tmp_path / "thesis", "thesis")
     script = launcher_path(project.portable_root)
@@ -825,8 +788,6 @@ def test_a_relocated_runtime_root_is_read_from_the_launcher(tmp_path: Path) -> N
 def test_the_version_flag_and_update_report_the_same_numbers(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    """One install has one version, and both surfaces read it the same way."""
-
     cli_module.main(["--version"])
     printed = capsys.readouterr().out
 
@@ -849,8 +810,6 @@ def test_the_version_flag_and_update_report_the_same_numbers(
 def test_the_check_reports_a_declared_version_that_names_no_release_here(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """The declared version and the tag that claims it are checked where they are."""
-
     monkeypatch.setattr(update_module, "nearest_checkout", lambda: tmp_path)
     (tmp_path / "pyproject.toml").write_text(
         '[project]\nversion = "9.9.9"\n', encoding="utf-8"

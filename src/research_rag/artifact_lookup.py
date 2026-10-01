@@ -1,8 +1,8 @@
 """Compact generation-local indexes for canonical JSONL artifacts.
 
 The SQLite sidecar stores identifiers, ordinals, content digests, and byte
-offsets only. Passage and extraction text stay canonical in the JSONL files and
-are read on demand, so the index does not duplicate corpus text.
+offsets only. Passage and extraction text stay canonical in the JSONL files and are
+read on demand, so the index does not duplicate corpus text.
 """
 
 from __future__ import annotations
@@ -28,7 +28,7 @@ _SQL_BATCH_SIZE = 500
 
 
 class ArtifactLookupError(RuntimeError):
-    """Raised when a generation lookup cannot be built or queried safely."""
+    pass
 
 
 def _chunk_text(record: Mapping[str, Any]) -> str:
@@ -382,8 +382,6 @@ def ensure_artifact_lookup(
 
 
 class ArtifactLookup:
-    """Read records from canonical artifacts through their compact offset index."""
-
     def __init__(self, chunks_path: Path, units_path: Path, lookup_path: Path) -> None:
         self.chunks_path = chunks_path
         self.units_path = units_path
@@ -643,8 +641,6 @@ def validate_artifact_lookup(
     expected_chunk_count: int,
     expected_unit_count: int,
 ) -> bool:
-    """Validate sidecar integrity and every referenced canonical record."""
-
     if not _lookup_is_current(chunks_path, units_path, lookup_path):
         return False
     try:

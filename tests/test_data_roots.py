@@ -1,18 +1,13 @@
-"""The names this app inherited, and the ones that are its own.
+"""Three locations keep the frozen MCP server's name; the rest are this app's own.
 
-Three locations carry the MCP server's name rather than this app's. It is frozen,
-still installed on the machines that have it, and reads those paths: a renamed
-user settings directory is read by neither product, a renamed model cache
-re-downloads about 150 MB on the first build, and a renamed launcher state file
-leaves the frozen product's pid file with nothing to stop it. Renaming any of
-them costs a user their settings, their models, or a running workspace, and
-nothing fails until then.
+The frozen product still reads those three: a renamed user settings directory is read
+by neither product, a renamed model cache re-downloads about 150 MB on the first
+build, and a renamed launcher state file leaves the frozen product's pid file with
+nothing to stop it. Nothing fails until then, so a rename must delete the assertion
+that forbids it and state the migration.
 
-The rest are this app's own and must stay that way, so a second product can
-never stop this one's process or land beside it in a project.
-
-Every constant here is asserted, so a later rename must delete its assertion and
-state the migration that makes it safe.
+The app's own names must stay its own, so a second product can never stop this one's
+process or land beside it in a project.
 """
 
 from __future__ import annotations
@@ -50,8 +45,6 @@ def test_the_model_cache_default_is_the_mcp_servers() -> None:
 
 
 def test_the_project_state_root_names_neither_product() -> None:
-    """The roots both products write to carry no product name at all."""
-
     assert (
         Path(".research-rag") / "config.toml" == settings_module.PROJECT_CONFIG_RELATIVE
     )
@@ -93,12 +86,12 @@ def test_the_launcher_runs_this_apps_own_command() -> None:
 
 
 def test_the_agent_answer_detail_is_declared_and_used() -> None:
-    """The one setting that is not a project, corpus, or machine tunable.
+    """The one setting that is neither project, corpus, nor machine tunable.
 
-    A settings file the frozen product wrote names it, and the layer stack refuses
-    an undeclared key in every layer, so the key cannot be dropped while that
-    product is installed. Removing it would also stop an agent's answers being
-    projectable, so the test names the reader as well as the key.
+    A settings file the frozen product wrote names it, and the layer stack refuses an
+    undeclared key in every layer, so the key cannot be dropped while that product is
+    installed. It also selects the projection an agent's answers are built with, so the
+    test pins the reader as well as the key.
     """
 
     keys = {setting.key for setting in SETTINGS}
@@ -114,11 +107,10 @@ def test_the_agent_answer_detail_is_declared_and_used() -> None:
         for path in ROOT.glob("src/research_rag/**/*.py")
         if "tool_detail" in path.read_text(encoding="utf-8")
     )
-    # `surfaces/cli.py` names the key in the `help settings` page rather than
-    # reading it, and a page that did not name the key would say less than the
-    # page is worth. The assertion guards the reader set: a module that behaves
-    # differently on the key is added here deliberately, and the agent surface
-    # stays the one that acts on its value.
+    # `surfaces/cli.py` names the key in the `help settings` page rather than reading
+    # it, so the assertion guards the reader set: a module that behaves differently on
+    # the key is added here deliberately, and the agent surface stays the one that acts
+    # on its value.
     assert readers == [
         "src/research_rag/config.py",
         "src/research_rag/settings.py",

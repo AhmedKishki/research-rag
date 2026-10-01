@@ -1,16 +1,13 @@
 """The browser workspace: the shared local interface over one research project.
 
-The UI runs in this process and calls `ResearchService` directly. The MCP server
-this app was seeded from served the same interface by starting a private stdio
-copy of itself and forwarding each call across that boundary. The shared UI
+The UI runs in this process and calls `ResearchService` directly. The shared UI
 already requested the complete payload, so nothing is lost by answering in
 process, and one process, one lock, and one generation replace a process tree.
 
 `ResearchUIAdapter.call` is the whole boundary. The shared UI sends its full
 optional argument set for every route, including fields a capability has turned
-off, so each operation here names the arguments it accepts and drops the rest.
-That is the same rule the tool-schema filter applied, and it keeps a control the
-app does not serve from travelling as an argument the app ignores.
+off, so each operation here names the arguments it accepts and drops the rest,
+and a control the app does not serve never travels as an argument the app ignores.
 """
 
 from __future__ import annotations
@@ -62,11 +59,11 @@ RESEARCH_UI_PROFILE = UIProfile(
     navigation_label="Research views",
     source_types_label="PDF + EPUB sources",
     ingest_intro=(
-        "All included PDFs and EPUBs will be extracted and indexed. The current "
-        "generation remains active unless the complete build succeeds."
+        "All included PDFs and EPUBs are extracted and indexed. The current "
+        "generation stays active unless the complete build succeeds."
     ),
     ingest_busy_message=(
-        "Building BM25 and dense indexes. This can take several minutes…"
+        "Building BM25 and dense indexes. This takes several minutes…"
     ),
     # The shared UI's neutral labels apply here: the quote rule is stated once
     # in README.md, not on every passage a browser renders.
@@ -86,9 +83,9 @@ RESEARCH_UI_PROFILE = UIProfile(
         # off and the panel and its routes stay absent.
         clients=True,
         # A build leaves its predecessor on disk, so a reader in the workspace
-        # can see what those builds cost and reclaim one. The listing is free: it is
-        # already in the status payload. The removal asks for the id twice,
-        # which the shared workspace insists on before it calls here.
+        # can see what those builds cost and reclaim one. The listing is already
+        # in the status payload. The removal asks for the id twice, which the
+        # shared workspace insists on before it calls here.
         generations=True,
         # A reader tunes this project in the browser, and the cost of a change is
         # named before anything is written, because a generation records most of
@@ -153,10 +150,10 @@ def _project_listing(config: ResearchConfig) -> dict[str, Any]:
     """The account's projects, projected as the workspace's selector reads them.
 
     The listing is the one `research-rag projects` prints, read through the same
-    function, so the projects a browser names are the projects a terminal names
-    and their state cannot differ. Each entry carries the address its app is
-    served on, or the absence of one: a project with no app has no URL, and a
-    workspace that invented one would offer a reader a link that fails.
+    function, so the projects a browser names and the projects a terminal names
+    cannot differ. Each entry carries the address its app is served on, or the
+    absence of one: a project with no app has no URL, and a workspace that
+    invented one would offer a reader a link that fails.
 
     `current` is this project's own recorded name, so the page marks the project
     it is serving rather than the first one in the list.
@@ -234,9 +231,8 @@ class ResearchUIAdapter:
     def _require_clients(self) -> ClientRegistry:
         """The registry, or a refusal when this adapter was built without one.
 
-        A test that serves the workspace over a stand-in service has no process
-        behind it, and a stand-in is not a server. Naming that beats reporting an
-        empty list that reads as "no agents are attached".
+        Naming that beats reporting an empty list that reads as "no agents are
+        attached".
         """
 
         if self.clients is None:
@@ -409,10 +405,8 @@ class ResearchUIAdapter:
         """Carry one settings change to the service, with its three fields checked.
 
         The revision is required rather than defaulted: a write that named no
-        revision could land on top of a change made since the page loaded, and
-        the workspace is a second reader of the same request, so a browser that
-        sent a revision which was not text has sent a request the app cannot act
-        on.
+        revision could land on top of a change made since the page loaded, and the
+        refusal for a revision that was not text belongs beside the field.
         """
 
         values = arguments.get("values")
@@ -441,9 +435,7 @@ class ResearchUIAdapter:
         """Carry one passage decision to the service, with its three arguments checked.
 
         The reasons are validated here rather than in the service because the
-        workspace is a second reader of the same request: a browser that sent a
-        reason which was not text has sent a request the app cannot act on, and
-        the refusal belongs beside the field it is about.
+        refusal belongs beside the field it is about.
         """
 
         included = arguments.get("included")
@@ -500,12 +492,11 @@ def create_ui_app(
 ) -> Starlette:
     """Create the shared workspace over the app's one service.
 
-    The adapter is always handed the service rather than a factory, because the
-    app process owns the gateway and there is exactly one of it: a factory here
-    would open a second one for the workspace alone. The client registry is
-    passed in for the same reason, and is absent when no process serves the
-    workspace. `app_state` is the app's own state, which is absent in the same
-    way, and the workspace's status carries it beside the service's.
+    The adapter is handed the service rather than a factory, because the app
+    process owns the gateway and there is exactly one of it. The client registry
+    is passed in for the same reason, and is absent when no process serves the
+    workspace. `app_state` is absent the same way, and the workspace's status
+    carries it beside the service's.
     """
 
     # More than one project can be served at the same time, so each one names the

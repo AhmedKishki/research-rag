@@ -1,11 +1,7 @@
-"""The running app: one port, three front ends, and the clients attached to it.
-
-These tests exercise a real `App` on a real loopback port, because the things that
-break in this design are all things a unit test with a fake transport cannot see:
-whether the agent endpoint answers a session at all once it is mounted rather than
-served, whether the workspace can find the adapter its own lifespan installs, and
-whether a disconnect actually ends a live session rather than only recording an
-intent.
+"""A real `App` on a real loopback port, because the things that break here a unit test
+with a fake transport cannot see: whether the agent endpoint answers a session once it
+is mounted, whether the workspace finds the adapter its own lifespan installs, and
+whether a disconnect ends a live session.
 """
 
 from __future__ import annotations
@@ -32,7 +28,6 @@ from research_rag.app import (
 )
 from research_rag.config import resolve_config
 
-# One app per test would claim a port each time; the fixtures below share one.
 OPERATIONS = (
     "status",
     "ingest",
@@ -53,10 +48,8 @@ def free_port() -> int:
 
 
 def get(url: str, path: str) -> tuple[int, Any]:
-    """One HTTP request, off this event loop.
-
-    The app is served on this loop, so a blocking request made on it would
-    deadlock the very server it is calling.
+    """The app is served on this loop, so a blocking request made on it would deadlock the
+    server it is calling.
     """
 
     _, _, port = url.rpartition(":")
@@ -91,10 +84,8 @@ def post(url: str, path: str, payload: dict[str, Any]) -> tuple[int, Any]:
 def post_ordered(
     url: str, path: str, payload: dict[str, Any], headers: dict[str, str]
 ) -> tuple[int, Any]:
-    """One POST whose headers are exactly what the caller asked for.
-
-    The gates this app puts on a settings write are header gates, so a test that
-    could not set a header would not be testing them.
+    """The gates on a settings write are header gates, so a test that cannot set a header
+    would not be testing them.
     """
 
     connection = http.client.HTTPConnection(
@@ -126,10 +117,8 @@ def anyio_backend() -> str:
 
 
 class FakeService:
-    """Stands in for `ResearchService` so these tests open no gateway.
-
-    The app builds its own service; replacing it is what keeps a test about
-    surfaces and clients from also being a test about a model download.
+    """Replacing the service keeps a test about surfaces and clients from also being a test
+    about a model download.
     """
 
     def __init__(self) -> None:
@@ -206,7 +195,7 @@ async def test_the_agent_surface_answers_on_the_workspaces_port(project: Path) -
             )
             answer = await client.call_tool("status", {})
             # The app's own state travels with the project's, so an agent knows
-            # where the workspace is and how many other agents are attached.
+            # where the workspace is.
             assert answer.data["ui_url"] == app.url
             assert answer.data["mcp_url"].endswith("/mcp")
     finally:
@@ -256,8 +245,7 @@ async def test_the_control_api_and_the_agent_surface_share_one_service(
         async with Client(app.mcp_url, timeout=30) as client:
             await client.call_tool("search", {"query": "heron", "top_k": 3})
 
-        # The same arguments, from two surfaces, through one service: a second
-        # service would appear here as a second recorded call per operation.
+        # A second service would appear here as a second recorded call per operation.
         assert [name for name, _ in fake.calls] == ["search", "search"]
         through_tool = dict(fake.calls[1][1])
         for optional in (
@@ -270,8 +258,8 @@ async def test_the_control_api_and_the_agent_surface_share_one_service(
             "source_ids",
             "exclude_source_ids",
         ):
-            # The agent's tool declares the filters it accepts; a surface that
-            # forwarded the ones it does not would be sending values nothing acts on.
+            # A surface forwarding a filter its operation does not accept would be
+            # sending values nothing acts on.
             assert optional not in through_tool or through_tool[optional] is None
         assert through_tool["query"] == through_control["query"]
         assert through_tool["top_k"] == through_control["top_k"]
@@ -409,11 +397,9 @@ async def test_a_control_settings_write_takes_no_path_in_its_body(
 async def test_the_agent_surface_declares_the_schema_an_agent_reads(
     project: Path,
 ) -> None:
-    """The names are pinned elsewhere; this pins what an agent is actually told.
-
-    A tool that keeps its name while losing a parameter is invisible to a name
-    check and fatal to a client. A tool that stops saying it is destructive turns
-    a call an agent must confirm into one it may fire without asking.
+    """A tool that keeps its name while losing a parameter is invisible to a name check and
+    fatal to a client. A tool that stops saying it is destructive turns a call an agent
+    must confirm into one it may fire without asking.
     """
 
     config = resolve_config(project, vanilla_executable=sys.executable)
@@ -439,9 +425,8 @@ async def test_the_agent_surface_declares_the_schema_an_agent_reads(
             )
             assert set(tools["search"].inputSchema["required"]) == {"query"}
             assert set(tools["ingest"].inputSchema["properties"]) == {"force_recompute"}
-            # A passage decision takes its identifier, its flag, and its reason,
-            # and nothing else: no generation to name, no way to exclude a batch
-            # in one call, and no reason-free way to remove a passage.
+            # No generation to name, no way to exclude a batch in one call, and no
+            # reason-free way to remove a passage.
             assert set(tools["set_chunk_inclusion"].inputSchema["properties"]) == {
                 "chunk_id",
                 "included",
@@ -452,10 +437,8 @@ async def test_the_agent_surface_declares_the_schema_an_agent_reads(
                 "included",
             }
             assert "included" in tools["set_source_inclusion"].inputSchema["required"]
-            # Only the two operations that change a project's review state are
-            # announced as writes, and only the exclusion is announced as
-            # destructive: a client that prompts on the wrong one of these
-            # either nags a reader or fires a removal unasked.
+            # A client that prompts on the wrong one of these either nags a reader
+            # or fires a removal unasked.
             assert tools["status"].annotations.readOnlyHint is True
             assert tools["search"].annotations.readOnlyHint is True
             assert tools["get_passage"].annotations.readOnlyHint is True
@@ -474,11 +457,9 @@ async def test_the_agent_surface_declares_the_schema_an_agent_reads(
 async def test_the_control_api_moves_a_generation_the_way_the_service_does(
     project: Path,
 ) -> None:
-    """The control API is a request path, not a second writer.
-
-    The confirmation crosses the wire because the command line already had to
-    repeat the id; a control surface that dropped the repeat would delete a
-    generation a person did not choose.
+    """The confirmation crosses the wire because the command line already had to repeat the
+    id; a control surface that dropped the repeat would delete a generation a person did
+    not choose.
     """
 
     config = resolve_config(project, vanilla_executable=sys.executable)
@@ -584,10 +565,8 @@ async def test_the_control_api_names_a_client_it_does_not_have(project: Path) ->
 async def test_the_control_api_answers_the_account_and_the_client_entry(
     project: Path,
 ) -> None:
-    """The command line can reach what the workspace's selector and entry read.
-
-    Both are the app's own answers rather than a command-line reconstruction, so a
-    terminal naming a project and a browser naming the same one cannot differ.
+    """A terminal naming a project and a browser naming the same one cannot differ, because
+    both read the app's own answer rather than a command-line reconstruction.
     """
 
     from research_rag import registry
@@ -602,9 +581,8 @@ async def test_the_control_api_answers_the_account_and_the_client_entry(
     await app.start()
     try:
         await wait_until_ready(app)
-        # The launcher is what records the address; an app started in process has
-        # to be recorded the same way before a probe can find it, and this is the
-        # pair of files the launcher writes.
+        # The launcher is what records the address, so an app started in process must be
+        # recorded the same way before a probe can find it.
         (config.state_root / PORT_FILE).write_text(str(app.port), encoding="utf-8")
         (config.state_root / PID_FILE).write_text(str(os.getpid()), encoding="utf-8")
 
@@ -613,8 +591,6 @@ async def test_the_control_api_answers_the_account_and_the_client_entry(
         assert [entry["project_name"] for entry in body["projects"]] == [
             config.project_name
         ]
-        # This project's own app is the one serving the request, and it is named
-        # with the address a reader can open.
         assert body["projects"][0]["app"] == {
             "attached_to": None,
             "running": True,
@@ -627,9 +603,8 @@ async def test_the_control_api_answers_the_account_and_the_client_entry(
         assert code == 200
         assert entry == {"entry": mcp_entry_block(config)}
 
-        # `Control` is synchronous, so it is used off the loop: the listing a
-        # reader asks for probes each project's own app, and a probe made on the
-        # loop would wait for an app that is itself waiting for the probe.
+        # `Control` is synchronous: the listing probes each project's own app, and a probe
+        # made on the loop would wait for an app waiting for the probe.
         def through_control() -> tuple[dict[str, Any], dict[str, Any]]:
             with Control(app.url) as handle:
                 return handle.projects(), handle.agent_entry()
@@ -657,8 +632,8 @@ async def test_a_named_client_is_listed_once_and_can_be_disconnected(
         )
         async with Client(transport) as client:
             answer = await client.call_tool("status", {})
-            # The MCP SDK opens a notification stream before the session exists,
-            # so a sighting is recorded too; it is a connection, not a client.
+            # The MCP SDK opens a notification stream before the session exists, so a
+            # sighting is recorded too; it is a connection, not a client.
             assert answer.data["mcp_clients"] == 1
 
             code, listing = await asyncio.to_thread(get, app.url, "/control/clients")
@@ -676,10 +651,8 @@ async def test_a_named_client_is_listed_once_and_can_be_disconnected(
             assert code == 200
             assert dropped["disconnected"]["attached"] is False
 
-            # The app stops counting it the moment it is dropped, which is what
-            # a reader watches. The gate test below is where the refusal itself
-            # is pinned, because the wording an MCP SDK reports for a dead
-            # session is the SDK's own and is not a contract here.
+            # The gate test below is where the refusal itself is pinned, because the wording an
+            # MCP SDK reports for a dead session is the SDK's own.
             code, listing = await asyncio.to_thread(get, app.url, "/control/clients")
             assert code == 200
             entry = next(
@@ -735,8 +708,6 @@ def test_a_port_outside_the_range_is_refused(project: Path) -> None:
 
 
 def test_the_registry_counts_a_client_and_not_its_connections() -> None:
-    """A sighting is not a session, and counting both reports one agent twice."""
-
     registry = ClientRegistry()
 
     class Request:
@@ -754,8 +725,8 @@ def test_the_registry_counts_a_client_and_not_its_connections() -> None:
     registry.observe(Request("s-1", "agent", 5000))
 
     report = registry.report()
-    # Two connections, one client: the sightings are folded onto the session by
-    # the name the client declared, and the row says how many streams it has.
+    # Two connections, one client: the sightings are folded onto the session by the
+    # name the client declared.
     assert len(report) == 1
     assert report[0]["attached"] is True
     assert report[0]["pending"] is False

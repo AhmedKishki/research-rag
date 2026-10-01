@@ -1,8 +1,6 @@
-"""`scripts/update.sh` is a delegation, not a second implementation.
+"""`scripts/update.sh` delegates every flag it keeps to `research-rag update`.
 
-The script keeps the flags it had so an existing habit still works, and every
-one of them now reaches `research-rag update`, which is the only place an update
-is implemented. The check runs offline, so this test never reaches a network.
+The check runs offline, so this test never reaches a network.
 """
 
 from __future__ import annotations
@@ -40,7 +38,6 @@ def test_check_offline_delegates_and_changes_nothing() -> None:
     assert report["command"] == "update"
     assert report["applied"] is False
     assert report["install"]["shape"] == "checkout"
-    # Offline is an answer rather than an error, and it changes nothing.
     assert report["remote"]["reachable"] is False
     assert "--offline" in report["remote"]["detail"]
     assert report["plan"]["would_run"] == []

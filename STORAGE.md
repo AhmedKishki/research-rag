@@ -16,7 +16,7 @@ my-research-project/
     ├── source-metadata.json              authoritative reviewed metadata overlay
     ├── source-exclusions.json            reviewed decisions, when present
     ├── chunk-exclusions.json             reviewed decisions about single passages, when present
-    ├── config.toml                    this project's settings layer
+    ├── config.toml                     this project's settings layer
     └── runtime/                       disposable derived state
         ├── current.json                  selected generation pointer
         ├── project.lock
@@ -37,21 +37,18 @@ my-research-project/
 ~/.cache/research-ultra-rag-mcp/models/  shared model binaries only
 ```
 
-- Two roots carry the name of the MCP server this app was seeded from rather than the app's own, and both are read by the products on either side of the migration.
+- Two roots carry the name of the MCP server this app was seeded from rather than the app's own, and both are read by this app and by the frozen product.
 - `~/.config/research-ultra-rag-mcp/config.toml` is the user settings file.
-- `~/.cache/research-ultra-rag-mcp/models/` holds the embedding and reranker binaries, about 150 MB in total.
-- `~/.cache/research-ultra-rag-mcp/models/` is the only cross-project shared state, and only because those binaries are immutable once downloaded.
+- `~/.cache/research-ultra-rag-mcp/models/` holds the embedding and reranker binaries, about 150 MB in total, and is the only cross-project shared state, because those binaries are immutable once downloaded.
 - `tests/test_data_roots.py` asserts both roots and states the reason each is retained.
 - Renaming either root is a migration rather than a refactor.
-- Everything else inside `.research-rag/` is byte-compatible with `research-ultra-rag-mcp`, which is frozen and still installed on the machines that carry it.
-- The app names no product inside its on-disk state, so both products read and write the same project.
-- The format is frozen while the frozen product is installed, because a field or schema version changed here is read by that product too.
+- Everything else inside `.research-rag/` is byte-compatible with `research-ultra-rag-mcp`, which is frozen and still installed on the machines that carry it, and the app names no product inside its on-disk state, so both products read and write the same project.
 
 ## Portable state
 
 - These six files are your decisions about the project.
-- These six files are the part worth backing up.
-- These six files are the part that survives a rebuild.
+  - They are the part worth backing up.
+  - They are the part that survives a rebuild.
 
 | File | What it holds | Keyed by |
 |---|---|---|
@@ -101,17 +98,16 @@ my-research-project/
 - A generation directory whose manifest is missing or unreadable is reported with `manifest_error` rather than failing the call.
 - Two commands move a generation, and both refuse the generation search reads.
 - `research-rag generations --use GENERATION_ID` points the project at a retained generation.
-- That `--use` validates the generation's artifacts and both indexes exactly as a build's activation does.
-- That `--use` rewrites `current.json` only after that validation succeeds, so a rollback that lands on a damaged generation fails instead of bricking every read surface.
-- That `--use` rebuilds no originals, so the corpus the pointer now describes is whatever that generation indexed.
+  - It validates the generation's artifacts and both indexes exactly as a build's activation does.
+  - It rewrites `current.json` only after that validation succeeds, so a rollback that lands on a damaged generation fails instead of bricking every read surface.
+  - It rebuilds no originals, so the corpus the pointer now describes is whatever that generation indexed.
 - `research-rag remove-generation GENERATION_ID --confirm GENERATION_ID` deletes one generation permanently.
-- The repeated id is the check, because a generation named by a listing and removed by a copy of that listing cannot be walked back.
-- That `remove-generation` refuses a generation a pending activation has named, because that activation is about to move it into place.
-- That `remove-generation` returns the space only through a rebuild, which costs one ingestion.
-- That `remove-generation` does not touch the original files.
+  - The repeated id is the check, because a generation named by a listing and removed by a copy of that listing cannot be walked back.
+  - It refuses a generation a pending activation has named, because that activation is about to move it into place.
+  - It returns the space only through a rebuild, which costs one ingestion.
+  - It does not touch the original files.
 - A running app can still hold a generation: the retrieval gateway keeps a live index against whichever generation it last loaded, and the exact dense backend memory-maps a generation's vector file for the process's lifetime.
-- Neither operation refuses a delete loudly: an unlinked mapping keeps reading the old bytes until its last reference drops, and a later open returns a missing-file error rather than a failure at the delete.
-- Both commands therefore take the project lock and refuse the current generation rather than merely warning about it.
+- Nothing refuses a delete loudly: an unlinked mapping keeps reading the old bytes until its last reference drops, and a later open returns a missing-file error rather than a failure at the delete. Both commands therefore take the project lock and refuse the current generation rather than merely warning about it.
 
 ### Generation layout
 
@@ -127,7 +123,7 @@ generations/<generation-id>/
 ```
 
 - `manifest.json` decides what a generation is.
-- `manifest.json` carries the schema version, the extraction policy, the chunking configuration, the retrieval-policy fingerprint, the model and revision that produced the vectors, the dense backend, and the file map.
+  - It carries the schema version, the extraction policy, the chunking configuration, the retrieval-policy fingerprint, the model and revision that produced the vectors, the dense backend, and the file map.
 - Two generations are interchangeable only when their manifests agree, and that is what makes reuse safe.
 - A generation whose policy fingerprint does not match the current settings is reported as requiring a new ingestion.
 - The directory names under `indexes/` vary by backend, and the manifest records which one a generation uses.
@@ -136,8 +132,8 @@ generations/<generation-id>/
 ### The artifact lookup
 
 - `artifact-lookup.sqlite3` holds identifiers, ordinals, content hashes, byte offsets into the canonical JSONL files, and one integer retrieval verdict per chunk.
-- `artifact-lookup.sqlite3` never stores passage text.
-- `artifact-lookup.sqlite3` is rebuilt from the canonical files when it is missing.
+  - It never stores passage text.
+  - It is rebuilt from the canonical files when it is missing.
 - The stored verdict is a bitmask over properties of the chunk alone — corrupt text, extraction artifact — and it mirrors the query-time check exactly.
 - `AGENTS.md` carries the rules that govern that verdict.
 
@@ -162,12 +158,12 @@ generations/<generation-id>/
 - Nothing in this app ever edits an original.
 - A `source_id` combines the project id with the normalized source-relative path, so replacing a file's bytes preserves it and renaming or moving the file changes it.
 - A `document_id` identifies one path-and-content version.
-- A `document_id` changes between generations and is never reported in an answer.
+  - It changes between generations and is never reported in an answer.
 - A `chunk_id` belongs to the generation that returned it and may change after a rebuild.
 - A source's locator is the position alone: a page, carrying `page_label` only where the printed label differs from the physical page, or a section for an EPUB.
 - Cleaned semantic text is what a search returns and what is indexed.
-- Cleaned semantic text is never a transcript, so `text` is not quotable.
-- `direct_quote_safe` is `false` on every passage the app builds.
+  - It is never a transcript, so `text` is not quotable.
+  - `direct_quote_safe` is `false` on every passage the app builds.
 - The untouched original at `source_relative_path` and `locator` is the quote authority.
 
 ## Review state
@@ -198,8 +194,7 @@ generations/<generation-id>/
 - `generation_metadata_snapshot_outdated` may become true after a hand edit, and it says only that the generation predates the review.
 - Omitting a field stops overriding it, so the extracted or automatic value returns.
 - An explicitly empty list or string clears the field it stands for.
-- An entry of `{}` clears every reviewed field for that source.
-- Deleting the whole entry clears every reviewed field for that source.
+- An entry of `{}`, or the whole entry deleted, clears every reviewed field for that source.
 - `research-rag metadata` and the workspace dialog rewrite only the named source's entry, so every other hand edit in the file survives.
 - An unknown field name is rejected with `Unsupported metadata fields: …`.
 - A wrong type, such as `"year": "2003"`, is rejected with that field's rule.
@@ -253,20 +248,18 @@ generations/<generation-id>/
 - An ingestion leaves the excluded passage in the indexes with the exclusion still over it.
 - `research-rag include --chunk CHUNK_ID` removes an entry, and deleting the entry by hand does the same.
 - A decision is never inferred from the corpus, because nothing is excluded for looking like something else.
-- `generation_id` makes an entry this generation cannot match identifiable by hand.
 - A `chunk_id` is derived from content, so unchanged text keeps it across a rebuild, and any other text changes it.
-- The identifier alone cannot tell those two cases apart.
+  - `generation_id` is what makes an entry this generation cannot match identifiable by hand.
+  - The identifier alone cannot tell those two cases apart.
 - `research-rag status` counts the entries recorded against another generation, and the workspace's chunk panel reports each entry as withheld or not.
 - An entry whose passage this generation does not hold is neither an error nor a stale corpus, because no ingestion brings a removed chunk back.
-- Remove such an entry when you no longer want it.
+  - Remove such an entry when you no longer want it.
 - An unknown field name is rejected with `Unsupported chunk exclusion fields: …`.
 - A missing or empty `reason`, `excluded_at`, or `generation_id` is rejected by name.
 - A `chunk_id` that is not a non-empty string is rejected.
 - Any `schema_version` other than 1 is rejected.
-- `research-ultra-rag-mcp` is frozen and still reads the projects this app serves.
-- That frozen product resolves `project.json`, `source-metadata.json`, `source-exclusions.json`, and `source-catalog.json` by name, so `chunk-exclusions.json` is invisible to it, and that is accepted.
-- While both products are installed, the frozen product still serves a passage excluded here.
-- Excluding a whole source is the decision both products honour, and `source-exclusions.json` is the file that decides it.
+- The frozen `research-ultra-rag-mcp` still reads the projects this app serves and resolves `project.json`, `source-metadata.json`, `source-exclusions.json`, and `source-catalog.json` by name, so `chunk-exclusions.json` is invisible to it, it keeps serving a passage excluded here, and that divergence is accepted.
+  - Excluding a whole source is the decision both products honour, and `source-exclusions.json` is the file that decides it.
 
 ### Filter layers
 
@@ -298,7 +291,7 @@ generations/<generation-id>/
 - Accents, superscripts, and subscripts are unchanged by that cleaning.
 - A chunk with at least one Unicode letter or digit is not symbol-only, and that holds for an alphanumeric formula or numeric content.
 - `dense_truncated_chunk_count` in an ingestion answer means some chunks run past the embedding model's token limit, so their dense vector covers a prefix while BM25 still matches the whole text.
-- Read a truncated passage by its locator.
+  - Read a truncated passage by its locator.
 - Layout wrapping is normalized before chunking, controls and soft hyphens are removed, and alphabetic line-end hyphen splits are joined.
 - Every other word and punctuation mark is preserved.
 
@@ -313,11 +306,8 @@ research-rag \
 ```
 
 - `RESEARCH_ULTRARAG_RUNTIME_ROOT` is the equivalent variable.
-- The path must be absolute.
 - The first run claims an empty directory by writing `.research-ultra-rag-runtime.json`, naming this project's `project_id`.
-- A root whose marker names a different project is refused.
-- A non-empty root with no marker is refused.
-- A path that is a file is refused.
+- A root is refused when it is not absolute, when its marker names a different project, when it is non-empty with no marker, or when it is a file.
 - Only derived state moves, and your portable review state stays in `<project>/.research-rag`.
 - `status.runtime_root` reports the effective location, and `null` when the default is in use.
 - Drop the option and relocate the directory to move back.
@@ -329,8 +319,7 @@ research-rag \
 - The register sits outside the project directory on purpose, because a register that travelled inside a project could not list the projects that had none.
 - The register holds no corpus, no index, no review, and no derived state.
 - A deleted project costs only its name in that file.
-- A deleted register costs only the names, and `research-rag init` restores them.
-- Deleting the file is always safe.
+- Deleting the register is always safe: a deleted register costs only the names, and `research-rag init` restores them.
 - A damaged register is reported rather than guessed at.
 - An entry that is not a pointer is skipped, so one unreadable project cannot hide the rest.
 

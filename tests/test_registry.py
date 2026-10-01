@@ -1,9 +1,4 @@
-"""The account's project record: one install, many projects.
-
-The record is a pointer file, so these tests are about the file: what a caller
-finds after `init`, what a selector resolves to, and what happens when the file
-is absent, damaged, or written twice.
-"""
+"""The account's project record is a pointer file, not a cache of a project's state."""
 
 from __future__ import annotations
 
@@ -47,7 +42,7 @@ def test_a_registered_project_is_found_by_name_and_by_id(account: Path) -> None:
     assert registry.resolve("Layout Thesis") == recorded
     assert registry.resolve("pid-one") == recorded
     assert registry.resolve("LAYOUT THESIS") == recorded
-    # A prefix is a guess, not a selector, so it resolves to nothing.
+    # A prefix is a guess, not a selector.
     assert registry.matches("layout") == []
 
 

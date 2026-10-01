@@ -1,9 +1,7 @@
-"""The command line: initialising a project, and routing to the service.
+"""No test here starts the vanilla gateway, and that is part of what is under test.
 
-These tests never start the vanilla gateway. That is part of what is under test:
-the routing tests hand `_operate` a recording stand-in, the laziness tests make
-the transport refuse to be built, and the tests that resolve a config touch only
-settings, files, the launcher, and local state.
+The routing tests hand `_operate` a recording stand-in and the laziness tests make the
+transport refuse to be built.
 """
 
 from __future__ import annotations
@@ -134,11 +132,9 @@ class RecordingService:
 
 
 class Operations:
-    """The two implementations `_run` chooses between, as one object.
-
-    The command line does not know or care whether an answer came from the app
-    over loopback or from a service it opened itself, so the double stands in for
-    the *interface*, not for either implementation.
+    """The command line does not know or care whether an answer came from the app over
+    loopback or from a service it opened itself, so the double stands in for the
+    interface, not for either implementation.
     """
 
     def __init__(self) -> None:
@@ -242,8 +238,8 @@ def test_init_records_the_project_so_the_install_can_name_it(
 
     report = _init(_args("--project-root", str(project), "init"))
 
-    # The project owns its state; the record points at it and sits beside the
-    # settings this account already has, so one install can name the project.
+    # The record sits beside the settings this account already has, so one install
+    # can name the project.
     assert report["registered"] == {
         "project_id": report["project_id"],
         "project_name": "thesis",
@@ -270,7 +266,6 @@ def test_a_command_can_name_a_registered_project_instead_of_its_path(
         _resolve(_args("--project", report["project_id"], "status")).project_root
         == project
     )
-    # The current directory is still what a call that names no project means.
     assert _resolve(_args("status")).project_root == Path.cwd()
     assert (
         _resolve(_args("--project-root", str(project), "status")).project_root
@@ -321,8 +316,7 @@ def test_the_projects_listing_names_every_registered_project(
         "layout-thesis",
         "thesis",
     ]
-    # Nothing was started to produce the listing: each project is only asked what
-    # is on disk, and an app that is not up is reported as not up.
+    # Nothing was started to produce the listing: each project is only asked what is on disk.
     for entry in listing.payload["projects"]:
         assert entry["root_exists"] is True
         assert entry["app"] == {
@@ -390,8 +384,8 @@ def test_init_is_idempotent_and_only_a_named_init_renames(tmp_path: Path) -> Non
     assert again["created"] == []
     assert again["project_name"] == "First"
     assert renamed["project_name"] == "Second"
-    # A name is a label, so changing it must not move the identity every
-    # generation is recorded against.
+    # A name is a label, so changing it must not move the identity a generation is
+    # recorded against.
     assert first["project_id"] == again["project_id"] == renamed["project_id"]
     assert _descriptor(project)["name"] == "Second"
 
@@ -416,8 +410,6 @@ def test_init_refuses_a_name_that_cannot_be_recorded(tmp_path: Path) -> None:
 def test_the_command_line_routes_each_command_to_its_service_operation() -> None:
     service = Operations()
 
-    # The terminal reads the same lean verdict an agent does, and asks for the
-    # complete payload explicitly.
     status = asyncio.run(_operate(_args("status"), service))
     assert status == {
         "ready": False,
@@ -532,11 +524,9 @@ def test_excluding_a_passage_names_the_chunk_it_decides_about() -> None:
 
 
 def test_a_decision_that_names_two_subjects_or_none_is_refused() -> None:
-    """Both refusals name the subject, because a silent choice is not the reader's.
-
-    A command that dropped one of the two would record a decision about a file
-    when the reader asked about a passage, or the other way round, and neither
-    reader would learn about it from the answer.
+    """A command that dropped one of the two subjects would record a decision about a file
+    when the reader asked about a passage, or the other way round, and neither reader
+    would learn it from the answer.
     """
 
     service = RecordingService()
@@ -667,13 +657,10 @@ def test_the_doctor_reports_without_opening_the_gateway(
     assert result.text is not None
     assert "project_identity" in result.text
     assert "vanilla_runtime" in result.text
-    # Nothing is indexed yet, so the project cannot serve a search.
     assert result.exit_code == 1
 
 
 def _fake_process(proc_root: Path, pid: int, arguments: list[str]) -> None:
-    """Write one process into a stand-in /proc tree."""
-
     directory = proc_root / str(pid)
     directory.mkdir(parents=True)
     (directory / "cmdline").write_bytes(("\0".join(arguments) + "\0").encode("utf-8"))
@@ -686,8 +673,8 @@ def test_the_stop_sweep_finds_only_processes_serving_this_project(
     proc_root = tmp_path / "proc"
     server = ["python", "-m", "research_rag", "--project-root", str(project)]
     _fake_process(proc_root, 10, server)
-    # Another project's server, a shell and an editor that name this path, and a
-    # process of ours with no project at all.
+    # Another project's server, a shell and an editor naming this path, and a process of
+    # ours with no project at all.
     _fake_process(proc_root, 11, [*server[:-1], str(tmp_path / "elsewhere")])
     _fake_process(proc_root, 12, ["/bin/bash", "-c", f"echo {project}"])
     _fake_process(proc_root, 13, ["vim", str(project)])
@@ -700,12 +687,9 @@ def test_the_stop_sweep_finds_only_processes_serving_this_project(
 
 
 def test_the_stop_sweep_reads_a_path_as_a_path_not_as_a_program(tmp_path: Path) -> None:
-    """`.research-rag` is in every project path, so a substring test lies.
-
-    A marker test that looks for the product name inside an argument reads a
-    project directory as though it were the program being run. The name has to be
-    a whole argument, or the sweep's second half, which keeps another project's
-    process out of it, is undone by its first.
+    """A marker test that looks for the product name inside an argument reads a project
+    directory as though it were the program being run, so the name has to be a whole
+    argument or the sweep's second half is undone by its first.
     """
 
     from research_rag.surfaces.cli import _invokes_this_app
@@ -727,12 +711,9 @@ def test_the_stop_sweep_reads_a_path_as_a_path_not_as_a_program(tmp_path: Path) 
 def test_the_stop_sweep_leaves_the_other_products_processes_alone(
     tmp_path: Path,
 ) -> None:
-    """Both products may serve one project while the migration runs.
-
-    The MCP server names this project root, and its gateway names a directory
-    under `.research-rag`. Neither is this app's process, so `stop --servers`
-    must leave both running: a sweep that ended them would stop a server a
-    reader started on purpose.
+    """The MCP server names this project root and its gateway names a directory under
+    `.research-rag`, so a sweep that ended them would stop a server a reader started on
+    purpose.
     """
 
     project = tmp_path / "ai-and-fetishism"
@@ -829,7 +810,6 @@ def test_stop_without_servers_only_stops_the_app(
     assert recorded[0][0].endswith(".research-rag/bin/open-research-rag-ui.sh")
     assert recorded[0][1:] == ["--stop"]
     assert report["ui_launcher_status"] == 0
-    # The launcher's message is captured, so stdout stays a single JSON report.
     assert report["ui_launcher_output"] == "No app is running for this project."
     assert "servers" not in report
 
@@ -884,8 +864,7 @@ def test_config_prints_what_a_change_to_every_key_costs(
 
     printed = capsys.readouterr().out
     assert "What a change to each key costs" in printed
-    # A key the registry labels `identity` but no generation reads costs nothing,
-    # and one the fingerprint records costs a rebuild.
+    # A key the registry labels `identity` but no generation reads costs nothing.
     assert "retrieval.rerank_max_candidates" in printed
     assert "retrieval.rrf_k" in printed
     assert "dense.embedding_model" in printed
@@ -901,16 +880,13 @@ def test_config_prints_the_description_of_every_key(
 
     asyncio.run(cli_module._run(args))
 
-    # Wrapped to the terminal's width, so the whitespace is what a reader's eye
-    # drops rather than what the sentence says.
+    # Wrapped to the terminal's width, so the whitespace is what a reader's eye drops.
     printed = " ".join(capsys.readouterr().out.split())
     for setting in SETTINGS:
         assert " ".join(setting.doc.split()) in printed
 
 
 def _launched(project: Path, monkeypatch: pytest.MonkeyPatch, returncode: int = 0):
-    """Generate the launcher, and record the commands the launcher is called with."""
-
     recorded: list[list[str]] = []
 
     def record(command: list[str], **_: Any) -> subprocess.CompletedProcess[str]:
@@ -996,7 +972,6 @@ def test_generations_lists_and_can_roll_back() -> None:
     assert listed["generations"] == [{"generation_id": "20260930T191235Z-45608dc5"}]
     assert listed["retained_generation_count"] == 1
     assert listed["current_generation_id"] == "20260930T191235Z-45608dc5"
-    # A listing must not move anything, so nothing reached the service.
     assert service.service.calls == []
 
     rolled = asyncio.run(

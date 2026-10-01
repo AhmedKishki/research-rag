@@ -1,5 +1,3 @@
-"""Source inventory, reviewed metadata, and reversible exclusions."""
-
 from __future__ import annotations
 
 import asyncio
@@ -116,8 +114,6 @@ class ReviewWorkflow:
         exclusions: dict[str, dict[str, str]] | None = None,
         metadata: dict[str, dict[str, Any]] | None = None,
     ) -> dict[str, dict[str, Any]]:
-        """Return live and selected-generation sources keyed by relative path."""
-
         catalog = self._sync_source_catalog(
             scan,
             current,

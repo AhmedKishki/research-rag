@@ -1,9 +1,9 @@
-"""The embedding models this server can drive, each pinned to a revision.
+"""The embedding models this server can drive.
 
 The embedding model decides what the dense half of retrieval can match, so it is
-a setting rather than a constant, and a checked one: every entry declares the
-languages it covers, and a corpus in a language the model was not trained for is
-reported instead of being silently mis-embedded.
+a checked setting: every entry declares the languages it covers, and a corpus in
+a language the model was not trained for is reported instead of being silently
+mis-embedded.
 
 FastEmbed resolves a name to whatever the hub serves that day, so each entry pins
 the revision its weights were resolved to, as the reranker table does. A model
@@ -24,7 +24,7 @@ from dataclasses import dataclass
 
 @dataclass(frozen=True, slots=True)
 class EmbeddingModel:
-    """One supported embedding model and the facts that must not drift."""
+    """One supported embedding model. Every field here is load-bearing."""
 
     name: str
     revision: str
@@ -133,8 +133,6 @@ EMBEDDING_MODEL_CHOICES = tuple(EMBEDDING_MODELS_BY_NAME)
 
 
 def resolve_embedding_model(name: str) -> EmbeddingModel:
-    """Return the pinned description of one supported embedding model."""
-
     try:
         return EMBEDDING_MODELS_BY_NAME[name]
     except KeyError:

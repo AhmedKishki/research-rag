@@ -350,7 +350,6 @@ def test_formula_letters_and_ligatures_fold_for_matching() -> None:
     assert text_corruption_reasons("𝑀𝑗𝑀𝑗𝑗𝑀") == []
     assert text_script_notes("𝑀𝑗𝑗𝑇𝑗𝑗") == []
 
-    # Alphabetic Presentation Forms are the fi/fl/ff ligatures.
     assert (
         normalize_reading_text("The ﬁnal ﬂow aﬀects it.")
         == "The final flow affects it."
@@ -527,7 +526,6 @@ def test_corrupt_epub_units_are_excluded_with_locator_diagnostics(
         "replacement_characters",
         "private_or_unassigned_characters",
     ]
-    # Script mixing is reported separately and is never an exclusion reason.
     assert text_script_notes(CORRUPT_TEXT) == [
         "non_latin_dominant",
         "mixed_script_text",
@@ -704,8 +702,7 @@ def test_pdf_front_matter_resolves_title_authors_year_and_doi(project: Path) -> 
         "categories": "missing",
         "keywords": "missing",
     }
-    # Every extraction records a language decision, including the decision that
-    # this fixture's text is too short to judge one.
+    # Including the decision that this fixture's text is too short to judge one.
     assert source["language"] in ([], ["en"])
     assert source["metadata_provenance"]["language"] in {
         "text_sample",
@@ -1115,7 +1112,6 @@ def test_relocated_runtime_root_is_claimed_then_reused(
     assert relocated.generations_root.is_dir()
     assert relocated.logs_root.is_dir()
     assert relocated.staging_root.is_dir()
-    # Portable review state stays in the project; only derived state moves.
     assert relocated.metadata_path.parent == project / ".research-rag"
     assert not (project / ".research-rag" / "runtime" / "generations").exists()
     marker_record = json.loads(marker.read_text(encoding="utf-8"))
@@ -1123,7 +1119,6 @@ def test_relocated_runtime_root_is_claimed_then_reused(
     assert marker_record["project_root"] == str(project.resolve())
     assert marker_record["schema_version"] == 1
 
-    # The same project reuses its root, including through an unresolved path.
     again = resolve_config(
         project,
         vanilla_executable=sys.executable,
@@ -1153,8 +1148,6 @@ def test_relocated_runtime_root_refuses_another_project_and_foreign_data(
             runtime_root=runtime_root,
         )
 
-    # A different project may not adopt the same root through the other case
-    # either, and the owning project keeps using it.
     with pytest.raises(ConfigurationError, match="belongs to another project"):
         resolve_config(
             other_project,
@@ -1224,8 +1217,7 @@ def test_embedding_threads_option_is_validated(project: Path) -> None:
         is None
     )
 
-    # 0 is how a file says "leave the thread count to the runtime", and a value
-    # that is not a number is refused by name.
+    # 0 is how a file says "leave the thread count to the runtime".
     assert (
         resolve_config(
             project,
@@ -1324,7 +1316,6 @@ def test_a_page_before_the_label_tree_still_gets_a_usable_locator(
         inside_the_tree = _pdf_locator(reopened[1], 2)
 
     assert before_the_tree == {"type": "pdf_page", "page": 1, "page_label": "1"}
-    # A real printed label is still what the locator reports.
     assert inside_the_tree == {"type": "pdf_page", "page": 2, "page_label": "1"}
 
 
@@ -1339,11 +1330,8 @@ def test_an_empty_page_label_falls_back_to_the_physical_page() -> None:
 
 
 def test_language_metadata_takes_iso_codes_and_refuses_other_values() -> None:
-    """A source may declare a language BM25 has no stopword list for."""
-
     assert normalize_metadata({"language": ["EN", "de"]}) == {"language": ["en", "de"]}
-    # Arabic is a true statement about a source even though BM25 cannot tokenize
-    # it. The corpus-level setting is where that limitation is refused.
+    # BM25 cannot tokenize Arabic; the corpus-level setting is where that is refused.
     assert normalize_metadata({"language": ["ar"]}) == {"language": ["ar"]}
     with pytest.raises(SourcePolicyError, match="ISO 639"):
         normalize_metadata({"language": ["english"]})
@@ -1386,5 +1374,4 @@ def test_language_detection_is_conservative() -> None:
     # A language outside the candidate set covers no list at all, even with enough
     # text to judge a language the lists do cover.
     assert extraction_module._detect_language(arabic) == ""
-    # Too little text to judge is not a guess either.
     assert extraction_module._detect_language("yes no maybe") == ""

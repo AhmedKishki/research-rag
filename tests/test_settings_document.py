@@ -1,5 +1,3 @@
-"""The project's own settings document: what a write lands in, and what it costs."""
-
 from __future__ import annotations
 
 import json
@@ -38,8 +36,6 @@ def anyio_backend() -> str:
 
 
 def _rows(answer: dict[str, Any]) -> dict[str, dict[str, Any]]:
-    """Every setting row of one settings answer, keyed by that setting's key."""
-
     return {
         row["key"]: row for section in answer["sections"] for row in section["settings"]
     }
@@ -50,10 +46,8 @@ def _config(project: Path, **kwargs: Any):
 
 
 def _service(project: Path, **kwargs: Any) -> ResearchService:
-    """The app's own service, with nothing that downloads a model.
-
-    A settings answer reads no corpus and opens no gateway, so the retrieval
-    stack stands in as two objects this test never calls.
+    """A settings answer reads no corpus and opens no gateway, so the retrieval stack
+    stands in as two objects this test never calls.
     """
 
     config = _config(project, **kwargs)
@@ -139,8 +133,6 @@ def test_a_write_keeps_every_key_it_did_not_change(project: Path) -> None:
 async def test_a_written_value_becomes_the_effective_value_of_this_app(
     project: Path,
 ) -> None:
-    """One implementation per operation means the read answers from the same write."""
-
     service = _service(project)
     before = await service.settings_read()
 
@@ -162,8 +154,6 @@ async def test_a_written_value_becomes_the_effective_value_of_this_app(
 
 
 async def test_the_settings_file_is_the_projects_own_layer(project: Path) -> None:
-    """A write lands in the project file, which is the layer the reader resolves."""
-
     service = _service(project)
     before = await service.settings_read()
 
@@ -182,8 +172,6 @@ async def test_the_settings_file_is_the_projects_own_layer(project: Path) -> Non
 async def test_an_unknown_key_is_refused_with_the_readers_own_message(
     project: Path,
 ) -> None:
-    """The refusal is the shared reader's text, not a second wording of it."""
-
     service = _service(project)
     before = await service.settings_read()
 
@@ -254,8 +242,6 @@ async def test_a_value_outside_the_declared_choices_is_refused(project: Path) ->
 async def test_a_symlinked_settings_file_is_refused_and_nothing_is_written(
     project: Path,
 ) -> None:
-    """The shared reader refuses a symlink, so the writer must refuse one too."""
-
     service = _service(project)
     before = await service.settings_read()
     elsewhere = project / "elsewhere.toml"
@@ -297,8 +283,6 @@ async def test_a_write_against_a_revision_the_reader_never_held_is_refused(
 async def test_a_write_is_refused_while_another_process_holds_the_project_lock(
     project: Path,
 ) -> None:
-    """The refusal names what holds the lock and the command that reports it."""
-
     service = _service(project)
     before = await service.settings_read()
     held = AsyncFileLock(service.config.state_root / "project.lock")
@@ -360,8 +344,6 @@ async def test_a_key_that_moves_nothing_a_generation_records_is_written_without_
 async def test_a_key_the_command_line_supplied_is_refused_a_project_write(
     project: Path,
 ) -> None:
-    """A project file sits below the command line, so it cannot change one value."""
-
     service = _service(project, settings_overrides=["retrieval.rrf_k=25"])
     before = await service.settings_read()
     rows = {
@@ -385,8 +367,6 @@ async def test_a_key_the_command_line_supplied_is_refused_a_project_write(
 async def test_every_key_carries_the_description_the_registry_declares(
     project: Path,
 ) -> None:
-    """The sentence is written once, and both readers receive that one."""
-
     answer = await _service(project).settings_read()
     rows = _rows(answer)
 
@@ -399,8 +379,6 @@ async def test_every_key_carries_the_description_the_registry_declares(
 async def test_a_bound_a_choice_or_a_variable_travels_only_where_one_is_declared(
     project: Path,
 ) -> None:
-    """A setting with no declared domain must not send an empty one."""
-
     answer = await _service(project).settings_read()
     rows = _rows(answer)
 
@@ -417,7 +395,6 @@ async def test_a_bound_a_choice_or_a_variable_travels_only_where_one_is_declared
         assert row.get("maximum", setting.maximum) == setting.maximum
         assert row.get("choices", list(setting.choices)) == list(setting.choices)
         assert row.get("env", setting.env) == setting.env
-    # A bounded integer, a fixed set of modes, and a key that declares no domain.
     assert rows["runtime.nice"]["minimum"] == 0
     assert rows["runtime.nice"]["maximum"] == 19
     assert rows["runtime.log_level"]["choices"] == list(LOG_LEVELS)
@@ -428,8 +405,6 @@ async def test_a_bound_a_choice_or_a_variable_travels_only_where_one_is_declared
 async def test_the_answer_adds_keys_the_workspace_ignores_and_removes_none(
     project: Path,
 ) -> None:
-    """The Config tab reads eight keys; every one of them has to stay."""
-
     answer = await _service(project).settings_read()
 
     assert json.loads(json.dumps(answer)) == answer
@@ -450,8 +425,7 @@ async def test_the_settings_answer_names_a_layer_and_a_cost_for_every_key(
     ]
     assert {row["key"] for row in rows} == {setting.key for setting in SETTINGS}
     for row in rows:
-        # The suite's own environment supplies the duplicate threshold, so that one
-        # key arrives read-only; every other key is the project's to write.
+        # The suite's own environment supplies the duplicate threshold.
         assert row["writable"] is (row["key"] != "retrieval.duplicate_cosine")
         assert row["origin"]
         assert row["cost"]["level"] in {"none", "regeneration", "model"}
@@ -462,8 +436,6 @@ async def test_the_settings_answer_names_a_layer_and_a_cost_for_every_key(
 async def test_the_read_answer_is_the_one_the_workspace_writes_through(
     project: Path,
 ) -> None:
-    """A read the browser may act on needs a revision to compare against."""
-
     service = _service(project)
 
     first = await service.settings_read()
@@ -487,8 +459,6 @@ async def test_a_key_that_moves_the_retrieval_policy_costs_a_regeneration(
 async def test_a_key_the_registry_calls_identity_but_no_generation_reads_costs_nothing(
     project: Path,
 ) -> None:
-    """The declared layer would demand a rebuild the code does not require."""
-
     service = _service(project)
     keys = (
         "retrieval.rerank_max_candidates",
@@ -526,8 +496,6 @@ async def test_a_key_that_changes_the_embedding_model_costs_a_model(
 async def test_a_key_that_changes_the_reranker_keeps_the_stored_vectors(
     project: Path,
 ) -> None:
-    """A new reranker loads on the next search, so no ingestion follows it."""
-
     service = _service(project)
 
     cost = setting_cost(

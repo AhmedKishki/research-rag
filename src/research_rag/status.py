@@ -1,5 +1,3 @@
-"""Readiness, staleness, upgrade reasons, and the generation inventory."""
-
 from __future__ import annotations
 
 import asyncio
@@ -87,9 +85,9 @@ def generation_upgrade_reasons(
 def uninitialised_status(project_name: str, reason: str) -> dict[str, Any]:
     """The status answer for a project this installation has not initialised.
 
-    An agent's client entry names a project and the machine it runs on decides
+    An agent's client entry names a project, and the machine it runs on decides
     which directory that name reaches. Where the machine holds no such project,
-    this is the whole answer, and it is the answer a blocked project already has:
+    this is the whole answer, and it is the shape a blocked project already has:
     `blocked_by` names the condition, the sentence that explains it, and the
     command that closes it, so an agent reads one shape whether or not the app
     came up.
@@ -179,7 +177,7 @@ class StatusWorkflow:
         self,
         current: tuple[Path, dict[str, Any]] | None = None,
     ) -> dict[str, Any]:
-        """Summarize the project, reusing a caller already-parsed pointer.
+        """Summarize the project from a caller already-parsed pointer.
 
         `search` already holds the selected generation and its manifest, and
         passes them in instead of making this read and parse them again.
@@ -311,12 +309,10 @@ class StatusWorkflow:
         metadata_pending_source_paths = sorted(set(metadata) - indexed_source_paths)
         excluded_document_ids = self._excluded_document_ids(manifest, exclusions)
         exclusion_records = self._exclusion_records(scan, exclusions, manifest)
-        # A chunk id is derived from content, so the same passage keeps it across
-        # a rebuild of unchanged bytes and anything else changes it. An entry
-        # recorded against another generation is therefore not yet a decision
-        # about this corpus, and it is counted here rather than folded into
-        # `stale`: an ingestion cannot restore a chunk it no longer holds, and
-        # `stale` names `ingest` as the call that closes the gap.
+        # A chunk id is derived from content, so an entry recorded against
+        # another generation is not yet a decision about this corpus. It is
+        # counted here rather than folded into `stale`, which names `ingest` as
+        # the call that closes the gap. `AGENTS.md` states the rule.
         absent_chunk_exclusions = sum(
             1
             for record in chunk_exclusions.values()
@@ -470,9 +466,9 @@ class StatusWorkflow:
                     payload.get("generation_id"),
                 )
             )
-            # The dependency report is built from the payload this method already
-            # produced, so the health answer and the status answer cannot come
-            # from two different states of the project.
+            # Built from the payload this method already produced, so the health
+            # answer and the status answer cannot come from two different states
+            # of the project.
             report = await asyncio.to_thread(health_report, self.config, payload)
             payload.update(report.as_status_fields())
             return payload

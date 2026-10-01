@@ -17,7 +17,6 @@ from research_rag.embeddings import (
     resolve_embedding_model,
 )
 
-# The default model's own dimension, resolved rather than hard-coded.
 EMBEDDING_DIMENSION = resolve_embedding_model(DEFAULT_EMBEDDING_MODEL).dimension
 
 
@@ -47,9 +46,8 @@ def test_embed_texts_uses_the_measured_inference_batch_size(tmp_path: Path) -> N
 
     vectors = backend.embed_texts(["alpha", "beta"])
 
-    # Sequences are padded to the longest member of their inference batch, so the
-    # batch size is a throughput decision rather than a memory setting, and it
-    # reaches the model loader from the settings.
+    # Sequences are padded to the longest member of their inference batch, so the batch
+    # size is a throughput decision, not a memory setting.
     assert recorded == [1]
     assert vectors.shape == (2, EMBEDDING_DIMENSION)
 
@@ -100,9 +98,8 @@ def test_embedding_threads_reach_the_model_loader(
 def test_embedding_token_audit_reports_a_missing_model_cache(
     tmp_path: Path,
 ) -> None:
-    # The audit must fail loudly rather than break ingestion, so a missing or
-    # offline model cache raises a dedicated error the service degrades from
-    # rather than an unrelated exception.
+    # The audit must fail loudly rather than break ingestion, so a missing or offline model
+    # cache raises a dedicated error the service degrades from.
     backend = LocalQdrantDenseBackend(tmp_path / "models", offline=True)
 
     with pytest.raises(DenseTokenAuditUnavailable):
@@ -198,6 +195,7 @@ def test_exact_backend_applies_document_filters_and_top_k(tmp_path: Path) -> Non
     assert [hit.chunk_id for hit in excluded] == ["c2", "c1", "c3"]
 
     # An empty filter list means "no filter", matching the Qdrant backend.
+    # An empty filter list means "no filter", matching the Qdrant backend.
     unfiltered = backend.search(index_path, "q", 4, document_ids=[])
     assert len(unfiltered) == 4
 
@@ -231,7 +229,6 @@ def test_exact_backend_rejects_inconsistent_or_misplaced_indexes(
     with pytest.raises(ValueError, match="vectors are missing"):
         backend.validate_index(index_path, expected_count=4, dimension=384)
 
-    # An exact index must live beside the generation it describes.
     with pytest.raises(ValueError, match="must live at"):
         backend.build_from_vectors(chunks, tmp_path / "elsewhere", vectors_path)
 
@@ -264,7 +261,6 @@ def test_local_qdrant_batches_resume_without_skips_or_duplicates(
         vectors[128:],
         offset=128,
     )
-    # Replaying a committed-but-not-checkpointed batch is an idempotent upsert.
     resumed_process.upload_index_batch(
         chunks[64:128],
         index_path,
@@ -308,8 +304,6 @@ def test_rerank_uses_the_configured_model_and_switches_only_on_request(
 
     assert backend.rerank("cobalt", ["alpha", "beta"]) == [5.0, 4.0]
     assert backend.rerank("cobalt", ["alpha"], model="BAAI/bge-reranker-base") == [5.0]
-    # Each model is loaded once and kept, so comparing rerankers over a judged
-    # set pays for each model once rather than once per query.
     assert backend.rerank("cobalt", ["alpha"]) == [5.0]
     assert loaded == ["jinaai/jina-reranker-v1-turbo-en", "BAAI/bge-reranker-base"]
 

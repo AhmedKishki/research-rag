@@ -1,9 +1,8 @@
-"""The documents must describe the software that is installed.
+"""A command that no longer exists, documented, is invisible to the suite and visible
+to the first reader who follows the manual.
 
-The failure this file prevents is specific: an install that works, documented so a
-reader follows a command that no longer exists, or a capability removed with its
-description still in the manual. Both are invisible to the test suite and visible
-to the first person who follows the documentation.
+The same holds for a capability removed with its description still in the manual, a
+project file left undocumented, and a document naming a path that has moved.
 """
 
 from __future__ import annotations
@@ -27,7 +26,7 @@ CLI_HELP = subprocess.run(
 
 
 def _installed_commands() -> set[str]:
-    """Every subcommand the one console command actually registers."""
+    """Every subcommand the one console command registers."""
 
     import argparse
 
@@ -47,9 +46,9 @@ def test_the_readme_documents_every_installed_command() -> None:
     for command in _installed_commands():
         assert command in README, f"{command!r} is installed but undocumented"
 
-    # The bare name `research-ultra-rag-mcp` stays in the manual, because it is
-    # the shared settings directory this app reads; what must not survive is any
-    # of the three console scripts the app no longer installs.
+    # The bare name `research-ultra-rag-mcp` stays in the manual: it is the shared
+    # settings directory this app reads. The three console scripts the app no longer
+    # installs must not survive.
     for retired in (
         "research-ultra-rag-mcp --",
         "research-ultra-rag-ui",
@@ -78,8 +77,7 @@ def test_the_product_is_described_as_a_server_with_three_front_ends() -> None:
     for front_end in ("start", "clients", "disconnect", "mcp", "ui"):
         assert front_end in README, front_end
     assert "mcp" in README.lower()
-    # A reader must be able to configure an agent, which is a capability a
-    # workspace-only product cannot document.
+    # Configuring an agent is a capability a workspace-only product cannot document.
     assert "stdio" in README
 
 
@@ -222,12 +220,11 @@ def test_no_document_names_a_surface_that_moved(document: str) -> None:
 
 
 def test_a_shipped_client_template_names_a_project_after_the_command() -> None:
-    """A copied template is the first entry a reader writes, so its order must work.
+    """The two client templates must put `--project-name` after the `mcp` subcommand.
 
-    `--project-name` belongs to the `mcp` subcommand, so an entry that puts it
-    first has the parser read the project name as the command: the server exits
-    before it can answer, and the client reports a closed connection with no
-    cause. Nothing else in the suite reads these two files.
+    An entry that puts it first has the parser read the project name as the command: the
+    server exits before it can answer, and the client reports a closed connection with no
+    cause.
     """
 
     import json
@@ -252,18 +249,16 @@ def test_a_shipped_client_template_names_a_project_after_the_command() -> None:
 
 
 def test_the_help_menu_accounts_for_every_command() -> None:
-    """Every installed command is in the menu, and in it exactly once.
+    """Every installed command is in the hand-written menu, and in it exactly once.
 
-    The menu is hand-written because argparse cannot group commands by the work
-    they do, and a hand-written list drifts as soon as a command is added. Adding
-    one is a two-line change: register it, and say here what it is for.
+    The menu is hand-written because argparse cannot group commands by the work they do,
+    and a hand-written list drifts as soon as a command is added.
     """
 
     from research_rag.surfaces.cli import HELP_GROUPS
 
     listed = [name for _, entries in HELP_GROUPS for name, _ in entries]
-    # `help` is reached by name and cannot list itself in a group it is the
-    # contents of, so it is the one registered command the menu exempts.
+    # `help` is reached by name and cannot list itself in a group it is the contents of.
     assert set(listed) | {"help"} == _installed_commands()
     assert len(listed) == len(set(listed)), "a command is in the menu twice"
 
@@ -293,6 +288,4 @@ def test_a_subject_page_names_a_command_and_the_help_menu_prints() -> None:
     for topic, page in HELP_TOPICS.items():
         assert topic in menu, f"the menu does not offer the {topic!r} page"
         assert page.strip().endswith("."), f"{topic}: a page is not a finished answer"
-    # The menu says the one thing a first call has to know, which the usage
-    # block above it cannot: the three surfaces share one process.
     assert "one app" in menu

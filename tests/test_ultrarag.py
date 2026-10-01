@@ -1,8 +1,5 @@
-"""A gateway that cannot start must answer with the reason, not the symptom.
-
-`Connection closed` is what a client sees when the vanilla gateway exits during
-its handshake. The reason is in the log the transport already writes, so these
-tests hold the transport down and read what a tool answer carries.
+"""`Connection closed` is what a client sees when the vanilla gateway exits during its
+handshake, and the reason is in the log the transport already writes.
 """
 
 from __future__ import annotations
@@ -68,7 +65,7 @@ def test_a_failed_start_names_the_reason_and_both_logs(config: ResearchConfig) -
     assert str(gateway_log) in message
     assert "RuntimeError: no runtime at /nowhere" in message
     assert "exit 3" in message
-    # The tail is carried, not the whole log: a caller reads the end.
+    # The tail is carried, not the whole log.
     assert "gateway line 0" not in message
     assert "gateway line 39" in message
     assert str(child_log) in message
@@ -146,12 +143,11 @@ def test_the_transport_writes_the_log_the_message_names(
 
 
 def test_the_handshake_is_bounded_by_its_own_timeout(config: ResearchConfig) -> None:
-    """A gateway that cannot start must be reported, not waited out.
+    """A gateway that exits mid-handshake leaves the client awaiting a response that never
+    arrives, so the handshake needs its own bound.
 
-    A gateway that exits mid-handshake leaves the client awaiting a response
-    that never arrives, so the handshake needs its own bound. Reusing the call
-    budget here made a failure the caller hears in seconds take the full 30
-    minutes, which is the test's own timeout.
+    Reusing the call budget here made a failure the caller hears in seconds take the full
+    30 minutes.
     """
 
     assert GATEWAY_INIT_TIMEOUT_SECONDS < TRANSPORT_TIMEOUT_SECONDS
@@ -178,8 +174,7 @@ def test_a_gateway_that_never_starts_is_reported_within_the_handshake_bound(
             )
         )
 
-    # A timeout the client raises itself is still the right answer. What is
-    # asserted is that the reason is named and arrives long before the call
+    # What is asserted is that the reason is named and arrives long before the call
     # budget the handshake no longer shares.
     assert "The UltraRAG gateway could not start" in str(raised.value)
     assert time.monotonic() - started < TRANSPORT_TIMEOUT_SECONDS

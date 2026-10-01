@@ -100,7 +100,7 @@ The browser workspace uses the independently versioned shared UI package at this
 pinned revision:
 
     ui-ultra-rag-mcp
-    commit 924a281
+    commit 1db180e
     https://github.com/AhmedKishki/ui-ultra-rag-mcp
 
 This app owns its adapter, its source authorization, and the process that hosts

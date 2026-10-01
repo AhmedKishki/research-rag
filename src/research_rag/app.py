@@ -55,8 +55,6 @@ TTY_FILE = "research-rag-ui.tty"
 
 
 def _own_tty() -> str | None:
-    """The terminal this process is attached to, or None when it has none."""
-
     try:
         return os.ttyname(0)
     except OSError:
@@ -191,8 +189,6 @@ class ClientRegistry:
         return existing
 
     def observe(self, request: Any) -> str | None:
-        """Record one request and return the session id it belongs to."""
-
         session_id = (request.headers.get("mcp-session-id") or "").strip()
         name = (request.headers.get(CLIENT_NAME_HEADER) or "").strip()
         peer = f"{request.client.host}:{request.client.port}" if request.client else "?"
@@ -470,8 +466,6 @@ class App:
         return self.service
 
     async def start(self) -> None:
-        """Claim the port and serve until stopped."""
-
         try:
             claim = _claim_loopback_port(self.host, self.port)
         except OSError as exc:
@@ -548,8 +542,6 @@ class App:
 
 @asynccontextmanager
 async def running(config: ResearchConfig, port: int) -> AsyncIterator[App]:
-    """Serve one project for the life of this block, then stop it."""
-
     app = App(config, port=port)
     await app.start()
     try:

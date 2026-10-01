@@ -8,13 +8,11 @@
 - Point `research-rag` at a directory of originals, and it builds a searchable generation from them.
 - Read every passage beside its source, its locator, and the metadata you reviewed.
 - `research-rag` returns cleaned semantic evidence and never writes an answer.
-- You conclude what the evidence supports.
 - The untouched original is the only authority for a quotation.
 
 ## What it does
 
 - **A browser workspace, an agent surface, and a command line** are three front ends to one process per project.
-  - The only question a reader has to ask is whether the app is up.
 - **Every search is hybrid and reranked.**
   - `MEASUREMENTS.md` carries the numbers, the weights, the gates, and the cost.
 - **Review decisions survive a rebuild.**
@@ -31,9 +29,6 @@
   - The workspace status view lists every attached agent and ends one on request.
   - `clients` and `disconnect` do the same from a terminal.
   - A client that cannot open a socket gets the same surface through `research-rag mcp`, which speaks stdio and proxies to the app.
-- **One client entry travels.**
-  - A stdio entry names a project, not a directory.
-  - The same file therefore serves that project on a laptop, a desktop, and a phone client, while the directory stays a fact of each machine.
 - **One install serves many projects.**
   - Each project is a directory with its own corpus, app process, and port.
   - `init` records each project, `projects` lists each one, and `--project <name>` names one in place of its path.
@@ -56,8 +51,7 @@ cd research-rag
 uv sync
 ```
 
-- The `uv tool install` command needs `git` on the `PATH`.
-- The `git clone` command needs `uv`.
+- The `uv tool install` command needs `git` on the `PATH`, and the `git clone` command needs `uv`.
 - The pinned UltraRAG runtime and two models download on first use, which needs a network.
 - `--offline` works once those files are cached.
 
@@ -72,22 +66,19 @@ research-rag install
 ```
 
 - A second run reports that the command is already installed and changes nothing.
-- `research-rag install --uninstall` removes that link.
-- `research-rag install --uninstall` refuses any path it cannot prove it wrote, so a script someone else placed there is left alone.
+- `research-rag install --uninstall` removes that link, and refuses any path it cannot prove it wrote, so a script someone else placed there is left alone.
 - One desktop menu entry per project starts that project's workspace and opens a browser:
 
 ```bash
 research-rag --project-root /path/to/project install --desktop
 ```
 
-- The entry runs `<project>/open-research-rag-ui.sh --open`.
-- That launcher claims the port, records the pid, and stops the whole process group on `--stop`.
+- The entry runs `<project>/open-research-rag-ui.sh --open`, and `--stop` ends the whole process group.
 - `research-rag install --desktop --uninstall` removes the entry.
-- `doctor` reports a menu entry whose project has been deleted, because that entry opens nothing.
+- `doctor` reports a menu entry whose project has been deleted.
 - An entry this app did not write is reported and left alone unless you pass `--force`.
-- Both files are written under the account's own directories: `~/.local/bin`, `~/.local/share/applications`, and `~/.local/share/icons/hicolor/scalable/apps/`.
-- Nothing is written outside the account's directories.
-- No project's own state is touched.
+- Every file is written under the account's own directories: `~/.local/bin`, `~/.local/share/applications`, and `~/.local/share/icons/hicolor/scalable/apps/`.
+- Nothing else is written, and no project's own state is touched.
 
 ## First use
 
@@ -98,40 +89,31 @@ research-rag --project-root /path/to/project ingest
 research-rag --project-root /path/to/project ui
 ```
 
-- `init` records the project identity and writes the workspace launcher under `.research-rag/bin/`.
-- `init` links that launcher into the project root as `open-research-rag-ui.sh`.
-- `init` never overwrites a file it did not create.
-- `status.ui_launcher` reports what `init` found.
+- `init` records the project identity, writes the workspace launcher under `.research-rag/bin/`, and links it into the project root as `open-research-rag-ui.sh`.
+  - It never overwrites a file it did not create, and `status.ui_launcher` reports what it found.
 - `ingest` extracts every included PDF and EPUB, chunks the text, embeds it, and builds a BM25 index and a dense index.
-- The current generation stays active throughout an `ingest`.
 - A second `ingest` call resumes a build that ran out of its time budget.
-- Sources must be regular `.pdf` and `.epub` files in `sources/`.
-- Markdown, symlinks, and anything outside `sources/` are ignored.
-- Nothing in the app edits an original.
+- Ingestion takes only regular `.pdf` and `.epub` files in `sources/`; markdown, symlinks, and anything outside it are ignored.
 
 ## Read the answer, then open the original
 
-- A search answers with its passages and the `generation_id` they came from.
-- A search carries a field only when it has news.
-- `stale` means the corpus moved on.
-- `rerank_fallback` means the reranker did not run.
-- `generation_upgrade_required` means this generation cannot serve the request.
-- An absent field is the ordinary case.
-- **`text`** is cleaned semantic text for comprehension and paraphrase.
-- **`text`** is never a transcript.
-- **`source_relative_path`** and **`locator`** say where to open the original.
-- The locator is the position alone: a page, or a section for an EPUB.
-- A page carries `page_label` only where the printed label differs from the physical page.
-- **`citation`** is the reference to attach to a claim.
-- **`direct_quote_safe`** is `false` on every passage the app builds.
-- Open the original at the locator and quote from it when you need exact wording.
-- **`direct_quote_safe`** is the machine-readable form of that rule.
-- Every search is hybrid and reranked because that mode beats every other measured mode on the judged set.
-- A query carrying no topic word abstains rather than matching on a function word.
-- A thin answer is a reason to ask again, not a conclusion.
-- The reranker reorders about twice the number of passages you ask for, so a larger `top_k` deepens the ranking as well as the answer.
-- `research-rag search` carries `--method` and `--no-rerank` only to reproduce a row of `MEASUREMENTS.md`.
-- No reader-facing surface offers the choice.
+- What a search answers with:
+  - Its passages and the `generation_id` they came from.
+  - A field only when it has news, and an absent field is the ordinary case:
+    - `stale`: the corpus moved on.
+    - `rerank_fallback`: the reranker did not run.
+    - `generation_upgrade_required`: this generation cannot serve the request.
+- What each passage carries:
+  - **`text`** is cleaned semantic text for comprehension and paraphrase, never a transcript.
+  - **`source_relative_path`** and **`locator`** say where to open the original.
+  - The locator is the position alone: a page, or a section for an EPUB, carrying `page_label` only where the printed label differs from the physical page.
+  - **`citation`** is the reference to attach to a claim.
+  - **`direct_quote_safe`** is `false` on every passage the app builds, which is the machine-readable form of the rule that a quotation is taken from the original.
+  - Open the original at the locator and quote from it when you need exact wording.
+- What every search does:
+  - A query carrying no topic word abstains rather than matching on a function word.
+  - A thin answer is a reason to ask again, not a conclusion.
+- `research-rag search` carries `--method` and `--no-rerank` only to reproduce a row of `MEASUREMENTS.md`, and no reader-facing surface offers the choice.
 
 ## Narrow what a search reads
 
@@ -145,43 +127,41 @@ research-rag --project-root /path/to/project search "commodity fetishism" \\
   --top-k 15
 ```
 
-- Categories, projects, languages, authors, and titles match any of their values.
-- Keywords match all of their values.
-- Authors and titles match as case-insensitive substrings, because a name is a phrase rather than a controlled tag.
-- A filter drops passages after the corpus is ranked, so the answer reports how much of the corpus the ranking reached: `filters.window_chunk_count` of `filters.corpus_chunk_count`, with `filters.window_is_whole_corpus` saying whether the ranking saw all of it.
-- An empty result with a filter applied therefore means nothing the window reached matches that filter, not that no source carries it, and a filter naming one source can find nothing when that source ranks below the window.
-- A filtered-out answer is not a broken index.
-- `sources` is the inventory of the corpus.
-- `passage CHUNK_ID --context-chunks 2` reads around a hit.
-- `metadata`, `exclude`, and `include` record a decision.
-- A metadata edit rewrites only that source's entry, so a hand edit to another entry in the same file survives.
-- `exclude --chunk CHUNK_ID` excludes one passage on its own.
-- A passage exclusion is applied when the answer is assembled rather than when the index is built, so the decision is enforced on the next search without a rebuild.
-- Every search re-compares the source directory with the generation and reports `stale` with what changed: sources added, sources modified, sources gone, and whether reviews or exclusions moved.
-- A reviewed metadata change is not staleness, because it is already effective.
-- The complete payload reports `metadata_overlay_active`.
-- Corrupt extraction units are omitted whole rather than indexed as garbage, and the count is reported.
-- Script mixing never withholds a passage, because a foreign-language quotation inside an English source is evidence and its locator says where it is.
+- How each layer matches:
+  - Categories, projects, languages, authors, and titles match any of their values.
+  - Keywords match all of their values.
+  - Authors and titles match as case-insensitive substrings, because a name is a phrase rather than a controlled tag.
+- What a filter costs:
+  - A filter drops passages after the corpus is ranked, so the answer reports how much of the corpus the ranking reached: `filters.window_chunk_count` of `filters.corpus_chunk_count`, with `filters.window_is_whole_corpus` saying whether the ranking saw all of it.
+  - An empty result with a filter applied means nothing the window reached matches that filter, not that no source carries it, and a filter naming one source can find nothing when that source ranks below the window.
+  - A filtered-out answer is not a broken index.
+- The other decisions a search reads:
+  - `sources` is the inventory of the corpus.
+  - `passage CHUNK_ID --context-chunks 2` reads around a hit.
+  - `metadata`, `exclude`, and `include` record a decision, and a metadata edit rewrites only that source's entry.
+  - `exclude --chunk CHUNK_ID` excludes one passage on its own, and the exclusion is applied when the answer is assembled rather than when the index is built, so the decision holds on the next search without a rebuild.
+  - Every search re-compares the source directory with the generation and reports `stale` with what changed: sources added, sources modified, sources gone, and whether reviews or exclusions moved.
+  - A reviewed metadata change is not staleness.
+  - The complete payload reports `metadata_overlay_active`.
+  - Corrupt extraction units are omitted whole rather than indexed as garbage, and the count is reported.
+  - Script mixing never withholds a passage.
 
 ## Settings
 
 - `research-rag config` prints every effective value, the layer it came from, what each key does, and what a change to each one costs.
 - The workspace writes those values into `.research-rag/config.toml` after naming which keys force a rebuild.
-- The workspace preserves every key it did not change, so a hand edit in that file survives.
-- A value the environment, the command line, or `--config PATH` supplied is shown read-only, because those layers outrank the project file.
+  - It preserves every key it did not change, so a hand edit in that file survives.
+- A value the environment, the command line, or `--config PATH` supplied is shown read-only.
 - Edit `.research-rag/config.toml` by hand to change a value outside the browser.
 - Pass `--set key=value` to override a value for a single command.
 - Pass `--config PATH` to add a layer.
 - `research-rag help settings` names the layers, the description, and the cost.
-- A corpus in a language the embedding model does not cover is reported rather than silently embedded.
 - `research-rag help filters` names the filter layers.
-- The example above shows the filter layers in use.
+- A corpus in a language the embedding model does not cover is reported rather than silently embedded.
 
 ## Move between machines
 
-- A project is self-contained: copy `sources/` and `.research-rag/`.
-- `runtime/` is disposable and rebuilds on the next ingestion.
-- Two processes pointed at one project root are refused by the project lock rather than silently interleaved.
+- A project is self-contained: copy `sources/` and `.research-rag/`, and `runtime/` rebuilds on the next ingestion.
 - `STORAGE.md` carries the full layout, including `--runtime-root` for a project on slow storage.
 
 ## Connect an agent
@@ -192,7 +172,7 @@ research-rag --project-root /path/to/project search "commodity fetishism" \\
 - `mcp` refuses `--project-root` and `--project`, `RESEARCH_ULTRARAG_PROJECT_ROOT` included.
 - The `mcp` command comes before its own options, which is the only order the parser accepts: an option in front is read as the command name, and the server closes the connection instead of answering.
 - On a machine holding no project under that name, the connection is made and `status` reports that the project is not initialised, with the `init` command that creates it.
-- Running that `init` command serves the project with no edit to the entry.
+  - Running that `init` command serves the project with no edit to the entry.
 - `RESEARCH_ULTRARAG_CLIENT_NAME` names the agent, so the app's client list can tell two agents apart.
 - `RESEARCH_ULTRARAG_PROJECT_NAME` names the project for a client that can pass an environment but no argument.
 - The port is chosen at start and recorded, so a hard-coded URL goes stale when the port moves.
@@ -204,11 +184,12 @@ research-rag --project-root /path/to/project doctor --check-entry ~/my-client.js
 ```
 
 - Two ready-to-copy templates sit in this repository: `mcp_settings.example.json` for a client using an `mcpServers` object, and `kilo-mcp.example.jsonc` for one using a Kilo-style `mcp` object.
-- Replacing the executable path and the project name in either template completes the entry.
-- An agent gets eight tools and one resource, and every answer is the lean projection: one question, no inventory, and no scores.
-- `status` is a verdict naming the call that closes a gap.
-- `find_source` looks up one work by filename, title, or author.
-- The full payload is `status --verbose` and the workspace.
+  - Replacing the executable path and the project name in either template completes the entry.
+- What the agent surface answers:
+  - An agent gets eight tools and one resource, and every answer is the lean projection: one question, no inventory, and no scores.
+  - `status` is a verdict naming the call that closes a gap.
+  - `find_source` looks up one work by filename, title, or author.
+  - The full payload is `status --verbose` and the workspace.
 
 ## The command line
 
@@ -243,8 +224,7 @@ research-rag --project-root /path/to/project doctor --check-entry ~/my-client.js
 
 - Every command takes `--project <name-or-id>` in place of `--project-root <path>`, so one shell can work on several projects.
 - `--project` and `--project-root` together are refused rather than resolved by precedence.
-- `status` is the one a person reads most, so it prints the lean verdict and takes `--verbose` for the whole payload.
-- Every other command prints the whole payload.
+- Every command other than `status` prints the whole payload.
 
 ## Diagnose an installation
 
@@ -282,7 +262,6 @@ research-rag update
 - `--apply` does not start those apps for you.
 - `--apply` prints the command that returns a detached checkout to its branch.
 - `research-rag --version` prints this app's version, the version installed in the environment now, the shared workspace's version, and whether a restart is required.
-- `update` reports the same four numbers from the same functions.
 - `scripts/update.sh` is a wrapper around `research-rag update`: `--check` reports only, `--offline` does not touch the network, and a project path is accepted.
 
 ## Use the workspace
@@ -300,12 +279,11 @@ AI and fetishism — workspace attached to /dev/pts/5
   Ctrl-C stops the app and the gateway it started.
 ```
 
-- Ctrl-C in that terminal stops the app and the gateway it opened.
 - Closing the window ends the app the same way, because a closed terminal sends the signal Ctrl-C would.
 - Nothing survives that terminal.
 - An installation holding more than one project is asked which one in the terminal.
 - A terminal that cannot answer, a script or a pipe, is given the list of projects and the command to run instead of a prompt nobody will read.
-- An app already up for that project is reported and left alone, because two apps on one project would each hold the lock and open a gateway.
+- An app already up for that project is reported and left alone.
 - The app records the same state whichever way it was started, so another terminal can find and stop it.
 - `research-rag projects` says whether each project's app is up and which terminal it is attached to.
 - An attached app stops with its terminal, and a detached one does not.
@@ -318,14 +296,11 @@ research-rag --project-root /path/to/project ui --stop     # stop it and what it
 ```
 
 - The launcher claims the first free loopback port at or above the one it was generated with and records the port it chose, so two projects never serve from the same port.
-- `research-rag serve` is the same workspace in the foreground on a fixed port.
-- The launcher runs `research-rag serve`.
+- The launcher runs `research-rag serve`, the workspace in the foreground on a fixed port.
 - The workspace binds loopback only and has no authentication, which is correct for an address no other machine can reach.
-- The workspace has no retrieval mode, no reranking switch, and no chunk tuning, because every search is hybrid and reranked.
 - The workspace offers metadata, source selection, category partitions, project metadata, and this project's settings, each with the description the registry declares for it.
 - The workspace has a tab per job: **Search**, **Sources**, **Config**, and **MCP**.
 - The generations, partitions, languages, and SQL console panels sit under the search view.
-- One installation serves several projects.
 - The header names the project the page is serving and offers the others.
 - A project whose app is up opens in a new tab.
 - A project whose app is down shows the command that starts it rather than a link that would fail.
@@ -340,8 +315,7 @@ research-rag --project-root /path/to/project ui --stop     # stop it and what it
   - `update` reads the remote's release tags, so the number it compares is the version a release carries rather than the branch head's latest commit.
   - A checkout ahead of the latest release reports unreleased work and changes nothing.
 - **The first build is slow.**
-  - The first build downloads the pinned runtime and two models, then extracts and embeds every source.
-  - `status.ingestion_progress` reports progress, and a cancelled build resumes where it stopped.
+  - It then extracts and embeds every source, `status.ingestion_progress` reports the progress, and a cancelled build resumes where it stopped.
 - **`--offline` fails if anything is uncached.**
   - Run `doctor --prefetch-models` first.
 - **A build reports "one build at a time".**
@@ -359,8 +333,7 @@ research-rag --project-root /path/to/project ui --stop     # stop it and what it
   - `doctor` names the file.
   - `doctor --repair-runtime` moves the old tree aside and installs the pinned one.
 - **A workspace settings save rewrites the whole file.**
-  - Comments in `.research-rag/config.toml` are not preserved, and keys are.
-  - A save merges into what is there and changes only the keys you saved.
+  - Comments in `.research-rag/config.toml` are not preserved; the keys you did not save are.
 
 ## UltraRAG credit and licensing
 
@@ -369,8 +342,7 @@ research-rag --project-root /path/to/project ui --stop     # stop it and what it
 - This app adds PDF/EPUB extraction, project-scoped immutable generations, reviewed metadata, hybrid retrieval, and a browser workspace.
 - UltraRAG's upstream README identifies it as a joint project of THUNLP at Tsinghua University, NEUIR at Northeastern University, OpenBMB, and AI9stars, together with the wider UltraRAG contributor community.
 - `NOTICE` records the upstream project, the pinned revisions, the models, and their licences.
-- This repository is an independent project.
-- This repository is not an official UltraRAG release.
+- This repository is an independent project, not an official UltraRAG release.
 - This repository is not affiliated with or endorsed by OpenBMB, THUNLP, NEUIR, AI9stars, or the UltraRAG contributors.
 - The UltraRAG name identifies the upstream software this app depends on and nothing else.
 - The code in this repository is licensed under the Apache License, Version 2.0, and `LICENSE` carries that text.

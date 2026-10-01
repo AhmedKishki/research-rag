@@ -1,9 +1,7 @@
-"""The doctor command: one line per dependency, and no repair without a flag.
+"""A default `doctor` run must read the installation without changing it, name the
+condition it found, and name the command that fixes it.
 
-The default run is the behaviour that matters most: it must read the installation
-without changing it, name the condition it found, and name the command that fixes
-it. The two operations that reach the network are tested against stand-ins, so
-these tests never download anything.
+The two operations that reach the network are tested against stand-ins.
 """
 
 from __future__ import annotations
@@ -94,8 +92,8 @@ def test_the_default_run_reports_every_check_and_changes_nothing(
     assert sorted(path.name for path in config.state_root.rglob("*")) == before
     for name in ("project_identity", "runtime_root", "vanilla_runtime", "lock"):
         assert any(name in line for line in result.lines)
-    # Nothing is installed and nothing blocks: an online project downloads what
-    # it needs on first use, which is a warning, not a broken installation.
+    # Nothing is installed and nothing blocks: an online project downloads what it needs
+    # on first use, which is a warning, not a broken installation.
     assert result.exit_code == 0
     assert any(line.startswith("warn") for line in result.lines)
 
@@ -164,7 +162,6 @@ def test_processes_are_reported_with_the_stop_command(config: ResearchConfig) ->
     text = result.text()
     assert "4321" in text
     assert "stop --servers" in text
-    # The doctor is not one of them, so it does not report itself.
     doctor_pid = run_doctor(
         config,
         dict(READY_STATUS),
@@ -228,7 +225,7 @@ def test_repair_moves_a_mismatched_tree_aside_and_installs(
     preserved = next(line for line in lines if "preserved" in line)
     assert "quarantine" in preserved
     assert "deadbeef" in preserved
-    # The evidence stays on disk, and the new tree is beside it, not in its place.
+    # The evidence stays on disk, and the new tree is beside it.
     assert Path(preserved.split()[-1].rstrip(".")).is_dir()
     assert (root / "servers" / "stray.pyc").exists() is False
 
@@ -304,9 +301,8 @@ def test_the_two_entries_reach_the_app_two_ways(config: ResearchConfig) -> None:
 
     assert url["url"].startswith("http://127.0.0.1:")
     assert url["url"].endswith("/mcp")
-    # The stdio entry names the bridge explicitly: `research-rag ui` runs the same
-    # executable and is not an agent entry, and the command comes before its own
-    # options because that is the only order the parser accepts.
+    # `research-rag ui` runs the same executable and is not an agent entry, so the
+    # stdio entry names `mcp` explicitly.
     assert command[1] == "mcp"
     assert Path(command[0]).name == "research-rag"
     assert stdio_entry["mcp"]["research-rag"]["timeout"] == 3_600_000
@@ -327,11 +323,9 @@ def test_the_stdio_entry_names_a_project_and_not_a_directory(
 def test_the_stdio_entry_puts_the_command_before_its_own_options(
     config: ResearchConfig,
 ) -> None:
-    """The parser only accepts them after it, and the wrong order closes the session.
-
-    An entry reading `research-rag --project-name NAME mcp` makes the parser take
-    `NAME` as the command, so the server exits before it can answer and the client
-    reports a closed connection with no cause.
+    """An entry reading `research-rag --project-name NAME mcp` makes the parser take `NAME`
+    as the command, so the server exits before it can answer and the client reports a
+    closed connection with no cause.
     """
 
     command = json.loads(mcp_entry_block(config))["mcp"]["research-rag"]["command"]
@@ -407,11 +401,8 @@ def test_a_correct_url_entry_passes(tmp_path: Path, config: ResearchConfig) -> N
 def test_another_servers_url_entry_is_left_alone(
     tmp_path: Path, config: ResearchConfig
 ) -> None:
-    """A client file holds every server its owner uses, and this is one of ours.
-
-    A remote entry belongs to another product, and reporting it as this app's
-    would name a fault it cannot have: the app serves loopback only, so a remote
-    URL was never an entry for it.
+    """A remote entry belongs to another product, and the app serves loopback only, so
+    reporting it as this app's would name a fault it cannot have.
     """
 
     path = _entry_file(

@@ -1,5 +1,3 @@
-"""PDF/EPUB source policy, discovery, hashing, and metadata validation."""
-
 from __future__ import annotations
 
 import hashlib
@@ -28,7 +26,7 @@ METADATA_FIELDS = frozenset(
 
 
 class SourcePolicyError(ValueError):
-    """Raised when a source violates the project research policy."""
+    pass
 
 
 @dataclass(frozen=True, slots=True)
@@ -49,8 +47,6 @@ class SourceScan:
 
 
 def stable_source_id(project_id: str, source_relative_path: str) -> str:
-    """Return a project-scoped identity that survives source-content changes."""
-
     relative = PurePosixPath(source_relative_path)
     if (
         not project_id
@@ -140,11 +136,10 @@ def _string_list(value: Any, field: str) -> list[str]:
 def _language_list(value: Any, field: str) -> list[str]:
     """Normalize a source's languages to lowercase ISO 639 codes.
 
-    A source carries none, one, or several languages. Metadata records what the
-    source is written in, which is not the same question as whether BM25 can
-    tokenize it. A code BM25 has no stopword list for is accepted here and
-    surfaced as a corpus-level warning, because refusing it would force the
-    metadata to misdescribe a source that is in that language.
+    Metadata records what a source is written in, which is not the same question
+    as whether BM25 can tokenize it. A code BM25 has no stopword list for is
+    accepted here and surfaced as a corpus-level warning, because refusing it
+    would force the metadata to misdescribe a source that is in that language.
     """
 
     languages: list[str] = []

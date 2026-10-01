@@ -51,8 +51,6 @@ def _meaningful(value: Any) -> bool:
 
 
 def _add(target: dict[str, Any], key: str, value: Any) -> None:
-    """Set a key unless its value is empty, null, false, or zero."""
-
     if _meaningful(value):
         target[key] = value
 
@@ -141,8 +139,6 @@ def lean_search(payload: Mapping[str, Any]) -> dict[str, Any]:
 
 
 def lean_passage_context(payload: Mapping[str, Any]) -> dict[str, Any]:
-    """Return the requested passage's neighbours, and the generation they are in."""
-
     result: dict[str, Any] = {}
     _add(result, "generation_id", payload.get("generation_id"))
     result["context"] = [lean_passage(item) for item in payload.get("context") or []]
@@ -349,8 +345,6 @@ def _lean_inclusion_decision(
 
 
 def lean_source_inclusion(payload: Mapping[str, Any]) -> dict[str, Any]:
-    """Return the inclusion decision, its reason, and whether it applies now."""
-
     return _lean_inclusion_decision(
         payload, identity=("source_id", "source_relative_path")
     )
@@ -371,8 +365,6 @@ def lean_chunk_inclusion(payload: Mapping[str, Any]) -> dict[str, Any]:
 
 
 def lean_source_metadata(payload: Mapping[str, Any]) -> dict[str, Any]:
-    """Return what was saved for one source and whether it applies now."""
-
     result: dict[str, Any] = {}
     for key in ("status", "source_id", "source_relative_path"):
         _add(result, key, payload.get(key))

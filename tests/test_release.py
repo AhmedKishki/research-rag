@@ -1,9 +1,8 @@
-"""Releases: what a remote publishes, and whether this checkout declares one.
+"""Nothing here reaches a network.
 
-Nothing here reaches a network. The tests that need real tags build a temporary
-repository and a local bare remote, so a release is read through the same `git`
-calls the command makes and a local path stands in for the network. The rest
-hand the parser the listing `git ls-remote --tags` would print.
+The tests that need real tags build a temporary repository and a local bare remote, so a
+release is read through the same `git` calls the command makes. The rest hand the parser
+the listing `git ls-remote --tags` would print.
 """
 
 from __future__ import annotations
@@ -33,8 +32,6 @@ COMMIT_C = "c" * 40
 
 
 def _git(root: Path, *arguments: str) -> str:
-    """Run one git command in a temporary repository and return what it printed."""
-
     completed = subprocess.run(
         ["git", "-C", str(root), *arguments],
         capture_output=True,
@@ -60,8 +57,6 @@ def _bare_remote(root: Path) -> Path:
 
 
 def _checkout(root: Path, remote: Path) -> Path:
-    """A working repository whose remote is a local bare directory."""
-
     work = root / "work"
     work.mkdir()
     _git(work, "init", "--initial-branch=main")
@@ -82,8 +77,6 @@ def _commit(work: Path, message: str, *, version: str | None = None) -> str:
 
 
 def _published(root: Path, *versions: str) -> tuple[Path, dict[str, str]]:
-    """A repository whose remote publishes one release tag per version given."""
-
     work = _checkout(root, _bare_remote(root))
     commits: dict[str, str] = {}
     for version in versions:
@@ -151,8 +144,6 @@ def test_two_tags_claiming_one_version_are_refused_rather_than_guessed() -> None
 
 
 def test_a_latest_dist_tag_decides_which_release_is_current() -> None:
-    """A remote that names its current release has said so, and is believed."""
-
     found = releases_from_tags(
         [
             _tag("v0.1.0", COMMIT_A),
@@ -201,8 +192,6 @@ def test_an_annotated_tag_is_read_at_the_commit_it_names() -> None:
 
 
 def test_a_release_is_read_from_a_remote_without_a_token(tmp_path: Path) -> None:
-    """The whole probe, against a repository that really carries the tags."""
-
     root = tmp_path / "repository"
     root.mkdir()
     work, commits = _published(root, "0.1.0", "0.2.0")
@@ -300,8 +289,6 @@ def test_a_tag_naming_the_declared_version_at_this_commit_is_consistent(
 def test_an_untagged_repository_is_consistent_with_its_declared_version(
     tmp_path: Path,
 ) -> None:
-    """A version nobody has released yet is not an inconsistency."""
-
     root = tmp_path / "repository"
     root.mkdir()
     work = _checkout(root, _bare_remote(root))
@@ -311,8 +298,6 @@ def test_an_untagged_repository_is_consistent_with_its_declared_version(
 
 
 def test_this_repository_declares_a_version_a_release_tag_may_carry() -> None:
-    """The declared version is a release version, checked where it is declared."""
-
     root = Path(__file__).resolve().parents[1]
     with (root / "pyproject.toml").open("rb") as handle:
         declared = tomllib.load(handle)["project"]["version"]

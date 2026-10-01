@@ -1,5 +1,3 @@
-"""Layout-aware extraction and bibliographic identity for PDF/EPUB sources."""
-
 from __future__ import annotations
 
 import hashlib
@@ -23,7 +21,7 @@ pymupdf.no_recommend_layout()
 
 
 class ExtractionError(RuntimeError):
-    """Raised when a source cannot be represented safely in the knowledge base."""
+    pass
 
 
 _HORIZONTAL_SPACE = re.compile(r"[\t\f\v \u00a0]+")
@@ -133,7 +131,6 @@ def _ends_sentence(value: str) -> bool:
 
 
 def _fold_compatibility_characters(value: str) -> str:
-    """Fold formula-font letters and presentation ligatures to plain text."""
     if not _FOLDABLE_CHARACTERS.search(value):
         return value
     return _FOLDABLE_CHARACTERS.sub(
@@ -179,8 +176,6 @@ def normalize_reading_text(value: str) -> str:
 
 
 def normalize_inline_text(value: str) -> str:
-    """Normalize extracted metadata to one display-safe line."""
-
     return _HORIZONTAL_SPACE.sub(
         " ", normalize_reading_text(value).replace("\n", " ")
     ).strip()
@@ -232,8 +227,6 @@ def _script_family(character: str) -> str | None:
 
 
 def _text_signals(value: str) -> tuple[list[str], list[str]]:
-    """Corruption evidence and script notes, per the rules `text_health_reasons` sets."""
-
     raw = unicodedata.normalize("NFC", value)
     normalized = normalize_inline_text(raw)
     if not normalized:
@@ -296,14 +289,10 @@ def text_script_notes(value: str) -> list[str]:
 
 
 def has_searchable_alphanumeric_content(value: str) -> bool:
-    """Whether normalized text contains a Unicode letter or number."""
-
     return any(character.isalnum() for character in normalize_inline_text(value))
 
 
 def text_health_reasons(value: str) -> list[str]:
-    """Corrupt text, or text with no searchable content."""
-
     reasons = text_corruption_reasons(value)
     normalized = normalize_inline_text(value)
     if normalized and not has_searchable_alphanumeric_content(normalized):
@@ -497,8 +486,6 @@ _LANGUAGE_TAG = re.compile(r"^([A-Za-z]{2,3})(?:[-_].*)?$")
 
 
 def _iso_language_code(value: str) -> str:
-    """Reduce a declared language tag such as `en-US` or `eng` to a code."""
-
     match = _LANGUAGE_TAG.match(str(value).strip())
     return match.group(1).casefold() if match else ""
 
@@ -1103,8 +1090,6 @@ def _label_annotations(
 
 
 def _quality_flags(text: str, kind: str) -> list[str]:
-    """Extraction debris meeting the deterministic rejection rules."""
-
     normalized = normalize_inline_text(text)
     alphabetic = sum(character.isalpha() for character in normalized)
     flags: list[str] = []
@@ -1118,8 +1103,6 @@ def _quality_flags(text: str, kind: str) -> list[str]:
 def _split_prose_and_lists(
     blocks: list[_TextBlock],
 ) -> list[tuple[str, list[_TextBlock]]]:
-    """Reading order preserved, list blocks separated from prose blocks."""
-
     groups: list[tuple[str, list[_TextBlock]]] = []
     for block in blocks:
         populated_lines = [line for line in block.lines if line.strip()]
@@ -1329,8 +1312,6 @@ def _epub_visible_identity(
     book: epub.EpubBook,
     filename_stem: str,
 ) -> tuple[str, list[str]]:
-    """Conservative title/byline fallback from the first visible sections."""
-
     for spine_entry in book.spine[:5]:
         item_id = spine_entry[0] if isinstance(spine_entry, tuple) else spine_entry
         item = book.get_item_with_id(item_id)
@@ -1375,8 +1356,6 @@ def _epub_visible_identity(
 
 
 def _epub_text_sample(book: epub.EpubBook, items: int = 3) -> str:
-    """Visible text of the first few spine documents."""
-
     parts: list[str] = []
     for spine_entry in book.spine[:items]:
         item_id = spine_entry[0] if isinstance(spine_entry, tuple) else spine_entry

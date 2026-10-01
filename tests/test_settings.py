@@ -1,5 +1,3 @@
-"""Unit coverage for layered settings: one registry, five precedence layers."""
-
 from __future__ import annotations
 
 import sys
@@ -26,17 +24,14 @@ from research_rag.settings import (
     sources_for,
 )
 
-# The fingerprint every published measurement was taken with. Layering has to
-# reproduce it byte for byte: a different value would tell every existing
-# generation that its ranking policy changed and force a rebuild for nothing.
+# A different value would tell every existing generation that its ranking policy
+# changed and force a rebuild for nothing.
 PUBLISHED_FINGERPRINT = (
     "b7285824c79d662c9abdba84238077abc1271d11a861c931ee0e590c3d4f380f"
 )
 
 
 def _resolve(project_root: Path, **kwargs) -> tuple[EffectiveSettings, dict[str, str]]:
-    """Resolve this server's registry over the shared layer stack."""
-
     values, provenance = resolve_settings(SETTINGS, sources_for(project_root), **kwargs)
     return EffectiveSettings.from_values(values), provenance
 
@@ -68,12 +63,9 @@ def test_defaults_reproduce_the_published_fingerprint(tmp_path: Path) -> None:
 def test_a_query_time_ranking_knob_keeps_the_published_fingerprint(
     tmp_path: Path,
 ) -> None:
-    """A penalty over ranked candidates must not tell every project to rebuild.
-
-    The source-diversity reordering applies to the candidates fusion and
-    reranking already returned, so it changes nothing a generation stores. In
-    the fingerprint it would flag every generation as needing an upgrade that
-    reproduces the same index byte for byte.
+    """The source-diversity reordering applies to the candidates fusion and reranking already
+    returned, so in the fingerprint it would flag every generation as needing an upgrade
+    that reproduces the same index byte for byte.
     """
 
     spread, _ = _resolve(
@@ -97,7 +89,6 @@ def test_a_layer_names_only_what_it_changes(tmp_path: Path) -> None:
 
     assert settings.rrf_k == 25
     assert settings.chunk_overlap == 32
-    # Everything else is still inherited from the packaged default.
     assert settings.chunk_size == 384
     assert provenance["retrieval.rrf_k"] != provenance["chunking.size"]
 
@@ -166,12 +157,8 @@ def test_out_of_bounds_and_cross_field_values_are_refused(tmp_path: Path) -> Non
 
 
 def test_the_ingest_budget_can_cover_a_whole_build(tmp_path: Path) -> None:
-    """A caller that can wait has to be able to set a budget that finishes the work.
-
-    With a cap of five minutes, a long build needs one call per slice, and a client
-    that stops repeating identical calls cannot finish it at all: an agent hit
-    that wall, its MCP request timed out after an hour, and the build was
-    finished by hand from the browser.
+    """With a cap of five minutes, a long build needs one call per slice, and a client that
+    stops repeating identical calls cannot finish it at all.
     """
 
     settings, _provenance = _resolve(
@@ -232,12 +219,10 @@ def test_resolve_config_exposes_the_merged_settings(project: Path) -> None:
 
     assert config.settings.rrf_k == 42
     assert config.settings.chunk_size == 200
-    # The convenience names read through to the settings rather than copying them.
     assert config.offline is False
     assert config.reranker_model == "Xenova/ms-marco-MiniLM-L-6-v2"
     assert config.settings_provenance["retrieval.rrf_k"] == "command line"
 
-    # A bad value from any layer is still reported as a configuration problem.
     with pytest.raises(ConfigurationError, match="must be one of"):
         resolve_config(
             project,
@@ -289,8 +274,6 @@ def test_the_language_is_part_of_the_ranking_policy(tmp_path: Path) -> None:
     english, _ = _resolve(tmp_path, environ={})
     german, _ = _resolve(tmp_path, overrides=["language.corpus=de"], environ={})
 
-    # A generation built against English stopwords is not the same policy as one
-    # built against German ones, and the fingerprint says so.
     assert retrieval_policy_fingerprint(german) != retrieval_policy_fingerprint(english)
 
 
@@ -357,8 +340,8 @@ def test_a_mixed_corpus_filters_the_first_language_named(tmp_path: Path) -> None
     )
     assert chosen.bm25_stopwords_language == "en"
 
-    # The default model covers English only, so the German half is reported, and
-    # the warning names the model that would cover both languages.
+    # The default model covers English only, so the warning names the model that
+    # would cover both languages.
     warning = chosen.embedding_language_warning
     assert warning is not None and "not 'de'" in warning
     assert "intfloat/multilingual-e5-large" in warning
@@ -401,9 +384,8 @@ def test_the_bm25_language_is_what_the_policy_records(tmp_path: Path) -> None:
         tmp_path, overrides=["language.corpus=en,de"], environ={}
     )
 
-    # BM25 filters one list, so a mixed corpus that points it at German ranks like
-    # a German corpus: a different stopword language makes it a different
-    # policy, and the order a corpus names its languages in writes that choice.
+    # BM25 filters one list, and the order a corpus names its languages in writes
+    # that choice.
     assert retrieval_policy_fingerprint(german_first) == retrieval_policy_fingerprint(
         german
     )
@@ -454,14 +436,13 @@ def test_apply_process_priority_raises_by_the_difference_and_only_once(
     monkeypatch.setattr(config_module.os, "nice", fake_nice)
 
     assert apply_process_priority(10) == 10
-    # The read is a zero increment, which is how niceness is read on POSIX.
     assert increments == [0, 6]
 
     # Idempotent, so a child that inherited the value and applies it again is safe.
     assert apply_process_priority(10) == 10
     assert increments == [0, 6, 0]
 
-    # 0 means "leave priority as it is", and does not even read it.
+    # 0 does not even read the current value.
     assert apply_process_priority(0) is None
     assert increments == [0, 6, 0]
 

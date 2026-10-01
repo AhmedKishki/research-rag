@@ -28,7 +28,7 @@ _HASH_IN_MESSAGE = re.compile(r"got\s+([0-9a-f]{8,64})")
 
 
 class DoctorError(ValueError):
-    """Raised when the check it was asked to run cannot run."""
+    pass
 
 
 @dataclass(frozen=True, slots=True)
@@ -102,7 +102,6 @@ def repair_runtime(config: ResearchConfig) -> tuple[str, ...]:
 
 
 def prefetch_models(config: ResearchConfig) -> tuple[str, ...]:
-    """The pinned models into the configured cache, and the change."""
     from .dense import _load_cross_encoder, _load_embedder
     from .storage import directory_statistics
 
@@ -151,8 +150,6 @@ _ENTRY_TIMEOUT_MS = 3_600_000
 
 
 def _project_server_command() -> Path:
-    """The console script this environment installed."""
-
     return Path(sys.executable).parent / SERVER_COMMAND
 
 
@@ -217,8 +214,6 @@ def mcp_entry_block(config: ResearchConfig) -> str:
 
 
 def _strip_jsonc(text: str) -> str:
-    """Remove `//` and block comments from a JSON-with-comments document."""
-
     out: list[str] = []
     index = 0
     length = len(text)
@@ -304,8 +299,6 @@ def _runs_this_app(entry: Any) -> bool:
 
 
 def _entry_url(entry: Any) -> str | None:
-    """The URL an entry points at, if it is a URL entry."""
-
     if not isinstance(entry, dict):
         return None
     url = entry.get("url")
@@ -519,8 +512,6 @@ def check_entry(config: ResearchConfig, path: str | Path) -> tuple[Check, ...]:
 
 
 def _runtime_root_argument(arguments: list[str]) -> str | None:
-    """A command line's ``--runtime-root`` value, if it carries one."""
-
     for index, argument in enumerate(arguments):
         if argument == "--runtime-root" and index + 1 < len(arguments):
             return arguments[index + 1]
@@ -579,8 +570,8 @@ def desktop_entry_checks() -> list[Check]:
     for entry in desktop_entries():
         add = f"`{CLI_COMMAND} install --desktop` writes it"
         if not entry.attached:
-            # An entry written by an older build served the app in the background
-            # with nothing to close; the one now written opens a terminal window.
+            # An entry that opens no terminal serves the app in the
+            # background with nothing to close.
             findings.append(
                 Check(
                     "desktop_entry",
@@ -626,8 +617,6 @@ def run_doctor(
     prefetch: bool = False,
     repair: bool = False,
 ) -> DoctorResult:
-    """The checks and the requested operation, and what to print."""
-
     if prefetch and repair:
         raise DoctorError(
             "--prefetch-models and --repair-runtime are separate operations; run "
