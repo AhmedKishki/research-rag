@@ -371,7 +371,7 @@ def test_a_state_root_claimed_by_another_project_blocks(
         runtime_root=relocated,
         model_cache_root=tmp_path / "models",
     )
-    marker = relocated / ".research-ultra-rag-runtime.json"
+    marker = relocated / ".research-rag-runtime.json"
     claimed = json.loads(marker.read_text(encoding="utf-8"))
     claimed["project_id"] = "00000000-0000-0000-0000-000000000000"
     marker.write_text(json.dumps(claimed), encoding="utf-8")

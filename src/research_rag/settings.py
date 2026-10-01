@@ -39,15 +39,15 @@ Layer = Literal["identity", "engine", "runtime"]
 # The names this app resolves its own settings layers by. `PROJECT_CONFIG_RELATIVE`
 # is name-free because it lives inside the project. The other two are the MCP
 # server's, retained deliberately: `USER_CONFIG_DIRECTORY` is
-# `research-ultra-rag-mcp` and `SETTINGS_ENVIRONMENT_PREFIX` is
-# `RESEARCH_ULTRARAG_`, so this app reads the same `~/.config` directory and the
+# `research-rag` and `SETTINGS_ENVIRONMENT_PREFIX` is
+# `RESEARCH_RAG_`, so this app reads the same `~/.config` directory and the
 # same environment variables the MCP server wrote. Renaming either splits one
 # user's settings across two products: the MCP server's file is silently ignored,
 # and the environment a user exported for it stops reaching this app.
 # `tests/test_data_roots.py` fails if either changes.
-USER_CONFIG_DIRECTORY = "research-ultra-rag-mcp"
+USER_CONFIG_DIRECTORY = "research-rag"
 PROJECT_CONFIG_RELATIVE = Path(".research-rag") / "config.toml"
-SETTINGS_ENVIRONMENT_PREFIX = "RESEARCH_ULTRARAG_"
+SETTINGS_ENVIRONMENT_PREFIX = "RESEARCH_RAG_"
 
 
 # The answer detail an agent's tool call receives. The browser workspace and the
@@ -248,7 +248,7 @@ SETTINGS: tuple[Setting, ...] = (
             "tokenize is refused, because the stopword list comes from it, and "
             "every language named must be covered by the embedding model."
         ),
-        env="RESEARCH_ULTRARAG_LANGUAGE_CORPUS",
+        env="RESEARCH_RAG_LANGUAGE_CORPUS",
     ),
     Setting(
         key="language.bm25_stopwords",
@@ -259,7 +259,7 @@ SETTINGS: tuple[Setting, ...] = (
             "Which language's stopword list BM25 filters with. Empty means the "
             "first language in language.corpus, because BM25 takes a single list."
         ),
-        env="RESEARCH_ULTRARAG_LANGUAGE_BM25_STOPWORDS",
+        env="RESEARCH_RAG_LANGUAGE_BM25_STOPWORDS",
     ),
     Setting(
         key="runtime.offline",
@@ -270,7 +270,7 @@ SETTINGS: tuple[Setting, ...] = (
             "Require an installed vanilla runtime and already-cached models "
             "instead of downloading anything."
         ),
-        env="RESEARCH_ULTRARAG_OFFLINE",
+        env="RESEARCH_RAG_OFFLINE",
     ),
     Setting(
         key="runtime.log_level",
@@ -280,7 +280,7 @@ SETTINGS: tuple[Setting, ...] = (
         normalize_case=True,
         doc="Verbosity of this process's own logging.",
         choices=LOG_LEVELS,
-        env="RESEARCH_ULTRARAG_LOG_LEVEL",
+        env="RESEARCH_RAG_LOG_LEVEL",
     ),
     Setting(
         key="runtime.tool_detail",
@@ -294,7 +294,7 @@ SETTINGS: tuple[Setting, ...] = (
             "line always use 'full'."
         ),
         choices=TOOL_DETAIL_MODES,
-        env="RESEARCH_ULTRARAG_TOOL_DETAIL",
+        env="RESEARCH_RAG_TOOL_DETAIL",
     ),
     Setting(
         key="runtime.embedding_threads",
@@ -307,7 +307,7 @@ SETTINGS: tuple[Setting, ...] = (
         ),
         minimum=0,
         maximum=1024,
-        env="RESEARCH_ULTRARAG_EMBEDDING_THREADS",
+        env="RESEARCH_RAG_EMBEDDING_THREADS",
     ),
     Setting(
         key="runtime.nice",
@@ -321,7 +321,7 @@ SETTINGS: tuple[Setting, ...] = (
         ),
         minimum=0,
         maximum=19,
-        env="RESEARCH_ULTRARAG_NICE",
+        env="RESEARCH_RAG_NICE",
     ),
     Setting(
         key="runtime.model_cache_root",
@@ -332,7 +332,7 @@ SETTINGS: tuple[Setting, ...] = (
             "Shared FastEmbed model cache; empty means the per-user cache "
             "directory for this application."
         ),
-        env="RESEARCH_ULTRARAG_MODEL_CACHE_ROOT",
+        env="RESEARCH_RAG_MODEL_CACHE_ROOT",
     ),
     # --- Retrieval: what the fused ranking is, and what it will not accept. ---
     Setting(
@@ -343,7 +343,7 @@ SETTINGS: tuple[Setting, ...] = (
         doc="Reciprocal-rank-fusion constant: higher flattens the rank curve.",
         minimum=1,
         maximum=1000,
-        env="RESEARCH_ULTRARAG_RETRIEVAL_RRF_K",
+        env="RESEARCH_RAG_RETRIEVAL_RRF_K",
     ),
     Setting(
         key="retrieval.bm25_weight",
@@ -353,7 +353,7 @@ SETTINGS: tuple[Setting, ...] = (
         doc="Weight of the BM25 rank in the fusion.",
         minimum=0.0,
         maximum=10.0,
-        env="RESEARCH_ULTRARAG_RETRIEVAL_BM25_WEIGHT",
+        env="RESEARCH_RAG_RETRIEVAL_BM25_WEIGHT",
     ),
     Setting(
         key="retrieval.dense_weight",
@@ -363,7 +363,7 @@ SETTINGS: tuple[Setting, ...] = (
         doc="Weight of the dense rank in the fusion.",
         minimum=0.0,
         maximum=10.0,
-        env="RESEARCH_ULTRARAG_RETRIEVAL_DENSE_WEIGHT",
+        env="RESEARCH_RAG_RETRIEVAL_DENSE_WEIGHT",
     ),
     Setting(
         key="retrieval.minimum_candidates",
@@ -376,7 +376,7 @@ SETTINGS: tuple[Setting, ...] = (
         ),
         minimum=1,
         maximum=1000,
-        env="RESEARCH_ULTRARAG_RETRIEVAL_MINIMUM_CANDIDATES",
+        env="RESEARCH_RAG_RETRIEVAL_MINIMUM_CANDIDATES",
     ),
     Setting(
         key="retrieval.maximum_candidates",
@@ -386,7 +386,7 @@ SETTINGS: tuple[Setting, ...] = (
         doc="Most fused candidates a search considers.",
         minimum=1,
         maximum=5000,
-        env="RESEARCH_ULTRARAG_RETRIEVAL_MAXIMUM_CANDIDATES",
+        env="RESEARCH_RAG_RETRIEVAL_MAXIMUM_CANDIDATES",
     ),
     Setting(
         key="retrieval.dense_minimum_cosine_similarity",
@@ -401,7 +401,7 @@ SETTINGS: tuple[Setting, ...] = (
         ),
         minimum=-1.0,
         maximum=1.0,
-        env="RESEARCH_ULTRARAG_RETRIEVAL_DENSE_MINIMUM_COSINE_SIMILARITY",
+        env="RESEARCH_RAG_RETRIEVAL_DENSE_MINIMUM_COSINE_SIMILARITY",
     ),
     Setting(
         key="retrieval.rerank_max_candidates",
@@ -414,7 +414,7 @@ SETTINGS: tuple[Setting, ...] = (
         ),
         minimum=1,
         maximum=5000,
-        env="RESEARCH_ULTRARAG_RETRIEVAL_RERANK_MAX_CANDIDATES",
+        env="RESEARCH_RAG_RETRIEVAL_RERANK_MAX_CANDIDATES",
     ),
     Setting(
         key="retrieval.rerank_window_multiple",
@@ -430,7 +430,7 @@ SETTINGS: tuple[Setting, ...] = (
         ),
         minimum=1,
         maximum=1000,
-        env="RESEARCH_ULTRARAG_RETRIEVAL_RERANK_WINDOW_MULTIPLE",
+        env="RESEARCH_RAG_RETRIEVAL_RERANK_WINDOW_MULTIPLE",
     ),
     Setting(
         key="retrieval.rerank_window_floor",
@@ -443,7 +443,7 @@ SETTINGS: tuple[Setting, ...] = (
         ),
         minimum=1,
         maximum=5000,
-        env="RESEARCH_ULTRARAG_RETRIEVAL_RERANK_WINDOW_FLOOR",
+        env="RESEARCH_RAG_RETRIEVAL_RERANK_WINDOW_FLOOR",
     ),
     Setting(
         key="retrieval.prf",
@@ -457,7 +457,7 @@ SETTINGS: tuple[Setting, ...] = (
             "set is known-item and cannot judge whether a query reaches more "
             "passages by borrowing the author's vocabulary."
         ),
-        env="RESEARCH_ULTRARAG_RETRIEVAL_PRF",
+        env="RESEARCH_RAG_RETRIEVAL_PRF",
     ),
     Setting(
         key="retrieval.prf_documents",
@@ -467,7 +467,7 @@ SETTINGS: tuple[Setting, ...] = (
         doc="How many of the lexical leaders the feedback terms are mined from.",
         minimum=1,
         maximum=100,
-        env="RESEARCH_ULTRARAG_RETRIEVAL_PRF_DOCUMENTS",
+        env="RESEARCH_RAG_RETRIEVAL_PRF_DOCUMENTS",
     ),
     Setting(
         key="retrieval.prf_terms",
@@ -477,7 +477,7 @@ SETTINGS: tuple[Setting, ...] = (
         doc="Most feedback terms added to one query.",
         minimum=1,
         maximum=100,
-        env="RESEARCH_ULTRARAG_RETRIEVAL_PRF_TERMS",
+        env="RESEARCH_RAG_RETRIEVAL_PRF_TERMS",
     ),
     Setting(
         key="retrieval.maximum_withheld_examples",
@@ -487,7 +487,7 @@ SETTINGS: tuple[Setting, ...] = (
         doc="Withheld candidates quoted per gate reason in a search answer.",
         minimum=0,
         maximum=100,
-        env="RESEARCH_ULTRARAG_RETRIEVAL_MAXIMUM_WITHHELD_EXAMPLES",
+        env="RESEARCH_RAG_RETRIEVAL_MAXIMUM_WITHHELD_EXAMPLES",
     ),
     Setting(
         key="retrieval.duplicate_cosine",
@@ -507,7 +507,7 @@ SETTINGS: tuple[Setting, ...] = (
         ),
         minimum=-1.0,
         maximum=2.0,
-        env="RESEARCH_ULTRARAG_RETRIEVAL_DUPLICATE_COSINE",
+        env="RESEARCH_RAG_RETRIEVAL_DUPLICATE_COSINE",
     ),
     Setting(
         key="retrieval.source_diversity_penalty",
@@ -526,7 +526,7 @@ SETTINGS: tuple[Setting, ...] = (
         ),
         minimum=0.0,
         maximum=1.0,
-        env="RESEARCH_ULTRARAG_RETRIEVAL_SOURCE_DIVERSITY_PENALTY",
+        env="RESEARCH_RAG_RETRIEVAL_SOURCE_DIVERSITY_PENALTY",
     ),
     Setting(
         key="retrieval.dense_relative_similarity_margin",
@@ -544,7 +544,7 @@ SETTINGS: tuple[Setting, ...] = (
         ),
         minimum=0.0,
         maximum=0.5,
-        env="RESEARCH_ULTRARAG_RETRIEVAL_DENSE_RELATIVE_SIMILARITY_MARGIN",
+        env="RESEARCH_RAG_RETRIEVAL_DENSE_RELATIVE_SIMILARITY_MARGIN",
     ),
     Setting(
         key="retrieval.minimum_passage_words",
@@ -561,7 +561,7 @@ SETTINGS: tuple[Setting, ...] = (
         ),
         minimum=0,
         maximum=400,
-        env="RESEARCH_ULTRARAG_RETRIEVAL_MINIMUM_PASSAGE_WORDS",
+        env="RESEARCH_RAG_RETRIEVAL_MINIMUM_PASSAGE_WORDS",
     ),
     Setting(
         key="retrieval.minimum_passage_token_fraction",
@@ -579,7 +579,7 @@ SETTINGS: tuple[Setting, ...] = (
         ),
         minimum=0.0,
         maximum=1.0,
-        env="RESEARCH_ULTRARAG_RETRIEVAL_MINIMUM_PASSAGE_TOKEN_FRACTION",
+        env="RESEARCH_RAG_RETRIEVAL_MINIMUM_PASSAGE_TOKEN_FRACTION",
     ),
     # --- Chunking: what a chunk is. Recorded per generation. ---
     Setting(
@@ -590,7 +590,7 @@ SETTINGS: tuple[Setting, ...] = (
         doc="Target chunk length in GPT-2 tokens.",
         minimum=50,
         maximum=384,
-        env="RESEARCH_ULTRARAG_CHUNKING_SIZE",
+        env="RESEARCH_RAG_CHUNKING_SIZE",
     ),
     Setting(
         key="chunking.overlap",
@@ -600,7 +600,7 @@ SETTINGS: tuple[Setting, ...] = (
         doc="Tokens consecutive chunks share; must be below the chunk size.",
         minimum=0,
         maximum=383,
-        env="RESEARCH_ULTRARAG_CHUNKING_OVERLAP",
+        env="RESEARCH_RAG_CHUNKING_OVERLAP",
     ),
     Setting(
         key="chunking.headers",
@@ -614,7 +614,7 @@ SETTINGS: tuple[Setting, ...] = (
             "vector, because vector reuse is keyed on the passage. Measured "
             "neutral on the reference corpus, so the default is off."
         ),
-        env="RESEARCH_ULTRARAG_CHUNKING_HEADERS",
+        env="RESEARCH_RAG_CHUNKING_HEADERS",
     ),
     Setting(
         key="chunking.batch_units",
@@ -627,7 +627,7 @@ SETTINGS: tuple[Setting, ...] = (
         ),
         minimum=1,
         maximum=256,
-        env="RESEARCH_ULTRARAG_CHUNKING_BATCH_UNITS",
+        env="RESEARCH_RAG_CHUNKING_BATCH_UNITS",
     ),
     # --- Ingestion: how much work one call does, and in what batches. ---
     Setting(
@@ -644,7 +644,7 @@ SETTINGS: tuple[Setting, ...] = (
         ),
         minimum=10,
         maximum=MAXIMUM_WORK_BUDGET_SECONDS,
-        env="RESEARCH_ULTRARAG_INGESTION_WORK_BUDGET_SECONDS",
+        env="RESEARCH_RAG_INGESTION_WORK_BUDGET_SECONDS",
     ),
     Setting(
         key="ingestion.embedding_batch_size",
@@ -654,7 +654,7 @@ SETTINGS: tuple[Setting, ...] = (
         doc="Chunks embedded per gateway call during ingestion.",
         minimum=1,
         maximum=1024,
-        env="RESEARCH_ULTRARAG_INGESTION_EMBEDDING_BATCH_SIZE",
+        env="RESEARCH_RAG_INGESTION_EMBEDDING_BATCH_SIZE",
     ),
     Setting(
         key="ingestion.pdf_page_batch_size",
@@ -664,7 +664,7 @@ SETTINGS: tuple[Setting, ...] = (
         doc="PDF pages extracted per gateway call.",
         minimum=1,
         maximum=64,
-        env="RESEARCH_ULTRARAG_INGESTION_PDF_PAGE_BATCH_SIZE",
+        env="RESEARCH_RAG_INGESTION_PDF_PAGE_BATCH_SIZE",
     ),
     Setting(
         key="dense.backend",
@@ -677,7 +677,7 @@ SETTINGS: tuple[Setting, ...] = (
             "vectors below the documented corpus threshold."
         ),
         choices=DENSE_BACKENDS,
-        env="RESEARCH_ULTRARAG_DENSE_BACKEND",
+        env="RESEARCH_RAG_DENSE_BACKEND",
     ),
     Setting(
         key="dense.embedding_model",
@@ -690,7 +690,7 @@ SETTINGS: tuple[Setting, ...] = (
             "the languages it covers."
         ),
         choices=EMBEDDING_MODEL_CHOICES,
-        env="RESEARCH_ULTRARAG_EMBEDDING_MODEL",
+        env="RESEARCH_RAG_EMBEDDING_MODEL",
     ),
     Setting(
         key="dense.reranker_model",
@@ -702,7 +702,7 @@ SETTINGS: tuple[Setting, ...] = (
             "is pinned to a revision in rerankers.py."
         ),
         choices=tuple(RERANKER_MODELS),
-        env="RESEARCH_ULTRARAG_RERANKER_MODEL",
+        env="RESEARCH_RAG_RERANKER_MODEL",
     ),
     Setting(
         key="dense.embedding_inference_batch_size",
@@ -715,7 +715,7 @@ SETTINGS: tuple[Setting, ...] = (
         ),
         minimum=1,
         maximum=1024,
-        env="RESEARCH_ULTRARAG_EMBEDDING_INFERENCE_BATCH_SIZE",
+        env="RESEARCH_RAG_EMBEDDING_INFERENCE_BATCH_SIZE",
     ),
     Setting(
         key="dense.exact_backend_chunk_limit",
@@ -728,7 +728,7 @@ SETTINGS: tuple[Setting, ...] = (
         ),
         minimum=1,
         maximum=100_000_000,
-        env="RESEARCH_ULTRARAG_EXACT_BACKEND_CHUNK_LIMIT",
+        env="RESEARCH_RAG_EXACT_BACKEND_CHUNK_LIMIT",
     ),
 )
 

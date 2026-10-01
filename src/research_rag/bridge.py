@@ -42,14 +42,14 @@ from .config import (
     initialise_command,
     resolve_config,
 )
-from .control import ControlError, ensure_running
+from .control import connect, is_serving, not_running_reason
 from .support import ResearchError
-from .surfaces.mcp import AGENT_BRIDGE_NAME, create_uninitialised_mcp
+from .surfaces.mcp import AGENT_BRIDGE_NAME, create_blocked_mcp
 from .version import APP_VERSION
 
 # The env var a client configuration sets so a reader of the app's client list
 # can tell which agent is which, rather than seeing "stdio-bridge" four times.
-CLIENT_NAME_ENV = "RESEARCH_ULTRARAG_CLIENT_NAME"
+CLIENT_NAME_ENV = "RESEARCH_RAG_CLIENT_NAME"
 DEFAULT_CLIENT_NAME = "stdio-bridge"
 
 
@@ -135,8 +135,12 @@ def resolve_project(
     )
 
 
-def serve_uninitialised(project_name: str, reason: str) -> None:
-    create_uninitialised_mcp(project_name, reason).run(
+def serve_blocked(
+    project_name: str, reason: str, *, config: ResearchConfig | None
+) -> None:
+    """Answer an agent whose project this machine cannot serve, and start nothing."""
+
+    create_blocked_mcp(project_name, reason, config=config).run(
         transport="stdio", show_banner=False
     )
 
@@ -147,17 +151,23 @@ def run(
     settings: Mapping[str, Any] | None = None,
     name: str | None = None,
 ) -> None:
-    """Connect stdio to the app serving this project name, and stay up as long as it does."""
+    """Connect stdio to the app serving this project name, and stay up as long as it does.
+
+    Nothing is started here. An app runs in a terminal and ends when that terminal
+    closes, so a client that arrives while the project is not being served is told
+    which command to run rather than quietly given a server of its own to leave
+    behind.
+    """
 
     config, reason = resolve_project(project_name, settings=settings)
     if config is None:
-        serve_uninitialised(project_name, reason or "")
+        serve_blocked(project_name, reason or "", config=None)
         return
-    try:
-        with ensure_running(config) as control:
-            url = f"{control.base_url}/mcp"
-    except ControlError as exc:
-        raise ResearchError(str(exc)) from exc
+    if not is_serving(config):
+        serve_blocked(project_name, not_running_reason(), config=config)
+        return
+    with connect(config) as control:
+        url = f"{control.base_url}/mcp"
     build_proxy(url, name=name or client_name()).run(
         transport="stdio", show_banner=False
     )

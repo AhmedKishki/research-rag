@@ -31,7 +31,6 @@ FULL_ANSWER_KEYS = (
     "projects",
     "retrieval",
     "source_exclusion_revision",
-    "ui_launcher",
     "version",
 )
 

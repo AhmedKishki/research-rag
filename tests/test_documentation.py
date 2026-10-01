@@ -46,16 +46,6 @@ def test_the_readme_documents_every_installed_command() -> None:
     for command in _installed_commands():
         assert command in README, f"{command!r} is installed but undocumented"
 
-    # The bare name `research-ultra-rag-mcp` stays in the manual: it is the shared
-    # settings directory this app reads. The three console scripts the app no longer
-    # installs must not survive.
-    for retired in (
-        "research-ultra-rag-mcp --",
-        "research-ultra-rag-ui",
-        "research-ultra-rag-verify",
-    ):
-        assert retired not in README, f"{retired!r} is documented but not installed"
-
 
 def test_the_cli_help_lists_every_installed_command() -> None:
     for command in sorted(_installed_commands()):

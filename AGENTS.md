@@ -80,7 +80,7 @@
   - `NOTICE` records the upstream, model, retrieval-component, and AGPL-3.0 extraction terms, which stay separate from that grant.
 - The command line:
   - The one command is `research-rag`.
-  - `research-rag` registers `init`, `status`, `ingest`, `search`, `sources`, `passage`, `include`, `exclude`, `metadata`, `config`, `doctor`, `start`, `ui`, `clients`, `disconnect`, `mcp`, `serve`, `stop`, `generations`, `remove-generation`, `install`, `update`, and `help`.
+  - `research-rag` registers `init`, `status`, `ingest`, `search`, `sources`, `passage`, `include`, `exclude`, `metadata`, `config`, `doctor`, `start`, `ui`, `clients`, `disconnect`, `mcp`, `stop`, `generations`, `remove-generation`, `install`, `update`, and `help`.
   - `install` puts the command on the account's `PATH` and writes desktop menu entries, and it needs no project.
   - `update` reports what a newer version means and applies it, and it needs no project.
   - No command at all opens the workspace in a browser and serves it from that terminal, asking which project when there is more than one.
@@ -91,7 +91,7 @@
 - The agent surface:
   - Eight tools and one resource at `<app>/mcp` on the app's own port, plus the stdio bridge.
   - `mcp` takes `--project-name`.
-  - `RESEARCH_ULTRARAG_PROJECT_NAME` names the same thing for a client that can pass only an environment.
+  - `RESEARCH_RAG_PROJECT_NAME` names the same thing for a client that can pass only an environment.
 - The pins:
 
 | Component | Pin |
@@ -102,14 +102,11 @@
 | UltraRAG | `0.3.0.2` at `3a709a2aea3fbe46acca59c422621c94b6e86857` |
 | `bm25s` fork | `20f6c02` |
 
-- The frozen sibling:
-  - The on-disk state is byte-compatible with `research-ultra-rag-mcp`, which is frozen and still installed on the machines that carry it, and both products keep reading and writing the same projects for that reason.
-  - This app is the only one of the two that changes.
-  - Four names keep the frozen product's name, and `tests/test_data_roots.py` states each:
-    - `USER_CONFIG_DIRECTORY`
-    - `SETTINGS_ENVIRONMENT_PREFIX`
-    - the model-cache directory
-    - `runtime.tool_detail`
+- Every shared location is named for this app, and `tests/test_data_roots.py` states each:
+  - `USER_CONFIG_DIRECTORY` is `research-rag`
+  - `SETTINGS_ENVIRONMENT_PREFIX` is `RESEARCH_RAG_`
+  - the model-cache directory is `research-rag`
+  - the app's own names appear in no path or variable belonging to another product
 - `bm25s` is forked for a one-line non-ASCII stopword fix, and its pin is reverted only once upstream fixes that.
   - `settings` fails fast on a list that cannot round-trip through the fork.
 - `pymupdf` raises `IndexError` from `Page.get_label()` when a document's page-label tree starts after the page asked about, and that fails a whole ingestion.
@@ -154,8 +151,8 @@
   - The app is up or it is down.
   - A command reaches the running app over the control API.
   - A project with no app up is answered in process, because a read of local state must not refuse itself because no daemon is running.
-- Every project-owned artifact lives beneath `<project>/.research-rag`, apart from the machine-local launcher symlink, and `STORAGE.md` carries the layout, the runtime-root rules, and the marker.
-  - Every path this app names inside a project carries `research-rag`, including the launcher's pid, port, log, and lock files, because two products sharing a pid file would let each stop the other's process.
+- Every project-owned artifact lives beneath `<project>/.research-rag`, and `STORAGE.md` carries the layout, the runtime-root rules, and the marker.
+  - Every path this app names inside a project carries `research-rag`, including its pid, port, and lock files, because two products sharing a pid file would let each stop the other's process.
 - Only immutable model binaries are shared through the configured user cache: documents, metadata, chunks, vectors, indexes, logs, and query state never sit in global storage.
 - Deterministic source IDs, document IDs, chunk IDs, source paths, and locators are preserved:
   - a `source_id` follows the normalized source-relative path and survives a byte change.
@@ -174,11 +171,9 @@
   - No automatic duplicate guessing is added.
   - A passage exclusion is a read-time decision like a reviewed metadata change, and it never turns `stale`.
   - An `ingest` cannot bring a removed chunk back, so `status` reports how many entries another generation cannot match, and `requires` never names `ingest` for one such entry.
-- The on-disk contract is frozen while `research-ultra-rag-mcp` is installed, because a change here that it cannot parse is a reader answering with state it could not have written.
-  - `project.json` is the only file the frozen product reads a known subset of.
-  - `chunk-exclusions.json` is the one file this app writes that the frozen product does not read, because that product resolves its four files by name.
-    - While the frozen product is installed, it keeps serving a passage excluded here, and that divergence is accepted rather than accidental.
-    - A whole-source exclusion is the decision both products honour, and a file the frozen product never looks up is not one it can be broken by.
+- `project.json`, `source-metadata.json`, `source-exclusions.json`, and `source-catalog.json` are the portable review surface, and every one of them is read and written by this app alone.
+  - `chunk-exclusions.json` is separate from them because a passage exclusion is a read-time decision rather than a whole-source one, and it is the file a hand-edited review most often grows.
+  - A project on disk is portable: nothing this app writes names the machine it was written on except the relocated-runtime record, which is machine-local by construction.
 - `registry.py` is a pointer file: an id, a name, and a root per project.
   - It never grows into a cache of a project's state, and one project's record never decides what another may read.
   - A project's name is the address an agent's entry carries, so a record's name is an interface.

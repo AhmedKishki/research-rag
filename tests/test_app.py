@@ -581,8 +581,8 @@ async def test_the_control_api_answers_the_account_and_the_client_entry(
     await app.start()
     try:
         await wait_until_ready(app)
-        # The launcher is what records the address, so an app started in process must be
-        # recorded the same way before a probe can find it.
+        # The app records its own address, so one started in process is recorded the
+        # same way before a probe can find it.
         (config.state_root / PORT_FILE).write_text(str(app.port), encoding="utf-8")
         (config.state_root / PID_FILE).write_text(str(os.getpid()), encoding="utf-8")
 

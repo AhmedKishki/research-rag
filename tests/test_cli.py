@@ -8,10 +8,9 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import signal
-import subprocess
 from pathlib import Path
-from types import SimpleNamespace
 from typing import Any, ClassVar, Self
 
 import pytest
@@ -19,10 +18,8 @@ from conftest import write_pdf
 
 import research_rag.surfaces.cli as cli_module
 import research_rag.ultrarag as ultrarag_module
-from research_rag import launcher as launcher_module
 from research_rag import registry
 from research_rag.config import ConfigurationError
-from research_rag.settings import SETTINGS
 from research_rag.support import ResearchError
 from research_rag.surfaces.cli import (
     _init,
@@ -222,8 +219,9 @@ def test_init_creates_a_project_and_records_the_name_it_was_given(
         "schema_version": 1,
         "source_directory": "sources",
     }
-    assert (project / ".research-rag" / "bin" / "open-research-rag-ui.sh").is_file()
-    assert Path(report["launcher"]["link_path"]).is_symlink()
+    # A project has no launcher to write: the app is served from the terminal that
+    # starts it, so there is nothing in the project that could outlive that terminal.
+    assert not (project / ".research-rag" / "bin").exists()
 
 
 def test_init_records_the_project_so_the_install_can_name_it(
@@ -705,28 +703,27 @@ def test_the_stop_sweep_reads_a_path_as_a_path_not_as_a_program(tmp_path: Path) 
         project,
     )
     assert _invokes_this_app(["python", "-m", "research_rag"], project)
-    assert not _invokes_this_app(["python", "-m", "research_ultra_rag_mcp"], project)
+    assert not _invokes_this_app(["python", "-m", "some_other_package"], project)
 
 
 def test_the_stop_sweep_leaves_the_other_products_processes_alone(
     tmp_path: Path,
 ) -> None:
-    """The MCP server names this project root and its gateway names a directory under
-    `.research-rag`, so a sweep that ended them would stop a server a reader started on
-    purpose.
+    """A hand-written wrapper and the vanilla gateway name this project, so a sweep
+    that ended them would stop a process a reader started on purpose.
     """
 
     project = tmp_path / "ai-and-fetishism"
     proc_root = tmp_path / "proc"
     proc_root.mkdir()
-    server = "/srv/research-ultra-rag-mcp-server/.venv/bin"
+    elsewhere = "/srv/some-other-tool/.venv/bin"
     state = project / ".research-rag" / "runtime" / "ultrarag-runtime"
     _fake_process(
         proc_root,
         31,
         [
-            "/srv/research-ultra-rag-mcp-server/.venv/bin/python",
-            f"{server}/research-ultra-rag-mcp",
+            f"{elsewhere}/python",
+            f"{elsewhere}/another-rag-mcp",
             "--project-root",
             str(project),
         ],
@@ -735,8 +732,8 @@ def test_the_stop_sweep_leaves_the_other_products_processes_alone(
         proc_root,
         32,
         [
-            f"{server}/python",
-            f"{server}/vanilla-ultra-rag-mcp",
+            f"{elsewhere}/python",
+            f"{elsewhere}/vanilla-ultra-rag-mcp",
             "--workspace-root",
             str(state),
             "--log-level",
@@ -750,7 +747,7 @@ def test_the_stop_sweep_leaves_the_other_products_processes_alone(
             "/srv/research-rag/.venv/bin/research-rag",
             "--project-root",
             str(project),
-            "serve",
+            "ui",
         ],
     )
 
@@ -789,177 +786,94 @@ def test_stopping_asks_first_and_kills_only_the_survivors(
     assert forced == [2]
 
 
-def test_stop_without_servers_only_stops_the_app(
+def test_stop_without_servers_reports_the_app_and_starts_nothing(
     project: Path,
-    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    recorded: list[list[str]] = []
+    """A stop is a question about the app, answered without signalling anything."""
 
-    def record(command: list[str], **_options: Any) -> SimpleNamespace:
-        recorded.append(command)
-        return SimpleNamespace(
-            returncode=0, stdout="No app is running for this project."
-        )
-
-    monkeypatch.setattr(cli_module, "subprocess", SimpleNamespace(run=record))
     args = _args("--project-root", str(project), "stop")
 
     report = _stop(args, _resolve(args))
 
-    assert len(recorded) == 1
-    assert recorded[0][0].endswith(".research-rag/bin/open-research-rag-ui.sh")
-    assert recorded[0][1:] == ["--stop"]
-    assert report["ui_launcher_status"] == 0
-    assert report["ui_launcher_output"] == "No app is running for this project."
+    assert report["project_root"] == str(project)
+    assert report["running"] is False
+    assert report["attached_to"] is None
     assert "servers" not in report
+    assert "forced_pids" not in report
 
 
-def test_stop_with_servers_reports_what_it_found_and_stopped(
+def test_start_serves_in_this_terminal_and_records_the_port_it_chose(
     project: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr(
-        cli_module,
-        "subprocess",
-        SimpleNamespace(
-            run=lambda _command, **_options: SimpleNamespace(returncode=0, stdout="")
-        ),
-    )
-    monkeypatch.setattr(
-        cli_module,
-        "_service_processes",
-        lambda _root, *_args: [(4242, "python -m research_rag")],
-    )
-    monkeypatch.setattr(cli_module, "_terminate", lambda _pids: [])
-    args = _args("--project-root", str(project), "stop", "--servers")
+    """`start` runs the app here, so the port and the pid belong to this process."""
 
-    report = _stop(args, _resolve(args))
+    served: list[object] = []
 
-    assert report["servers"] == [{"pid": 4242, "command": "python -m research_rag"}]
-    assert report["forced_pids"] == []
-    assert len(report["notes"]) == 2
+    async def _serving(config: Any, *, port: int | None, open_browser: bool):
+        served.append((config, port, open_browser))
+        return cli_module.CommandResult()
 
-
-def test_set_overrides_reach_the_settings_by_resolving_in_this_process(
-    project: Path,
-) -> None:
-    args = _args(
-        "--project-root", str(project), "--set", "retrieval.rrf_k=30", "config"
-    )
-
-    config = _resolve(args)
-
-    assert config.settings.rrf_k == 30
-    assert config.settings_provenance["retrieval.rrf_k"] == "command line"
-
-
-def test_config_prints_what_a_change_to_every_key_costs(
-    project: Path, capsys: pytest.CaptureFixture[str]
-) -> None:
-    """`config` stays read-only, and it shows the cost before a file is edited."""
-
-    args = _args("--project-root", str(project), "config")
-
-    asyncio.run(cli_module._run(args))
-
-    printed = capsys.readouterr().out
-    assert "What a change to each key costs" in printed
-    # A key the registry labels `identity` but no generation reads costs nothing.
-    assert "retrieval.rerank_max_candidates" in printed
-    assert "retrieval.rrf_k" in printed
-    assert "dense.embedding_model" in printed
-    assert not (project / ".research-rag" / "config.toml").exists()
-
-
-def test_config_prints_the_description_of_every_key(
-    project: Path, capsys: pytest.CaptureFixture[str]
-) -> None:
-    """The terminal and the Config tab read one description, from the registry."""
-
-    args = _args("--project-root", str(project), "config")
-
-    asyncio.run(cli_module._run(args))
-
-    # Wrapped to the terminal's width, so the whitespace is what a reader's eye drops.
-    printed = " ".join(capsys.readouterr().out.split())
-    for setting in SETTINGS:
-        assert " ".join(setting.doc.split()) in printed
-
-
-def _launched(project: Path, monkeypatch: pytest.MonkeyPatch, returncode: int = 0):
-    recorded: list[list[str]] = []
-
-    def record(command: list[str], **_: Any) -> subprocess.CompletedProcess[str]:
-        recorded.append(command)
-        return subprocess.CompletedProcess(command, returncode, "", "")
-
-    monkeypatch.setattr(launcher_module.subprocess, "run", record)
-    return recorded
-
-
-def test_start_hands_over_to_the_project_launcher(
-    project: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """The launcher owns the port choice, the lock, and the pid file."""
-
-    recorded = _launched(project, monkeypatch)
+    monkeypatch.setattr(cli_module, "_serve_attached", _serving)
     args = _args("--project-root", str(project), "start", "--port", "5099")
     config = _resolve(args)
-    launcher_module.ensure_ui_launcher(
-        project_root=config.project_root,
-        portable_root=config.portable_root,
-        state_root=config.state_root,
-        project_name=config.project_name,
-    )
 
-    outcome = _start(args, config)
+    _start(args, config)
 
-    assert outcome["running"] is True
-    assert recorded[0][0].endswith(".research-rag/bin/open-research-rag-ui.sh")
-    assert recorded[0][1:] == ["--port", "5099"]
+    assert served == [(config, 5099, False)]
 
 
-def test_ui_starts_the_app_and_opens_a_browser(
+def test_ui_serves_in_this_terminal_and_opens_a_browser(
     project: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    recorded = _launched(project, monkeypatch)
     opened: list[str] = []
+    served: list[object] = []
+
+    async def _serving(config: Any, *, port: int | None, open_browser: bool):
+        served.append((config, port, open_browser))
+        return cli_module.CommandResult()
+
     monkeypatch.setattr(cli_module, "_open_browser", opened.append)
-    args = _args("--project-root", str(project), "ui")
+    monkeypatch.setattr(cli_module, "_serve_attached", _serving)
+    args = _args("--project-root", str(project), "ui", "--port", "5099")
     config = _resolve(args)
-    launcher_module.ensure_ui_launcher(
-        project_root=config.project_root,
-        portable_root=config.portable_root,
-        state_root=config.state_root,
-        project_name=config.project_name,
+
+    _start(args, config)
+
+    # The attached run owns the browser: it opens once the app answers, so the
+    # command hands it the port it was told to use and asks for the workspace.
+    assert served == [(config, 5099, True)]
+    assert opened == []
+
+
+def test_start_leaves_an_app_another_terminal_owns_alone(
+    project: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """A reader deciding whether Ctrl-C here stops that app needs the difference."""
+
+    served: list[object] = []
+
+    async def _serving(*_: Any, **__: Any):
+        served.append(True)
+        return cli_module.CommandResult()
+
+    monkeypatch.setattr(cli_module, "_serve_attached", _serving)
+    args = _args("--project-root", str(project), "start")
+    config = _resolve(args)
+    # Both files are what the app writes, and a recorded port whose process is gone
+    # reads as no app at all.
+    (config.state_root / "research-rag-ui.port").write_text("5099\n", encoding="utf-8")
+    (config.state_root / "research-rag-ui.pid").write_text(
+        str(os.getpid()), encoding="utf-8"
     )
 
     _start(args, config)
 
-    assert recorded[0][1:] == ["--open"]
-
-
-def test_start_reports_a_launcher_that_fails(
-    project: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """A start that failed names what failed and where the reason was written."""
-
-    _launched(project, monkeypatch, returncode=3)
-    args = _args("--project-root", str(project), "start")
-    config = _resolve(args)
-    launcher_module.ensure_ui_launcher(
-        project_root=config.project_root,
-        portable_root=config.portable_root,
-        state_root=config.state_root,
-        project_name=config.project_name,
-    )
-
-    with pytest.raises(ResearchError, match="did not start") as failure:
-        _start(args, config)
-    assert "research-rag-ui.log" in str(failure.value)
+    assert served == []
+    assert "already served" in capsys.readouterr().out
 
 
 def test_generations_lists_and_can_roll_back() -> None:

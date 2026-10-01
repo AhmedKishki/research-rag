@@ -8,9 +8,7 @@
 ```text
 my-research-project/
 ├── sources/                              untouched PDF/EPUB originals
-├── open-research-rag-ui.sh               symlink to .research-rag/bin/open-research-rag-ui.sh
 └── .research-rag/                        all project state
-    ├── bin/open-research-rag-ui.sh       generated machine-local workspace launcher
     ├── project.json                      stable id, name, source directory
     ├── source-catalog.json               durable source-id-to-path registry
     ├── source-metadata.json              authoritative reviewed metadata overlay
@@ -34,15 +32,13 @@ my-research-project/
                 ├── bm25/
                 └── qdrant/
 
-~/.cache/research-ultra-rag-mcp/models/  shared model binaries only
+~/.cache/research-rag/models/  shared model binaries only
 ```
 
-- Two roots carry the name of the MCP server this app was seeded from rather than the app's own, and both are read by this app and by the frozen product.
-- `~/.config/research-ultra-rag-mcp/config.toml` is the user settings file.
-- `~/.cache/research-ultra-rag-mcp/models/` holds the embedding and reranker binaries, about 150 MB in total, and is the only cross-project shared state, because those binaries are immutable once downloaded.
-- `tests/test_data_roots.py` asserts both roots and states the reason each is retained.
-- Renaming either root is a migration rather than a refactor.
-- Everything else inside `.research-rag/` is byte-compatible with `research-ultra-rag-mcp`, which is frozen and still installed on the machines that carry it, and the app names no product inside its on-disk state, so both products read and write the same project.
+- `~/.config/research-rag/config.toml` is the user settings file.
+- `~/.config/research-rag/projects.json` is the account's project register, beside those settings.
+- `~/.cache/research-rag/models/` holds the embedding and reranker binaries, about 150 MB in total, and is the only cross-project shared state, because those binaries are immutable once downloaded.
+- `tests/test_data_roots.py` asserts both roots and states why each is named for this app.
 
 ## Portable state
 
@@ -258,8 +254,8 @@ generations/<generation-id>/
 - A missing or empty `reason`, `excluded_at`, or `generation_id` is rejected by name.
 - A `chunk_id` that is not a non-empty string is rejected.
 - Any `schema_version` other than 1 is rejected.
-- The frozen `research-ultra-rag-mcp` still reads the projects this app serves and resolves `project.json`, `source-metadata.json`, `source-exclusions.json`, and `source-catalog.json` by name, so `chunk-exclusions.json` is invisible to it, it keeps serving a passage excluded here, and that divergence is accepted.
-  - Excluding a whole source is the decision both products honour, and `source-exclusions.json` is the file that decides it.
+- This file is separate from `source-exclusions.json` because it decides one passage rather than a whole source.
+  - Excluding a whole source is recorded in `source-exclusions.json`.
 
 ### Filter layers
 
@@ -305,8 +301,8 @@ research-rag \
   --runtime-root /ssd/research-runtime/ai-and-fetishism
 ```
 
-- `RESEARCH_ULTRARAG_RUNTIME_ROOT` is the equivalent variable.
-- The first run claims an empty directory by writing `.research-ultra-rag-runtime.json`, naming this project's `project_id`.
+- `RESEARCH_RAG_RUNTIME_ROOT` is the equivalent variable.
+- The first run claims an empty directory by writing `.research-rag-runtime.json`, naming this project's `project_id`.
 - A root is refused when it is not absolute, when its marker names a different project, when it is non-empty with no marker, or when it is a file.
 - Only derived state moves, and your portable review state stays in `<project>/.research-rag`.
 - `status.runtime_root` reports the effective location, and `null` when the default is in use.
@@ -314,7 +310,7 @@ research-rag \
 
 ## Outside the project
 
-- One account's project register lives beside its settings, at `~/.config/research-ultra-rag-mcp/projects.json`.
+- One account's project register lives beside its settings, at `~/.config/research-rag/projects.json`.
 - That register holds one entry per project, and each entry holds its `project_id`, `project_name`, `project_root`, and `registered_at`.
 - The register sits outside the project directory on purpose, because a register that travelled inside a project could not list the projects that had none.
 - The register holds no corpus, no index, no review, and no derived state.

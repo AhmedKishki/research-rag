@@ -14,7 +14,6 @@ from pathlib import Path
 from config_ultra_rag_mcp import SettingsError, resolve_settings
 from platformdirs import user_cache_path
 
-from .launcher import ensure_ui_launcher
 from .settings import (
     SETTINGS,
     EffectiveSettings,
@@ -35,19 +34,26 @@ class ConfigurationError(ValueError):
     pass
 
 
-_RUNTIME_MARKER = ".research-ultra-rag-runtime.json"
+# The first loopback port an app claims. It is a default rather than a fixed choice,
+# because an app is started from a terminal and a second project must not fail where
+# a port was free.
+DEFAULT_UI_PORT = 5051
+_RUNTIME_MARKER = ".research-rag-runtime.json"
+# Where this project recorded that its derived state was relocated to. Machine-local,
+# and absent for a project that keeps its state inside its own root.
+RUNTIME_ROOT_RECORD = "runtime-root"
 
 # A server this project starts for itself is a managed child: it may not serve
 # the browser UI, because only a server an operator started may. Every child
 # transport marks the server it starts and drops the variables that describe a
 # top-level invocation, so no exported setting can turn one server into a chain
 # of them.
-MANAGED_CHILD_ENV = "RESEARCH_ULTRARAG_MANAGED_CHILD"
+MANAGED_CHILD_ENV = "RESEARCH_RAG_MANAGED_CHILD"
 # The process that started a child. A child orphaned before it can read its own
 # parent, a client that dies between spawning and startup, still knows who owned
 # it and can end itself with them.
-OWNER_PID_ENV = "RESEARCH_ULTRARAG_OWNER_PID"
-TOP_LEVEL_ONLY_ENV = ("RESEARCH_ULTRARAG_UI_PORT",)
+OWNER_PID_ENV = "RESEARCH_RAG_OWNER_PID"
+TOP_LEVEL_ONLY_ENV = ("RESEARCH_RAG_UI_PORT",)
 
 
 def child_process_environment() -> dict[str, str]:
@@ -676,7 +682,7 @@ def resolve_config(
         if runtime_cache_root is not None
         else None
     )
-    # `research-ultra-rag-mcp` is the MCP server's directory name, kept so this
+    # `research-rag` is the MCP server's directory name, kept so this
     # app reads the same embedding and reranker binaries that server
     # downloaded. A name matching this product would leave every existing cache
     # behind and re-download both models on the first build, silently, because the
@@ -687,7 +693,7 @@ def resolve_config(
     configured_model_cache = (
         settings.model_cache_root
         if settings.model_cache_root is not None
-        else user_cache_path("research-ultra-rag-mcp", appauthor=False) / "models"
+        else user_cache_path("research-rag", appauthor=False) / "models"
     ).resolve()
     legacy_model_cache = state / "models"
     if (
@@ -705,16 +711,7 @@ def resolve_config(
     (state / "failures").mkdir(exist_ok=True)
     (state / "ultrarag-runtime").mkdir(exist_ok=True)
     configured_model_cache.mkdir(parents=True, exist_ok=True)
-    # Initialising the project leaves a machine-local UI launcher under
-    # the project's own state root and, when absent, a single symlink to it in
-    # the project root. Both are created only when missing, never overwriting.
-    ensure_ui_launcher(
-        project_root=project,
-        portable_root=portable,
-        state_root=state,
-        project_name=project_name,
-        runtime_root=state if relocated else None,
-    )
+    record_runtime_root(portable, state if relocated else None)
 
     return ResearchConfig(
         project_root=project,
@@ -744,3 +741,31 @@ def resolve_source_reference(config: ResearchConfig, relative_path: str) -> Path
             f"Source path escapes the sources directory: {relative_path}"
         )
     return candidate
+
+
+def record_runtime_root(portable_root: Path, runtime_root: Path | None) -> None:
+    """Record where this project's derived state lives, or that it is not relocated.
+
+    Written whenever the project's configuration is resolved, so a later command
+    that has only the project's root to go on finds the state a relocated runtime
+    put elsewhere rather than reporting a project that holds nothing.
+    """
+
+    record = portable_root / RUNTIME_ROOT_RECORD
+    if runtime_root is None:
+        record.unlink(missing_ok=True)
+        return
+    # Not suppressed: a project whose portable root cannot be written is one whose
+    # relocated state a later command would report as missing, and a silent miss
+    # there reads as an empty project rather than a broken one.
+    record.write_text(f"{runtime_root}\n", encoding="utf-8")
+
+
+def recorded_runtime_root(portable_root: Path) -> Path | None:
+    """Where this project's derived state was relocated to, or None."""
+
+    try:
+        text = (portable_root / RUNTIME_ROOT_RECORD).read_text(encoding="utf-8").strip()
+    except OSError:
+        return None
+    return Path(text) if text else None

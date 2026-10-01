@@ -12,6 +12,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import signal
 import subprocess
 from pathlib import Path
 from typing import Any
@@ -19,9 +20,9 @@ from typing import Any
 import pytest
 
 import research_rag.surfaces.cli as cli_module
+from research_rag import config as config_module
 from research_rag import registry
 from research_rag import update as update_module
-from research_rag.launcher import launcher_path
 from research_rag.release import FOUND, NONE, Release, ReleaseSet
 from research_rag.support import ResearchError
 from research_rag.surfaces.cli import _parser
@@ -601,22 +602,49 @@ def test_a_lock_nobody_holds_is_not_a_refusal(tmp_path: Path) -> None:
     assert update_module.held_projects([project]) == ()
 
 
-def test_stopping_an_app_uses_the_projects_own_launcher(tmp_path: Path) -> None:
+def test_stopping_an_app_signals_the_pid_the_app_recorded(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An app is asked to stop the way its own terminal would ask it."""
+
     project = update_module.ProjectState(tmp_path / "thesis", "thesis")
-    script = project.portable_root / "bin" / "open-research-rag-ui.sh"
-    script.parent.mkdir(parents=True)
-    script.write_text("#!/bin/sh\n", encoding="utf-8")
     project.state_root.mkdir(parents=True)
     (project.state_root / "research-rag-ui.pid").write_text(
         str(os.getpid()), encoding="utf-8"
     )
-    run = Recorder({f"{script} --stop": "Stopped the app for this project.\n"})
+    sent: list[tuple[int, int]] = []
+    monkeypatch.setattr(
+        update_module.os, "kill", lambda pid, sig: sent.append((pid, sig))
+    )
+    run = Recorder()
 
     stopped = update_module.stop_app(project, run)
 
-    assert run.calls == [(str(script), "--stop")]
+    assert run.calls == []
+    # Signal 0 is the liveness probe that found the pid; only the TERM is the request.
+    assert [entry for entry in sent if entry[1] != 0] == [(os.getpid(), signal.SIGTERM)]
     assert stopped.stopped is True
-    assert "Stopped the app" in stopped.detail
+    assert str(os.getpid()) in stopped.detail
+
+
+def test_a_pid_that_cannot_be_asked_to_stop_is_reported(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    project = update_module.ProjectState(tmp_path / "thesis", "thesis")
+    project.state_root.mkdir(parents=True)
+    (project.state_root / "research-rag-ui.pid").write_text(
+        str(os.getpid()), encoding="utf-8"
+    )
+
+    def _refuse(_pid: int, _sig: int) -> None:
+        raise PermissionError(13, "Operation not permitted")
+
+    monkeypatch.setattr(update_module.os, "kill", _refuse)
+
+    stopped = update_module.stop_app(project, Recorder())
+
+    assert stopped.stopped is False
+    assert "not permitted" in stopped.detail
 
 
 def test_a_project_with_no_app_is_left_alone(tmp_path: Path) -> None:
@@ -688,12 +716,13 @@ def test_applying_stops_every_app_and_prints_the_command_that_starts_it_again(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     project = update_module.ProjectState(tmp_path / "thesis", "thesis")
-    script = project.portable_root / "bin" / "open-research-rag-ui.sh"
-    script.parent.mkdir(parents=True)
-    script.write_text("#!/bin/sh\n", encoding="utf-8")
     project.state_root.mkdir(parents=True)
     (project.state_root / "research-rag-ui.pid").write_text(
         str(os.getpid()), encoding="utf-8"
+    )
+    sent: list[tuple[int, int]] = []
+    monkeypatch.setattr(
+        update_module.os, "kill", lambda pid, sig: sent.append((pid, sig))
     )
     monkeypatch.setattr(
         registry,
@@ -713,7 +742,7 @@ def test_applying_stops_every_app_and_prints_the_command_that_starts_it_again(
             releases=_published("0.1.0", "0.2.0"),
         ),
     )
-    stopped = Recorder({f"{script} --stop": "Stopped the app for this project.\n"})
+    stopped = Recorder()
     applied = Recorder({"git checkout --detach v0.2.0": "HEAD is now at abc\n"})
     monkeypatch.setattr(update_module, "subprocess_runner", stopped)
     monkeypatch.setattr(
@@ -730,7 +759,8 @@ def test_applying_stops_every_app_and_prints_the_command_that_starts_it_again(
     payload = _run("update", "--apply").payload
 
     assert payload is not None
-    assert stopped.calls == [(str(script), "--stop")]
+    assert stopped.calls == []
+    assert [entry for entry in sent if entry[1] != 0] == [(os.getpid(), signal.SIGTERM)]
     assert payload["applied"] is True
     assert payload["stopped"][0]["stopped"] is True
     assert payload["start_again"] == [
@@ -770,19 +800,19 @@ def test_applying_with_nothing_to_apply_stops_nothing(
     assert run.calls == []
 
 
-def test_a_relocated_runtime_root_is_read_from_the_launcher(tmp_path: Path) -> None:
+def test_a_relocated_runtime_root_is_read_from_the_projects_own_record(
+    tmp_path: Path,
+) -> None:
     elsewhere = tmp_path / "fast-disk"
     project = update_module.ProjectState(tmp_path / "thesis", "thesis")
-    script = launcher_path(project.portable_root)
-    script.parent.mkdir(parents=True)
-    script.write_text(
-        f'#!/bin/sh\nPROJECT_ROOT="{project.project_root}"\n'
-        f'RUNTIME_ROOT="{elsewhere}"\n',
-        encoding="utf-8",
-    )
+    project.portable_root.mkdir(parents=True)
+    config_module.record_runtime_root(project.portable_root, elsewhere)
 
     assert project.state_root == elsewhere
     assert project.default_state_root == project.portable_root / "runtime"
+
+    config_module.record_runtime_root(project.portable_root, None)
+    assert project.state_root == project.default_state_root
 
 
 def test_the_version_flag_and_update_report_the_same_numbers(

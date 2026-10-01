@@ -1,10 +1,10 @@
-"""Three locations keep the frozen MCP server's name; the rest are this app's own.
+"""Every shared location is named for this app, and nothing else may claim it.
 
-The frozen product still reads those three: a renamed user settings directory is read
-by neither product, a renamed model cache re-downloads both models on the first
-build, and a renamed launcher state file leaves the frozen product's pid file with
-nothing to stop it. Nothing fails until then, so a rename must delete the assertion
-that forbids it and state the migration.
+A renamed user settings directory, model cache, or state file strands the one that
+was written, and nothing fails until a command needs it: a settings file under a
+directory nothing reads is ignored, a model cache under a new path re-downloads
+both models on the first build, and a state file under a name another product also
+writes lets one product stop the other's process.
 
 The app's own names must stay its own, so a second product can never stop this one's
 process or land beside it in a project.
@@ -15,83 +15,85 @@ from __future__ import annotations
 import tomllib
 from pathlib import Path
 
+from research_rag import app as app_module
 from research_rag import config as config_module
-from research_rag import launcher as launcher_module
 from research_rag import settings as settings_module
 from research_rag.settings import SETTINGS
 
 ROOT = Path(__file__).resolve().parent.parent
-LEGACY = "research-ultra-rag-mcp"
-LEGACY_ENVIRONMENT_PREFIX = "RESEARCH_ULTRARAG_"
 
 
-def test_the_user_settings_directory_is_the_mcp_servers() -> None:
-    """The frozen product resolves its own settings layer by this name."""
+def test_the_user_settings_directory_is_this_apps_own() -> None:
+    """One account directory holds this app's settings and its project register."""
 
-    assert settings_module.USER_CONFIG_DIRECTORY == LEGACY
-
-
-def test_the_settings_environment_prefix_is_the_mcp_servers() -> None:
-    """Every `RESEARCH_ULTRARAG_*` variable the frozen product reads is one of these."""
-
-    assert settings_module.SETTINGS_ENVIRONMENT_PREFIX == LEGACY_ENVIRONMENT_PREFIX
+    assert settings_module.USER_CONFIG_DIRECTORY == "research-rag"
 
 
-def test_the_model_cache_default_is_the_mcp_servers() -> None:
+def test_the_settings_environment_prefix_is_this_apps_own() -> None:
+    """Every `RESEARCH_RAG_*` variable this app reads is one of these."""
+
+    assert settings_module.SETTINGS_ENVIRONMENT_PREFIX == "RESEARCH_RAG_"
+
+
+def test_the_model_cache_default_is_this_apps_own() -> None:
     """Both models live under that directory, and only a build needs them."""
 
     source = (ROOT / "src/research_rag/config.py").read_text(encoding="utf-8")
-    assert f'user_cache_path("{LEGACY}", appauthor=False)' in source
+    assert 'user_cache_path("research-rag", appauthor=False)' in source
 
 
-def test_the_project_state_root_names_neither_product() -> None:
+def test_no_setting_or_environment_variable_carries_another_products_name() -> None:
+    """A reader finding one would look for a directory that does not exist."""
+
+    for setting in SETTINGS:
+        assert "ULTRARAG" not in setting.env, setting.key
+        assert "ULTRARAG" not in setting.key.upper()
+
+
+def test_the_project_state_root_is_named_for_this_app() -> None:
     assert (
         Path(".research-rag") / "config.toml" == settings_module.PROJECT_CONFIG_RELATIVE
     )
-    assert config_module._RUNTIME_MARKER == ".research-ultra-rag-runtime.json"
-    assert "research_rag" not in config_module._RUNTIME_MARKER
-    assert "research-rag" not in config_module._RUNTIME_MARKER
+    assert config_module._RUNTIME_MARKER == ".research-rag-runtime.json"
 
 
-def test_the_generated_launcher_and_its_link_are_the_apps_own() -> None:
-    """The frozen product's launcher sits in the same project under the same names."""
-
-    assert launcher_module.LAUNCHER_NAME == "open-research-rag-ui.sh"
-    assert launcher_module.LINK_NAME == "open-research-rag-ui.sh"
-    assert launcher_module.LAUNCHER_NAME != "open-ui.sh"
-
-
-def test_the_launcher_state_files_are_the_apps_own() -> None:
+def test_the_running_state_files_are_this_apps_own() -> None:
     """A shared pid file lets one product stop the other's process."""
 
-    template = launcher_module._TEMPLATE
-    for name in ("pid", "port", "lock"):
-        assert f"research-rag-ui.{name}" in template
-        assert f"open-ui.{name}" not in template
-    assert "logs/research-rag-ui.log" in template
-    assert "logs/open-ui.log" not in template
+    assert app_module.PID_FILE == "research-rag-ui.pid"
+    assert app_module.PORT_FILE == "research-rag-ui.port"
+    assert app_module.TTY_FILE == "research-rag-ui.tty"
+    for name in (app_module.PID_FILE, app_module.PORT_FILE, app_module.TTY_FILE):
+        assert "open-ui" not in name
 
 
-def test_the_launcher_runs_this_apps_own_command() -> None:
-    assert launcher_module.UI_COMMAND == "research-rag"
-    assert launcher_module.SERVE_COMMAND == "serve"
-    template = launcher_module._TEMPLATE
-    # Global options go in front of the subcommand and its own options behind it,
-    # so the generated command is the one the parser accepts.
-    assert '"$UI_COMMAND" --project-root "$PROJECT_ROOT"' in template
-    assert '@SERVE@ --port "$PORT"' in template
-    assert "@SERVE@ --project-root" not in template
-    assert '--port "$PORT" @SERVE@' not in template
-    assert "research-ultra-rag" not in template
+def test_a_project_records_where_its_state_lives_only_when_relocated(
+    tmp_path: Path,
+) -> None:
+    """A relocated runtime root is machine-local, so the record is not portable."""
+
+    portable = tmp_path / "project" / ".research-rag"
+    portable.mkdir(parents=True)
+    record = portable / config_module.RUNTIME_ROOT_RECORD
+
+    config_module.record_runtime_root(portable, None)
+    assert not record.exists()
+    assert config_module.recorded_runtime_root(portable) is None
+
+    config_module.record_runtime_root(portable, tmp_path / "elsewhere" / "runtime")
+    try:
+        assert config_module.recorded_runtime_root(portable) == (
+            tmp_path / "elsewhere" / "runtime"
+        )
+    finally:
+        config_module.record_runtime_root(portable, None)
 
 
 def test_the_agent_answer_detail_is_declared_and_used() -> None:
     """The one setting that is neither project, corpus, nor machine tunable.
 
-    A settings file the frozen product wrote names it, and the layer stack refuses an
-    undeclared key in every layer, so the key cannot be dropped while that product is
-    installed. It also selects the projection an agent's answers are built with, so the
-    test pins the reader as well as the key.
+    It selects the projection an agent's answers are built with, so the test pins the
+    reader as well as the key.
     """
 
     keys = {setting.key for setting in SETTINGS}

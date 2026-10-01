@@ -20,7 +20,7 @@ from ..config import ResearchConfig
 from ..instructions import AGENT_INSTRUCTIONS
 from ..review import DEFAULT_FIND_SOURCE_LIMIT
 from ..settings import LEAN_TOOL_DETAIL
-from ..status import uninitialised_status
+from ..status import not_served_status, uninitialised_status
 from ..tool_views import present_tool_response
 from ..version import APP_VERSION
 
@@ -228,26 +228,42 @@ async def _tool_call(operation: Callable[[], Awaitable[T]]) -> T:
         raise ToolError(f"Research workflow failed: {exc}") from exc
 
 
-def create_uninitialised_mcp(project_name: str, reason: str) -> FastMCP[Any]:
-    """The agent surface for a project this machine has not initialised.
+def create_blocked_mcp(
+    project_name: str, reason: str, *, config: ResearchConfig | None
+) -> FastMCP[Any]:
+    """The agent surface for a project this machine cannot serve right now.
 
     An agent's client entry names a project, not a directory, so the same entry
-    can be written on one machine and used on another. That only works where a
-    project exists first: where it does not, this server answers and stops.
-    `status` is declared here rather than by the bridge, so the tools an agent
-    sees are declared in one file and the other seven operations are absent
+    can be written on one machine and used on another. It names a project this
+    machine has never initialised, or one whose app is not running: in both cases
+    there is no corpus to answer about, so this server answers and stops.
+
+    Nothing is started to make it whole. An app belongs to the terminal that
+    started it, so this surface's job is to say which command a reader runs in a
+    terminal, and `status` is declared here rather than by the bridge so the tools
+    an agent sees are declared in one file. The other seven operations are absent
     because there is no corpus behind them.
     """
 
-    payload = uninitialised_status(project_name, reason)
+    # A resolved config is the whole difference between the two conditions: it
+    # means the project is on disk and only its app is missing.
+    payload = (
+        not_served_status(config, reason)
+        if config is not None
+        else uninitialised_status(project_name, reason)
+    )
+    condition = (
+        "the project exists but no app is serving it"
+        if config is not None
+        else "no project has been initialised under that name on this machine"
+    )
     app = FastMCP(
         name=SERVER_NAME,
         version=APP_VERSION,
         instructions=(
-            f"This entry names the project {project_name!r}, and no project has "
-            f"been initialised under that name on this machine, so this server "
-            f"offers `status` and nothing else. {reason} Nothing else here can "
-            "succeed until that command has been run."
+            f"This entry names the project {project_name!r}, and {condition}, so "
+            f"this server offers `status` and nothing else. {reason} Nothing else "
+            "here can succeed until that command has been run in a terminal."
         ),
     )
 
@@ -263,8 +279,7 @@ def create_uninitialised_mcp(project_name: str, reason: str) -> FastMCP[Any]:
         }
     )
     async def status() -> dict[str, Any]:
-        """Report that this project is not initialised on this machine, and the
-        command that creates it.
+        """Report why this project cannot be served, and the command that serves it.
 
         `blocked_by` carries the reason and the exact command. Run it and this
         entry serves the project it names, with no change to the entry.
@@ -276,7 +291,7 @@ def create_uninitialised_mcp(project_name: str, reason: str) -> FastMCP[Any]:
         "research://status",
         name="current generation status",
         description=(
-            "Why this project cannot be served, and the command that initialises it."
+            "Why this project cannot be served, and the command that serves it."
         ),
         mime_type="application/json",
     )

@@ -1,11 +1,13 @@
 """The one command line: one research project, in a terminal or a browser.
 
 `research-rag` resolves a project, constructs a `ResearchService`, and calls it in
-this process. `ui` hands the browser workspace to the project's own generated
-launcher, and `serve` is the foreground host that launcher runs. One console
-script reaches all of it, and the agent surface lives in `surfaces/mcp.py` rather
-than here, so the terminal and the browser answer from the same call on the same
-payload.
+this process. `ui` serves the browser workspace and the agent surface from this
+terminal, in the foreground, and there is no other way to bring an app up: a
+command that starts one stays in the terminal that ran it, so Ctrl-C and a closed
+window both reach it and nothing is left running that nobody is watching. One
+console script reaches all of it, and the agent surface lives in `surfaces/mcp.py`
+rather than here, so the terminal and the browser answer from the same call on the
+same payload.
 
 Only a command that queries opens the vanilla gateway, and it opens on the first
 call rather than as a command-line choice: a generation initializes BM25 through
@@ -21,7 +23,6 @@ import contextlib
 import json
 import os
 import signal
-import subprocess
 import sys
 import textwrap
 import time
@@ -39,10 +40,10 @@ from typing import Any, Self
 from config_ultra_rag_mcp import describe_settings
 
 from .. import bridge
-from .. import launcher as launcher_module
 from ..app import UI_HOST, App, _claim_loopback_port, _own_tty, running_url
 from ..config import (
     CLI_COMMAND,
+    DEFAULT_UI_PORT,
     ConfigurationError,
     ResearchConfig,
     apply_process_priority,
@@ -51,8 +52,7 @@ from ..config import (
     resolve_config,
 )
 from ..control import Control, ControlError, connect
-from ..launcher import launcher_path, start_app, ui_launcher_state
-from ..registry import account_projects, registry_path
+from ..registry import account_projects, project_app_state, registry_path
 from ..registry import register as register_project
 from ..registry import resolve as resolve_registered
 from ..rerankers import RERANKER_MODEL_CHOICES
@@ -66,25 +66,19 @@ from ..ultrarag import LazyGateway, VanillaUltraRAG
 CLI_NAME = CLI_COMMAND
 DEFAULT_DEPTH = 10
 # The variable a client entry that cannot pass an argument sets instead. It is
-# the counterpart of `RESEARCH_ULTRARAG_PROJECT_ROOT`, and it exists for the same
+# the counterpart of `RESEARCH_RAG_PROJECT_ROOT`, and it exists for the same
 # reason: a client that offers only an environment block still has to name a
 # project.
-PROJECT_NAME_ENV = "RESEARCH_ULTRARAG_PROJECT_NAME"
-# How far above the default port an attached app looks for a free one. The
-# launcher's own script has no bound and keeps going; a bound keeps a terminal
-# from appearing to hang on a machine whose ports are all taken.
+PROJECT_NAME_ENV = "RESEARCH_RAG_PROJECT_NAME"
+# How far above the default port an attached app looks for a free one. A port a
+# reader named is never moved, so a named port that is taken fails and says so
+# rather than being served somewhere they did not ask for.
 _PORT_ATTEMPTS = 32
+
 # What a project's own .gitignore keeps out of version control: the derived
-# state that can be rebuilt, and the machine-local launcher. The descriptor,
-# catalogs, and review files are small, portable, and worth keeping.
-VERSION_CONTROL_NOTES = (
-    ".research-rag/runtime/",
-    ".research-rag/bin/",
-    # Both products may serve one project while the migration runs, and each
-    # generates a launcher link at its own name in the project root.
-    "open-research-rag-ui.sh",
-    "open-ui.sh",
-)
+# state that can be rebuilt. The descriptor, catalogs, and review files are
+# small, portable, and worth keeping.
+VERSION_CONTROL_NOTES = (".research-rag/runtime/",)
 # A process the stop sweep may signal has to name one of these, so a shell or an
 # editor that merely mentions the project path is never touched. The MCP server
 # this app was seeded from is deliberately absent: during the migration both
@@ -215,10 +209,6 @@ HELP_GROUPS: tuple[tuple[str, tuple[tuple[str, str], ...]], ...] = (
                 "stop",
                 "Stop this project's app and what it started.",
             ),
-            (
-                "serve",
-                "The app in the foreground on one port. The launcher runs this.",
-            ),
         ),
     ),
     (
@@ -289,7 +279,7 @@ A project's settings resolve in four layers, each overriding the one above it, a
 `config` prints every effective value with the layer it came from:
 
   1. the packaged defaults in default.toml
-  2. the per-user file, ~/.config/research-ultra-rag-mcp/config.toml
+  2. the per-user file, ~/.config/research-rag/config.toml
   3. the project file, <project>/.research-rag/config.toml
   4. an extra file named by --config PATH
 
@@ -326,7 +316,7 @@ The entry names a project, never a directory, so one entry written on one machin
 works on every machine where that project was initialised. The directory is a fact
 of each machine: the app resolves the name through this installation's own project
 record. `--project-root` and `--project` are refused here, and so is
-`RESEARCH_ULTRARAG_PROJECT_ROOT`.
+`RESEARCH_RAG_PROJECT_ROOT`.
 
 A name no project on this machine answers with a connection and one tool: `status`
 reports that the project is not initialised and gives the `init` command that
@@ -342,8 +332,8 @@ Two ready-to-copy templates ship with the source: mcp_settings.example.json for 
 client using an mcpServers object, and kilo-mcp.example.jsonc for one using a
 Kilo-style mcp object. Replace the executable path and the project name in either.
 
-Set RESEARCH_ULTRARAG_CLIENT_NAME so the app's client list can tell agents apart,
-or RESEARCH_ULTRARAG_PROJECT_NAME when the client can pass an environment but not
+Set RESEARCH_RAG_CLIENT_NAME so the app's client list can tell agents apart,
+or RESEARCH_RAG_PROJECT_NAME when the client can pass an environment but not
 an argument. `clients` lists the agents and `disconnect` ends one; the workspace
 shows the same list, so an agent ended in the browser is gone from the terminal
 too.
@@ -388,7 +378,7 @@ def _parser() -> argparse.ArgumentParser:
         # named a path. An absent value means the current directory, resolved
         # where it is used.
         "--project-root",
-        default=os.environ.get("RESEARCH_ULTRARAG_PROJECT_ROOT"),
+        default=os.environ.get("RESEARCH_RAG_PROJECT_ROOT"),
         help="Project root holding .research-rag (default: the current directory).",
     )
     parser.add_argument(
@@ -401,7 +391,7 @@ def _parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--project",
-        default=os.environ.get("RESEARCH_ULTRARAG_PROJECT"),
+        default=os.environ.get("RESEARCH_RAG_PROJECT"),
         help=(
             "Name or id of a project this installation registered, in place of "
             "--project-root. `research-rag projects` lists them."
@@ -409,7 +399,7 @@ def _parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--runtime-root",
-        default=os.environ.get("RESEARCH_ULTRARAG_RUNTIME_ROOT"),
+        default=os.environ.get("RESEARCH_RAG_RUNTIME_ROOT"),
         help=(
             "Absolute directory for derived state, when the project itself is on "
             "slow storage. Omit to keep it under .research-rag."
@@ -446,7 +436,7 @@ def _parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--config",
-        default=os.environ.get("RESEARCH_ULTRARAG_CONFIG"),
+        default=os.environ.get("RESEARCH_RAG_CONFIG"),
         help="Extra settings file, layered above the per-user and project files.",
     )
     parser.add_argument(
@@ -800,26 +790,6 @@ def _parser() -> argparse.ArgumentParser:
         ),
     )
 
-    host = commands.add_parser(
-        "serve",
-        help=(
-            "Serve the app in the foreground on one fixed port: the browser "
-            "workspace, the agent surface, and the control API together."
-        ),
-    )
-    host.add_argument(
-        "--host",
-        choices=("127.0.0.1", "localhost", "::1"),
-        default=UI_HOST,
-        help="Loopback address only (default: 127.0.0.1).",
-    )
-    host.add_argument(
-        "--port",
-        type=int,
-        default=None,
-        help="Serve on this port; omit to claim the first free one at 5051.",
-    )
-
     stop = commands.add_parser(
         "stop",
         help="Stop this project's app, and optionally its processes.",
@@ -972,13 +942,12 @@ def _init(args: argparse.Namespace) -> dict[str, Any]:
         "created": created,
         "registered": registered.as_record(),
         "registry_path": str(registry_path()),
-        "launcher": ui_launcher_state(config.project_root, config.portable_root),
         "keep_out_of_version_control": list(VERSION_CONTROL_NOTES),
         "next_steps": [
             f"Add PDF or EPUB sources to {config.source_root}.",
             project_command(config.project_root, "ingest"),
             project_command(config.project_root, "search", "your question"),
-            project_command(config.project_root, "start", "--open"),
+            project_command(config.project_root, "ui"),
         ],
     }
 
@@ -1092,32 +1061,28 @@ def _terminate(pids: list[int]) -> list[int]:
 
 
 def _stop(args: argparse.Namespace, config: ResearchConfig) -> dict[str, Any]:
-    """Stop this project's browser view, and with ``--servers`` every process serving it.
+    """Stop this project's app, and with ``--servers`` every process serving it.
 
-    The launcher's own message is captured rather than printed, so a caller gets
-    one JSON report on stdout.
+    An app belongs to the terminal that started it, so this command reports which
+    terminal owns it and says plainly that stopping it here leaves that terminal
+    without an app. It never starts one afterwards: nothing about an app outliving
+    the terminal that began it.
     """
 
-    script = launcher_path(config.portable_root)
-    report: dict[str, Any] = {"project_root": str(config.project_root)}
-    if script.is_file():
-        stopped = subprocess.run(
-            [str(script), "--stop"],
-            capture_output=True,
-            text=True,
-            check=False,
-        )
-        report["ui_launcher_status"] = stopped.returncode
-        report["ui_launcher_output"] = stopped.stdout.strip()
-    else:
-        report["ui_launcher_status"] = None
+    app_state = project_app_state(config.project_root).get("app") or {}
+    report: dict[str, Any] = {
+        "project_root": str(config.project_root),
+        "running": bool(app_state.get("running")),
+        "attached_to": app_state.get("attached_to"),
+        "url": app_state.get("url"),
+    }
     if not args.servers:
         return report
     found = _service_processes(config.project_root)
     report["servers"] = [{"pid": pid, "command": command} for pid, command in found]
     report["forced_pids"] = _terminate([pid for pid, _ in found])
     report["notes"] = [
-        "A workspace you started in another terminal belongs to that terminal: this command stops it and does not start it again.",
+        "An app you started in another terminal belongs to that terminal: this command stops it and does not start it again.",
         "A build interrupted this way resumes from its checkpoint on the next ingest call.",
     ]
     return report
@@ -1444,9 +1409,9 @@ async def _serve_attached(
     terminal's process group, so Ctrl-C and a closed window both reach it, and
     the stop below shuts the gateway it opened down rather than orphaning one.
 
-    The port is claimed the way the launcher's own script claims it — the first
-    free one at or above the default — so a second project on the same machine
-    does not fail where a detached one would have moved.
+    The port is claimed by binding it, so a second project on the same machine
+    walks past a taken one rather than failing where a second app would have
+    moved it.
     """
 
     # A port named by the caller is the one they asked for, and it is tried once:
@@ -1508,7 +1473,7 @@ def _a_free_port() -> int:
     is only going to measure.
     """
 
-    first = launcher_module.DEFAULT_UI_PORT
+    first = DEFAULT_UI_PORT
     for candidate in range(first, first + _PORT_ATTEMPTS):
         try:
             claim = _claim_loopback_port(UI_HOST, candidate)
@@ -1656,31 +1621,30 @@ def _serve_attached_sync(
     return asyncio.run(_serve_attached(config, port=None, open_browser=open_browser))
 
 
-async def _serve(args: argparse.Namespace, config: ResearchConfig) -> CommandResult:
-    """Serve the app in the foreground until this process is stopped.
+def _start(args: argparse.Namespace, config: ResearchConfig) -> CommandResult:
+    """Serve this project from this terminal until the terminal or the app ends.
 
-    The generated launcher runs this, so it takes an explicit port and never
-    chooses one: the launcher already made that choice while holding the lock
-    that makes it exclusive. A caller running it by hand omits `--port` and gets
-    the first free port at or above the default.
+    Attached is the whole point, so this is the same run the bare call makes: the
+    process stays in the foreground and in this terminal's process group, where
+    Ctrl-C and a closed window both reach it.
+
+    An app already serving this project is reported rather than started a second
+    time, because two apps on one project would each hold the lock and open a
+    gateway. Its terminal is not this one, so this call says so and returns the
+    reader to their prompt instead of occupying it.
     """
 
-    return await _serve_attached(config, port=args.port, open_browser=False)
-
-
-def _start(args: argparse.Namespace, config: ResearchConfig) -> dict[str, Any]:
-    """Bring the app up, and say where it is and who is attached."""
-
-    outcome = start_app(config, port=args.port, open_browser=args.open)
-    if args.open and outcome.get("url"):
-        _open_browser(outcome["url"])
-    if not outcome.get("running"):
-        detail = outcome.get("stderr") or outcome.get("stdout") or ""
-        raise ResearchError(
-            f"The app for {config.project_root} did not start: {detail} "
-            f"(log: {outcome.get('log')})"
+    url = running_url(config)
+    if url is not None:
+        if args.open:
+            _open_browser(url)
+        sys.stdout.write(
+            f"{config.project_name} is already served at {url} by a process this "
+            f"terminal does not own; Ctrl-C here would not stop it. "
+            f"'{CLI_NAME} stop' stops it, and this command then serves it here.\n"
         )
-    return outcome
+        return CommandResult()
+    return asyncio.run(_serve_attached(config, port=args.port, open_browser=args.open))
 
 
 def _open_browser(url: str) -> None:
@@ -1765,8 +1729,8 @@ async def _update(args: argparse.Namespace) -> dict[str, Any]:
     latest published release, so the version in the answer and the version
     `research-rag --version` prints are the same number. Applying refuses while a
     project lock is held, refuses a checkout with uncommitted work, stops every app
-    through that project's own launcher, and prints the command that starts each
-    one again.
+    through that project's own recorded pid, and prints the command that starts
+    each one again.
     """
 
     from .. import release as release_module
@@ -2024,8 +1988,6 @@ async def _run(args: argparse.Namespace) -> CommandResult:
         return CommandResult(payload=_clients(config))
     if args.command == "disconnect":
         return CommandResult(payload=_disconnect(args, config))
-    if args.command == "serve":
-        return await _serve(args, config)
     if args.command == "stop":
         return CommandResult(payload=_stop(args, config))
     if args.command == "doctor":

@@ -569,42 +569,49 @@ class Control:
         return self._call("GET", "/agent-entry")
 
 
-def connect(config: ResearchConfig) -> Control | None:
+def connect(config: ResearchConfig, *, timeout: float = 3600.0) -> Control | None:
     """Return a handle on the running app, or None when there is not one.
 
     Reading local state through a daemon that is not up would mean opening a second
-    service, so a command that only reads answers in process.
+    service, so a command that only reads answers in process. The handle is built
+    from the port this project recorded; `is_serving` is what says the app behind
+    it is still there.
     """
 
     url = running_url(config)
-    return Control(url) if url is not None else None
+    return Control(url, timeout=timeout) if url is not None else None
 
 
-def ensure_running(config: ResearchConfig, *, timeout: float = 180.0) -> Control:
-    """Return a handle on the app, starting it if the project has none.
+def is_serving(config: ResearchConfig, *, timeout: float = 5.0) -> bool:
+    """Whether the app this project records is answering right now.
 
-    The launcher does the starting, because it owns the free-port choice, the lock,
-    the pid file, and the log. This waits for the port it recorded rather than
-    probing, so the app reached is the one the launcher reported.
+    A port file survives a terminal that closed, so `connect` alone can hand back a
+    handle to an app that is gone. Asking it is the difference between telling a
+    reader their project is being served and telling them it is not.
     """
 
-    import time
+    handle = connect(config, timeout=timeout)
+    if handle is None:
+        return False
+    try:
+        handle.health()
+    except (ControlError, httpx.HTTPError):
+        return False
+    finally:
+        handle.close()
+    return True
 
-    existing = connect(config)
-    if existing is not None:
-        return existing
-    from .launcher import start_app
 
-    started = start_app(config)
-    deadline = time.monotonic() + timeout
-    while time.monotonic() < deadline:
-        handle = connect(config)
-        if handle is not None:
-            return handle
-        if not started.get("running", True):
-            break
-        time.sleep(0.2)
-    raise ControlError(
-        f"The app for {config.project_root} did not start; read "
-        f"{config.state_root / 'logs' / 'research-rag-ui.log'}"
+def not_running_reason() -> str:
+    """Why a project is not being served, in one sentence.
+
+    Nothing is started to produce it. An app belongs to the terminal that started
+    it, so a client that reaches for one is told that rather than quietly given a
+    server of its own to leave behind. The command is `project_command`, so the
+    remedy is written once where a client entry is built.
+    """
+
+    return (
+        "An app runs in a terminal and ends when that terminal closes, so this "
+        "project is not being served and nothing was started to change that."
     )
