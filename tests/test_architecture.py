@@ -230,14 +230,20 @@ def test_the_answer_projection_is_shared_by_the_two_bounded_readers() -> None:
     )
     assert callers == ["surfaces/mcp.py"], callers
     # The command line reaches the projection directly because it selects the
-    # mode per run rather than through the MCP server's own configuration.
+    # mode per run rather than through the MCP server's own configuration. The
+    # account record reaches it as well, because reading whether one project's app
+    # is up is part of reading the record, and the command line's listing and the
+    # workspace's selector are that one answer.
     lean_callers = sorted(
         _relative(path.relative_to(PACKAGE).as_posix())
         for path in _modules()
         if "lean_status" in path.read_text(encoding="utf-8")
         and path.name != "tool_views.py"
     )
-    assert lean_callers == ["surfaces/cli.py"], lean_callers
+    assert lean_callers == ["registry.py", "surfaces/cli.py"], lean_callers
+    # The workspace, with the whole payload on screen, still must not reach for
+    # it: it reads the service's own answer rather than a projection of it.
+    assert "surfaces/ui.py" not in lean_callers
 
 
 # The layer stack, the registry's `Setting` type, the coercion, the provenance,

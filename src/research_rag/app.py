@@ -379,7 +379,10 @@ class App:
             self.config, connect=self._service, app_state=self.state
         ).http_app(path=MCP_PATH)
         workspace = create_ui_app(
-            self.config, service=self.service, clients=self.clients
+            self.config,
+            service=self.service,
+            clients=self.clients,
+            app_state=self.state,
         )
 
         @asynccontextmanager

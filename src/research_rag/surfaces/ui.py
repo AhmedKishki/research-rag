@@ -15,7 +15,8 @@ app does not serve from travelling as an argument the app ignores.
 
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
+import asyncio
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import replace
 from typing import TYPE_CHECKING, Any
 
@@ -36,6 +37,8 @@ from ..config import (
     ResearchConfig,
     resolve_source_reference,
 )
+from ..doctor import mcp_entry_block
+from ..registry import account_projects
 from ..service import ResearchService
 from ..sources import SourcePolicyError, scan_sources
 from ..version import version_label
@@ -95,6 +98,14 @@ RESEARCH_UI_PROFILE = UIProfile(
         # that beside the source decision it is an alternative to, and the panel
         # lists what has been decided so the decision can be reversed.
         chunk_exclusion=True,
+        # One installation serves several projects, so the workspace says which
+        # one it is and can reach another. The listing is the account's own
+        # record, read through the same code `research-rag projects` uses.
+        projects=True,
+        # A reader configuring an agent in the browser is handed the same entry
+        # `research-rag doctor --mcp-entry` prints, rather than a second copy of
+        # it written for a browser.
+        agent_entry=True,
     ),
 )
 
@@ -133,7 +144,40 @@ _OPERATION_ARGUMENTS: Mapping[str, frozenset[str]] = {
     "remove_generation": frozenset({"generation_id", "confirm"}),
     "settings_read": frozenset(),
     "settings_write": frozenset({"values", "expected_revision", "confirm"}),
+    "list_projects": frozenset(),
+    "agent_entry": frozenset(),
 }
+
+
+def _project_listing(config: ResearchConfig) -> dict[str, Any]:
+    """The account's projects, projected as the workspace's selector reads them.
+
+    The listing is the one `research-rag projects` prints, read through the same
+    function, so the projects a browser names are the projects a terminal names
+    and their state cannot differ. Each entry carries the address its app is
+    served on, or the absence of one: a project with no app has no URL, and a
+    workspace that invented one would offer a reader a link that fails.
+
+    `current` is this project's own recorded name, so the page marks the project
+    it is serving rather than the first one in the list.
+    """
+
+    account = account_projects()
+    entries = [
+        {
+            "project_name": entry.get("project_name"),
+            "project_root": entry.get("project_root"),
+            "running": bool((entry.get("app") or {}).get("running")),
+            "url": (entry.get("app") or {}).get("url"),
+            "attached_clients": entry.get("attached_clients", 0),
+        }
+        for entry in account.get("projects", [])
+    ]
+    return {
+        "projects": entries,
+        "current": config.project_name,
+        "message": account.get("message") or "",
+    }
 
 
 def _string_list(value: Any) -> list[str] | None:
@@ -174,10 +218,12 @@ class ResearchUIAdapter:
         service: ResearchService,
         *,
         clients: ClientRegistry | None = None,
+        app_state: Callable[[], Mapping[str, Any]] | None = None,
     ) -> None:
         self.config = config
         self.service = service
         self.clients = clients
+        self.app_state = app_state
 
     async def health(self) -> Mapping[str, Any]:
         return {
@@ -249,7 +295,14 @@ class ResearchUIAdapter:
         arguments: Mapping[str, Any],
     ) -> Mapping[str, Any]:
         if operation == "status":
-            return await self.service.status()
+            payload = dict(await self.service.status())
+            if self.app_state is not None:
+                # The app's own state, which is what the control API's status and
+                # the agent's resource already carry. The workspace reads the
+                # same answer rather than a status that names the port beside it
+                # differently.
+                payload.update(self.app_state())
+            return payload
         if operation == "list_sources":
             return await self.service.list_sources()
         if operation == "ingest":
@@ -337,28 +390,49 @@ class ResearchUIAdapter:
         if operation == "settings_read":
             return await self.service.settings_read()
         if operation == "settings_write":
-            values = arguments.get("values")
-            if not isinstance(values, Mapping) or not values:
-                raise UIRequestError(
-                    "A settings write needs a values object naming what to change"
-                )
-            expected_revision = arguments.get("expected_revision")
-            if not isinstance(expected_revision, str) or not expected_revision.strip():
-                raise UIRequestError(
-                    "A settings write needs the expected_revision it read, so a "
-                    "change made since is refused instead of overwritten"
-                )
-            confirm = arguments.get("confirm", False)
-            if not isinstance(confirm, bool):
-                raise UIRequestError("confirm must be a boolean")
-            return await self.service.settings_write(
-                dict(values),
-                expected_revision=expected_revision,
-                confirm=confirm,
-            )
+            return await self._settings_write(arguments)
+        if operation == "list_projects":
+            # Probing each project's own app is blocking loopback I/O, and a
+            # project whose app is slow to answer must not hold up the page that
+            # asked about it.
+            return await asyncio.to_thread(_project_listing, self.config)
+        if operation == "agent_entry":
+            # The generator `doctor --mcp-entry` prints, so a client's
+            # configuration is the same text whichever surface produced it.
+            return {"entry": mcp_entry_block(self.config)}
         raise UIRequestError(
             f"Research operation {operation!r} is not available",
             status_code=404,
+        )
+
+    async def _settings_write(self, arguments: Mapping[str, Any]) -> Mapping[str, Any]:
+        """Carry one settings change to the service, with its three fields checked.
+
+        The revision is required rather than defaulted: a write that named no
+        revision could land on top of a change made since the page loaded, and
+        the workspace is a second reader of the same request, so a browser that
+        sent a revision which was not text has sent a request the app cannot act
+        on.
+        """
+
+        values = arguments.get("values")
+        if not isinstance(values, Mapping) or not values:
+            raise UIRequestError(
+                "A settings write needs a values object naming what to change"
+            )
+        expected_revision = arguments.get("expected_revision")
+        if not isinstance(expected_revision, str) or not expected_revision.strip():
+            raise UIRequestError(
+                "A settings write needs the expected_revision it read, so a "
+                "change made since is refused instead of overwritten"
+            )
+        confirm = arguments.get("confirm", False)
+        if not isinstance(confirm, bool):
+            raise UIRequestError("confirm must be a boolean")
+        return await self.service.settings_write(
+            dict(values),
+            expected_revision=expected_revision,
+            confirm=confirm,
         )
 
     async def _set_chunk_inclusion(
@@ -422,6 +496,7 @@ def create_ui_app(
     *,
     service: ResearchService,
     clients: ClientRegistry | None = None,
+    app_state: Callable[[], Mapping[str, Any]] | None = None,
 ) -> Starlette:
     """Create the shared workspace over the app's one service.
 
@@ -429,7 +504,8 @@ def create_ui_app(
     app process owns the gateway and there is exactly one of it: a factory here
     would open a second one for the workspace alone. The client registry is
     passed in for the same reason, and is absent when no process serves the
-    workspace.
+    workspace. `app_state` is the app's own state, which is absent in the same
+    way, and the workspace's status carries it beside the service's.
     """
 
     # More than one project can be served at the same time, so each one names the
@@ -438,5 +514,7 @@ def create_ui_app(
     profile = replace(RESEARCH_UI_PROFILE, project_fallback_name=config.project_name)
     return create_shared_ui_app(
         profile=profile,
-        adapter=ResearchUIAdapter(config, service, clients=clients),
+        adapter=ResearchUIAdapter(
+            config, service, clients=clients, app_state=app_state
+        ),
     )

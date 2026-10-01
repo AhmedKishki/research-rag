@@ -13,6 +13,7 @@ from __future__ import annotations
 import asyncio
 import http.client
 import json
+import os
 import socket
 import sys
 from pathlib import Path
@@ -576,6 +577,65 @@ async def test_the_control_api_names_a_client_it_does_not_have(project: Path) ->
         )
         assert code == 400
         assert "nope" in body["error"]
+    finally:
+        await app.stop()
+
+
+async def test_the_control_api_answers_the_account_and_the_client_entry(
+    project: Path,
+) -> None:
+    """The command line can reach what the workspace's selector and entry read.
+
+    Both are the app's own answers rather than a command-line reconstruction, so a
+    terminal naming a project and a browser naming the same one cannot differ.
+    """
+
+    from research_rag import registry
+    from research_rag.app import PID_FILE, PORT_FILE
+    from research_rag.control import Control
+    from research_rag.doctor import mcp_entry_block
+
+    config = resolve_config(project, vanilla_executable=sys.executable)
+    registry.register(config.project_id, config.project_name, config.project_root)
+    app = App(config, port=free_port())
+    app.service = FakeService()  # type: ignore[assignment]
+    await app.start()
+    try:
+        await wait_until_ready(app)
+        # The launcher is what records the address; an app started in process has
+        # to be recorded the same way before a probe can find it, and this is the
+        # pair of files the launcher writes.
+        (config.state_root / PORT_FILE).write_text(str(app.port), encoding="utf-8")
+        (config.state_root / PID_FILE).write_text(str(os.getpid()), encoding="utf-8")
+
+        code, body = await asyncio.to_thread(get, app.url, "/control/projects")
+        assert code == 200
+        assert [entry["project_name"] for entry in body["projects"]] == [
+            config.project_name
+        ]
+        # This project's own app is the one serving the request, and it is named
+        # with the address a reader can open.
+        assert body["projects"][0]["app"] == {
+            "running": True,
+            "url": app.url,
+            "port": app.port,
+        }
+        assert body["projects"][0]["attached_clients"] == 0
+
+        code, entry = await asyncio.to_thread(get, app.url, "/control/agent-entry")
+        assert code == 200
+        assert entry == {"entry": mcp_entry_block(config)}
+
+        # `Control` is synchronous, so it is used off the loop: the listing a
+        # reader asks for probes each project's own app, and a probe made on the
+        # loop would wait for an app that is itself waiting for the probe.
+        def through_control() -> tuple[dict[str, Any], dict[str, Any]]:
+            with Control(app.url) as handle:
+                return handle.projects(), handle.agent_entry()
+
+        projects, entry_through_control = await asyncio.to_thread(through_control)
+        assert projects["project_count"] == body["project_count"]
+        assert entry_through_control == entry
     finally:
         await app.stop()
 
