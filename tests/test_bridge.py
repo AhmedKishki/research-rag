@@ -227,7 +227,9 @@ def test_the_bridge_answers_a_project_no_app_is_serving_and_starts_nothing(
     )
     assert payload["project_initialised"] is True
     assert payload["blocked_by"][0]["check"] == "app.serving"
-    assert "ui" in payload["blocked_by"][0]["remedy"]
+    # The remedy names the project, so no machine's directory reaches an agent.
+    assert "start" in payload["blocked_by"][0]["remedy"]
+    assert "AI and fetishism" in payload["blocked_by"][0]["remedy"]
 
 
 def test_the_mcp_command_hands_the_bridge_a_name(

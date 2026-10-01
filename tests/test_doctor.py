@@ -380,8 +380,10 @@ def test_a_relocated_runtime_root_also_follows_the_command(
     command = json.loads(mcp_entry_block(config))["mcp"]["research-rag"]["command"]
 
     assert command[1] == "mcp"
-    assert command.index("--runtime-root") > command.index("mcp")
     assert command.index("--project-name") > command.index("mcp")
+    # A relocated runtime root is where one machine keeps its derived state, so it
+    # never reaches an entry another machine will read.
+    assert "--runtime-root" not in command
 
 
 def test_a_correct_url_entry_passes(tmp_path: Path, config: ResearchConfig) -> None:

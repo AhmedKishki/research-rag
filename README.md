@@ -87,7 +87,7 @@ research-rag --project-root /path/to/project install --desktop
 research-rag --project-root /path/to/project init --name "My project"
 cp ~/Downloads/*.pdf ~/Downloads/*.epub /path/to/project/sources/
 research-rag --project-root /path/to/project ingest
-research-rag --project-root /path/to/project ui
+research-rag --project-root /path/to/project start
 ```
 
 - `init` records the project identity and adds the project to the account register under the name an agent's client entry will carry.
@@ -212,7 +212,7 @@ research-rag --project-root /path/to/project doctor --check-entry ~/my-client.js
 | `metadata` | one source's reviewed bibliographic override |
 | `config` | every effective setting, what the key does, and the layer it came from |
 | `doctor` | one line per dependency, with the command that fixes it |
-| `start` / `ui` | the app, started; `ui` also opens a browser |
+| `start` | the app, served from this terminal |
 | `clients` / `disconnect` | the agents attached to the app, and ending one |
 | `mcp` | the agent surface on stdio for `--project-name`, proxied to that project's app |
 | `stop` | the app, and optionally any process of this app still building |
@@ -266,7 +266,7 @@ research-rag update
 
 ## Use the workspace
 
-- A bare `research-rag` opens the workspace in a browser and serves it from the terminal you typed it in:
+- A bare `research-rag` serves the workspace from the terminal you typed it in, and prints the address:
 
 ```bash
 research-rag
@@ -289,13 +289,14 @@ AI and fetishism — workspace attached to /dev/pts/5
 - An agent's client entry starts nothing: when no app is serving its project it offers `status`, which names the command to run in a terminal.
 
 ```bash
-research-rag --project-root /path/to/project ui             # serve it here and print the URL
-research-rag --project-root /path/to/project ui --open      # and open a browser
-research-rag --project-root /path/to/project ui --port 5055 # on a port you name
-research-rag --project-root /path/to/project stop           # stop it, from any terminal
+research-rag --project-root /path/to/project start               # serve it here, print the URL
+research-rag --project-root /path/to/project --start-ui start     # and open a browser
+research-rag --project-root /path/to/project start --port 5055   # on a port you name
+research-rag --project-root /path/to/project stop                # stop it, from any terminal
 ```
 
-- There is no other way to bring an app up. `start` and `ui` both serve it in the terminal that ran them, so Ctrl-C and a closed window both reach it.
+- The command line is where this app is worked from, so serving never opens a browser by itself. `--start-ui` asks for one.
+- There is no other way to bring an app up. `start` serves it in the terminal that ran it, so Ctrl-C and a closed window both reach it.
 - A port you name is never moved: a port that is taken fails and says so. A port left to the app is the first free one at or above 5051, so two projects never serve from the same port.
 - `stop` from another terminal stops an app that terminal does not own, and does not start it again.
 - The workspace binds loopback only and has no authentication, which is correct for an address no other machine can reach.

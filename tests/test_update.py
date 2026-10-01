@@ -764,7 +764,7 @@ def test_applying_stops_every_app_and_prints_the_command_that_starts_it_again(
     assert payload["applied"] is True
     assert payload["stopped"][0]["stopped"] is True
     assert payload["start_again"] == [
-        f"research-rag --project-root {project.project_root} ui"
+        f"research-rag --project-root {project.project_root} start"
     ]
     assert payload["project_state_untouched"] is True
     assert applied.calls == []

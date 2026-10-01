@@ -240,10 +240,11 @@ def mcp_entry_block(config: ResearchConfig) -> str:
     order for the same reason.
     """
 
+    # The entry carries the project's name and nothing else. A relocated runtime
+    # root is where one machine keeps its derived state, and a second machine
+    # resolves the same name to a different place entirely.
     arguments = [_recommended_server_command(), "mcp"]
     arguments.extend(["--project-name", config.project_name])
-    if config.runtime_root is not None:
-        arguments.extend(["--runtime-root", str(config.runtime_root)])
     entry = {
         "mcp": {
             SERVER_COMMAND: {
