@@ -24,6 +24,7 @@ import os
 import signal
 import subprocess
 import sys
+import textwrap
 import time
 from collections.abc import AsyncIterator, Sequence
 from contextlib import AbstractContextManager, asynccontextmanager, nullcontext
@@ -79,6 +80,251 @@ VERSION_CONTROL_NOTES = (
 SERVICE_MARKERS = ("research_rag", "research-rag")
 STOP_GRACE_SECONDS = 5.0
 
+# The menu `research-rag help` prints. argparse already prints a usage block and
+# a per-command one; what it cannot print is the order of the work, which group a
+# command belongs to, and the three facts a first call needs: the project owns
+# one app, this command line reaches that app rather than starting its own, and
+# nothing here writes an original. Each command appears in exactly one group and
+# `test_the_help_menu_accounts_for_every_command` fails when one is added to the
+# parser and not here.
+HELP_GROUPS: tuple[tuple[str, tuple[tuple[str, str], ...]], ...] = (
+    (
+        "First time",
+        (
+            (
+                "init",
+                (
+                    "Create the project identity and .research-rag, or attach to a "
+                    "directory you already have without moving a file."
+                ),
+            ),
+            (
+                "ingest",
+                (
+                    "Extract, chunk, embed, and index the PDFs and EPUBs in the "
+                    "sources directory. Call it again to resume a build that ran out "
+                    "of its time budget."
+                ),
+            ),
+            (
+                "ui",
+                "Bring the app up and open the workspace. A first run ends here.",
+            ),
+        ),
+    ),
+    (
+        "What state the project is in",
+        (
+            (
+                "status",
+                (
+                    "Whether the corpus is current, and what changed since the "
+                    "generation. A stale answer names the call that closes it, and "
+                    "--verbose prints the whole payload."
+                ),
+            ),
+            (
+                "sources",
+                "The inventory: every file, which are indexed, and why one is not.",
+            ),
+            (
+                "doctor",
+                (
+                    "What is wrong with this installation, one line per dependency, "
+                    "each with the command that fixes it."
+                ),
+            ),
+        ),
+    ),
+    (
+        "Reading",
+        (
+            (
+                "search",
+                (
+                    "Evidence passages for a question, always hybrid and always "
+                    "reranked. `help filters` names the six filter layers and the two "
+                    "retrieval switches."
+                ),
+            ),
+            (
+                "passage",
+                (
+                    "One passage and its neighbours, for reading around a result. "
+                    "Takes the chunk id a search returned."
+                ),
+            ),
+        ),
+    ),
+    (
+        "Deciding about a source",
+        (
+            (
+                "metadata",
+                (
+                    "Reviewed bibliography for one source. It survives a rebuild, "
+                    "which is what a rebuild re-extracts over."
+                ),
+            ),
+            (
+                "exclude",
+                "Take a source out of retrieval, recording why. The file stays.",
+            ),
+            (
+                "include",
+                "Put an excluded source back into retrieval.",
+            ),
+        ),
+    ),
+    (
+        "Running the app",
+        (
+            (
+                "start",
+                (
+                    "Bring the app up and report where it is. `ui` does the same and "
+                    "opens a browser."
+                ),
+            ),
+            (
+                "projects",
+                "Every project this installation knows, and which of them are up.",
+            ),
+            (
+                "clients",
+                "The agents attached to this project's app.",
+            ),
+            (
+                "disconnect",
+                "End one attached agent's session.",
+            ),
+            (
+                "stop",
+                "Stop this project's app and what it started.",
+            ),
+            (
+                "serve",
+                (
+                    "The app in the foreground on one port, which is what the "
+                    "generated launcher runs."
+                ),
+            ),
+        ),
+    ),
+    (
+        "Agents and settings",
+        (
+            (
+                "mcp",
+                (
+                    "The agent surface on stdio, proxied to the running app, for a "
+                    "client that cannot open a socket. `help agents` has the client "
+                    "entry."
+                ),
+            ),
+            (
+                "config",
+                (
+                    "Every effective setting and the layer it came from. It prints and "
+                    "does not write; `help settings` names the layers and what a change "
+                    "costs."
+                ),
+            ),
+        ),
+    ),
+)
+
+# Pages for a subject rather than a command. A command name resolves to that
+# command's own usage, so these carry only what no single command can.
+HELP_TOPICS: dict[str, str] = {
+    "filters": """\
+search takes six filter layers, each an --option that may be repeated, and two
+switches that reach one source at a time. A filter that is given nothing is not
+applied.
+
+  --category C        keep passages whose source carries any of these categories
+  --project P         keep passages whose source carries any of these project tags
+  --keyword K         keep passages carrying every one of these keywords
+  --language L        keep passages from a source in any of these ISO 639 codes
+  --author A          keep passages from a source with one of these names
+  --title T           keep passages whose source title contains one of these phrases
+  --source-id ID      search only these sources
+  --exclude-source-id ID
+                      search everything except these sources
+
+The category, project, keyword, language, author, and title layers are read from
+the source's reviewed metadata, not from the extracted text, so a filter that
+matches nothing reports nothing rather than a fallback. Set the metadata with
+`metadata` and the filters start working.
+
+Two switches decide how the retrieval itself runs, and they are the app's
+settings rather than a per-search choice:
+
+  --method M         bm25, dense, or hybrid; hybrid and reranking are the default
+  --no-rerank        skip the cross-encoder, which is on by default and is most of
+                     what a search costs
+
+The agent surface has no such switches, and no method, depth, or reranking
+argument at all: it is always hybrid, always reranked, and its depth is a
+setting. `status` is the same. The reason is that a method chosen per call is a
+number a reader cannot reproduce from the answer they were given.
+""",
+    "settings": """\
+A project's settings resolve in four layers, each overriding the one above it,
+and `config` prints every effective value with the layer it came from:
+
+  1. the packaged defaults in default.toml
+  2. the per-user file, ~/.config/research-ultra-rag-mcp/config.toml
+  3. the project file, <project>/.research-rag/config.toml
+  4. an extra file named by --config PATH
+
+`config` prints and does not write. To change a value, edit the project file; the
+two global options below are per-call and are not recorded anywhere.
+
+  --set key=value    override one value for this command, repeatable, and
+                     forgotten when the command ends
+  --config PATH      add one more layer for this command
+
+What a change costs. Most keys decide what a generation contains, so changing one
+and then searching answers `stale` until `ingest` runs again, and a value that
+changes retrieval changes the answer to a question already asked. A few keys do
+not: runtime.tool_detail, the search depth, the network-binding host, and the
+process priority are read per call and cost nothing to change.
+
+`doctor` reports which layer a value came from when a setting is not doing what
+the project expected, and the file path it would be changed in.
+""",
+    "agents": """\
+The app serves MCP at /mcp on its own port, so a client that can open a socket
+needs only the URL. A client that speaks only stdio uses `research-rag mcp`,
+which makes sure the app is up and then proxies to it.
+
+Let the project print the entry for the machine it runs on, because the port is
+chosen at start and a hard-coded URL goes stale the first time it moves:
+
+  research-rag --project-root DIR doctor --mcp-entry
+  research-rag --project-root DIR doctor --check-entry <file>
+
+To check an entry already in place without editing it. Two ready-to-copy
+templates ship with the source: mcp_settings.example.json for a client using an
+mcpServers object, and kilo-mcp.example.jsonc for one using a Kilo-style mcp
+object. Replace two absolute paths in either and the entry is complete.
+
+Set RESEARCH_ULTRARAG_CLIENT_NAME so the app's client list can tell agents
+apart. `clients` lists them and `disconnect` ends one; the workspace shows the
+same list, so an agent ended in the browser is gone from the terminal too.
+
+What an agent gets is seven tools and one resource, and every answer is the lean
+projection: a question at a time, no inventory, no scores. `status` is a verdict
+and names the call that closes a gap rather than printing the whole corpus state.
+The full payload is `status --verbose` here and the workspace there.
+
+A generated sentence citing a passage is not for direct quotation. Take the
+quotation from the original file, which the workspace opens beside the passage
+and the agent reaches with get_passage.
+""",
+}
+
 
 @asynccontextmanager
 async def _service(config: ResearchConfig) -> AsyncIterator[ResearchService]:
@@ -97,6 +343,10 @@ def _parser() -> argparse.ArgumentParser:
         description=(
             "Review evidence from a project's PDF and EPUB corpus, in a "
             "terminal or in a browser."
+        ),
+        epilog=(
+            f"`{CLI_NAME} help` prints the same commands grouped by the work, "
+            f"and `{CLI_NAME} help TOPIC` explains a subject."
         ),
     )
     parser.add_argument(
@@ -196,6 +446,30 @@ def _parser() -> argparse.ArgumentParser:
             "is up."
         ),
     )
+    # A command name is a valid topic, so the choices are every registered
+    # command beside the subject pages. They are derived from the menu rather
+    # than typed out, so a command added to the parser and to the menu is one
+    # change and the drift test below is what notices one added to neither.
+    help_command = commands.add_parser(
+        "help",
+        help=(
+            "Print the menu, or one page of it: a subject, or a command's own "
+            "usage. Needs no project."
+        ),
+    )
+    help_command.add_argument(
+        "topic",
+        nargs="?",
+        choices=sorted(
+            set(HELP_TOPICS)
+            | {name for _, entries in HELP_GROUPS for name, _ in entries}
+        ),
+        help=(
+            "A subject to explain, or a command whose usage to print. Omit for "
+            "the whole menu."
+        ),
+    )
+
     status = commands.add_parser(
         "status", help="Report readiness and what changed since the generation."
     )
@@ -1150,6 +1424,54 @@ def _control(config: ResearchConfig) -> AbstractContextManager[Control | None]:
     return nullcontext(connect(config))
 
 
+def _help_menu() -> str:
+    """The whole menu: the order of the work, then the three facts a first call needs.
+
+    The descriptions are stored as one sentence and wrapped here, so a command's
+    wording is written without the indentation of the column it happens to land
+    in and stays readable when the column moves.
+    """
+
+    width = max(len(name) for _, entries in HELP_GROUPS for name, _ in entries)
+    label = 2 + width + 2
+    text_width = max(40, min(78, 96) - label)
+    lines = [
+        f"{CLI_NAME} — a research knowledge base over a project's own PDFs and EPUBs.",
+        "",
+        "A project has one app. This command line, the browser workspace, and an",
+        "agent's tools are three ways into that one process, so they read one index",
+        "and one set of review decisions and cannot disagree.",
+        "",
+    ]
+    for title, entries in HELP_GROUPS:
+        lines.append(title)
+        for name, description in entries:
+            body = textwrap.wrap(description, width=text_width) or [""]
+            lines.append(f"  {name.ljust(width)}  {body[0]}")
+            lines.extend(f"{' ' * label}{extra}" for extra in body[1:])
+        lines.append("")
+    lines.append(
+        f"Each command takes --project-root DIR or --project NAME.\n"
+        f"One command's own options: `{CLI_NAME} COMMAND --help`.\n"
+        f"A subject: `{CLI_NAME} help {', '.join(sorted(HELP_TOPICS))}`."
+    )
+    return "\n".join(lines) + "\n"
+
+
+def _command_usage(parser: argparse.ArgumentParser, name: str) -> str:
+    """The usage block one registered subcommand prints, reached by name.
+
+    `help search` and `search --help` are the same document, so this returns the
+    subparser's own output rather than a second description of it that could
+    drift from the one the option list came from.
+    """
+
+    for action in parser._actions:
+        if isinstance(action, argparse._SubParsersAction) and name in action.choices:
+            return action.choices[name].format_help()
+    raise KeyError(name)
+
+
 async def _run(args: argparse.Namespace) -> CommandResult:
     """Resolve the project, run the named command, and return what to print."""
 
@@ -1186,7 +1508,19 @@ async def _run(args: argparse.Namespace) -> CommandResult:
 
 
 def main(argv: Sequence[str] | None = None) -> None:
-    args = _parser().parse_args(argv)
+    parser = _parser()
+    args = parser.parse_args(argv)
+    if args.command == "help":
+        # Before the project is resolved, because the menu is what a reader has
+        # precisely when they have no project yet, and it must not fail on a
+        # directory that holds one.
+        if args.topic is None:
+            sys.stdout.write(_help_menu())
+        elif args.topic in HELP_TOPICS:
+            sys.stdout.write(HELP_TOPICS[args.topic])
+        else:
+            sys.stdout.write(_command_usage(parser, args.topic))
+        return
     if args.command == "mcp":
         # The bridge owns stdio and its own event loop, so it runs before this
         # process starts one rather than inside it.

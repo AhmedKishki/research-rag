@@ -282,6 +282,18 @@ Corrupt extraction units are omitted whole rather than indexed as garbage, and t
 
 ## Use the terminal
 
+`research-rag help` prints every command grouped by the work, and `research-rag help TOPIC` explains a subject. Neither needs a project, so both work before you have one:
+
+```bash
+research-rag help              # every command, grouped by what you are doing
+research-rag help filters      # the six filter layers and the retrieval switches
+research-rag help settings     # the four setting layers and what a change costs
+research-rag help agents       # the MCP client entry, and what an agent receives
+research-rag help search       # one command's own options
+```
+
+A subject page is for something no single command can answer; naming a command prints that command's own usage, so the two are the same document.
+
 ```bash
 # Create and build.
 research-rag --project-root /path/to/project init --name "My project"
@@ -416,6 +428,7 @@ A project has at most one app. The command line, the browser workspace, and an a
 | `mcp` | the agent surface on stdio, proxied to the running app |
 | `serve` | the app in the foreground, which is what the launcher runs |
 | `stop` | the app, and optionally any process of this app still building |
+| `help` | every command grouped by the work, or one page of it; needs no project |
 
 `status` is the exception a person reads most, so it prints the same lean verdict an agent gets and takes `--verbose` for the complete payload; every other command prints the complete payload. An agent's tool answer is projected to the fields an agent acts on, and the mode is the `runtime.tool_detail` setting.
 
