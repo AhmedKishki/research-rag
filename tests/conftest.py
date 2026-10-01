@@ -6,6 +6,7 @@ from typing import Any
 import pymupdf
 import pytest
 from ebooklib import epub
+from platformdirs import user_cache_dir
 
 from research_rag.config import ResearchConfig
 from research_rag.storage import (
@@ -87,17 +88,22 @@ def _an_account_directory_of_this_run(
     """Point every account-scoped file at a throwaway directory.
 
     The project record and the per-user settings file live in the account's
-    config directory, so a test that runs `init` writes there unless it says
-    otherwise. That is the reader's own record of their projects, and a test run
-    must not add to it or read it.
+    config directory, and the command, its menu entries, and its icon live in the
+    account's data and binary directories, so a test that runs `install` or reads
+    a desktop entry writes there unless it says otherwise. Those are the
+    reader's own files, and a test run must not add to them or read them.
 
-    `XDG_CONFIG_HOME` alone is enough on this platform and leaves the model cache
-    alone, which the integration test needs to be the real one.
+    `XDG_CACHE_HOME` is pinned to the real cache instead of being redirected: it
+    holds only immutable model binaries, and the integration test needs the ones
+    that are already there rather than downloading them again.
     """
 
-    monkeypatch.setenv(
-        "XDG_CONFIG_HOME", str(tmp_path_factory.mktemp("account-config"))
-    )
+    account = tmp_path_factory.mktemp("account")
+    real_cache = Path(user_cache_dir())
+    monkeypatch.setenv("HOME", str(account))
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(account / "config"))
+    monkeypatch.setenv("XDG_DATA_HOME", str(account / "data"))
+    monkeypatch.setenv("XDG_CACHE_HOME", str(real_cache))
 
 
 @pytest.fixture

@@ -1646,6 +1646,10 @@ async def _update(args: argparse.Namespace) -> dict[str, Any]:
             "--offline cannot update: nothing on the remote was asked. Nothing "
             "was changed. Run this again without --offline."
         )
+    if not plan.available:
+        # Stopping an app is not free, so a run with nothing to apply changes
+        # nothing at all, and says why.
+        raise ResearchError("Nothing to apply. " + " ".join(plan.notes))
     projects = [
         update_module.ProjectState(entry.project_root, entry.project_name)
         for entry in load_registered()
@@ -1657,12 +1661,24 @@ async def _update(args: argparse.Namespace) -> dict[str, Any]:
             "Nothing was changed. " + " ".join(one.refusal() for one in held)
         )
     payload["projects"] = [project.as_dict() for project in projects]
-    before = {
-        str(project.project_root): update_module.portable_state_digest(
-            project.project_root
+
+    def digests() -> dict[str, dict[str, tuple[int, int]]]:
+        return {
+            str(project.project_root): update_module.portable_state_digest(
+                project.project_root
+            )
+            for project in projects
+        }
+
+    def state_sentence(before_run: dict[str, dict[str, tuple[int, int]]]) -> str:
+        changes = update_module.state_changes(before_run, digests())
+        if not changes:
+            return "no project's portable state changed."
+        return "the portable state that changed: " + "; ".join(
+            f"{root} ({', '.join(names)})" for root, names in sorted(changes.items())
         )
-        for project in projects
-    }
+
+    before = digests()
     stopped = [update_module.stop_app(project, runner) for project in projects]
     payload["stopped"] = [one.as_dict() for one in stopped]
     try:
@@ -1670,26 +1686,13 @@ async def _update(args: argparse.Namespace) -> dict[str, Any]:
             plan, run=runner, cwd=local.checkout
         )
     except ResearchError as exc:
-        payload["steps"] = plan.labels()
-        payload["failed"] = str(exc)
-        after = {
-            str(project.project_root): update_module.portable_state_digest(
-                project.project_root
-            )
-            for project in projects
-        }
-        payload["project_state_changes"] = update_module.state_changes(before, after)
-        raise ResearchError(str(exc)) from exc
+        raise ResearchError(
+            f"{exc} After the failed step, {state_sentence(before)}"
+        ) from exc
     applied = update_module.probe_local(run=runner)
     payload["applied"] = True
     payload["install_after"] = applied.as_dict()
-    after = {
-        str(project.project_root): update_module.portable_state_digest(
-            project.project_root
-        )
-        for project in projects
-    }
-    changes = update_module.state_changes(before, after)
+    changes = update_module.state_changes(before, digests())
     payload["project_state_changes"] = changes
     payload["project_state_untouched"] = not changes
     payload["start_again"] = [
@@ -1774,10 +1777,10 @@ def _help_menu() -> str:
             lines.extend(f"{' ' * label}{extra}" for extra in body[1:])
         lines.append("")
     lines.append(
-        f"Each command takes --project-root DIR or --project NAME, except "
-        f"`install --desktop`,\n"
-        f"`update`, `help`, and `mcp`. `mcp` takes --project-name NAME so a client\n"
-        f"entry carries no path.\n"
+        f"Each command takes --project-root DIR or --project NAME, except `mcp`,\n"
+        f"which takes --project-name NAME so a client entry carries no path.\n"
+        f"`install` needs no project unless --desktop is given, and `update` and\n"
+        f"`help` need none.\n"
         f"One command's own options: `{CLI_NAME} COMMAND --help`.\n"
         f"A subject: `{CLI_NAME} help {', '.join(sorted(HELP_TOPICS))}`."
     )
