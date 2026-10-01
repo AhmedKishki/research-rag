@@ -3,10 +3,10 @@
 # This file ships inside the package and holds every tunable this app reads.
 # A layer above it names only what it changes; layers win per key, lowest first:
 #
-#   this file  <  ~/.config/research-ultra-rag-mcp/config.toml
+#   this file  <  ~/.config/research-rag/config.toml
 #              <  <project>/.research-rag/config.toml
 #              <  --config PATH
-#              <  RESEARCH_ULTRARAG_* environment variables
+#              <  RESEARCH_RAG_* environment variables
 #              <  --set key=value
 #
 # `research-rag config` prints the merged result and the layer that supplied

@@ -75,7 +75,7 @@ def _no_collapsed_repetitions_in_the_suite(
     their own threshold, which is the stronger statement.
     """
 
-    monkeypatch.setenv("RESEARCH_ULTRARAG_RETRIEVAL_DUPLICATE_COSINE", "2.0")
+    monkeypatch.setenv("RESEARCH_RAG_RETRIEVAL_DUPLICATE_COSINE", "2.0")
 
 
 @pytest.fixture(autouse=True)

@@ -64,9 +64,8 @@ def _own_tty() -> str | None:
 def _record_state(config: ResearchConfig, port: int) -> None:
     """Write the running state a second terminal reads to find this app.
 
-    The generated launcher writes these for the app it starts, and an app a
-    reader started by hand writes them for itself, so `clients`, `stop`, and the
-    workspace's project selector see the same thing either way.
+    The app writes these for itself wherever it was started from, so `clients`,
+    `stop`, and the workspace's project selector see the same thing either way.
     """
 
     state = config.state_root
@@ -566,8 +565,8 @@ async def _security_headers(request: Any, call_next: Any) -> Any:
 async def _unexpected_error(_: Any, exc: Exception) -> JSONResponse:
     """Report an unexpected failure without its detail, and keep the reason.
 
-    The detail goes to the app's log, which the launcher records and `research-rag
-    doctor` names, because no reader can act on a traceback.
+    The detail goes to the app's log, which `research-rag doctor` names, because
+    no reader can act on a traceback.
     """
 
     LOGGER.exception("research-rag request failed", exc_info=exc)

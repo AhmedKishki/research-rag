@@ -4,10 +4,9 @@ import asyncio
 from pathlib import Path
 from typing import Any
 
-from .config import ResearchConfig, initialise_command
+from .config import ResearchConfig, initialise_command, project_command
 from .generation import value_fingerprint
 from .health import health_report
-from .launcher import ui_launcher_state
 from .sources import (
     ALLOWED_SOURCE_EXTENSIONS,
     SourcePolicyError,
@@ -82,15 +81,15 @@ def generation_upgrade_reasons(
     return reasons
 
 
-def uninitialised_status(project_name: str, reason: str) -> dict[str, Any]:
-    """The status answer for a project this installation has not initialised.
+def blocked_status(
+    reason: str, *, check: str, remedy: str, initialised: bool
+) -> dict[str, Any]:
+    """The status answer for a project this machine cannot serve right now.
 
-    An agent's client entry names a project, and the machine it runs on decides
-    which directory that name reaches. Where the machine holds no such project,
-    this is the whole answer, and it is the shape a blocked project already has:
-    `blocked_by` names the condition, the sentence that explains it, and the
-    command that closes it, so an agent reads one shape whether or not the app
-    came up.
+    One shape for every condition that stops a corpus being answered: `blocked_by`
+    names the check that failed, the sentence that explains it, and the command
+    that closes it, so an agent reads the same object whether the project was never
+    created or the app that serves it is not running.
 
     The reason names the project, because nothing else in this answer does: an
     agent's answer carries no corpus inventory, and a client that may be
@@ -100,16 +99,49 @@ def uninitialised_status(project_name: str, reason: str) -> dict[str, Any]:
     return {
         "ready": False,
         "stale": False,
-        "project_initialised": False,
+        "project_initialised": initialised,
         "blocked_by": [
             {
-                "check": "project.initialised",
+                "check": check,
                 "reason": reason,
-                "remedy": initialise_command(project_name),
+                "remedy": remedy,
             }
         ],
         "message": reason,
     }
+
+
+def uninitialised_status(project_name: str, reason: str) -> dict[str, Any]:
+    """The status answer for a project this installation has not initialised.
+
+    An agent's client entry names a project, and the machine it runs on decides
+    which directory that name reaches. Where the machine holds no such project,
+    this is the whole answer, and it is `blocked_status` with this project's own
+    condition and remedy.
+    """
+
+    return blocked_status(
+        reason,
+        check="project.initialised",
+        remedy=initialise_command(project_name),
+        initialised=False,
+    )
+
+
+def not_served_status(config: ResearchConfig, reason: str) -> dict[str, Any]:
+    """The status answer for a project that exists but has no app serving it.
+
+    The project is there and its corpus is readable from disk, so the condition is
+    the app rather than the project, and the remedy is the command that starts one
+    in a terminal.
+    """
+
+    return blocked_status(
+        reason,
+        check="app.serving",
+        remedy=project_command(config.project_root, "ui"),
+        initialised=True,
+    )
 
 
 def generation_inventory(
@@ -234,10 +266,6 @@ class StatusWorkflow:
                 "portable_root": str(self.config.portable_root),
                 "model_cache_root": str(self.config.model_cache_root),
                 "version": version_block(),
-                "ui_launcher": ui_launcher_state(
-                    self.config.project_root,
-                    self.config.portable_root,
-                ),
                 "discovered_source_count": len(scan.selected),
                 "selected_source_count": len(selected),
                 "excluded_source_count": len(exclusions),
@@ -380,10 +408,6 @@ class StatusWorkflow:
             "portable_root": str(self.config.portable_root),
             "model_cache_root": str(self.config.model_cache_root),
             "version": version_block(),
-            "ui_launcher": ui_launcher_state(
-                self.config.project_root,
-                self.config.portable_root,
-            ),
             "generation_id": manifest["generation_id"],
             "created_at": manifest["created_at"],
             "discovered_source_count": len(scan.selected),

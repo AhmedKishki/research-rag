@@ -27,13 +27,13 @@ from __future__ import annotations
 import json
 import os
 import re
+import signal
 from collections.abc import Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from .config import project_command
-from .launcher import launcher_path
+from .config import project_command, recorded_runtime_root
 from .process import COMMAND_TIMEOUT_SECONDS, CommandResult, Runner, subprocess_runner
 from .release import (
     NONE,
@@ -66,9 +66,6 @@ PORTABLE_DIRECTORY = ".research-rag"
 RUNTIME_DIRECTORY = "runtime"
 PID_FILE = "research-rag-ui.pid"
 LOCK_FILE = "project.lock"
-# The one line of a generated launcher that records where a project keeps its
-# derived state when it is not the default.
-_RUNTIME_ROOT_LINE = re.compile(r'^RUNTIME_ROOT="(.*)"$', re.MULTILINE)
 # The two commands that put this app on a machine in the first place. A refusal
 # names them so a reader can run one instead of being told a guess is wrong.
 ALTERNATIVES = (
@@ -758,22 +755,15 @@ class ProjectState:
 
     @property
     def state_root(self) -> Path:
-        """Where this project's launcher keeps its pid, its lock, and its staging.
+        """Where this project keeps its pid, its lock, and its staging.
 
-        A relocated runtime root is recorded in the launcher that acts on it, so
-        the answer is read from that file rather than from a second rule about
-        where a project keeps its derived state.
+        A relocated runtime root is recorded by the project itself when its
+        configuration is resolved, so the answer is read from that record rather
+        than from a second rule about where a project keeps its derived state.
         """
 
-        script = launcher_path(self.portable_root)
-        try:
-            text = script.read_text(encoding="utf-8")
-        except OSError:
-            return self.default_state_root
-        found = _RUNTIME_ROOT_LINE.search(text)
-        if found is None or not found.group(1).strip():
-            return self.default_state_root
-        return Path(found.group(1).strip())
+        relocated = recorded_runtime_root(self.portable_root)
+        return relocated if relocated is not None else self.default_state_root
 
     def as_dict(self) -> dict[str, Any]:
         return {
@@ -889,7 +879,7 @@ class StoppedProject:
 
 
 def recorded_pid(project: ProjectState) -> int | None:
-    """The pid a project's launcher recorded, when that process is still alive."""
+    """The pid a project's app recorded, when that process is still alive."""
 
     try:
         recorded = (project.state_root / PID_FILE).read_text(encoding="utf-8").strip()
@@ -902,24 +892,32 @@ def recorded_pid(project: ProjectState) -> int | None:
 
 
 def stop_app(project: ProjectState, run: Runner) -> StoppedProject:
-    """Stop one project's app through its own launcher, so the group stops too.
+    """Ask one project's app to stop, the way its own terminal would.
 
-    The launcher owns the pid, the port, and the process group, so this command
-    does not signal anything itself. A project with no live app is left alone.
+    The app records its own pid, so this command signals that pid and nothing
+    else. A project with no live app is left alone.
     """
 
-    if recorded_pid(project) is None:
+    pid = recorded_pid(project)
+    if pid is None:
         return StoppedProject(project, False, "no app was running for this project")
-    script = launcher_path(project.portable_root)
-    if not script.is_file():
+    # The app belongs to the terminal that started it, so it is asked to stop the
+    # way that terminal would ask it. An app that ignores the request is named
+    # rather than killed, because this command does not own a terminal the reader
+    # is watching.
+    try:
+        os.kill(pid, signal.SIGTERM)
+    except OSError as exc:
         return StoppedProject(
             project,
             False,
-            f"no launcher at {script}, so nothing was stopped",
+            f"pid {pid} could not be asked to stop: {exc.strerror or exc}",
         )
-    result = run([str(script), "--stop"])
-    detail = _first_line(result.stdout) or _first_line(result.stderr)
-    return StoppedProject(project, result.ok, detail or "the launcher said nothing")
+    return StoppedProject(
+        project,
+        True,
+        f"pid {pid} was asked to stop; the terminal that started it ends it.",
+    )
 
 
 def portable_state_digest(project_root: Path) -> dict[str, tuple[int, int]]:

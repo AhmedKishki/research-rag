@@ -20,7 +20,7 @@ def account(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     home.mkdir()
     monkeypatch.setenv("XDG_CONFIG_HOME", str(home / "config"))
     monkeypatch.setenv("HOME", str(home))
-    return home / "config" / "research-ultra-rag-mcp" / "projects.json"
+    return home / "config" / "research-rag" / "projects.json"
 
 
 def test_an_account_with_no_projects_says_so(account: Path) -> None:

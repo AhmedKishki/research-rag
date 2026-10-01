@@ -189,7 +189,7 @@ def test_status_names_a_blocker_and_its_remedy() -> None:
                 {
                     "check": "vanilla_runtime",
                     "reason": "The tree differs at servers/stray.pyc.",
-                    "remedy": "research-ultra-rag doctor --project-root /project "
+                    "remedy": "research-rag doctor --project-root /project "
                     "--repair-runtime",
                 }
             ],
@@ -197,7 +197,7 @@ def test_status_names_a_blocker_and_its_remedy() -> None:
                 {
                     "check": "lock",
                     "reason": "Process 4321 has held the project since 09:00:00Z.",
-                    "remedy": "research-ultra-rag --project-root /project stop --servers",
+                    "remedy": "research-rag --project-root /project stop --servers",
                 }
             ],
         ),
@@ -208,8 +208,7 @@ def test_status_names_a_blocker_and_its_remedy() -> None:
         {
             "check": "vanilla_runtime",
             "reason": "The tree differs at servers/stray.pyc.",
-            "remedy": "research-ultra-rag doctor --project-root /project "
-            "--repair-runtime",
+            "remedy": "research-rag doctor --project-root /project --repair-runtime",
         }
     ]
     assert lean["degraded"][0]["check"] == "lock"
@@ -848,7 +847,6 @@ def _status_payload(**overrides: object) -> dict[str, object]:
             "installed": "0.15.0",
             "restart_required": False,
         },
-        "ui_launcher": {"script_present": True, "link_state": "linked"},
         "generation_id": "20260101T000000Z-abcdef",
         "created_at": "2026-01-01T00:00:00Z",
         "discovered_source_count": 3,

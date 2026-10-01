@@ -1099,7 +1099,7 @@ def test_relocated_runtime_root_is_claimed_then_reused(
     project: Path, tmp_path: Path
 ) -> None:
     runtime_root = tmp_path / "fast-local-runtime"
-    marker = runtime_root / ".research-ultra-rag-runtime.json"
+    marker = runtime_root / ".research-rag-runtime.json"
 
     relocated = resolve_config(
         project,
@@ -1239,7 +1239,7 @@ def test_default_runtime_root_needs_no_marker(project: Path) -> None:
 
     assert config.runtime_root is None
     assert config.state_root == project / ".research-rag" / "runtime"
-    assert not (config.state_root / ".research-ultra-rag-runtime.json").exists()
+    assert not (config.state_root / ".research-rag-runtime.json").exists()
 
 
 def test_research_starts_only_required_ultrarag_namespaces(project: Path) -> None:

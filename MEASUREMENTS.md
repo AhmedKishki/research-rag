@@ -76,7 +76,7 @@ Four findings hold as decisions:
 
 A number is comparable only with another measured by the same engine, because a process answering from a different checkout reads a different reviewed-metadata field set and can refuse the project's own state. `doctor` reports the two directories when they differ, `research-rag update` names the processes still running the pre-update code, and the reviewed-metadata file records the fields its writer understood, so an older process refuses the file by cause instead of naming a field the caller never typed.
 
-`research-rag` and the frozen `research-ultra-rag-mcp` read and write the same project, which adds one limit: a figure measured by one and a figure measured by the other are the same measurement, because both call one unchanged engine, but a figure measured by a third checkout is not comparable until `doctor` reports the two trees as the same. Only `research-rag` changes, so a figure taken here is measured against an engine the frozen product still matches.
+A figure is comparable with another measured by the same engine, because both call the same unchanged retrieval code. A figure measured by a different checkout is not comparable until `doctor` reports the two trees as the same, and `update` names the processes still running the pre-update code while it applies.
 
 ## Which version an update compares against
 
@@ -95,7 +95,7 @@ uv run python scripts/evaluate_retrieval.py --project /mnt/data/my-project \
 
 - **The shipped default stays.** The comparison reached the same depth as the alternative and ordered quote queries slightly better, at a lower cost per query, so it is neither the better nor the cheaper model here.
 - **A set this size cannot rank two models.** Treat a comparison this narrow as directional, and re-measure before trusting either on a different corpus.
-- **Changing the model is an operator decision, not a per-search one.** `--reranker-model` (or `RESEARCH_ULTRARAG_RERANKER_MODEL`) changes every search this app answers, and `search(rerank_model=...)` changes it for one engine call.
+- **Changing the model is an operator decision, not a per-search one.** `--reranker-model` (or `RESEARCH_RAG_RERANKER_MODEL`) changes every search this app answers, and `search(rerank_model=...)` changes it for one engine call.
 - **Which model is smaller is not a parameter to tune.** Both run through the same FastEmbed cross-encoder class with the runtime's default thread count, so the difference is an ONNX-export property.
 
 ## Reply depth is the depth the ranking reaches

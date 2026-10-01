@@ -14,12 +14,13 @@ import json
 import os
 import re
 import shlex
+import shutil
 import sys
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from .config import CLI_COMMAND, ResearchConfig, project_command
+from .config import CLI_COMMAND, DEFAULT_UI_PORT, ResearchConfig, project_command
 from .embeddings import resolve_embedding_model
 from .health import WARN, Check, HealthReport, health_report
 from .rerankers import resolve_reranker_model
@@ -149,8 +150,53 @@ MAXIMUM_ENTRY_TIMEOUT_MS = 86_400_000
 _ENTRY_TIMEOUT_MS = 3_600_000
 
 
-def _project_server_command() -> Path:
-    return Path(sys.executable).parent / SERVER_COMMAND
+def _recommended_server_command() -> str:
+    """The command a client entry should carry on this machine.
+
+    `install` puts the command on `PATH`, and an entry naming it survives this
+    checkout being replaced, so that is what a generated entry uses. A machine
+    where the command was never installed gets the absolute path instead, because a
+    name no client can resolve is worse than a long one.
+    """
+
+    return (
+        SERVER_COMMAND
+        if shutil.which(SERVER_COMMAND)
+        else str(Path(sys.executable).parent / SERVER_COMMAND)
+    )
+
+
+def _project_server_commands() -> set[Path]:
+    """Every path that runs this installation's command on this machine.
+
+    `install` puts the command on `PATH` pointing at this checkout's interpreter,
+    so a client entry naming either one runs this app. An entry naming any other
+    build runs something else, which is what the check is for.
+    """
+
+    commands = {Path(sys.executable).parent / SERVER_COMMAND}
+    found = shutil.which(SERVER_COMMAND)
+    if found is not None:
+        commands.add(Path(found))
+    return commands
+
+
+def _resolved_command(value: str) -> Path | None:
+    """Where a client entry's command would actually run, or None if it cannot.
+
+    A client execs the first argument and lets the operating system search `PATH`,
+    so an entry that names `research-rag` runs the command `install` put there.
+    Checking the name as a path instead would block every entry that relies on
+    `PATH`, which is the form `install` writes.
+    """
+
+    if not value:
+        return None
+    candidate = Path(value).expanduser()
+    if candidate.is_file():
+        return candidate
+    found = shutil.which(value)
+    return Path(found) if found is not None else None
 
 
 def mcp_url_block(config: ResearchConfig) -> str:
@@ -160,7 +206,6 @@ def mcp_url_block(config: ResearchConfig) -> str:
     and the reader is told to start the app first: the port is not knowable before then.
     """
     from .app import recorded_port
-    from .launcher import DEFAULT_UI_PORT
 
     port = recorded_port(config)
     return (
@@ -195,7 +240,7 @@ def mcp_entry_block(config: ResearchConfig) -> str:
     order for the same reason.
     """
 
-    arguments = [str(_project_server_command()), "mcp"]
+    arguments = [_recommended_server_command(), "mcp"]
     arguments.extend(["--project-name", config.project_name])
     if config.runtime_root is not None:
         arguments.extend(["--runtime-root", str(config.runtime_root)])
@@ -393,7 +438,8 @@ def check_entry(config: ResearchConfig, path: str | Path) -> tuple[Check, ...]:
             findings.extend(_check_url_entry(name, url))
             continue
         arguments = _arguments_of(entry)
-        executable = Path(arguments[0]).expanduser() if arguments else Path("")
+        named = arguments[0] if arguments else ""
+        executable = _resolved_command(named)
         misplaced = _options_before_the_command(arguments)
         if misplaced:
             findings.append(
@@ -405,21 +451,22 @@ def check_entry(config: ResearchConfig, path: str | Path) -> tuple[Check, ...]:
                     "and the server closes the connection. Put `mcp` first.",
                 )
             )
-        if not executable.is_file():
+        if executable is None:
             findings.append(
                 Check(
                     "entry.executable",
                     "blocked",
-                    f"{name} runs {executable or '(no command)'}, which is not a file.",
+                    f"{name} runs {named or '(no command)'}, which is not on this "
+                    f"machine's PATH.",
                 )
             )
-        elif executable != _project_server_command():
+        elif executable not in _project_server_commands():
             findings.append(
                 Check(
                     "entry.executable",
                     "warn",
                     f"{name} runs {executable}; this environment provides "
-                    f"{_project_server_command()}.",
+                    f"{Path(sys.executable).parent / SERVER_COMMAND}.",
                 )
             )
         root = _project_root_argument(arguments)

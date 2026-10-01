@@ -259,7 +259,7 @@ def test_top_k_counts_the_passages_a_reader_kept(project: Path, monkeypatch) -> 
     with none while the whole window is excluded.
     """
 
-    monkeypatch.setenv("RESEARCH_ULTRARAG_RETRIEVAL_MINIMUM_CANDIDATES", "2")
+    monkeypatch.setenv("RESEARCH_RAG_RETRIEVAL_MINIMUM_CANDIDATES", "2")
 
     async def exercise() -> None:
         service, _hits = await _service(project, pages=12)

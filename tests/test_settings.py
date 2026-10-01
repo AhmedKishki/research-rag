@@ -103,7 +103,7 @@ def test_precedence_runs_file_then_environment_then_command_line(
     from_environment, provenance = _resolve(
         project,
         config_path=named,
-        environ={"RESEARCH_ULTRARAG_RETRIEVAL_RRF_K": "15"},
+        environ={"RESEARCH_RAG_RETRIEVAL_RRF_K": "15"},
     )
     assert from_environment.rrf_k == 15
     assert provenance["retrieval.rrf_k"].startswith("environment")
@@ -112,7 +112,7 @@ def test_precedence_runs_file_then_environment_then_command_line(
         project,
         config_path=named,
         overrides=["retrieval.rrf_k=5"],
-        environ={"RESEARCH_ULTRARAG_RETRIEVAL_RRF_K": "15"},
+        environ={"RESEARCH_RAG_RETRIEVAL_RRF_K": "15"},
     )
     assert from_command_line.rrf_k == 5
     assert provenance["retrieval.rrf_k"] == "command line"

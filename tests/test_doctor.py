@@ -18,7 +18,7 @@ import research_rag.doctor as doctor_module
 from research_rag.config import ResearchConfig, resolve_config
 from research_rag.doctor import (
     DoctorError,
-    _project_server_command,
+    _recommended_server_command,
     check_entry,
     mcp_entry_block,
     mcp_url_block,
@@ -346,7 +346,7 @@ def test_an_option_before_the_command_is_refused(
                 "mcp": {
                     "rag": {
                         "command": [
-                            str(_project_server_command()),
+                            _recommended_server_command(),
                             "--project-name",
                             config.project_name,
                             "mcp",
@@ -516,7 +516,7 @@ def test_a_stdio_entry_naming_a_directory_is_blocked(
                 "mcp": {
                     "rag": {
                         "command": [
-                            str(_project_server_command()),
+                            _recommended_server_command(),
                             "--project-root",
                             str(config.project_root),
                             "mcp",
@@ -541,7 +541,7 @@ def test_a_stdio_entry_naming_no_project_is_blocked(
     path = _entry_file(
         tmp_path,
         json.dumps(
-            {"mcp": {"rag": {"command": [str(_project_server_command()), "mcp"]}}}
+            {"mcp": {"rag": {"command": [_recommended_server_command(), "mcp"]}}}
         ),
     )
 
@@ -564,7 +564,7 @@ def test_a_stdio_entry_for_another_project_is_a_warning(
                 "mcp": {
                     "rag": {
                         "command": [
-                            str(_project_server_command()),
+                            _recommended_server_command(),
                             "--project-name",
                             "a-different-project",
                             "mcp",

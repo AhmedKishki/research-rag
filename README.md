@@ -73,7 +73,8 @@ research-rag install
 research-rag --project-root /path/to/project install --desktop
 ```
 
-- The entry runs `<project>/open-research-rag-ui.sh --open`, and `--stop` ends the whole process group.
+- The entry runs this installation's `research-rag` in a terminal window and serves whichever project you choose there, so no project is named in the entry.
+- Closing the window ends the app it started.
 - `research-rag install --desktop --uninstall` removes the entry.
 - `doctor` reports a menu entry whose project has been deleted.
 - An entry this app did not write is reported and left alone unless you pass `--force`.
@@ -89,8 +90,8 @@ research-rag --project-root /path/to/project ingest
 research-rag --project-root /path/to/project ui
 ```
 
-- `init` records the project identity, writes the workspace launcher under `.research-rag/bin/`, and links it into the project root as `open-research-rag-ui.sh`.
-  - It never overwrites a file it did not create, and `status.ui_launcher` reports what it found.
+- `init` records the project identity and adds the project to the account register under the name an agent's client entry will carry.
+  - It never overwrites a file it did not create.
 - `ingest` extracts every included PDF and EPUB, chunks the text, embeds it, and builds a BM25 index and a dense index.
 - A second `ingest` call resumes a build that ran out of its time budget.
 - Ingestion takes only regular `.pdf` and `.epub` files in `sources/`; markdown, symlinks, and anything outside it are ignored.
@@ -169,12 +170,12 @@ research-rag --project-root /path/to/project search "commodity fetishism" \\
 - The app serves MCP at `/mcp` on its own port, so a client that can open a socket needs only the URL `http://127.0.0.1:<port>/mcp`.
 - A client that speaks only stdio uses `research-rag mcp --project-name NAME`, which makes sure that project's app is up and then proxies to it.
 - The stdio entry names a project and never a directory, so the same entry works on every machine where that project was initialised.
-- `mcp` refuses `--project-root` and `--project`, `RESEARCH_ULTRARAG_PROJECT_ROOT` included.
+- `mcp` refuses `--project-root` and `--project`, `RESEARCH_RAG_PROJECT_ROOT` included.
 - The `mcp` command comes before its own options, which is the only order the parser accepts: an option in front is read as the command name, and the server closes the connection instead of answering.
 - On a machine holding no project under that name, the connection is made and `status` reports that the project is not initialised, with the `init` command that creates it.
   - Running that `init` command serves the project with no edit to the entry.
-- `RESEARCH_ULTRARAG_CLIENT_NAME` names the agent, so the app's client list can tell two agents apart.
-- `RESEARCH_ULTRARAG_PROJECT_NAME` names the project for a client that can pass an environment but no argument.
+- `RESEARCH_RAG_CLIENT_NAME` names the agent, so the app's client list can tell two agents apart.
+- `RESEARCH_RAG_PROJECT_NAME` names the project for a client that can pass an environment but no argument.
 - The port is chosen at start and recorded, so a hard-coded URL goes stale when the port moves.
 - Print the entry for the machine it runs on, and check one already in place without editing it:
 
@@ -201,7 +202,7 @@ research-rag --project-root /path/to/project doctor --check-entry ~/my-client.js
 | Command | What it answers |
 |---|---|
 | `projects` | every project this installation registered, and whether an app is serving it |
-| `init` | the project identity, the app launcher, and the project's place in the register |
+| `init` | the project identity and the project's place in the register |
 | `status` | the readiness answer, or the complete payload with `--verbose` |
 | `ingest` | the current generation, a checkpointed build's progress, or a new complete generation |
 | `search` | hybrid reranked evidence, with filters applied from reviewed metadata |
@@ -214,7 +215,6 @@ research-rag --project-root /path/to/project doctor --check-entry ~/my-client.js
 | `start` / `ui` | the app, started; `ui` also opens a browser |
 | `clients` / `disconnect` | the agents attached to the app, and ending one |
 | `mcp` | the agent surface on stdio for `--project-name`, proxied to that project's app |
-| `serve` | the app in the foreground, which is what the launcher runs |
 | `stop` | the app, and optionally any process of this app still building |
 | `generations` | every generation on disk with its size, and the one search reads; `--use ID` searches a retained one instead |
 | `remove-generation` | a generation search does not read, deleted after its id is repeated |
@@ -257,7 +257,7 @@ research-rag update
 - `--apply` performs the update.
 - `--apply` refuses while a build holds any project lock, and names the project, the phase that build is in, and the command that reports it.
 - `--apply` refuses while the checkout has uncommitted work, and names the files in the way.
-- Otherwise `--apply` stops every app this installation serves through that project's own launcher.
+- Otherwise `--apply` asks every app this installation serves to stop, by the pid it recorded.
 - `--apply` then reports the new revision, whether any project's portable state under `.research-rag` changed, and the exact command that starts each stopped app again.
 - `--apply` does not start those apps for you.
 - `--apply` prints the command that returns a detached checkout to its branch.
@@ -283,20 +283,21 @@ AI and fetishism — workspace attached to /dev/pts/5
 - Nothing survives that terminal.
 - An installation holding more than one project is asked which one in the terminal.
 - A terminal that cannot answer, a script or a pipe, is given the list of projects and the command to run instead of a prompt nobody will read.
-- An app already up for that project is reported and left alone.
-- The app records the same state whichever way it was started, so another terminal can find and stop it.
+- An app already up for that project is reported and left alone, and the terminal you are in is told that Ctrl-C here would not stop it.
+- The app records the terminal it is attached to, so another terminal can find it, name that terminal, and stop it.
 - `research-rag projects` says whether each project's app is up and which terminal it is attached to.
-- An attached app stops with its terminal, and a detached one does not.
+- An agent's client entry starts nothing: when no app is serving its project it offers `status`, which names the command to run in a terminal.
 
 ```bash
-research-rag --project-root /path/to/project ui            # start and print the URL
-research-rag --project-root /path/to/project ui --open     # and open a browser
-research-rag --project-root /path/to/project ui --stop     # stop it and what it started
-./open-research-rag-ui.sh                                 # the generated launcher
+research-rag --project-root /path/to/project ui             # serve it here and print the URL
+research-rag --project-root /path/to/project ui --open      # and open a browser
+research-rag --project-root /path/to/project ui --port 5055 # on a port you name
+research-rag --project-root /path/to/project stop           # stop it, from any terminal
 ```
 
-- The launcher claims the first free loopback port at or above the one it was generated with and records the port it chose, so two projects never serve from the same port.
-- The launcher runs `research-rag serve`, the workspace in the foreground on a fixed port.
+- There is no other way to bring an app up. `start` and `ui` both serve it in the terminal that ran them, so Ctrl-C and a closed window both reach it.
+- A port you name is never moved: a port that is taken fails and says so. A port left to the app is the first free one at or above 5051, so two projects never serve from the same port.
+- `stop` from another terminal stops an app that terminal does not own, and does not start it again.
 - The workspace binds loopback only and has no authentication, which is correct for an address no other machine can reach.
 - The workspace offers metadata, source selection, category partitions, project metadata, and this project's settings, each with the description the registry declares for it.
 - The workspace has a tab per job: **Search**, **Sources**, **Config**, and **MCP**.

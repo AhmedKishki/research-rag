@@ -5,9 +5,8 @@
 ## The app and its front ends
 
 - [ ] **Let a command start the app when the corpus is not ready.** Decision. A command that touches the corpus goes to the running app, and a project with no app up is answered in process, which opens a second service for a project nobody is serving. Starting the app instead makes `status` leave a process behind. The answer may be a flag, or a short-lived app for read-only commands.
-- [ ] **A session an unnamed client opened cannot have its stream dropped.** Limit. A disconnect folds the client's sightings onto the session by the name the client declared, and a client that declared nothing has only its session refused. `RESEARCH_ULTRARAG_CLIENT_NAME` is the fix, and the stdio bridge always sets it, so this only reaches a hand-written HTTP client.
+- [ ] **A session an unnamed client opened cannot have its stream dropped.** Limit. A disconnect folds the client's sightings onto the session by the name the client declared, and a client that declared nothing has only its session refused. `RESEARCH_RAG_CLIENT_NAME` is the fix, and the stdio bridge always sets it, so this only reaches a hand-written HTTP client.
 - [ ] **Measure the payload difference the app makes.** Missing number. Nothing states the lean and full search sizes since the repackaging retired them. Measure them against the running app, and add the workspace, agent, and control surfaces' own overhead, because one process now serves all three and the claim that they cannot disagree is only as good as the evidence that they are one service.
-- [ ] **Record the skew between this app and the frozen MCP server.** Gap. `code_currency` catches two checkouts of one product, not this app answering a project the frozen product also serves. The on-disk contract is frozen and stated in this app's `AGENTS.md`, but nothing reports the two disagreeing about a field set. A number measured by one and read in the other is not comparable until something says they are the same tree.
 
 ## A report that is true
 

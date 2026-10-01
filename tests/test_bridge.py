@@ -18,9 +18,10 @@ from fastmcp import Client
 import research_rag.bridge as bridge_module
 from research_rag import bridge, registry
 from research_rag.config import resolve_config
+from research_rag.status import not_served_status
 from research_rag.support import ResearchError
 from research_rag.surfaces.cli import main
-from research_rag.surfaces.mcp import create_uninitialised_mcp
+from research_rag.surfaces.mcp import create_blocked_mcp
 
 pytestmark = pytest.mark.anyio
 
@@ -38,7 +39,7 @@ def account(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     home.mkdir()
     monkeypatch.setenv("XDG_CONFIG_HOME", str(home / "config"))
     monkeypatch.setenv("HOME", str(home))
-    return home / "config" / "research-ultra-rag-mcp" / "projects.json"
+    return home / "config" / "research-rag" / "projects.json"
 
 
 def _initialised(root: Path, name: str) -> str:
@@ -109,8 +110,10 @@ def test_a_name_two_projects_share_is_refused(account: Path, project: Path) -> N
 async def test_an_uninitialised_project_answers_status_and_nothing_else() -> None:
     """One tool, one condition, and the command that closes it."""
 
-    server = create_uninitialised_mcp(
-        "ai-and-fetishism", "No project is initialised under that name here."
+    server = create_blocked_mcp(
+        "ai-and-fetishism",
+        "No project is initialised under that name here.",
+        config=None,
     )
 
     async with Client(server) as client:
@@ -129,8 +132,10 @@ async def test_an_uninitialised_project_answers_status_and_nothing_else() -> Non
 
 
 async def test_the_uninitialised_surface_serves_the_status_resource() -> None:
-    server = create_uninitialised_mcp(
-        "ai-and-fetishism", "No project is initialised under that name here."
+    server = create_blocked_mcp(
+        "ai-and-fetishism",
+        "No project is initialised under that name here.",
+        config=None,
     )
 
     async with Client(server) as client:
@@ -139,7 +144,7 @@ async def test_the_uninitialised_surface_serves_the_status_resource() -> None:
     assert "ai-and-fetishism" in answer[0].text
 
 
-def test_the_bridge_starts_the_app_for_a_registered_project(
+def test_the_bridge_proxies_a_project_an_app_is_serving(
     account: Path, project: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     _initialised(project, "AI and fetishism")
@@ -151,10 +156,13 @@ def test_the_bridge_starts_the_app_for_a_registered_project(
         def run(self, **kwargs: object) -> None:
             served["run"] = kwargs
 
+    monkeypatch.setattr(bridge, "is_serving", lambda config: True)
     monkeypatch.setattr(
         bridge,
-        "ensure_running",
-        lambda config: nullcontext(SimpleNamespace(base_url="http://127.0.0.1:5051")),
+        "connect",
+        lambda config, **_: nullcontext(
+            SimpleNamespace(base_url="http://127.0.0.1:5051")
+        ),
     )
     monkeypatch.setattr(
         bridge, "build_proxy", lambda url, *, name: served.update(url=url) or _Proxy()
@@ -172,20 +180,54 @@ def test_the_bridge_answers_instead_of_refusing_a_missing_project(
     _initialised(project, "Something Else")
     served: dict[str, object] = {}
 
-    def _no_app(config: object) -> object:
-        raise AssertionError("no app may be started for a project that is not there")
-
-    monkeypatch.setattr(bridge, "ensure_running", _no_app)
     monkeypatch.setattr(
         bridge_module,
-        "serve_uninitialised",
-        lambda name, reason: served.update(name=name, reason=reason),
+        "serve_blocked",
+        lambda name, reason, *, config: served.update(
+            name=name, reason=reason, config=config
+        ),
     )
 
     bridge.run("ai and fetishism")
 
     assert served["name"] == "ai and fetishism"
     assert "init" in str(served["reason"])
+    assert served["config"] is None
+
+
+def test_the_bridge_answers_a_project_no_app_is_serving_and_starts_nothing(
+    account: Path, project: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An app belongs to a terminal, so a client that finds none is told where."""
+
+    _initialised(project, "AI and fetishism")
+    served: dict[str, object] = {}
+
+    monkeypatch.setattr(bridge, "is_serving", lambda config: False)
+    monkeypatch.setattr(
+        bridge_module,
+        "serve_blocked",
+        lambda name, reason, *, config: served.update(
+            name=name, reason=reason, config=config
+        ),
+    )
+    monkeypatch.setattr(
+        bridge,
+        "build_proxy",
+        lambda url, *, name: pytest.fail("no proxy may be built with no app serving"),
+    )
+
+    bridge.run("AI and fetishism")
+
+    assert served["name"] == "AI and fetishism"
+    assert served["config"] is not None
+    payload = not_served_status(
+        served["config"],
+        "An app runs in a terminal and ends when that terminal closes.",
+    )
+    assert payload["project_initialised"] is True
+    assert payload["blocked_by"][0]["check"] == "app.serving"
+    assert "ui" in payload["blocked_by"][0]["remedy"]
 
 
 def test_the_mcp_command_hands_the_bridge_a_name(
@@ -219,7 +261,7 @@ def test_a_path_in_an_mcp_entry_is_refused(arguments: list[str]) -> None:
 
 
 def test_an_mcp_entry_with_no_project_name_is_refused() -> None:
-    with pytest.raises(SystemExit, match="RESEARCH_ULTRARAG_PROJECT_NAME"):
+    with pytest.raises(SystemExit, match="RESEARCH_RAG_PROJECT_NAME"):
         main(["mcp"])
 
 
@@ -234,7 +276,7 @@ def test_a_client_that_can_only_set_an_environment_still_names_a_project(
         served.update(project_name=project_name)
 
     monkeypatch.setattr(bridge_module, "run", _run)
-    monkeypatch.setenv("RESEARCH_ULTRARAG_PROJECT_NAME", "ai-and-fetishism")
+    monkeypatch.setenv("RESEARCH_RAG_PROJECT_NAME", "ai-and-fetishism")
 
     main(["mcp"])
 
