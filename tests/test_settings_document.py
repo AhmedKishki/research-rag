@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import sys
 import tomllib
 from pathlib import Path
@@ -13,7 +14,7 @@ from filelock import AsyncFileLock
 
 from research_rag.config import resolve_config
 from research_rag.service import ResearchService
-from research_rag.settings import SETTINGS, SETTINGS_BY_KEY
+from research_rag.settings import LOG_LEVELS, SETTINGS, SETTINGS_BY_KEY
 from research_rag.settings_document import (
     merged_document,
     render_project_document,
@@ -24,10 +25,24 @@ from research_rag.support import ResearchError
 
 pytestmark = pytest.mark.anyio
 
+#: The keys the workspace's Config tab reads. The answer may carry more; a
+#: renamed or removed one of these breaks a tab that is already shipped.
+WORKSPACE_KEYS = frozenset(
+    {"key", "label", "value", "kind", "layer", "origin", "writable", "cost"}
+)
+
 
 @pytest.fixture
 def anyio_backend() -> str:
     return "asyncio"
+
+
+def _rows(answer: dict[str, Any]) -> dict[str, dict[str, Any]]:
+    """Every setting row of one settings answer, keyed by that setting's key."""
+
+    return {
+        row["key"]: row for section in answer["sections"] for row in section["settings"]
+    }
 
 
 def _config(project: Path, **kwargs: Any):
@@ -365,6 +380,62 @@ async def test_a_key_the_command_line_supplied_is_refused_a_project_write(
 
     assert "cannot override" in str(refusal.value)
     assert not (project / ".research-rag" / "config.toml").exists()
+
+
+async def test_every_key_carries_the_description_the_registry_declares(
+    project: Path,
+) -> None:
+    """The sentence is written once, and both readers receive that one."""
+
+    answer = await _service(project).settings_read()
+    rows = _rows(answer)
+
+    assert set(rows) == {setting.key for setting in SETTINGS}
+    for setting in SETTINGS:
+        assert rows[setting.key]["doc"] == setting.doc
+        assert rows[setting.key]["doc"].strip()
+
+
+async def test_a_bound_a_choice_or_a_variable_travels_only_where_one_is_declared(
+    project: Path,
+) -> None:
+    """A setting with no declared domain must not send an empty one."""
+
+    answer = await _service(project).settings_read()
+    rows = _rows(answer)
+
+    for setting in SETTINGS:
+        row = rows[setting.key]
+        for name, declared in (
+            ("minimum", setting.minimum is not None),
+            ("maximum", setting.maximum is not None),
+            ("choices", bool(setting.choices)),
+            ("env", bool(setting.env)),
+        ):
+            assert (name in row) is declared, f"{setting.key}.{name}"
+        assert row.get("minimum", setting.minimum) == setting.minimum
+        assert row.get("maximum", setting.maximum) == setting.maximum
+        assert row.get("choices", list(setting.choices)) == list(setting.choices)
+        assert row.get("env", setting.env) == setting.env
+    # A bounded integer, a fixed set of modes, and a key that declares no domain.
+    assert rows["runtime.nice"]["minimum"] == 0
+    assert rows["runtime.nice"]["maximum"] == 19
+    assert rows["runtime.log_level"]["choices"] == list(LOG_LEVELS)
+    assert "minimum" not in rows["runtime.offline"]
+    assert "choices" not in rows["retrieval.rrf_k"]
+
+
+async def test_the_answer_adds_keys_the_workspace_ignores_and_removes_none(
+    project: Path,
+) -> None:
+    """The Config tab reads eight keys; every one of them has to stay."""
+
+    answer = await _service(project).settings_read()
+
+    assert json.loads(json.dumps(answer)) == answer
+    for section in answer["sections"]:
+        for row in section["settings"]:
+            assert set(row) >= WORKSPACE_KEYS
 
 
 async def test_the_settings_answer_names_a_layer_and_a_cost_for_every_key(

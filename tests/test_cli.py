@@ -24,6 +24,7 @@ import research_rag.ultrarag as ultrarag_module
 from research_rag import launcher as launcher_module
 from research_rag import registry
 from research_rag.config import ConfigurationError
+from research_rag.settings import SETTINGS
 from research_rag.support import ResearchError
 from research_rag.surfaces.cli import (
     _init,
@@ -884,6 +885,22 @@ def test_config_prints_what_a_change_to_every_key_costs(
     assert "retrieval.rrf_k" in printed
     assert "dense.embedding_model" in printed
     assert not (project / ".research-rag" / "config.toml").exists()
+
+
+def test_config_prints_the_description_of_every_key(
+    project: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """The terminal and the Config tab read one description, from the registry."""
+
+    args = _args("--project-root", str(project), "config")
+
+    asyncio.run(cli_module._run(args))
+
+    # Wrapped to the terminal's width, so the whitespace is what a reader's eye
+    # drops rather than what the sentence says.
+    printed = " ".join(capsys.readouterr().out.split())
+    for setting in SETTINGS:
+        assert " ".join(setting.doc.split()) in printed
 
 
 def _launched(project: Path, monkeypatch: pytest.MonkeyPatch, returncode: int = 0):

@@ -200,6 +200,14 @@ def test_a_symlinked_config_layer_is_refused(tmp_path: Path) -> None:
         _resolve(tmp_path, config_path=link, environ={})
 
 
+def test_every_setting_says_what_its_key_does() -> None:
+    """A key with no description reaches both readers as an unexplained row."""
+
+    blank = [setting.key for setting in SETTINGS if not setting.doc.strip()]
+
+    assert not blank
+
+
 def test_the_report_names_every_setting_and_its_layer(tmp_path: Path) -> None:
     project = tmp_path / "project"
     _write(
