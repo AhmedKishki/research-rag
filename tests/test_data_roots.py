@@ -117,8 +117,15 @@ def test_the_agent_answer_detail_is_declared_and_used() -> None:
         for path in ROOT.glob("src/research_rag/**/*.py")
         if "tool_detail" in path.read_text(encoding="utf-8")
     )
+    # `surfaces/cli.py` names the key in the `help settings` page rather than
+    # reading it, and a page that told a reader what a change costs without
+    # naming the key would be less use than the page is worth. What the assertion
+    # still guards is the reader set: a module that behaves differently on the
+    # key has to be added here deliberately, and the agent surface stays the one
+    # that acts on its value.
     assert readers == [
         "src/research_rag/config.py",
         "src/research_rag/settings.py",
+        "src/research_rag/surfaces/cli.py",
         "src/research_rag/surfaces/mcp.py",
     ], readers

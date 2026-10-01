@@ -218,3 +218,51 @@ def test_no_document_names_a_surface_that_moved(document: str) -> None:
     ):
         assert retired not in text, f"{document} still names {retired}"
     assert "create_research_transport" not in text, document
+
+
+def test_the_help_menu_accounts_for_every_command() -> None:
+    """Every installed command is in the menu, and in it exactly once.
+
+    The menu is hand-written because argparse cannot group commands by the work
+    they do, and a hand-written list drifts the moment a command is added. This
+    is what makes adding one a two-line change: register it, and say here what
+    it is for.
+    """
+
+    from research_rag.surfaces.cli import HELP_GROUPS
+
+    listed = [name for _, entries in HELP_GROUPS for name, _ in entries]
+    # `help` is reached by name and cannot list itself in a group it is the
+    # contents of, so it is the one registered command the menu exempts.
+    assert set(listed) | {"help"} == _installed_commands()
+    assert len(listed) == len(set(listed)), "a command is in the menu twice"
+
+
+def test_every_menu_entry_says_what_the_command_is_for() -> None:
+    """A name in the menu with no description is a name the reader must look up."""
+
+    from research_rag.surfaces.cli import HELP_GROUPS
+
+    for title, entries in HELP_GROUPS:
+        assert title, "a group has no heading"
+        for name, description in entries:
+            assert name and description, f"{title}: an entry is blank"
+            assert not description[0].islower(), (
+                f"{name}: a description must start with a capital"
+            )
+            assert description.endswith("."), f"{name}: a description is not a sentence"
+
+
+def test_a_subject_page_names_a_command_and_the_help_menu_prints() -> None:
+    """The menu and the subject pages are the same document argparse cannot print."""
+
+    from research_rag.surfaces.cli import HELP_TOPICS, _help_menu
+
+    menu = _help_menu()
+    assert "help" in menu
+    for topic, page in HELP_TOPICS.items():
+        assert topic in menu, f"the menu does not offer the {topic!r} page"
+        assert page.strip().endswith("."), f"{topic}: a page is not a finished answer"
+    # The menu says the one thing a first call has to know, which the usage
+    # block above it cannot: that the three surfaces share one process.
+    assert "one app" in menu

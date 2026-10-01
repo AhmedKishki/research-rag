@@ -54,7 +54,7 @@ Any question that needs a user choice must be presented as a numbered list of co
 
 ## Current compatibility baseline
 - Package: `research-rag`
-- Command: `research-rag`, with `init`, `status`, `ingest`, `search`, `sources`, `passage`, `include`, `exclude`, `metadata`, `config`, `doctor`, `start`, `ui`, `clients`, `disconnect`, `mcp`, `serve`, and `stop`
+- Command: `research-rag`, with `init`, `status`, `ingest`, `search`, `sources`, `passage`, `include`, `exclude`, `metadata`, `config`, `doctor`, `start`, `ui`, `clients`, `disconnect`, `mcp`, `serve`, `stop`, and `help`. `help` prints the commands grouped by the work and a page per subject, needs no project, and delegates a command name to that command's own usage so there is one document per command; `tests/test_documentation.py` fails when a registered command is missing from the menu or listed twice.
 - Agent surface: seven tools and one resource at `<app>/mcp` on the app's own port, plus the stdio bridge for a client that cannot open a socket
 - Version: `0.1.0`
 - On-disk compatibility: byte-compatible with `research-ultra-rag-mcp`, which is frozen and still installed on the machines that carry it, so the two keep reading and writing the same projects. The names that are inherited rather than this app's own are `USER_CONFIG_DIRECTORY`, `SETTINGS_ENVIRONMENT_PREFIX`, the model-cache directory, and the `runtime.tool_detail` key; `tests/test_data_roots.py` states each one and why it is retained. This app is the only one of the two that changes.
@@ -164,7 +164,7 @@ Do not blur this boundary in documentation. Adding answer generation would be a 
 - `app.py`: the running app. One project, one port, one service, the composed ASGI application, the MCP client registry, and the port claim.
 - `control.py`: the control API the command line speaks, and the `Control` handle it speaks it with, plus `ensure_running` for the command that needs the app.
 - `bridge.py`: the stdio front end, which makes sure the app is up and proxies stdio to its agent endpoint under a name it reports.
-- `surfaces/cli.py`: the command line — the command centre for the app's lifecycle, its clients, its corpus, and the projects it serves.
+- `surfaces/cli.py`: the command line — the command centre for the app's lifecycle, its clients, its corpus, and the projects it serves — and the `help` menu and subject pages, which need no project and live here because a page for one command has to be that command's own usage.
 - `surfaces/mcp.py`: the agent surface — the seven tools, the one resource, and the answer projection.
 - `surfaces/ui.py`: the workspace profile, the adapter that maps its operations to the service, and safe original-source authorization.
 - `tool_views.py`: the lean/full answer projection, used by the agent surface and by the command line's default `status`.
