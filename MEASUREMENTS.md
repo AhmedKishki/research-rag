@@ -209,7 +209,11 @@ succ@50 90.6%, MRR 0.717, nDCG@50 0.759, doc@50 100.0%. Paraphrase reach rises f
 
 ### Which product produced them
 
-A number here is comparable only with another measured by the same engine, because a process answering from a different checkout reads a different reviewed-metadata field set and can refuse the project's own state. `doctor` reports the two directories when they differ, `scripts/update.sh` names the processes still running the pre-update code, and the reviewed-metadata file records the fields its writer understood, so an older process refuses the file by cause instead of naming a field the caller never typed.
+A number here is comparable only with another measured by the same engine, because a process answering from a different checkout reads a different reviewed-metadata field set and can refuse the project's own state. `doctor` reports the two directories when they differ, `research-rag update` names the processes still running the pre-update code, and the reviewed-metadata file records the fields its writer understood, so an older process refuses the file by cause instead of naming a field the caller never typed.
+
+### Which version an update compares against
+
+`update` reads the remote's release tags with `git ls-remote --tags`, so a check needs no token and no API key. `DIST_TAG` is the tag name that names the current release rather than a version of its own (`latest`); a remote that publishes it wins over the highest version tag, because a maintainer moves it when a release is superseded. A tag carrying a pre-release or build-metadata suffix is not a release, and two tags claiming one version is a refusal rather than a coin toss. A checkout's position against that release is one of `at_release`, `behind_release`, `ahead_of_release`, `no_release`, and `unreadable_release`, and only `behind_release` is an update to apply: `ahead_of_release` is unreleased work, which is a fact to report and never a reason to change anything.
 
 `research-rag` and the frozen `research-ultra-rag-mcp` read and write the same project, which adds one limit this file does not resolve on its own: a figure measured by one and a figure measured by the other are the same measurement, because both call one unchanged engine, but a figure measured by a third checkout is not comparable until `doctor` reports the two trees as the same. Only `research-rag` changes, so a figure here is measured against an engine the frozen product still matches.
 

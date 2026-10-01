@@ -37,6 +37,26 @@ uv sync
 
 The first command needs `git` on the `PATH`; the second needs `uv`. The pinned UltraRAG runtime and two models download on first use, which needs a network. After that `--offline` works.
 
+## Put it on the command line and in the menu
+
+The console script exists inside a checkout at `.venv/bin/`, which no shell searches. `install` links the running interpreter's own script into the directory the shell already searches, so a `uv sync` and an installed copy both keep working:
+
+```bash
+research-rag install
+```
+
+A second run says the command is already installed and changes nothing. `research-rag install --uninstall` removes that link and refuses any path it cannot prove it wrote, so a script someone else placed there is left alone.
+
+One desktop menu entry per project starts that project's workspace and opens a browser:
+
+```bash
+research-rag --project-root /path/to/project install --desktop
+```
+
+The entry runs `<project>/open-research-rag-ui.sh --open`, which is the launcher that claims the port, records the pid, and stops the whole process group on `--stop`. `research-rag install --desktop --uninstall` removes the entry, and `doctor` reports an entry whose project has been deleted, because that entry opens nothing at all. An entry this app did not write is reported and left alone unless you pass `--force`.
+
+Both files are written under the account's own directories: `~/.local/bin`, `~/.local/share/applications`, and `~/.local/share/icons/hicolor/scalable/apps/`. Nothing is written outside the account's directories, and no project's own state is touched.
+
 ## First use
 
 ```bash
@@ -79,7 +99,7 @@ research-rag --project-root /path/to/project search "commodity fetishism" \\
 
 Categories, projects, languages, authors, and titles match any of their values; keywords match all of theirs. Authors and titles match as case-insensitive substrings, because a name is a phrase rather than a controlled tag. An empty result with a filter applied means no source matches it, and the answer names the filters it applied. A filtered-out answer is not a broken index.
 
-Source selection narrows to named files: `sources` is the inventory, `passage CHUNK_ID --context-chunks 2` reads around a result, and `metadata`, `exclude`, and `include` record a decision. A metadata edit rewrites only that source's entry, so a hand edit to another entry in the same file survives.
+Source selection narrows to named files: `sources` is the inventory, `passage CHUNK_ID --context-chunks 2` reads around a result, and `metadata`, `exclude`, and `include` record a decision. A metadata edit rewrites only that source's entry, so a hand edit to another entry in the same file survives. A passage can be excluded on its own with `exclude --chunk CHUNK_ID`, and the decision is enforced on the next search without a rebuild, because it is applied when the answer is assembled rather than when the index is built.
 
 Every search re-compares the source directory with the generation and reports `stale`, naming what changed: sources added, modified, or gone, and whether reviews or exclusions moved. A reviewed metadata change is not staleness; it is already effective, and the complete payload reports `metadata_overlay_active`.
 
@@ -110,7 +130,7 @@ research-rag --project-root /path/to/project doctor --check-entry ~/my-client.js
 
 Two ready-to-copy templates are in this repository: `mcp_settings.example.json` for a client using an `mcpServers` object, and `kilo-mcp.example.jsonc` for one using a Kilo-style `mcp` object. Replace the executable path and the project name in either and the entry is complete.
 
-An agent gets seven tools and one resource, and every answer is the lean projection: a question at a time, no inventory, no scores. `status` is a verdict naming the call that closes a gap; `find_source` looks up one work by filename, title, or author. The full payload is `status --verbose` and the workspace.
+An agent gets eight tools and one resource, and every answer is the lean projection: a question at a time, no inventory, no scores. `status` is a verdict naming the call that closes a gap; `find_source` looks up one work by filename, title, or author. The full payload is `status --verbose` and the workspace.
 
 ## The command line
 
@@ -125,7 +145,7 @@ An agent gets seven tools and one resource, and every answer is the lean project
 | `search` | hybrid reranked evidence, with filters applied from reviewed metadata |
 | `sources` | the corpus inventory, including files not indexed yet |
 | `passage` | one passage and its neighbours |
-| `include` / `exclude` | reversible retrieval decisions, enforced immediately |
+| `include` / `exclude` | reversible retrieval decisions for a whole file or one passage (`--chunk CHUNK_ID`), enforced immediately |
 | `metadata` | one source's reviewed bibliographic override |
 | `config` | every effective setting and the layer it came from |
 | `doctor` | one line per dependency, with the command that fixes it |
@@ -136,6 +156,8 @@ An agent gets seven tools and one resource, and every answer is the lean project
 | `stop` | the app, and optionally any process of this app still building |
 | `generations` | every generation on disk with its size, and the one search reads; `--use ID` searches a retained one instead |
 | `remove-generation` | a generation search does not read, deleted after its id is repeated |
+| `install` | the command on the account's `PATH`, and with `--desktop` one project in the desktop menu |
+| `update` | what a newer version would change, and with `--apply` the update itself |
 | `help` | every command grouped by the work, or one page of it |
 
 Every command takes `--project <name-or-id>` in place of `--project-root <path>`, so one shell can work on several projects. The two together are refused rather than resolved by precedence. `status` is the one a person reads most, so it prints the lean verdict and takes `--verbose` for the whole payload; every other command prints the whole payload.
@@ -152,6 +174,22 @@ research-rag --project-root /path/to/project doctor --repair-runtime
 
 The last two are the only operations that reach the network, and neither implies the other. A repair that discards evidence moves it aside rather than deleting it.
 
+## Update
+
+`research-rag update` checks and writes nothing:
+
+```bash
+research-rag update
+```
+
+It reports which kind of install this is, and compares it with the repository's published releases rather than with a branch head. In a checkout it names the version this checkout declares, the latest published release, whether the checkout is at it, behind it, or ahead of it with unreleased work, and what applying would do. In an installed distribution it names the installed version and what is available, and the tool that owns the install — `uv` or `pipx` — is found by asking each one rather than by guessing. A remote that cannot be reached, or a repository that has published no release, is reported as an answer: nothing changed.
+
+`--apply` performs it. It refuses while any project lock is held by a build, naming the project, the phase it is in, and the command that reports it, and it refuses while the checkout has uncommitted work, naming the files in the way. Otherwise it stops every app this installation serves through that project's own launcher, then reports the new revision, whether any project's portable state under `.research-rag` changed, and the exact command that starts each stopped app again. It does not start them for you, and it prints the command that returns a detached checkout to your branch.
+
+`research-rag --version` prints this app's version, the version installed in the environment now, the shared workspace's version, and whether a restart is required. `update` reports the same four numbers from the same functions.
+
+`scripts/update.sh` remains a wrapper around this command: `--check` reports only, `--offline` does not touch the network, and a project path is accepted.
+
 ## Use the workspace
 
 ```bash
@@ -163,11 +201,14 @@ research-rag --project-root /path/to/project ui --stop     # stop it and what it
 
 The launcher claims the first free loopback port at or above the one it was generated with and records the port it chose, so two projects never serve from the same port. `research-rag serve` is the same workspace in the foreground on a fixed port, and is what the launcher runs.
 
-The workspace binds loopback only and has no authentication, which is correct for an address no other machine can reach. It has no retrieval mode, no reranking switch, and no chunk tuning, because every search is hybrid and reranked. Metadata, source selection, category partitions, project metadata, and this project's settings are there.
+The workspace binds loopback only and has no authentication, which is correct for an address no other machine can reach. It has no retrieval mode, no reranking switch, and no chunk tuning, because every search is hybrid and reranked. Metadata, source selection, category partitions, project metadata, and this project's settings are there. The workspace has a tab per job: **Search**, **Sources**, **Config**, and **MCP**, and the generations, partitions, languages, and SQL console panels sit under the search view.
+
+One installation serves several projects. The header names the project the page is serving and offers the others: a project whose app is up opens in a new tab, and one whose app is down shows the command that starts it rather than a link that would fail. The **MCP** tab carries the address this app serves agents on and the client entry `research-rag doctor --mcp-entry` prints, copyable as it is.
 
 ## Limitations
 
 - **The app is a process, not a daemon.** It does not survive an update; stop it and start it again. An agent attached to a stopped app has no session, and `clients` says so rather than listing a stale one.
+- **Updates compare against a published release.** `update` reads the remote's release tags, so the number it compares is the version a release carries rather than the branch head's latest commit. A checkout ahead of the latest release reports unreleased work and changes nothing.
 - **The first build is slow.** It downloads the pinned runtime and two models, then extracts and embeds every source. `status.ingestion_progress` reports progress, and a cancelled build resumes where it stopped.
 - **`--offline` fails if anything is uncached.** Run `doctor --prefetch-models` first.
 - **A build reports "one build at a time".** Another process holds the project lock, and `status` names the resident build's phase. Reads are refused rather than queued while it runs.
