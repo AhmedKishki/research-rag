@@ -171,6 +171,23 @@ def version_block() -> dict[str, object]:
     }
 
 
+def version_lines() -> tuple[str, ...]:
+    """The lines `research-rag --version` prints.
+
+    `version_block` is the one place these four numbers are assembled, so the
+    flag, `status`, and `update` cannot print different values for one install.
+    """
+
+    block = version_block()
+    ui = block["ui"]
+    return (
+        f"{DISTRIBUTION_NAME} {block['app']}",
+        f"installed {block['installed']}",
+        f"UI {ui}" if ui else "UI not installed",
+        f"restart_required {str(block['restart_required']).lower()}",
+    )
+
+
 def version_label() -> str:
     """Return the short header label the workspace shows under the project name."""
 

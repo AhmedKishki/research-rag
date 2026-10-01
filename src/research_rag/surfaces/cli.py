@@ -34,7 +34,7 @@ from config_ultra_rag_mcp import describe_settings
 
 from .. import bridge
 from .. import launcher as launcher_module
-from ..app import UI_HOST, App, running_url
+from ..app import UI_HOST, App
 from ..config import (
     CLI_COMMAND,
     ConfigurationError,
@@ -46,9 +46,8 @@ from ..config import (
 )
 from ..control import Control, ControlError, connect
 from ..launcher import launcher_path, start_app, ui_launcher_state
-from ..registry import load as load_registry
+from ..registry import account_projects, registry_path
 from ..registry import register as register_project
-from ..registry import registered_at_label, registry_path
 from ..registry import resolve as resolve_registered
 from ..rerankers import RERANKER_MODEL_CHOICES
 from ..service import ResearchService
@@ -257,9 +256,10 @@ HELP_GROUPS: tuple[tuple[str, tuple[tuple[str, str], ...]], ...] = (
             (
                 "update",
                 (
-                    "What a newer version would change, and with --apply the update "
-                    "itself: stop every app, pull or upgrade, and print the command "
-                    "that starts each one again."
+                    "Compare this installation with the latest published release, "
+                    "and with --apply move to it: stop every app, put the release "
+                    "in place, and print the command that starts each app again. "
+                    "The branch head is reported beside the release answer."
                 ),
             ),
         ),
@@ -410,6 +410,15 @@ def _parser() -> argparse.ArgumentParser:
         help="Project root holding .research-rag (default: the current directory).",
     )
     parser.add_argument(
+        "--version",
+        action="store_true",
+        help=(
+            "Print this app's version, the version installed now, the shared "
+            "workspace's version, and whether a restart is required. Needs no "
+            "project."
+        ),
+    )
+    parser.add_argument(
         "--project",
         default=os.environ.get("RESEARCH_ULTRARAG_PROJECT"),
         help=(
@@ -471,7 +480,9 @@ def _parser() -> argparse.ArgumentParser:
             "resolves settings in this process."
         ),
     )
-    commands = parser.add_subparsers(dest="command", required=True, metavar="COMMAND")
+    # Not `required=True`, because `--version` is an answer of its own and asks
+    # for no command. A call with neither prints the same refusal argparse would.
+    commands = parser.add_subparsers(dest="command", metavar="COMMAND")
 
     create = commands.add_parser(
         "init",
@@ -877,7 +888,10 @@ def _parser() -> argparse.ArgumentParser:
 
     refresh_install = commands.add_parser(
         "update",
-        help="Report what a newer version would change, and --apply put it in place.",
+        help=(
+            "Compare this installation with the latest published release, and "
+            "--apply move to it."
+        ),
     )
     refresh_install.add_argument(
         "--apply",
@@ -1425,70 +1439,13 @@ async def _operate(
 async def _projects(args: argparse.Namespace) -> dict[str, Any]:
     """Report every registered project, and whether an app is serving it.
 
-    A project whose app is not running is reported as such rather than started,
-    because a listing is a question about what exists.
+    The listing is the account's own record read once, so the workspace's
+    selector names the same projects this command does. A project whose app is
+    not running is reported as such rather than started, because a listing is a
+    question about what exists.
     """
 
-    entries: list[dict[str, Any]] = []
-    for project in load_registry():
-        entry: dict[str, Any] = {
-            "project_name": project.project_name,
-            "project_id": project.project_id,
-            "project_root": str(project.project_root),
-            "registered_at": registered_at_label(project),
-            "root_exists": (project.project_root / ".research-rag").is_dir(),
-            "app": {"running": False, "url": None, "port": None},
-            "attached_clients": 0,
-        }
-        if entry["root_exists"]:
-            try:
-                entry.update(_project_app_state(project.project_root))
-            except (ConfigurationError, ResearchError) as exc:
-                entry["error"] = str(exc)
-        entries.append(entry)
-    answer: dict[str, Any] = {
-        "registry_path": str(registry_path()),
-        "project_count": len(entries),
-        "projects": entries,
-    }
-    if not entries:
-        answer["message"] = (
-            "No project is registered yet. Run 'research-rag --project-root "
-            "<path> init' once per project, and this install can address each one "
-            "by name."
-        )
-    return answer
-
-
-def _project_app_state(project_root: Path) -> dict[str, Any]:
-
-    config = resolve_config(project_root)
-    url = running_url(config)
-    state: dict[str, Any] = {
-        "app": {"running": url is not None, "url": url, "port": _port_of(url)},
-        "attached_clients": 0,
-    }
-    if url is None:
-        return state
-    try:
-        with Control(url, timeout=10.0) as handle:
-            verdict = lean_status(handle.status())
-            clients = handle.clients()
-    except ControlError as exc:
-        state["error"] = str(exc)
-        return state
-    state["attached_clients"] = len(clients)
-    for key in ("ready", "stale", "requires"):
-        if key in verdict:
-            state[key] = verdict[key]
-    return state
-
-
-def _port_of(url: str | None) -> int | None:
-    if not url:
-        return None
-    _, _, port = url.rpartition(":")
-    return int(port) if port.isdigit() else None
+    return account_projects()
 
 
 @dataclass(frozen=True, slots=True)
@@ -1616,14 +1573,18 @@ def _install(args: argparse.Namespace) -> dict[str, Any]:
 async def _update(args: argparse.Namespace) -> dict[str, Any]:
     """Report what a newer version means, and with ``--apply`` put it in place.
 
-    The check is the default and writes nothing. Applying refuses while a
-    project lock is held, stops every app this installation serves through that
-    project's own launcher, and prints the command that starts each one again
-    rather than starting it.
+    The check is the default and writes nothing. The comparison is against the
+    latest published release, so the version in the answer and the version
+    `research-rag --version` prints are the same number. Applying refuses while a
+    project lock is held, refuses a checkout with uncommitted work, stops every
+    app this installation serves through that project's own launcher, and prints
+    the command that starts each one again rather than starting it.
     """
 
+    from .. import release as release_module
     from .. import update as update_module
     from ..registry import load as load_registered
+    from ..version import version_block
 
     offline = bool(args.offline)
     runner = update_module.subprocess_runner
@@ -1633,10 +1594,21 @@ async def _update(args: argparse.Namespace) -> dict[str, Any]:
     payload: dict[str, Any] = {
         "command": "update",
         "applied": False,
+        # The same four numbers `research-rag --version` prints, from the same
+        # functions, so an answer cannot carry one version and the flag another.
+        "version": version_block(),
         "install": local.as_dict(),
         "remote": remote.as_dict(),
         "plan": plan.as_dict(),
     }
+    if not args.apply and local.is_checkout and local.checkout is not None:
+        # On the reporting path only: an applied update moves the checkout, and a
+        # tag it read a moment before may be one commit from being irrelevant.
+        payload["declared_version_problems"] = list(
+            release_module.release_consistency(
+                local.checkout, local.declared or local.version, runner
+            )
+        )
     if plan.blocked:
         raise ResearchError(plan.blocked)
     if not args.apply:
@@ -1779,8 +1751,10 @@ def _help_menu() -> str:
     lines.append(
         f"Each command takes --project-root DIR or --project NAME, except `mcp`,\n"
         f"which takes --project-name NAME so a client entry carries no path.\n"
-        f"`install` needs no project unless --desktop is given, and `update` and\n"
-        f"`help` need none.\n"
+        f"`install` needs no project unless --desktop is given, and `update`,\n"
+        f"`help`, and `--version` need none.\n"
+        f"`{CLI_NAME} --version` prints this app's version, the installed one,\n"
+        f"the shared workspace's, and whether a restart is required.\n"
         f"One command's own options: `{CLI_NAME} COMMAND --help`.\n"
         f"A subject: `{CLI_NAME} help {', '.join(sorted(HELP_TOPICS))}`."
     )
@@ -1874,6 +1848,16 @@ async def _run(args: argparse.Namespace) -> CommandResult:
 def main(argv: Sequence[str] | None = None) -> None:
     parser = _parser()
     args = parser.parse_args(argv)
+    if args.version:
+        # Before the project is resolved, like `help`: a reader asking what is
+        # installed has no project yet, and the answer must not fail on a
+        # directory that happens to hold one.
+        from ..version import version_lines
+
+        sys.stdout.write("\n".join(version_lines()) + "\n")
+        return
+    if args.command is None:
+        parser.error("the following arguments are required: COMMAND")
     if args.command == "help":
         # Before the project is resolved: the menu is what a reader has
         # precisely when they have no project yet, and it must not fail on a

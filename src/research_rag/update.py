@@ -1,19 +1,25 @@
 """Say what a newer version means for this installation, and put it in place.
 
-The command checks by default and writes nothing: it reports the branch, the
-local commit, the remote's head, and how far behind the checkout is, or the
-installed version and what is available, and whether anything has to stop first.
-`--apply` performs the update.
+The command checks by default and writes nothing: it compares what is installed
+with the latest published release, reports the branch head beside that answer,
+and says whether anything has to stop first. `--apply` performs the update. The
+release a remote publishes is read from its tags by `release.py`, which needs no
+token and no API key.
 
 Two install shapes exist and neither is assumed. A git checkout is updated by
-pulling it and syncing its environment. An installed distribution is updated by
-the tool that owns the install, and that tool is detected by asking each of
-`uv` and `pipx` rather than by guessing from `PATH` order.
+detaching it onto the release tag and syncing its environment, and the answer
+prints the command that returns it to the branch. An installed distribution is
+updated to the release version by the tool that owns the install, and that tool
+is detected by asking each of `uv` and `pipx` rather than by guessing from `PATH`
+order.
 
-Every decision is a pure function of the two states it is handed, and every
-subprocess call arrives through an injected runner, so the behaviour is testable
-with no remote and no network. An unreachable remote is a normal answer rather
-than an error: the report says so, changes nothing, and names what to try.
+Whether an update is available comes from the release comparison alone: a commit
+on the branch head that nobody published is unreleased work, which is a fact to
+report and not a reason to change anything. Every decision is a pure function of
+the two states it is handed, and every subprocess call arrives through an
+injected runner, so the behaviour is testable with no remote and no network. An
+unreachable remote is a normal answer rather than an error: the report says so,
+changes nothing, and names what to try.
 """
 
 from __future__ import annotations
@@ -21,14 +27,22 @@ from __future__ import annotations
 import json
 import os
 import re
-import subprocess
-from collections.abc import Callable, Sequence
-from dataclasses import dataclass
+from collections.abc import Sequence
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
 from .config import project_command
 from .launcher import launcher_path
+from .process import COMMAND_TIMEOUT_SECONDS, CommandResult, Runner, subprocess_runner
+from .release import (
+    NONE,
+    ReleaseSet,
+    compare_versions,
+    declared_version,
+    is_release_version,
+    remote_release,
+)
 from .storage import read_json
 from .support import ResearchError
 from .version import DISTRIBUTION_NAME, installed_version, nearest_checkout
@@ -37,6 +51,14 @@ CHECKOUT = "checkout"
 DISTRIBUTION = "distribution"
 UV = "uv"
 PIPX = "pipx"
+# Where a checkout stands against the release a remote publishes. `no_release` is
+# its own answer: the repository has published nothing to compare against, which
+# is a different finding from being at the latest release.
+AT_RELEASE = "at_release"
+BEHIND_RELEASE = "behind_release"
+AHEAD_OF_RELEASE = "ahead_of_release"
+NO_RELEASE = "no_release"
+UNREADABLE_RELEASE = "unreadable_release"
 # The two files that decide what the environment installs. A commit that touches
 # neither cannot move a pin, so `uv lock` has nothing to resolve and is skipped.
 PIN_FILES = ("pyproject.toml", "uv.lock")
@@ -47,8 +69,6 @@ LOCK_FILE = "project.lock"
 # The one line of a generated launcher that records where a project keeps its
 # derived state when it is not the default.
 _RUNTIME_ROOT_LINE = re.compile(r'^RUNTIME_ROOT="(.*)"$', re.MULTILINE)
-# How long a `git` or `uv` call may take before it is a failure worth reporting.
-COMMAND_TIMEOUT_SECONDS = 300.0
 # The two commands that put this app on a machine in the first place. A refusal
 # names them so a reader can run one instead of being told a guess is wrong.
 ALTERNATIVES = (
@@ -56,45 +76,12 @@ ALTERNATIVES = (
     "pipx install git+https://github.com/AhmedKishki/research-rag.git",
 )
 
-
-@dataclass(frozen=True, slots=True)
-class CommandResult:
-    """One completed subprocess call."""
-
-    returncode: int
-    stdout: str = ""
-    stderr: str = ""
-
-    @property
-    def ok(self) -> bool:
-        return self.returncode == 0
-
-
-def subprocess_runner(argv: Sequence[str], *, cwd: Path | None = None) -> CommandResult:
-    """Run one external command and report what it said.
-
-    `git`, `uv`, and `pipx` are not children of this app: they hold no project
-    and serve no UI, so they inherit the environment unchanged rather than the
-    managed-child environment a server of this app would be handed.
-    """
-
-    try:
-        completed = subprocess.run(
-            [str(part) for part in argv],
-            cwd=cwd,
-            capture_output=True,
-            text=True,
-            check=False,
-            timeout=COMMAND_TIMEOUT_SECONDS,
-        )
-    except OSError as exc:
-        return CommandResult(127, "", str(exc))
-    except subprocess.SubprocessError as exc:
-        return CommandResult(124, "", str(exc))
-    return CommandResult(completed.returncode, completed.stdout, completed.stderr)
-
-
-Runner = Callable[..., CommandResult]
+__all__ = [
+    "COMMAND_TIMEOUT_SECONDS",
+    "CommandResult",
+    "Runner",
+    "subprocess_runner",
+]
 
 
 @dataclass(frozen=True, slots=True)
@@ -109,6 +96,8 @@ class LocalState:
     commit: str | None = None
     tool: str | None = None
     tool_specifier: str = ""
+    declared: str | None = None
+    dirty: tuple[str, ...] = ()
 
     @property
     def is_checkout(self) -> bool:
@@ -121,6 +110,10 @@ class LocalState:
             report[name] = str(value) if isinstance(value, Path) else value
         if self.tool_specifier:
             report["tool_specifier"] = self.tool_specifier
+        if self.declared:
+            report["declared_version"] = self.declared
+        if self.dirty:
+            report["dirty_files"] = list(self.dirty)
         return report
 
 
@@ -134,11 +127,13 @@ class RemoteState:
     behind: int | None = None
     available_version: str | None = None
     pins_moving: bool = False
+    releases: ReleaseSet = field(default_factory=ReleaseSet)
 
     def as_dict(self) -> dict[str, Any]:
         report: dict[str, Any] = {"reachable": self.reachable}
         for name in ("detail", "head", "behind", "available_version", "pins_moving"):
             report[name] = getattr(self, name)
+        report["releases"] = self.releases.as_dict()
         return report
 
 
@@ -154,21 +149,31 @@ class UpdatePlan:
     local_revision: str | None = None
     remote_revision: str | None = None
     blocked: str | None = None
+    release_version: str | None = None
+    release_position: str = ""
 
     def labels(self) -> tuple[str, ...]:
         return tuple(" ".join(command) for command in self.commands)
 
     def as_dict(self) -> dict[str, Any]:
-        return {
+        report: dict[str, Any] = {
             "shape": self.shape,
             "update_available": self.available,
-            "commits_behind": self.behind,
             "local_revision": self.local_revision,
             "remote_revision": self.remote_revision,
             "would_run": list(self.labels()),
             "notes": list(self.notes),
             "blocked": self.blocked,
         }
+        # Whether an update is available is the release comparison, so its two
+        # keys are the answer. The commit count beside it is the branch head's
+        # position, which is a fact about unreleased work and never the decision.
+        if self.release_position:
+            report["release_version"] = self.release_version
+            report["release_position"] = self.release_position
+        if self.behind is not None:
+            report["commits_behind_branch"] = self.behind
+        return report
 
 
 def _first_line(text: str) -> str:
@@ -237,6 +242,26 @@ def owning_tool(run: Runner) -> tuple[str | None, str | None]:
     return None, None
 
 
+def dirty_files(root: Path, run: Runner) -> tuple[str, ...]:
+    """The tracked paths this checkout has uncommitted work in.
+
+    An untracked file is not in the way: `git checkout` keeps it, so it is not
+    named. The tracked paths are the ones a move to another commit would carry
+    away, and applying refuses while any of them is dirty.
+    """
+
+    result = run(
+        ["git", "-C", str(root), "status", "--porcelain", "--untracked-files=no"]
+    )
+    if not result.ok:
+        return ()
+    paths: list[str] = []
+    for line in result.stdout.splitlines():
+        if len(line) > 3:
+            paths.append(line[3:].strip())
+    return tuple(paths)
+
+
 def probe_local(*, run: Runner) -> LocalState:
     """Read this installation's own state, touching no remote."""
 
@@ -263,6 +288,8 @@ def probe_local(*, run: Runner) -> LocalState:
                 run,
             ),
             commit=_text(["git", "-C", str(checkout), "rev-parse", "HEAD"], run),
+            declared=declared_version(checkout),
+            dirty=dirty_files(checkout, run),
         )
     tool, specifier = owning_tool(run=run)
     return LocalState(
@@ -271,6 +298,15 @@ def probe_local(*, run: Runner) -> LocalState:
 
 
 def _checkout_remote(local: LocalState, run: Runner, *, offline: bool) -> RemoteState:
+    """What this checkout's remote publishes: its release tags and its branch head.
+
+    The release tags are asked for over `git ls-remote`, which needs no token and
+    no API key, and the branch head is asked for with an ordinary fetch. Both are
+    reported, and neither is derived from the other: the branch head says what
+    unreleased work this checkout carries, and the release tags say what a reader
+    may install.
+    """
+
     root = local.checkout
     if offline:
         return RemoteState(
@@ -284,8 +320,8 @@ def _checkout_remote(local: LocalState, run: Runner, *, offline: bool) -> Remote
         return RemoteState(
             reachable=False,
             detail=(
-                f"{root} has no upstream branch, so there is nothing to compare "
-                "it against. Name one with `git branch --set-upstream-to`."
+                f"{root} has no upstream branch, so the branch head cannot be "
+                "read. Name one with `git branch --set-upstream-to`."
             ),
         )
     fetched = run(["git", "-C", str(root), "fetch", "--quiet", "--prune", "--tags"])
@@ -295,17 +331,20 @@ def _checkout_remote(local: LocalState, run: Runner, *, offline: bool) -> Remote
             detail=f"`git fetch` failed: {_first_line(fetched.stderr or fetched.stdout)}",
         )
     range_expression = f"HEAD..{local.upstream}"
-    changed = _text(
-        ["git", "-C", str(root), "diff", "--name-only", range_expression], run
-    )
     behind = _text(
         ["git", "-C", str(root), "rev-list", "--count", range_expression], run
     )
+    releases = remote_release(root, run)
+    # A pin moves when the release's own commits touch one, so the release range
+    # decides it and the branch range is only the fallback.
+    changed_range = f"HEAD..{releases.tag}" if releases.tag else range_expression
+    changed = _text(["git", "-C", str(root), "diff", "--name-only", changed_range], run)
     return RemoteState(
         reachable=True,
         head=_text(["git", "-C", str(root), "rev-parse", local.upstream], run),
         behind=int(behind) if behind and behind.isdigit() else None,
         pins_moving=any(name in (changed or "").split() for name in PIN_FILES),
+        releases=releases,
     )
 
 
@@ -370,72 +409,232 @@ def probe_remote(
     return _distribution_remote(local, run, offline=offline)
 
 
+def _where_sentence(local: LocalState, revision: str) -> str:
+    root = local.checkout
+    branch = local.branch or "an unknown branch"
+    declared = local.declared or local.version
+    return f"{root} is on {branch} at {revision} and declares version {declared}."
+
+
+def _branch_sentence(local: LocalState, remote: RemoteState) -> str:
+    """Where the branch head stands, beside every answer about the release.
+
+    A developer on a branch has to know what unreleased work it carries. That is
+    a fact to report, and it is never the reason anything is applied.
+    """
+
+    if remote.behind is None:
+        return (
+            f"Where {local.upstream} stands could not be counted: "
+            f"{remote.detail or 'git reported no count'}."
+        )
+    if remote.behind == 0:
+        return f"{local.upstream} is level with this checkout."
+    return (
+        f"{local.upstream} is at {(remote.head or '')[:12] or 'an unknown commit'}, "
+        f"{remote.behind} commit(s) ahead."
+    )
+
+
+def _return_command(root: Path, branch: str | None) -> str:
+    """The command that puts this checkout back on the branch it left."""
+
+    if branch:
+        return f"git -C {root} checkout {branch}"
+    return f"git -C {root} branch"
+
+
+def _release_order(release_version: str, declared: str) -> int | None:
+    """Which of two versions is higher, or None when one cannot be compared.
+
+    A version carrying a pre-release suffix or build metadata is not one a
+    release tag may carry, so no honest comparison exists and none is invented.
+    """
+
+    if not (is_release_version(release_version) and is_release_version(declared)):
+        return None
+    return compare_versions(release_version, declared)
+
+
+def _dirty_refusal(root: Path, dirty: Sequence[str]) -> str:
+    """The refusal a working tree with uncommitted work gets."""
+
+    shown = list(dirty[:5])
+    named = ", ".join(shown)
+    if len(dirty) > len(shown):
+        named = f"{named}, and {len(dirty) - len(shown)} more"
+    return (
+        f"Nothing was changed. {root} has uncommitted changes in {named}, and "
+        "moving to another commit would carry them away. `git -C "
+        f"{root} status` names them; commit them, or set them aside with `git -C "
+        f"{root} stash`, then run this again. An untracked file is left where it "
+        "is."
+    )
+
+
+def _release_commands(
+    local: LocalState, remote: RemoteState
+) -> tuple[tuple[str, ...], ...]:
+    """Detach onto the release tag, then re-sync the environment it needs."""
+
+    tag = remote.releases.tag or "HEAD"
+    commands: list[tuple[str, ...]] = [("git", "checkout", "--detach", tag)]
+    if remote.pins_moving:
+        commands.append(("uv", "lock"))
+    commands.append(("uv", "sync"))
+    return tuple(commands)
+
+
 def _checkout_plan(local: LocalState, remote: RemoteState) -> UpdatePlan:
+    """What an update here would do, from the release comparison alone.
+
+    Whether an update is available is decided by comparing the version this
+    checkout declares with the latest release the remote publishes. The branch
+    head is reported beside that answer and never decides it: a commit nobody
+    published is not an update.
+    """
+
     root = local.checkout
     revision = (local.commit or "")[:12] or "an unknown commit"
+    where = _where_sentence(local, revision)
+    report: dict[str, Any] = {
+        "shape": CHECKOUT,
+        "local_revision": revision,
+        "remote_revision": (remote.head or "")[:12] or None,
+        "behind": remote.behind,
+    }
     if not remote.reachable:
         return UpdatePlan(
-            shape=CHECKOUT,
             available=False,
             notes=(
-                f"{root} is on {local.branch or 'an unknown branch'} at {revision}.",
+                where,
                 f"The remote could not be reached: {remote.detail}.",
                 (
                     "Nothing was changed. Retry with a network, or read the local "
                     "state above as the answer."
                 ),
             ),
-            local_revision=revision,
+            **report,
         )
-    if remote.behind is None:
+    releases = remote.releases
+    branch_sentence = _branch_sentence(local, remote)
+    if releases.state == NONE:
         return UpdatePlan(
-            shape=CHECKOUT,
             available=False,
             notes=(
-                f"{root} is on {local.branch or 'an unknown branch'} at {revision}.",
+                where,
+                f"{releases.detail}, and nothing can be compared with it.",
+                branch_sentence,
                 (
-                    f"How far behind {local.upstream} it is could not be read: "
-                    f"{remote.detail or 'git reported no count'}."
+                    "Publishing a release is a maintainer action: tag the commit "
+                    "that is the release with `git tag v<version>`, push the tag, "
+                    "and open the release on the repository. Nothing was changed."
                 ),
+            ),
+            release_position=NO_RELEASE,
+            **report,
+        )
+    if not releases.found:
+        return UpdatePlan(
+            available=False,
+            notes=(where, releases.detail, branch_sentence, "Nothing was changed."),
+            release_position=UNREADABLE_RELEASE,
+            **report,
+        )
+    release = releases.release
+    declared = local.declared or local.version
+    order = _release_order(release.version, declared)
+    tagged = f"release {release.version}, tagged {release.tag}"
+    if order is None:
+        return UpdatePlan(
+            available=False,
+            notes=(
+                where,
+                (
+                    f"The remote publishes {tagged}, which the version this "
+                    "checkout declares cannot be compared with, because a release "
+                    "version is MAJOR.MINOR.PATCH with no pre-release suffix and "
+                    "no build metadata."
+                ),
+                branch_sentence,
                 "Nothing was changed.",
             ),
-            local_revision=revision,
-            remote_revision=(remote.head or "")[:12] or None,
+            release_version=release.version,
+            release_position=UNREADABLE_RELEASE,
+            **report,
         )
-    if remote.behind == 0:
+    if order == 0:
+        elsewhere = (
+            ""
+            if not release.commit or release.commit == (local.commit or "")
+            else (
+                f" It carries that version on commit "
+                f"{(local.commit or '')[:12]}, which is not the commit the tag "
+                f"names ({release.commit[:12]})."
+            )
+        )
         return UpdatePlan(
-            shape=CHECKOUT,
             available=False,
             notes=(
+                where,
                 (
-                    f"{root} is on {local.branch or 'an unknown branch'} at "
-                    f"{revision}, level with {local.upstream} at "
-                    f"{(remote.head or '')[:12] or 'an unknown commit'}."
+                    f"{releases.detail}. This checkout declares that version, so "
+                    f"it is at {tagged}.{elsewhere}"
                 ),
+                branch_sentence,
+                "Nothing was changed.",
             ),
-            behind=0,
-            local_revision=revision,
-            remote_revision=(remote.head or "")[:12] or None,
+            release_version=release.version,
+            release_position=AT_RELEASE,
+            **report,
         )
-    commands: list[tuple[str, ...]] = [("git", "pull", "--ff-only")]
-    if remote.pins_moving:
-        commands.append(("uv", "lock"))
-    commands.append(("uv", "sync"))
-    return UpdatePlan(
-        shape=CHECKOUT,
-        available=True,
-        notes=(
-            (
-                f"{root} is on {local.branch or 'an unknown branch'} at {revision}; "
-                f"{local.upstream} is at "
-                f"{(remote.head or '')[:12] or 'an unknown commit'}, "
-                f"{remote.behind} commit(s) ahead."
+    if order < 0:
+        return UpdatePlan(
+            available=False,
+            notes=(
+                where,
+                (
+                    f"The remote publishes {tagged}, which is older than the "
+                    f"{declared} this checkout declares, so this checkout is ahead "
+                    "of the release and carries unreleased work. That is a fact "
+                    "about this checkout, not a reason to change anything."
+                ),
+                branch_sentence,
+                "Nothing was changed.",
             ),
+            release_version=release.version,
+            release_position=AHEAD_OF_RELEASE,
+            **report,
+        )
+    notes = [
+        where,
+        f"{releases.detail}. This checkout declares {declared}, so it is behind "
+        f"{tagged}" + (f" at {release.commit[:12]}." if release.commit else "."),
+        (
+            f"Applying detaches this checkout onto {release.tag} and re-syncs its "
+            "environment. No untracked file is removed and no branch is rewritten."
         ),
-        commands=tuple(commands),
-        behind=remote.behind,
-        local_revision=revision,
-        remote_revision=(remote.head or "")[:12] or None,
+        (
+            f"Return to the branch afterwards with `{_return_command(root, local.branch)}`."
+        ),
+    ]
+    if local.dirty:
+        return UpdatePlan(
+            available=True,
+            notes=tuple(notes),
+            commands=(),
+            blocked=_dirty_refusal(root, local.dirty),
+            release_version=release.version,
+            release_position=BEHIND_RELEASE,
+            **report,
+        )
+    return UpdatePlan(
+        available=True,
+        notes=tuple(notes),
+        commands=_release_commands(local, remote),
+        release_version=release.version,
+        release_position=BEHIND_RELEASE,
+        **report,
     )
 
 
