@@ -219,6 +219,10 @@
 - Ingestion selects only regular PDF and EPUB files beneath the configured sources directory.
   - Source symlinks and path traversal are rejected.
 - The underlying vanilla operations are never exposed, UltraRAG is never patched, and the dense backends never move into the gateway.
+- The command line is where this app is worked from, and the browser is a front to it.
+  - Everything the workspace can do, a command can do, because one capability has one implementation and the command reaches the same service.
+  - Serving never opens a browser, and a browser never appears unless `--start-ui` asked for one.
+  - An app is served by the terminal that started it, so an operation on the corpus is a command a reader types rather than a control in a page they are looking at.
 - Every payload goes through the core, and one capability has one implementation, so the three surfaces cannot disagree.
   - The workspace and the agent surface call a `ResearchService` method.
   - The command line is the third front end into that same service.

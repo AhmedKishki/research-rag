@@ -4,6 +4,11 @@
 
 ## The app and its front ends
 
+- [ ] **Choose the project in the command centre rather than in the terminal.** Feature. A bare `research-rag` asks which project when this installation holds more than one, and it asks before there is anything to answer in. The app should bind no project, serve every project this installation knows, and re-bind in place to whichever one is chosen there, so one terminal serves every project and closing it ends all of them.
+  - `App` is built around a fixed `ResearchConfig`: the gateway, the service, the project lock, and the per-project pid and port files are all built from it, so binding later means tearing those down and building them again. The port, the client registry, and the process outlive every project, and `Surfaces` reads its two surfaces per request, so the swap itself is small.
+  - Binding a different project detaches every client on the previous one, because a session answered about one corpus cannot answer about another.
+  - The project selector the workspace already renders is navigational: it links to an app that is running and otherwise hands out a command to start one. A host that re-binds in place needs the workspace to offer the choice as an action, and that capability belongs in `ui-ultra-rag-mcp` before the pin here moves.
+
 - [ ] **Let a command start the app when the corpus is not ready.** Decision. A command that touches the corpus goes to the running app, and a project with no app up is answered in process, which opens a second service for a project nobody is serving. Starting the app instead makes `status` leave a process behind. The answer may be a flag, or a short-lived app for read-only commands.
 - [ ] **A session an unnamed client opened cannot have its stream dropped.** Limit. A disconnect folds the client's sightings onto the session by the name the client declared, and a client that declared nothing has only its session refused. `RESEARCH_RAG_CLIENT_NAME` is the fix, and the stdio bridge always sets it, so this only reaches a hand-written HTTP client.
 - [ ] **Measure the payload difference the app makes.** Missing number. Nothing states the lean and full search sizes since the repackaging retired them. Measure them against the running app, and add the workspace, agent, and control surfaces' own overhead, because one process now serves all three and the claim that they cannot disagree is only as good as the evidence that they are one service.
@@ -41,6 +46,10 @@
   - [ ] **Keep the measurement current and wider.** Test. Re-run `scripts/evaluate_retrieval.py` when the corpus, the extraction policy, or a retrieval default changes, and add a second corpus and filtered queries.
 
 ## Keeping the code changeable
+
+- [ ] **Decide which of the suite's tests earn their place.** Problem. 636 tests run in 2m50s, and the five slowest account for 156s of that: two start the real vanilla gateway, two hold the project lock against a real second process, and one runs the update script. The remaining 631 cost about 14s together, so the suite is not slow by volume.
+  - The `integration` marker is registered and nothing selects on it, and `-m "not integration"` saves 54s rather than the 120s the slowest five suggest, because two of them carry no marker.
+  - Nothing has read the suite for duplication. Start with `test_service.py`, where thin repetition is most likely, and either delete what a stronger test already covers or mark what is genuinely slow so an ordinary change can run the fast subset.
 
 - [ ] **Split the resumable ingestion loop into per-phase handlers, then enable `C901`.** Feature. `_advance_ingestion` is 1,341 lines at complexity 107 against 35 for the next worst function in the package; three of its phase blocks call closures defined inside it and eight read loop-local state, so the split is an ingestion state object that handlers take and return. Accept on a green suite and a re-ingest that reuses every chunk and vector.
 
