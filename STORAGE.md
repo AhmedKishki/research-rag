@@ -73,7 +73,14 @@ These four files are your decisions about the project. They are the part worth b
 
 Everything under `.research-rag/runtime/` is rebuilt from `sources/` plus the portable state. Deleting it costs one ingestion.
 
-`current.json` names the one generation search uses. Earlier successful generations stay on disk and are not searched; nothing prunes them. `research-rag status` reports `retained_generation_count` and `retained_generation_bytes`, and `generations` lists each with its creation time, chunk and document counts, file count, and size. A directory whose manifest is missing or unreadable is reported with `manifest_error` rather than failing the call. Remove an old generation directory yourself, and only when you are sure nothing is using it.
+`current.json` names the one generation search uses. Earlier successful generations stay on disk and are not searched; nothing prunes them automatically. `research-rag status` reports `retained_generation_count` and `retained_generation_bytes`, and `generations` lists each with its creation time, chunk and document counts, file count, and size. A directory whose manifest is missing or unreadable is reported with `manifest_error` rather than failing the call.
+
+Two commands move a generation, and both refuse the one search reads:
+
+- `research-rag generations --use GENERATION_ID` points the project at a retained generation. It validates that generation's artifacts and both indexes exactly as a build's activation does, and only then rewrites `current.json`, so a rollback that lands on a damaged generation fails instead of bricking every read surface. The originals are not rebuilt, so the corpus the pointer now describes is whatever that generation indexed.
+- `research-rag remove-generation GENERATION_ID --confirm GENERATION_ID` deletes one permanently. The repeat is the check: a generation named by a listing and removed by a copy of that listing is a mistake that cannot be walked back. It also refuses a generation a pending activation has named, because that activation is about to move it into place. The space comes back only from a rebuild, which costs one ingestion; the original files are not touched.
+
+A running app may still hold a generation: the retrieval gateway keeps a live index against whichever generation it last loaded, and the exact dense backend memory-maps a generation's vector file for the process's lifetime. Neither refuses a delete — an unlinked mapping keeps reading the old bytes until its last reference drops, and a later open returns a missing-file error rather than a failure at the delete. That is why both commands take the project lock and why the current generation is refused rather than merely warned about.
 
 ### Generation layout
 

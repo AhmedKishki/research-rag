@@ -407,7 +407,8 @@ def _capacity_check(config: ResearchConfig, status: Mapping[str, Any]) -> Check:
             BLOCKED,
             f"{free} bytes are free and a build needs about {required}, the size "
             "of the generations already on disk. The doctor never deletes an "
-            "index; free space yourself or build elsewhere.",
+            "index; free space yourself with 'research-rag remove-generation', or "
+            "build elsewhere.",
         )
     if free < required * CAPACITY_APPROACHING_FACTOR:
         return Check(

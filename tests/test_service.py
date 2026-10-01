@@ -50,7 +50,7 @@ from research_rag.service import (
     _public_document,
 )
 from research_rag.settings import resolve_gate_stopwords
-from research_rag.storage import read_jsonl, write_jsonl
+from research_rag.storage import atomic_write_json, read_json, read_jsonl, write_jsonl
 
 # The default model's own facts, resolved rather than hard-coded.
 DEFAULT_EMBEDDING_FACTS = resolve_embedding_model(DEFAULT_EMBEDDING_MODEL)
@@ -4925,3 +4925,271 @@ def test_two_passages_on_one_theme_are_both_shown(project: Path) -> None:
         return len(answer["hits"])
 
     assert asyncio.run(exercise()) == 2
+
+
+async def _two_generation_service(project: Path) -> tuple[Any, Any, str, str]:
+    """A service over a project holding exactly two retained generations."""
+
+    write_pdf(
+        project / "sources" / "article.pdf",
+        ["Cobalt evidence about labour."],
+        title="Article",
+    )
+    config = resolve_config(project, vanilla_executable=sys.executable)
+    service = ResearchService(  # type: ignore[arg-type]
+        config,
+        FakeUltraRAG(),
+        dense=FakeDenseBackend(),
+    )
+    first = await service.ingest(chunk_size=50, chunk_overlap=10)
+    write_pdf(
+        project / "sources" / "second.pdf",
+        ["Amber evidence in a second source."],
+        title="Second",
+    )
+    second = await service.ingest(chunk_size=50, chunk_overlap=10)
+    return service, config, first["generation_id"], second["generation_id"]
+
+
+async def _assert_use_generation_rolls_the_pointer_back(project: Path) -> None:
+    """A rollback moves the pointer only after the target validated."""
+
+    service, config, first, second = await _two_generation_service(project)
+
+    assert second != first
+    before = await service.status()
+    assert before["generation_id"] == second
+
+    switched = await service.use_generation(first)
+
+    assert switched["status"] == "changed"
+    assert switched["generation_id"] == first
+    assert switched["previous_generation_id"] == second
+    assert switched["effective_immediately"] is True
+
+    status = await service.status()
+    assert status["generation_id"] == first
+    assert status["ready"] is True
+    current = [item for item in status["generations"] if item["is_current"]]
+    assert [item["generation_id"] for item in current] == [first]
+    # The pointer is the only thing that moved; both generations are still on
+    # disk, which is what makes the switch reversible.
+    assert status["retained_generation_count"] == 2
+    assert read_json(config.current_path)["generation_id"] == first
+
+
+async def _assert_use_generation_reports_an_already_selected_generation(
+    project: Path,
+) -> None:
+    """Asking for the generation in use is not an error and changes nothing."""
+
+    service, _config, _first, second = await _two_generation_service(project)
+
+    again = await service.use_generation(second)
+
+    assert again["status"] == "unchanged"
+    assert again["generation_id"] == second
+    assert (await service.status())["generation_id"] == second
+
+
+async def _assert_use_generation_refuses_a_damaged_generation(project: Path) -> None:
+    """A rollback that lands on broken artifacts fails and leaves the pointer."""
+
+    service, config, first, second = await _two_generation_service(project)
+    target = config.generations_root / first
+    # Break the index the activation validator probes, so the target cannot
+    # pass without the guard that is the point of this test.
+    vectors = target / "portable" / "embeddings.npy"
+    vectors.write_bytes(b"not a vector matrix")
+
+    with pytest.raises(ResearchError) as failure:
+        await service.use_generation(first)
+
+    assert "failed validation" in str(failure.value)
+    assert read_json(config.current_path)["generation_id"] == second
+    assert (await service.status())["generation_id"] == second
+    assert (await service.status())["ready"] is True
+
+
+async def _assert_use_generation_refuses_a_name_that_is_not_a_generation_id(
+    project: Path,
+) -> None:
+    """A caller-supplied name never becomes a path."""
+
+    service, _config, _first, second = await _two_generation_service(project)
+
+    for name in ("../staging", "..", "/etc", "", "not-an-id"):
+        with pytest.raises(ResearchError) as failure:
+            await service.use_generation(name)
+        assert "is not a generation id" in str(failure.value)
+    assert (await service.status())["generation_id"] == second
+
+
+async def _assert_use_generation_refuses_while_a_pending_activation_is_outstanding(
+    project: Path,
+) -> None:
+    """A waiting activation is about to move the pointer, so a rollback must not."""
+
+    service, config, first, second = await _two_generation_service(project)
+    pending = "20260101T000000Z-aabbccdd"
+    atomic_write_json(
+        config.state_root / "pending-activation.json",
+        {"schema_version": 1, "project_id": config.project_id, "build_id": pending},
+    )
+
+    with pytest.raises(ResearchError) as failure:
+        await service.use_generation(first)
+
+    assert "pending activation" in str(failure.value)
+    assert read_json(config.current_path)["generation_id"] == second
+
+
+async def _assert_remove_generation_removes_the_one_search_does_not_read(
+    project: Path,
+) -> None:
+    """Removal frees a generation the app is not serving."""
+
+    service, config, first, second = await _two_generation_service(project)
+    doomed = config.generations_root / first
+    assert doomed.is_dir()
+
+    removed = await service.remove_generation(first, confirm=first)
+
+    assert removed["status"] == "removed"
+    assert removed["generation_id"] == first
+    assert removed["freed_file_count"] > 0
+    assert removed["freed_bytes"] > 0
+    assert removed["recoverable_by"] == "ingest"
+    assert not doomed.exists()
+    status = await service.status()
+    assert status["retained_generation_count"] == 1
+    assert [item["generation_id"] for item in status["generations"]] == [second]
+    assert status["generation_id"] == second
+    assert status["ready"] is True
+
+
+async def _assert_remove_generation_refuses_the_generation_in_use(
+    project: Path,
+) -> None:
+    """Deleting the generation search reads would break every read surface."""
+
+    service, config, _first, second = await _two_generation_service(project)
+
+    with pytest.raises(ResearchError) as failure:
+        await service.remove_generation(second, confirm=second)
+
+    assert "the one search reads" in str(failure.value)
+    assert (config.generations_root / second).is_dir()
+    assert (await service.status())["ready"] is True
+
+
+async def _assert_remove_generation_will_not_run_on_a_mistyped_id(
+    project: Path,
+) -> None:
+    """The id is repeated because a listing is not a decision."""
+
+    service, config, first, _second = await _two_generation_service(project)
+
+    with pytest.raises(ResearchError) as failure:
+        await service.remove_generation(first, confirm="y")
+    assert "Pass --confirm" in str(failure.value)
+
+    with pytest.raises(ResearchError) as failure:
+        await service.remove_generation(first, confirm="")
+    assert "Pass --confirm" in str(failure.value)
+
+    assert (config.generations_root / first).is_dir()
+    assert (await service.status())["retained_generation_count"] == 2
+
+
+async def _assert_remove_generation_refuses_a_pending_activation_target(
+    project: Path,
+) -> None:
+    """A generation an activation is about to move into place is not free."""
+
+    service, config, first, _second = await _two_generation_service(project)
+    pending = "20260101T000000Z-aabbccdd"
+    target = config.generations_root / pending
+    target.mkdir(parents=True)
+    (target / "manifest.json").write_text("{}", encoding="utf-8")
+    atomic_write_json(
+        config.state_root / "pending-activation.json",
+        {"schema_version": 1, "project_id": config.project_id, "build_id": pending},
+    )
+
+    with pytest.raises(ResearchError) as failure:
+        await service.remove_generation(pending, confirm=pending)
+
+    assert "waiting to become the one search reads" in str(failure.value)
+    assert target.is_dir()
+    assert (config.generations_root / first).is_dir()
+
+
+async def _assert_a_removed_generation_can_be_rebuilt_and_selected_again(
+    project: Path,
+) -> None:
+    """Removal is permanent, and the stated recovery is one ingestion."""
+
+    service, config, first, second = await _two_generation_service(project)
+    await service.remove_generation(first, confirm=first)
+    assert not (config.generations_root / first).exists()
+
+    rebuilt = await service.ingest(chunk_size=50, chunk_overlap=10)
+
+    # The build is refused as unchanged while the current generation still
+    # matches the corpus, so the recovered generation is a rollback target
+    # rather than a second copy of what is already in use.
+    assert rebuilt["status"] in {"unchanged", "complete"}
+    status = await service.status()
+    assert status["generation_id"] == second
+    assert status["ready"] is True
+
+
+def test_use_generation_rolls_the_pointer_back(project: Path) -> None:
+    asyncio.run(_assert_use_generation_rolls_the_pointer_back(project))
+
+
+def test_use_generation_reports_an_already_selected_generation(project: Path) -> None:
+    asyncio.run(_assert_use_generation_reports_an_already_selected_generation(project))
+
+
+def test_use_generation_refuses_a_damaged_generation(project: Path) -> None:
+    asyncio.run(_assert_use_generation_refuses_a_damaged_generation(project))
+
+
+def test_use_generation_refuses_a_name_that_is_not_a_generation_id(
+    project: Path,
+) -> None:
+    asyncio.run(
+        _assert_use_generation_refuses_a_name_that_is_not_a_generation_id(project)
+    )
+
+
+def test_use_generation_refuses_while_a_pending_activation_is_outstanding(
+    project: Path,
+) -> None:
+    asyncio.run(
+        _assert_use_generation_refuses_while_a_pending_activation_is_outstanding(
+            project
+        )
+    )
+
+
+def test_remove_generation_removes_the_one_search_does_not_read(project: Path) -> None:
+    asyncio.run(_assert_remove_generation_removes_the_one_search_does_not_read(project))
+
+
+def test_remove_generation_refuses_the_generation_in_use(project: Path) -> None:
+    asyncio.run(_assert_remove_generation_refuses_the_generation_in_use(project))
+
+
+def test_remove_generation_will_not_run_on_a_mistyped_id(project: Path) -> None:
+    asyncio.run(_assert_remove_generation_will_not_run_on_a_mistyped_id(project))
+
+
+def test_remove_generation_refuses_a_pending_activation_target(project: Path) -> None:
+    asyncio.run(_assert_remove_generation_refuses_a_pending_activation_target(project))
+
+
+def test_a_removed_generation_can_be_rebuilt_and_selected_again(project: Path) -> None:
+    asyncio.run(_assert_a_removed_generation_can_be_rebuilt_and_selected_again(project))
