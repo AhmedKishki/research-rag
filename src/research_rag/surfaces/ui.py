@@ -82,6 +82,11 @@ RESEARCH_UI_PROFILE = UIProfile(
         # are attached to it and end one. A host that is not a server leaves this
         # off and the panel and its routes stay absent.
         clients=True,
+        # A build leaves its predecessor on disk, so a reader in the workspace
+        # can see what those builds cost and reclaim one. The listing is free —
+        # it is already in the status payload — and the removal asks for the id
+        # twice, which the shared workspace insists on before it calls here.
+        generations=True,
     ),
 )
 
@@ -116,6 +121,7 @@ _OPERATION_ARGUMENTS: Mapping[str, frozenset[str]] = {
     "get_passage": frozenset({"chunk_id", "context_chunks"}),
     "set_source_inclusion": frozenset({"source_path", "included", "reason"}),
     "set_source_metadata": frozenset({"source_path", "metadata"}),
+    "remove_generation": frozenset({"generation_id", "confirm"}),
 }
 
 
@@ -298,6 +304,20 @@ class ResearchUIAdapter:
                 metadata=dict(metadata),
                 source_path=_source_path(arguments),
             )
+        if operation == "remove_generation":
+            generation_id = arguments.get("generation_id")
+            if not isinstance(generation_id, str) or not generation_id:
+                raise UIRequestError(
+                    "A generation removal needs a generation_id string"
+                )
+            # The confirmation is carried, not defaulted. The shared workspace
+            # already refuses a mismatch before it gets here; forwarding
+            # anything but the id the reader typed is how a browser would come
+            # to mean "yes" on a click.
+            confirm = arguments.get("confirm")
+            if not isinstance(confirm, str):
+                raise UIRequestError("A generation removal needs a confirm string")
+            return await self.service.remove_generation(generation_id, confirm=confirm)
         raise UIRequestError(
             f"Research operation {operation!r} is not available",
             status_code=404,

@@ -27,7 +27,7 @@ dependencies = [
     "pydantic>=2.12,<3",
     "pymupdf>=1.26,<2",
     "qdrant-client==1.19.1",
-    "ui-ultra-rag-mcp @ git+https://github.com/AhmedKishki/ui-ultra-rag-mcp.git@98a97a9",
+    "ui-ultra-rag-mcp @ git+https://github.com/AhmedKishki/ui-ultra-rag-mcp.git@924a281",
     "vanilla-ultra-rag-mcp @ git+https://github.com/AhmedKishki/vanilla-ultra-rag-mcp-server.git@fc339c259a672ca4dacb525840eba851d01c4b75",
 ]
 
