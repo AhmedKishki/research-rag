@@ -19,7 +19,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from .config import ResearchConfig, project_command
+from .config import CLI_COMMAND, ResearchConfig, project_command
 from .embeddings import resolve_embedding_model
 from .health import WARN, Check, HealthReport, health_report
 from .rerankers import resolve_reranker_model
@@ -190,12 +190,18 @@ def mcp_entry_block(config: ResearchConfig) -> str:
     The stdio entry names the project and not its directory, so the same entry
     serves the project on every machine where it was initialised, and the app
     there resolves the name through its own project record.
+
+    The subcommand comes before its own options, because that is the only order
+    the parser accepts: `--project-name` belongs to `mcp`, so an entry that puts
+    it first has the parser reading the project name as the command, and the
+    server closes the connection instead of answering. `check_entry` refuses that
+    order for the same reason.
     """
 
-    arguments = [str(_project_server_command()), "--project-name", config.project_name]
+    arguments = [str(_project_server_command()), "mcp"]
+    arguments.extend(["--project-name", config.project_name])
     if config.runtime_root is not None:
         arguments.extend(["--runtime-root", str(config.runtime_root)])
-    arguments.append("mcp")
     entry = {
         "mcp": {
             SERVER_COMMAND: {
@@ -350,6 +356,22 @@ def _check_url_entry(name: str, url: str) -> list[Check]:
     return findings
 
 
+def _options_before_the_command(arguments: list[str]) -> list[str]:
+    """Which of this app's own options an entry puts ahead of the `mcp` command.
+
+    The parser only accepts them after it, so an option in front is read as the
+    command name. That closes the connection with an error naming the project's
+    own words, which is the hardest kind of failure to see from the entry.
+    """
+
+    command = arguments.index("mcp") if "mcp" in arguments else len(arguments)
+    return [
+        argument
+        for argument in arguments[:command]
+        if argument in ("--project-name", "--runtime-root")
+    ]
+
+
 def check_entry(config: ResearchConfig, path: str | Path) -> tuple[Check, ...]:
     """Report on one client entry without changing it."""
 
@@ -379,6 +401,17 @@ def check_entry(config: ResearchConfig, path: str | Path) -> tuple[Check, ...]:
             continue
         arguments = _arguments_of(entry)
         executable = Path(arguments[0]).expanduser() if arguments else Path("")
+        misplaced = _options_before_the_command(arguments)
+        if misplaced:
+            findings.append(
+                Check(
+                    "entry.argument_order",
+                    "blocked",
+                    f"{name} puts {' and '.join(misplaced)} before the `mcp` "
+                    "command, so the parser reads the project name as the command "
+                    "and the server closes the connection. Put `mcp` first.",
+                )
+            )
         if not executable.is_file():
             findings.append(
                 Check(
@@ -544,29 +577,41 @@ def desktop_entry_checks() -> list[Check]:
 
     findings: list[Check] = []
     for entry in desktop_entries():
-        remedy = project_command(
-            entry.project_root, "install", "--desktop", "--uninstall"
-        )
-        if not entry.project_root.is_dir():
+        add = f"`{CLI_COMMAND} install --desktop` writes it"
+        if not entry.attached:
+            # An entry written by an older build served the app in the background
+            # with nothing to close; the one now written opens a terminal window.
             findings.append(
                 Check(
                     "desktop_entry",
                     WARN,
-                    f"The menu entry {entry.path.name} opens "
-                    f"{entry.project_root}, which no longer exists, so clicking "
-                    "it starts nothing.",
-                    remedy,
+                    f"The menu entry {entry.path.name} does not open a terminal "
+                    "window, so the app it starts runs with nothing to close.",
+                    add,
                 )
             )
             continue
-        if not entry.launcher.is_file():
+        if entry.names_a_project:
             findings.append(
                 Check(
                     "desktop_entry",
                     WARN,
-                    f"The menu entry {entry.path.name} runs {entry.launcher}, "
+                    f"The menu entry {entry.path.name} names a project, so it "
+                    "stops working the day that project is renamed or moved. The "
+                    "entry written now serves whichever project you choose in the "
+                    "window it opens.",
+                    add,
+                )
+            )
+            continue
+        if not entry.executable.is_file():
+            findings.append(
+                Check(
+                    "desktop_entry",
+                    WARN,
+                    f"The menu entry {entry.path.name} runs {entry.executable}, "
                     "which is not there, so clicking it starts nothing.",
-                    remedy,
+                    f"`{CLI_COMMAND} install` puts the command back on PATH",
                 )
             )
     return findings

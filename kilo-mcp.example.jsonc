@@ -5,18 +5,19 @@
 //
 // This entry is the stdio bridge, so it starts the app for the project if it is
 // not up. It names the project and not its directory, so the same entry serves
-// the project on every machine where it was initialised. Replace the executable
-// path and the project name. Add `--runtime-root` only when a project keeps its
-// derived state on another device.
+// the project on every machine where it was initialised. The `mcp` command comes
+// before its own options, which is the only order the parser accepts. Replace
+// the executable path and the project name. Add `--runtime-root` only when a
+// project keeps its derived state on another device.
 {
   "mcp": {
     "research-rag": {
       "type": "local",
       "command": [
         "/ABSOLUTE/PATH/TO/research-rag/.venv/bin/research-rag",
+        "mcp",
         "--project-name",
-        "MY-RESEARCH-PROJECT",
-        "mcp"
+        "MY-RESEARCH-PROJECT"
       ],
       "environment": {},
       "enabled": true,

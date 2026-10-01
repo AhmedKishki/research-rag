@@ -873,8 +873,8 @@ def _parser() -> argparse.ArgumentParser:
     setup = commands.add_parser(
         "install",
         help=(
-            "Put this command on the account's PATH, and --desktop give one "
-            "project a desktop menu entry."
+            "Put this command on the account's PATH, and --desktop give this "
+            "installation one menu entry that serves a project in a window."
         ),
     )
     setup.add_argument(
@@ -886,8 +886,9 @@ def _parser() -> argparse.ArgumentParser:
         "--desktop",
         action="store_true",
         help=(
-            "Write one freedesktop entry for the named project instead of the "
-            "command on PATH. Takes --project-root or --project."
+            "Write the one freedesktop entry for this installation instead of the "
+            "command on PATH. It opens a terminal window and serves whichever "
+            "project you choose there, so no project is named in the entry."
         ),
     )
     setup.add_argument(
@@ -1781,14 +1782,13 @@ def _install(args: argparse.Namespace) -> dict[str, Any]:
     )
 
     if args.desktop:
-        # Read through the project directory rather than a resolved
-        # configuration: resolving one writes the project's portable state, and
-        # installing a menu entry must touch nothing the project owns.
-        project_root = _project_path(args)
+        # The entry belongs to this installation rather than to a project, so no
+        # project is resolved: resolving one writes its portable state, and adding
+        # a menu entry must touch nothing a project owns.
         if args.uninstall:
-            report = uninstall_desktop_entry(project_root=project_root)
+            report = uninstall_desktop_entry()
         else:
-            report = install_desktop_entry(project_root=project_root, force=args.force)
+            report = install_desktop_entry(force=args.force)
         return {"command": "install", "desktop": report}
     if args.uninstall:
         report = uninstall_console_entry()
@@ -1978,8 +1978,7 @@ def _help_menu() -> str:
     lines.append(
         f"Each command takes --project-root DIR or --project NAME, except `mcp`,\n"
         f"which takes --project-name NAME so a client entry carries no path.\n"
-        f"`install` needs no project unless --desktop is given, and `update`,\n"
-        f"`help`, and `--version` need none.\n"
+        f"`install`, `update`, `help`, and `--version` need no project at all.\n"
         f"No command at all opens the workspace in a browser and serves it from\n"
         f"this terminal, so Ctrl-C or closing the terminal stops it. It asks\n"
         f"which project when this installation holds more than one.\n"

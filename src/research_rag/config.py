@@ -448,6 +448,18 @@ def project_command(project_root: str | Path, *arguments: str) -> str:
     return " ".join(shlex.quote(part) for part in parts)
 
 
+def project_selection_command(selector: str, *arguments: str) -> str:
+    """A copy-pasteable command naming a project by its recorded name.
+
+    Where `project_command` needs a directory this one needs a name, which is
+    what a reader has when the project is recorded and its directory is a fact of
+    the machine rather than something they typed.
+    """
+
+    parts = (CLI_COMMAND, "--project", selector, *arguments)
+    return " ".join(shlex.quote(part) for part in parts)
+
+
 def initialise_command(
     project_name: str,
     project_root: str | Path = PLACEHOLDER_PROJECT_ROOT,

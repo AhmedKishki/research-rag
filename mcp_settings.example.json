@@ -3,9 +3,9 @@
     "research-rag": {
       "command": "/ABSOLUTE/PATH/TO/research-rag/.venv/bin/research-rag",
       "args": [
+        "mcp",
         "--project-name",
-        "MY-RESEARCH-PROJECT",
-        "mcp"
+        "MY-RESEARCH-PROJECT"
       ],
       "env": {},
       "disabled": false,
