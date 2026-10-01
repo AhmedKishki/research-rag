@@ -52,7 +52,7 @@ from ..registry import resolve as resolve_registered
 from ..rerankers import RERANKER_MODEL_CHOICES
 from ..service import ResearchService
 from ..settings import SETTINGS
-from ..settings_document import describe_costs
+from ..settings_document import describe_costs, describe_docs
 from ..support import DEFAULT_RETRIEVAL_METHOD, RETRIEVAL_METHODS, ResearchError
 from ..tool_views import lean_status
 from ..ultrarag import LazyGateway, VanillaUltraRAG
@@ -316,6 +316,10 @@ The two global options below are per-call and are not recorded anywhere.
   --set key=value    override one value for this command, repeatable, and
                      forgotten when the command ends
   --config PATH      add one more layer for this command
+
+What a key does is written once, as `Setting.doc` in src/research_rag/settings.py.
+`config` prints that sentence beside each key and the workspace's Config tab shows
+the same one, so neither reader carries a description of its own.
 
 What a change costs is computed, not declared. `config` prints it: each key is
 costed by applying a change to it and recomputing what a build records, the
@@ -1824,6 +1828,7 @@ async def _run(args: argparse.Namespace) -> CommandResult:
                 SETTINGS, config.settings.as_values(), config.settings_provenance
             )
         )
+        print(describe_docs())
         print(describe_costs(config.settings))
         return CommandResult()
     if args.command == "start":

@@ -20,6 +20,10 @@ layer again, because the layers this app was started with are not recoverable
 from the files it reads. The settings the dense backends and the gateway were
 constructed from are named separately, because a change to one of those is read
 by what this process already loaded rather than by the next search.
+
+The description of a key is `Setting.doc` in `settings.py`. This module publishes
+it to both readers, so the workspace's Config tab and `research-rag config` show
+one sentence per key rather than a description written twice.
 """
 
 from __future__ import annotations
@@ -456,11 +460,57 @@ def describe_costs(settings: EffectiveSettings, *, width: int = 78) -> str:
     return "\n".join(lines)
 
 
+def describe_docs(*, width: int = 78) -> str:
+    """Return what each key does, beside its key, grouped by section.
+
+    The sentence is `Setting.doc`, printed from the registry rather than written
+    here, so this answer and the workspace's Config tab read one description and
+    cannot disagree.
+    """
+
+    lines = ["", "What each key does, from the registry that declares it:"]
+    for section in dict.fromkeys(setting.key.split(".")[0] for setting in SETTINGS):
+        lines.extend(("", f"[{section}]"))
+        for setting in SETTINGS:
+            if not setting.key.startswith(f"{section}."):
+                continue
+            indent = " " * (2 + len(setting.key) + 2)
+            body = textwrap.wrap(
+                setting.doc,
+                width=max(24, width - len(indent)),
+                break_on_hyphens=False,
+            ) or [""]
+            lines.append(f"  {setting.key}  {body[0]}")
+            lines.extend(f"{indent}{extra}" for extra in body[1:])
+    return "\n".join(lines)
+
+
 def _label_for(setting: Setting) -> str:
     """A human name for a key, taken from the key itself."""
 
     leaf = setting.key.split(".")[-1].replace("_", " ")
     return leaf[:1].upper() + leaf[1:]
+
+
+def declared_facts(setting: Setting) -> dict[str, Any]:
+    """What this setting declares about its own domain, and nothing it does not.
+
+    A bound, a fixed set of choices, and a variable name are present only where
+    the registry declares one, so a reader cannot tell an unbounded setting from
+    one whose bound was never loaded. The keys travel the way the registry
+    spells them, so no surface retypes them.
+    """
+
+    facts: dict[str, Any] = {}
+    if setting.minimum is not None:
+        facts["minimum"] = setting.minimum
+    if setting.maximum is not None:
+        facts["maximum"] = setting.maximum
+    if setting.choices:
+        facts["choices"] = list(setting.choices)
+    if setting.env:
+        facts["env"] = setting.env
+    return facts
 
 
 def _refusal_for_layer(key: str, origin: str, path: Path) -> str:
@@ -511,7 +561,12 @@ class SettingsWorkflow:
         return self.config.portable_root / "config.toml"
 
     def section_rows(self) -> list[dict[str, Any]]:
-        """Every setting, grouped by section, in registry order."""
+        """Every setting, grouped by section, in registry order.
+
+        Each row carries the sentence the registry declares for that key and the
+        domain it declares, so a reader is told what the key does without a
+        surface writing a description of its own.
+        """
 
         costs = setting_costs(self.config.settings)
         rows: list[dict[str, Any]] = []
@@ -525,6 +580,7 @@ class SettingsWorkflow:
                 entries.append(
                     {
                         "key": setting.key,
+                        "doc": setting.doc,
                         "label": _label_for(setting),
                         "value": _public_value(self.config.settings.value(setting.key)),
                         "kind": setting.kind.__name__,
@@ -535,6 +591,7 @@ class SettingsWorkflow:
                             "level": cost["level"],
                             "message": cost["message"],
                         },
+                        **declared_facts(setting),
                     }
                 )
             rows.append(
@@ -550,8 +607,8 @@ class SettingsWorkflow:
         """Return the settings this process resolved, and what each key costs.
 
         Nothing is resolved again, so a reader sees the values the retrieval stack
-        and the next build actually use, each named with the layer that supplied it
-        and the cost of changing it.
+        and the next build actually use, each named with the layer that supplied it,
+        the sentence that says what the key does, and the cost of changing it.
         """
 
         return {
