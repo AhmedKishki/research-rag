@@ -27,6 +27,11 @@ from .settings import (
 # prints commands an operator can paste.
 CLI_COMMAND = "research-rag"
 
+# Where a remedy points when the reader has to supply the directory themselves.
+# It is a path-shaped token with no quoting, so the printed command stays
+# pasteable after one edit.
+PLACEHOLDER_PROJECT_ROOT = "/path/to/project"
+
 
 class ConfigurationError(ValueError):
     """Raised when the server cannot establish a safe project boundary."""
@@ -437,6 +442,20 @@ def project_command(project_root: str | Path, *arguments: str) -> str:
 
     parts = (CLI_COMMAND, "--project-root", str(project_root), *arguments)
     return " ".join(shlex.quote(part) for part in parts)
+
+
+def initialise_command(
+    project_name: str,
+    project_root: str | Path = PLACEHOLDER_PROJECT_ROOT,
+) -> str:
+    """A copy-pasteable command that creates a project under one recorded name.
+
+    A name is all an agent's client entry carries, so this is the command that
+    turns that entry into a served project on one machine. The directory is the
+    one thing the entry cannot name, so an unset one is left to the reader.
+    """
+
+    return project_command(project_root, "init", "--name", project_name)
 
 
 def runtime_root_claim_problem(candidate: Path, project_id: str) -> str | None:

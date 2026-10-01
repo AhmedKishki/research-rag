@@ -20,6 +20,8 @@ from pydantic import Field
 from ..config import ResearchConfig
 from ..instructions import AGENT_INSTRUCTIONS
 from ..review import DEFAULT_FIND_SOURCE_LIMIT
+from ..settings import LEAN_TOOL_DETAIL
+from ..status import uninitialised_status
 from ..tool_views import present_tool_response
 from ..version import APP_VERSION
 
@@ -219,6 +221,70 @@ async def _tool_call(operation: Callable[[], Awaitable[T]]) -> T:
         raise ToolError(str(exc)) from exc
     except Exception as exc:
         raise ToolError(f"Research workflow failed: {exc}") from exc
+
+
+def create_uninitialised_mcp(project_name: str, reason: str) -> FastMCP[Any]:
+    """The agent surface for a project this machine has not initialised.
+
+    An agent's client entry names a project, not a directory, so the same entry
+    can be written on one machine and used on another. That only works if a
+    project exists there first: where it does not, this server answers and stops.
+    `status` is declared here rather than by the bridge, so the tools an agent
+    can see are still declared in exactly one file, and the other six operations
+    are absent because there is no corpus behind them to read, search, or review.
+
+    The instructions lead with the condition, because an agent that has just
+    listed its tools is deciding what to try next, and nothing else it can call
+    will succeed.
+    """
+
+    payload = uninitialised_status(project_name, reason)
+    app = FastMCP(
+        name=SERVER_NAME,
+        version=APP_VERSION,
+        instructions=(
+            f"This entry names the project {project_name!r}, and no project has "
+            f"been initialised under that name on this machine, so this server "
+            f"offers `status` and nothing else. {reason} Nothing else here can "
+            "succeed until that command has been run."
+        ),
+    )
+
+    def _present(operation: str, answer: dict[str, Any]) -> dict[str, Any]:
+        return present_tool_response(operation, answer, detail=LEAN_TOOL_DETAIL)
+
+    @app.tool(
+        annotations={
+            "readOnlyHint": True,
+            "destructiveHint": False,
+            "idempotentHint": True,
+            "openWorldHint": False,
+        }
+    )
+    async def status() -> dict[str, Any]:
+        """Report that this project is not initialised on this machine, and the
+        command that creates it.
+
+        This is the only tool this server has, and its answer is the whole
+        reason the server exists. `blocked_by` carries the reason and the exact
+        command; run it, and this entry serves the project it names with no
+        change to the entry.
+        """
+
+        return _present("status", payload)
+
+    @app.resource(
+        "research://status",
+        name="current generation status",
+        description=(
+            "Why this project cannot be served, and the command that initialises it."
+        ),
+        mime_type="application/json",
+    )
+    async def status_resource() -> str:
+        return json.dumps(await status(), ensure_ascii=False, indent=2)
+
+    return app
 
 
 def create_mcp(

@@ -13,6 +13,10 @@ belongs to, so registering a project is undone by deleting one file. The file
 sits beside the account settings this app already reads, so one user has one
 directory for both. It is written atomically because two commands may register
 two projects at the same moment.
+
+A project's recorded name is the address an agent's client entry carries, so one
+entry names the same project on every machine where that project was
+initialised, and the directory stays a fact of each machine.
 """
 
 from __future__ import annotations
@@ -59,6 +63,23 @@ class RegisteredProject:
             "project_root": str(self.project_root),
             "registered_at": self.registered_at,
         }
+
+    @property
+    def descriptor_path(self) -> Path:
+        """Where the project this record points at keeps its identity."""
+
+        return self.project_root / ".research-rag" / "project.json"
+
+    def initialised(self) -> bool:
+        """Whether the directory this record points at holds a project.
+
+        A record is a pointer and a project can be moved or deleted while the
+        pointer stays, so a caller that has to serve the project asks this
+        first. The descriptor's presence is the whole test: no project state is
+        read to decide it.
+        """
+
+        return self.descriptor_path.is_file()
 
 
 def _read(path: Path) -> dict[str, Any]:
@@ -191,15 +212,29 @@ def matches(query: str) -> list[RegisteredProject]:
     to be generous.
     """
 
-    term = query.strip()
+    term = query.strip().casefold()
     if not term:
         return []
     return [
         project
         for project in load()
-        if term.casefold() == project.project_id.casefold()
-        or term.casefold() == project.project_name.casefold()
+        if term == project.project_id.casefold()
+        or term == project.project_name.casefold()
     ]
+
+
+def named(query: str) -> list[RegisteredProject]:
+    """Return the registered projects a recorded *name* resolves to.
+
+    Only the name matches, never the id: an agent's client entry carries a
+    project's name, and resolving it through an id would let a name and another
+    project's id stand for the same directory.
+    """
+
+    term = query.strip().casefold()
+    if not term:
+        return []
+    return [project for project in load() if term == project.project_name.casefold()]
 
 
 def resolve(query: str) -> RegisteredProject:
@@ -244,6 +279,7 @@ __all__ = [
     "forget",
     "load",
     "matches",
+    "named",
     "register",
     "registered_at_label",
     "registry_path",

@@ -1,10 +1,23 @@
-"""`research-rag mcp`: a stdio front end to the running app.
+"""`research-rag mcp`: a stdio front end to the app that serves a named project.
 
 An MCP client that speaks only stdio cannot open a socket, so this is the command
 that connects one: it makes sure the app is up, then proxies stdio to the app's
 agent endpoint on the app's own port. The proxy adds nothing — the tools, the
 answer projection, the project, and the UltraRAG gateway are the app's, so a
 stdio client and a browser cannot see two different states.
+
+The bridge names a project and never a directory. A client configuration is
+written once and copied between machines, a phone, and a repository, and an
+absolute path in it is true on exactly one of them; a project's recorded name is
+resolvable on every machine where that project was initialised. The resolution
+belongs to this installation's own record, so the bridge asks the record for the
+directory and refuses to accept one itself.
+
+A project that this machine has not initialised is answered, not refused: the
+connection is established, `status` reports that the name resolves to nothing
+here, and the answer carries the command that creates the project. The other six
+operations are absent, because there is no corpus behind them. An agent's entry
+therefore needs no editing after that command runs.
 
 The bridge names itself, so a disconnect is legible: the app lists clients by
 name, and dropping one ends its session, which ends the pipe and therefore the
@@ -14,16 +27,24 @@ client.
 from __future__ import annotations
 
 import os
+from collections.abc import Mapping
 from typing import Any
 
 from fastmcp.client.transports import StreamableHttpTransport
 from fastmcp.server import create_proxy
 
+from . import registry
 from .app import CLIENT_NAME_HEADER
-from .config import ConfigurationError, ResearchConfig
+from .config import (
+    ConfigurationError,
+    ResearchConfig,
+    configured_source_directory,
+    initialise_command,
+    resolve_config,
+)
 from .control import ControlError, ensure_running
 from .support import ResearchError
-from .surfaces.mcp import AGENT_BRIDGE_NAME
+from .surfaces.mcp import AGENT_BRIDGE_NAME, create_uninitialised_mcp
 from .version import APP_VERSION
 
 # The env var a client configuration sets so a reader of the app's client list
@@ -55,9 +76,85 @@ def build_proxy(url: str, *, name: str) -> Any:
     )
 
 
-def run(config: ResearchConfig, *, name: str | None = None) -> None:
-    """Connect stdio to the app for this project, and stay up as long as it does."""
+def uninitialised_reason(project_name: str) -> str | None:
+    """Why this machine cannot serve that project name, or None when it can.
 
+    Nothing is created to find out: a record this installation never wrote, and
+    a record whose directory no longer holds a project, are the same condition
+    from the entry's point of view, and both are fixed by initialising the
+    project. A name two records share is a different fault, and no amount of
+    initialising settles it, so it is raised.
+    """
+
+    found = registry.named(project_name)
+    if not found:
+        return (
+            f"No project is initialised under the name {project_name!r} on this "
+            f"machine. {initialise_command(project_name)} creates one here, and "
+            "this entry serves it unchanged."
+        )
+    if len(found) > 1:
+        roots = ", ".join(str(entry.project_root) for entry in found)
+        raise ResearchError(
+            f"{project_name!r} is recorded for more than one project: {roots}. A "
+            "client entry names a project, and it cannot name two."
+        )
+    entry = found[0]
+    if not entry.initialised():
+        return (
+            f"The project {project_name!r} is recorded at {entry.project_root}, "
+            f"which holds no project. {initialise_command(project_name, entry.project_root)} "
+            f"initialises one there, and this entry serves it unchanged."
+        )
+    return None
+
+
+def resolve_project(
+    project_name: str,
+    *,
+    settings: Mapping[str, Any] | None = None,
+) -> tuple[ResearchConfig | None, str | None]:
+    """The app's configuration for a named project, or the refusal that replaces it.
+
+    A project this installation can serve resolves to its own configuration. One
+    it cannot resolves to `None` and the sentence an agent is told instead, so
+    the caller never has to decide whether a missing project is an error.
+    """
+
+    reason = uninitialised_reason(project_name)
+    if reason is not None:
+        return None, reason
+    entry = registry.named(project_name)[0]
+    return (
+        resolve_config(
+            entry.project_root,
+            source_directory=configured_source_directory(entry.project_root),
+            **dict(settings or {}),
+        ),
+        None,
+    )
+
+
+def serve_uninitialised(project_name: str, reason: str) -> None:
+    """Answer an agent about a project this machine does not hold."""
+
+    create_uninitialised_mcp(project_name, reason).run(
+        transport="stdio", show_banner=False
+    )
+
+
+def run(
+    project_name: str,
+    *,
+    settings: Mapping[str, Any] | None = None,
+    name: str | None = None,
+) -> None:
+    """Connect stdio to the app serving this project name, and stay up as long as it does."""
+
+    config, reason = resolve_project(project_name, settings=settings)
+    if config is None:
+        serve_uninitialised(project_name, reason or "")
+        return
     try:
         with ensure_running(config) as control:
             url = f"{control.base_url}/mcp"
@@ -68,9 +165,14 @@ def run(config: ResearchConfig, *, name: str | None = None) -> None:
     )
 
 
-def main(config: ResearchConfig, *, name: str | None = None) -> None:
+def main(
+    project_name: str,
+    *,
+    settings: Mapping[str, Any] | None = None,
+    name: str | None = None,
+) -> None:
     try:
-        run(config, name=name)
+        run(project_name, settings=settings, name=name)
     except (ConfigurationError, ResearchError) as exc:
         raise SystemExit(str(exc)) from exc
     except KeyboardInterrupt:  # pragma: no cover - a client closing the pipe
