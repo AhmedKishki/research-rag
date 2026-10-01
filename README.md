@@ -14,6 +14,7 @@ You point `research-rag` at a directory of originals, build a searchable generat
 - **Reversible exclusions.** A source leaves every retrieval surface at once, and the file stays.
 - **Immutable generations.** A rebuild writes a new generation and switches to it only when every index is complete, so a failed build leaves the previous one searchable. `generations` lists them and reclaims their space; `STORAGE.md` has the format.
 - **Clients you can see and drop, from either place.** The workspace status view lists attached agents and can end one; `clients` and `disconnect` do the same from a terminal. A client that cannot open a socket gets the same surface through `research-rag mcp`, which speaks stdio and proxies to the app.
+- **One client entry that travels.** A stdio entry names a project, not a directory, so the same file serves the project on a laptop, a desktop, and a phone client; the directory is a fact of each machine.
 - **Many projects, one install.** Each project is a directory with its own corpus, app process, and port. `init` records them, `projects` lists them, and `--project <name>` names one instead of repeating its path.
 
 `FEATURES.md` has the full inventory, including what this app leaves out and why.
@@ -96,7 +97,9 @@ A project is self-contained. Copy `sources/` and `.research-rag/`; `runtime/` is
 
 ## Connect an agent
 
-The app serves MCP at `/mcp` on its own port, so a client that can open a socket needs only the URL: `http://127.0.0.1:<port>/mcp`. A client that speaks only stdio uses `research-rag mcp`, which makes sure the app is up and then proxies to it. Set `RESEARCH_ULTRARAG_CLIENT_NAME` to something that names the agent, so the app's client list can tell them apart.
+The app serves MCP at `/mcp` on its own port, so a client that can open a socket needs only the URL: `http://127.0.0.1:<port>/mcp`. A client that speaks only stdio uses `research-rag mcp --project-name NAME`, which makes sure that project's app is up and then proxies to it.
+
+The stdio entry names a project and never a directory, so the same entry works on every machine where that project was initialised, and `--project-root` and `--project` are refused there, `RESEARCH_ULTRARAG_PROJECT_ROOT` included. On a machine that holds no project under that name, the connection is made and `status` reports that the project is not initialised, with the `init` command that creates it; run that command and the entry serves the project with no edit to it. Set `RESEARCH_ULTRARAG_CLIENT_NAME` to something that names the agent, so the app's client list can tell them apart, or `RESEARCH_ULTRARAG_PROJECT_NAME` when the client can pass an environment but no argument.
 
 The port is chosen at start and recorded, so a hard-coded URL goes stale when it moves. Print the entry for the machine it runs on instead, and check one already in place without editing it:
 
@@ -105,7 +108,7 @@ research-rag --project-root /path/to/project doctor --mcp-entry
 research-rag --project-root /path/to/project doctor --check-entry ~/my-client.json
 ```
 
-Two ready-to-copy templates are in this repository: `mcp_settings.example.json` for a client using an `mcpServers` object, and `kilo-mcp.example.jsonc` for one using a Kilo-style `mcp` object. Replace two absolute paths and the entry is complete.
+Two ready-to-copy templates are in this repository: `mcp_settings.example.json` for a client using an `mcpServers` object, and `kilo-mcp.example.jsonc` for one using a Kilo-style `mcp` object. Replace the executable path and the project name in either and the entry is complete.
 
 An agent gets seven tools and one resource, and every answer is the lean projection: a question at a time, no inventory, no scores. `status` is a verdict naming the call that closes a gap; `find_source` looks up one work by filename, title, or author. The full payload is `status --verbose` and the workspace.
 
@@ -128,7 +131,7 @@ An agent gets seven tools and one resource, and every answer is the lean project
 | `doctor` | one line per dependency, with the command that fixes it |
 | `start` / `ui` | the app, started; `ui` also opens a browser |
 | `clients` / `disconnect` | the agents attached to the app, and ending one |
-| `mcp` | the agent surface on stdio, proxied to the running app |
+| `mcp` | the agent surface on stdio for `--project-name`, proxied to that project's app |
 | `serve` | the app in the foreground, which is what the launcher runs |
 | `stop` | the app, and optionally any process of this app still building |
 | `generations` | every generation on disk with its size, and the one search reads; `--use ID` searches a retained one instead |

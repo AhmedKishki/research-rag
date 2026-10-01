@@ -59,6 +59,11 @@ from ..ultrarag import LazyGateway, VanillaUltraRAG
 
 CLI_NAME = CLI_COMMAND
 DEFAULT_DEPTH = 10
+# The variable a client entry that cannot pass an argument sets instead. It is
+# the counterpart of `RESEARCH_ULTRARAG_PROJECT_ROOT`, and it exists for the same
+# reason: a client that offers only an environment block still has to name a
+# project.
+PROJECT_NAME_ENV = "RESEARCH_ULTRARAG_PROJECT_NAME"
 # What a project's own .gitignore keeps out of version control: the derived
 # state that can be rebuilt, and the machine-local launcher. The descriptor,
 # catalogs, and review files are small, portable, and worth keeping.
@@ -219,8 +224,10 @@ HELP_GROUPS: tuple[tuple[str, tuple[tuple[str, str], ...]], ...] = (
             (
                 "mcp",
                 (
-                    "The agent surface on stdio, proxied to the running app, for a "
-                    "client that cannot open a socket. `help agents` has the entry."
+                    "The agent surface on stdio for one project, named with "
+                    "--project-name and proxied to that project's app. A client "
+                    "entry carries no path, so it works on every machine holding "
+                    "the project. `help agents` has the entry."
                 ),
             ),
             (
@@ -296,8 +303,21 @@ the project expected, and the file path it would be changed in.
 """,
     "agents": """\
 The app serves MCP at /mcp on its own port, so a client that can open a socket
-needs only the URL. A client that speaks only stdio uses `research-rag mcp`,
-which makes sure the app is up and then proxies to it.
+needs only the URL. A client that speaks only stdio uses `research-rag mcp
+--project-name NAME`, which makes sure that project's app is up and then proxies
+to it.
+
+The entry names a project, never a directory, so one entry written on one machine
+works on every machine where that project was initialised. The directory is a
+fact of each machine: the app resolves the name through this installation's own
+project record. `--project-root` and `--project` are refused here, and so is
+`RESEARCH_ULTRARAG_PROJECT_ROOT`, because an entry carrying a path in any form
+would break the moment it was copied anywhere.
+
+A name no project on this machine answers with a connection and one tool:
+`status` reports that the project is not initialised and gives the `init` command
+that creates it. Run that command and the same entry serves the project, with no
+edit to the entry.
 
 Let the project print the entry for the machine it runs on: the port is chosen at
 start, and a hard-coded URL goes stale the first time it moves:
@@ -308,11 +328,14 @@ start, and a hard-coded URL goes stale the first time it moves:
 To check an entry already in place without editing it. Two ready-to-copy
 templates ship with the source: mcp_settings.example.json for a client using an
 mcpServers object, and kilo-mcp.example.jsonc for one using a Kilo-style mcp
-object. Replace two absolute paths in either and the entry is complete.
+object. Replace the executable path and the project name in either and the entry
+is complete.
 
 Set RESEARCH_ULTRARAG_CLIENT_NAME so the app's client list can tell agents
-apart. `clients` lists them and `disconnect` ends one; the workspace shows the
-same list, so an agent ended in the browser is gone from the terminal too.
+apart, or RESEARCH_ULTRARAG_PROJECT_NAME when the client can pass an environment
+but not an argument. `clients` lists the agents and `disconnect` ends one; the
+workspace shows the same list, so an agent ended in the browser is gone from the
+terminal too.
 
 An agent gets seven tools and one resource, and every answer is the lean
 projection: a question at a time, no inventory, no scores. `status` is a verdict
@@ -728,8 +751,17 @@ def _parser() -> argparse.ArgumentParser:
     bridge_command = commands.add_parser(
         "mcp",
         help=(
-            "Serve this project's agent surface on stdio, proxied to the running "
-            "app, for an MCP client that speaks only stdio."
+            "Serve the agent surface on stdio for the project named by "
+            "--project-name, proxied to that project's app."
+        ),
+    )
+    bridge_command.add_argument(
+        "--project-name",
+        default=os.environ.get(PROJECT_NAME_ENV),
+        help=(
+            "Name this project was initialised under, which the app on this "
+            "machine resolves to a directory. A client entry carries this name "
+            "and no path, so it works on every machine holding the project."
         ),
     )
     bridge_command.add_argument(
@@ -1499,7 +1531,8 @@ def _help_menu() -> str:
             lines.extend(f"{' ' * label}{extra}" for extra in body[1:])
         lines.append("")
     lines.append(
-        f"Each command takes --project-root DIR or --project NAME.\n"
+        f"Each command takes --project-root DIR or --project NAME, except `mcp`,\n"
+        f"which takes --project-name NAME so a client entry carries no path.\n"
         f"One command's own options: `{CLI_NAME} COMMAND --help`.\n"
         f"A subject: `{CLI_NAME} help {', '.join(sorted(HELP_TOPICS))}`."
     )
@@ -1517,6 +1550,35 @@ def _command_usage(parser: argparse.ArgumentParser, name: str) -> str:
         if isinstance(action, argparse._SubParsersAction) and name in action.choices:
             return action.choices[name].format_help()
     raise KeyError(name)
+
+
+def _bridge_project_name(args: argparse.Namespace) -> str:
+    """Return the project this MCP entry names, and refuse the ones it may not.
+
+    A client entry is copied between machines, and a path in one is true on the
+    machine it was written on. The name is resolved here, by this installation,
+    so the entry itself names a project and nothing about where it lives.
+    """
+
+    for option, value in (
+        ("--project-root", getattr(args, "project_root", None)),
+        ("--project", getattr(args, "project", None)),
+    ):
+        if value:
+            raise ConfigurationError(
+                f"The MCP entry names a project, not a directory: drop {option} "
+                "and pass --project-name NAME. The app on this machine resolves "
+                "the name to the directory the project was initialised at, which "
+                "is what lets one entry work on every machine holding it."
+            )
+    name = getattr(args, "project_name", None)
+    if not name or not name.strip():
+        raise ConfigurationError(
+            "The MCP entry needs --project-name NAME, or "
+            f"{PROJECT_NAME_ENV} in the client's environment, naming a project "
+            "this installation initialised."
+        )
+    return name.strip()
 
 
 async def _run(args: argparse.Namespace) -> CommandResult:
@@ -1569,18 +1631,13 @@ def main(argv: Sequence[str] | None = None) -> None:
         return
     if args.command == "mcp":
         # The bridge owns stdio and its own event loop, so it runs before this
-        # process starts one.
+        # process starts one. It is handed a project's name, because a client
+        # entry that named a directory could not be copied to another machine.
         try:
-            config = _resolve(args)
-        except (
-            ConfigurationError,
-            ControlError,
-            ResearchError,
-            OSError,
-            ValueError,
-        ) as exc:
+            project_name = _bridge_project_name(args)
+        except (ConfigurationError, ResearchError) as exc:
             raise SystemExit(f"{CLI_NAME}: {exc}") from exc
-        bridge.main(config, name=args.client_name)
+        bridge.main(project_name, settings=_config_kwargs(args), name=args.client_name)
         return
     try:
         result = asyncio.run(_run(args))

@@ -79,6 +79,27 @@ def _no_collapsed_repetitions_in_the_suite(
     monkeypatch.setenv("RESEARCH_ULTRARAG_RETRIEVAL_DUPLICATE_COSINE", "2.0")
 
 
+@pytest.fixture(autouse=True)
+def _an_account_directory_of_this_run(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path_factory: pytest.TempPathFactory,
+) -> None:
+    """Point every account-scoped file at a throwaway directory.
+
+    The project record and the per-user settings file live in the account's
+    config directory, so a test that runs `init` writes there unless it says
+    otherwise. That is the reader's own record of their projects, and a test run
+    must not add to it or read it.
+
+    `XDG_CONFIG_HOME` alone is enough on this platform and leaves the model cache
+    alone, which the integration test needs to be the real one.
+    """
+
+    monkeypatch.setenv(
+        "XDG_CONFIG_HOME", str(tmp_path_factory.mktemp("account-config"))
+    )
+
+
 @pytest.fixture
 def project(tmp_path: Path) -> Path:
     root = tmp_path / "research-project"

@@ -134,6 +134,10 @@ def _project_root_argument(arguments: list[str]) -> str | None:
     return _argument_value(arguments, "--project-root")
 
 
+def _project_name_argument(arguments: list[str]) -> str | None:
+    return _argument_value(arguments, "--project-name")
+
+
 # The MCP client entry the doctor prints and validates. The app is reached two
 # ways, so there are two: a URL entry for a client that can open a socket, which
 # points at the app's own port, and a stdio entry for one that cannot, which runs
@@ -183,13 +187,12 @@ def mcp_entry_block(config: ResearchConfig) -> str:
     """The stdio client entry for the resolved configuration.
 
     One of two: a client that can open a socket is better served by the URL entry.
+    The stdio entry names the project and not its directory, so the same entry
+    serves the project on every machine where it was initialised, and the app
+    there resolves the name through its own project record.
     """
 
-    arguments = [
-        str(_project_server_command()),
-        "--project-root",
-        str(config.project_root),
-    ]
+    arguments = [str(_project_server_command()), "--project-name", config.project_name]
     if config.runtime_root is not None:
         arguments.extend(["--runtime-root", str(config.runtime_root)])
     arguments.append("mcp")
@@ -385,20 +388,33 @@ def check_entry(config: ResearchConfig, path: str | Path) -> tuple[Check, ...]:
                 )
             )
         root = _project_root_argument(arguments)
-        if root is None:
+        project_name = _project_name_argument(arguments)
+        if root is not None:
             findings.append(
                 Check(
-                    "entry.project_root",
+                    "entry.project_name",
                     "blocked",
-                    f"{name} names no --project-root, so it cannot serve this project.",
+                    f"{name} names the directory {root}, so it stops working the "
+                    "moment it is used on another machine. Name the project "
+                    "instead: --project-name "
+                    f"{config.project_name}.",
                 )
             )
-        elif Path(root).expanduser().resolve() != config.project_root:
+        elif project_name is None:
             findings.append(
                 Check(
-                    "entry.project_root",
+                    "entry.project_name",
+                    "blocked",
+                    f"{name} names no project, so it cannot serve {config.project_name}.",
+                )
+            )
+        elif project_name.casefold() != config.project_name.casefold():
+            findings.append(
+                Check(
+                    "entry.project_name",
                     "warn",
-                    f"{name} serves {root}; this project is {config.project_root}.",
+                    f"{name} serves the project {project_name}; this one is "
+                    f"{config.project_name}.",
                 )
             )
         entry_runtime_root = _runtime_root_argument(arguments)
@@ -435,15 +451,15 @@ def check_entry(config: ResearchConfig, path: str | Path) -> tuple[Check, ...]:
         name
         for name, entry in entries.items()
         if _runs_this_app(entry)
-        and (root := _project_root_argument(_arguments_of(entry))) is not None
-        and Path(root).expanduser().resolve() == config.project_root
+        and (named := _project_name_argument(_arguments_of(entry))) is not None
+        and named.casefold() == config.project_name.casefold()
     ]
     if len(matching) > 1:
         findings.append(
             Check(
                 "entry.duplicate",
                 "warn",
-                f"{', '.join(sorted(matching))} all name {config.project_root}. One "
+                f"{', '.join(sorted(matching))} all name {config.project_name}. One "
                 "app serves a project, so a second entry either reaches the same "
                 "app or starts a second one on another port.",
             )
@@ -453,8 +469,8 @@ def check_entry(config: ResearchConfig, path: str | Path) -> tuple[Check, ...]:
             Check(
                 "entry",
                 "ok",
-                f"{entry_path} reaches this project's app with matching paths "
-                "and a usable timeout.",
+                f"{entry_path} reaches the app for {config.project_name} with a "
+                "usable timeout.",
             )
         )
     return tuple(findings)

@@ -167,7 +167,13 @@ def test_no_surface_imports_another_surface() -> None:
 
 
 def test_the_agent_surface_is_declared_once() -> None:
-    """The seven operations exist in one file, so an agent cannot get two answers."""
+    """The seven operations exist in one file, so an agent cannot get two answers.
+
+    `status` is the one operation declared twice: once for a project this
+    machine serves, and once for a project its agent entry names and nothing
+    here resolves. Every other operation is declared once, because a second
+    declaration of it would be a second answer for a corpus that exists.
+    """
 
     declaring: dict[str, list[str]] = {}
     for path in _modules():
@@ -189,9 +195,22 @@ def test_the_agent_surface_is_declared_once() -> None:
         if names:
             declaring[_relative(path.relative_to(PACKAGE).as_posix())] = names
     assert list(declaring) == ["surfaces/mcp.py"], declaring
-    assert len(declaring["surfaces/mcp.py"]) == 8, (
-        declaring
-    )  # seven tools, one resource
+
+    operations = [name.split(":", 1)[1] for name in declaring["surfaces/mcp.py"]]
+    assert set(operations) == {
+        "status",
+        "ingest",
+        "search",
+        "find_source",
+        "get_passage",
+        "set_source_inclusion",
+        "set_source_metadata",
+        "status_resource",
+    }
+    assert len(operations) == 10, operations
+    for name in set(operations) - {"status", "status_resource"}:
+        assert operations.count(name) == 1, name
+    assert operations.count("status") == 2
 
 
 def test_the_answer_projection_is_shared_by_the_two_bounded_readers() -> None:

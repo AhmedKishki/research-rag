@@ -6,7 +6,7 @@ import asyncio
 from pathlib import Path
 from typing import Any
 
-from .config import ResearchConfig
+from .config import ResearchConfig, initialise_command
 from .generation import value_fingerprint
 from .health import health_report
 from .launcher import ui_launcher_state
@@ -82,6 +82,36 @@ def generation_upgrade_reasons(
     ):
         reasons.append("retrieval_policy")
     return reasons
+
+
+def uninitialised_status(project_name: str, reason: str) -> dict[str, Any]:
+    """The status answer for a project this installation has not initialised.
+
+    An agent's client entry names a project and the machine it runs on decides
+    which directory that name reaches. Where the machine holds no such project,
+    this is the whole answer, and it is the answer a blocked project already has:
+    `blocked_by` names the condition, the sentence that explains it, and the
+    command that closes it, so an agent reads one shape whether or not the app
+    came up.
+
+    The reason names the project, because nothing else in this answer does: an
+    agent's answer carries no corpus inventory, and a client that may be
+    configured against several projects has to learn which one is missing.
+    """
+
+    return {
+        "ready": False,
+        "stale": False,
+        "project_initialised": False,
+        "blocked_by": [
+            {
+                "check": "project.initialised",
+                "reason": reason,
+                "remedy": initialise_command(project_name),
+            }
+        ],
+        "message": reason,
+    }
 
 
 def generation_inventory(

@@ -163,8 +163,14 @@ def _required_actions(payload: Mapping[str, Any]) -> list[str]:
     dense index this tool searches, reviewed sources it has never indexed, an
     exclusion the indexes still hold, and a build that stopped part-way. The
     answer names them once.
+
+    A project that does not exist needs none of them: there is nothing to
+    rebuild, its condition is in `blocked_by`, and its remedy is a command the
+    agent cannot call as a tool.
     """
 
+    if payload.get("project_initialised") is False:
+        return []
     changes = payload.get("changes") or {}
     actions: list[str] = []
     if (
@@ -188,7 +194,8 @@ def lean_status(payload: Mapping[str, Any]) -> dict[str, Any]:
     `ready` and `stale` are booleans rather than an absence, `requires` names the
     calls that make this generation serve what the project holds, and `message`
     says why in one sentence. `changes`, `ingestion_progress`, `blocked_by`, and
-    `degraded` appear only while they hold.
+    `degraded` appear only while they hold. `project_initialised` appears only
+    when it is false, which is the one answer with no project behind it.
 
     The corpus counts, the retained generations, the retrieval policy, and the
     per-check detail are the command line's and the workspace's answer. The
@@ -200,6 +207,10 @@ def lean_status(payload: Mapping[str, Any]) -> dict[str, Any]:
         "ready": bool(payload.get("ready")),
         "stale": bool(payload.get("stale")),
     }
+    # Stated only when it is false: true everywhere else carries no information,
+    # and a reader that has to branch on it needs the one answer where it fails.
+    if payload.get("project_initialised") is False:
+        result["project_initialised"] = False
     _add(result, "generation_id", payload.get("generation_id"))
     required = _required_actions(payload)
     if required:
