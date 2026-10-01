@@ -11,8 +11,10 @@ the command line sends, and the command line names what it sends, so the two
 cannot drift without a test saying so. That is the same rule the workspace
 adapter and the agent tools follow.
 
-Loopback only, JSON only, and the same operations the service exposes. There is
-no control operation that changes project state; the service is the only writer.
+Loopback only, JSON only, and the same operations the service exposes. The
+service is the only writer: a control operation is a request the command line
+sends, not a second path to the state, so a project changed from a terminal and
+a project changed from a browser go through one implementation and one lock.
 """
 
 from __future__ import annotations
@@ -174,6 +176,48 @@ async def _source_inclusion(app: App, request: Request) -> JSONResponse:
     )
 
 
+async def _generations(app: App, _request: Request) -> JSONResponse:
+    """Every retained generation, which is the inventory the status payload carries."""
+
+    status = await app.service.status()
+    generations = status.get("generations")
+    return _json(
+        {
+            "generations": generations if isinstance(generations, list) else [],
+            "retained_generation_count": int(
+                status.get("retained_generation_count") or 0
+            ),
+            "retained_generation_bytes": int(
+                status.get("retained_generation_bytes") or 0
+            ),
+            "current_generation_id": status.get("generation_id"),
+        }
+    )
+
+
+async def _use_generation(app: App, request: Request) -> JSONResponse:
+    body = await _body(request)
+    generation_id = body.get("generation_id")
+    if not isinstance(generation_id, str) or not generation_id:
+        raise ResearchError("a generation selection needs a generation_id string")
+    return _json(await app.service.use_generation(generation_id))
+
+
+async def _remove_generation(app: App, request: Request) -> JSONResponse:
+    # The confirmation is carried over the wire rather than inferred from the
+    # caller's intent: the command line already had to repeat the id, and a
+    # surface that dropped the repeat would be a surface that deletes a
+    # generation a person did not choose.
+    body = await _body(request)
+    generation_id = body.get("generation_id")
+    if not isinstance(generation_id, str) or not generation_id:
+        raise ResearchError("a generation removal needs a generation_id string")
+    confirm = body.get("confirm")
+    if not isinstance(confirm, str):
+        raise ResearchError("a generation removal needs a confirm string")
+    return _json(await app.service.remove_generation(generation_id, confirm=confirm))
+
+
 async def _source_metadata(app: App, request: Request) -> JSONResponse:
     body = await _body(request)
     metadata = body.get("metadata")
@@ -227,6 +271,9 @@ def control_routes(app: App) -> list[Route]:
         route("/passages/{chunk_id}", _passage, ["GET"]),
         route("/source-inclusion", _source_inclusion, ["POST"]),
         route("/source-metadata", _source_metadata, ["POST"]),
+        route("/generations", _generations, ["GET"]),
+        route("/generations/use", _use_generation, ["POST"]),
+        route("/generations/remove", _remove_generation, ["POST"]),
     ]
 
 
@@ -330,6 +377,21 @@ class Control:
                 "source_id": source_id,
                 "metadata": metadata,
             },
+        )
+
+    def generations(self) -> dict[str, Any]:
+        return self._call("GET", "/generations")
+
+    def use_generation(self, generation_id: str) -> dict[str, Any]:
+        return self._call(
+            "POST", "/generations/use", json={"generation_id": generation_id}
+        )
+
+    def remove_generation(self, generation_id: str, *, confirm: str) -> dict[str, Any]:
+        return self._call(
+            "POST",
+            "/generations/remove",
+            json={"generation_id": generation_id, "confirm": confirm},
         )
 
 

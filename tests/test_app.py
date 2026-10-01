@@ -141,6 +141,16 @@ class FakeService:
     async def set_source_metadata(self, **arguments: Any) -> dict[str, Any]:
         return self._record("set_source_metadata", arguments)
 
+    async def use_generation(self, generation_id: str) -> dict[str, Any]:
+        return self._record("use_generation", {"generation_id": generation_id})
+
+    async def remove_generation(
+        self, generation_id: str, *, confirm: str
+    ) -> dict[str, Any]:
+        return self._record(
+            "remove_generation", {"generation_id": generation_id, "confirm": confirm}
+        )
+
 
 async def test_the_agent_surface_answers_on_the_workspaces_port(project: Path) -> None:
     """One port, one service, and the agent gets the same operations as always."""
@@ -279,6 +289,84 @@ async def test_the_agent_surface_declares_the_schema_an_agent_reads(
             assert "status" in instructions
     finally:
         await app.stop()
+
+
+async def test_the_control_api_moves_a_generation_the_way_the_service_does(
+    project: Path,
+) -> None:
+    """The control API is a request path, not a second writer.
+
+    The confirmation crosses the wire because the command line already had to
+    repeat the id; a control surface that dropped the repeat would be a surface
+    that deletes a generation a person did not choose.
+    """
+
+    config = resolve_config(project, vanilla_executable=sys.executable)
+    app = App(config, port=free_port())
+    service = FakeService()
+    app.service = service  # type: ignore[assignment]
+    await app.start()
+    try:
+        await wait_until_ready(app)
+        selected = await asyncio.to_thread(
+            post,
+            app.url,
+            "/control/generations/use",
+            {"generation_id": "20260930T191235Z-45608dc5"},
+        )
+        assert selected[0] == 200
+        removed = await asyncio.to_thread(
+            post,
+            app.url,
+            "/control/generations/remove",
+            {
+                "generation_id": "20260930T191235Z-45608dc5",
+                "confirm": "20260930T191235Z-45608dc5",
+            },
+        )
+        assert removed[0] == 200
+    finally:
+        await app.stop()
+    assert ("use_generation", {"generation_id": "20260930T191235Z-45608dc5"}) in (
+        service.calls
+    )
+    assert (
+        "remove_generation",
+        {
+            "generation_id": "20260930T191235Z-45608dc5",
+            "confirm": "20260930T191235Z-45608dc5",
+        },
+    ) in service.calls
+
+
+async def test_the_control_api_refuses_a_generation_request_it_cannot_serve(
+    project: Path,
+) -> None:
+    """A removal that arrives without a confirmation is refused, not defaulted."""
+
+    config = resolve_config(project, vanilla_executable=sys.executable)
+    app = App(config, port=free_port())
+    service = FakeService()
+    app.service = service  # type: ignore[assignment]
+    await app.start()
+    try:
+        await wait_until_ready(app)
+        for path, payload, expected in (
+            ("/control/generations/use", {"generation_id": ""}, "generation_id"),
+            ("/control/generations/use", {}, "generation_id"),
+            ("/control/generations/remove", {"generation_id": "x"}, "confirm"),
+            (
+                "/control/generations/remove",
+                {"generation_id": "x", "confirm": 7},
+                "confirm",
+            ),
+        ):
+            code, body = await asyncio.to_thread(post, app.url, path, payload)
+            assert code == 400, path
+            assert expected in body["error"]
+    finally:
+        await app.stop()
+    assert not [name for name, _ in service.calls if "generation" in name]
 
 
 async def test_the_control_api_refuses_a_search_it_cannot_serve(project: Path) -> None:

@@ -313,6 +313,11 @@ research-rag --project-root /path/to/project passage CHUNK_ID
 research-rag --project-root /path/to/project metadata "evidence.pdf" --year 2025
 research-rag --project-root /path/to/project exclude "evidence.pdf" --reason "Duplicate"
 
+# Reclaim the space a rebuild left behind. The id is repeated on purpose.
+research-rag --project-root /path/to/project generations
+research-rag --project-root /path/to/project generations --use 20260930T191235Z-45608dc5
+research-rag --project-root /path/to/project remove-generation 20260930T191235Z-45608dc5 --confirm 20260930T191235Z-45608dc5
+
 # Browse it, and read the settings that apply.
 research-rag --project-root /path/to/project ui
 research-rag --project-root /path/to/project config
@@ -428,6 +433,8 @@ A project has at most one app. The command line, the browser workspace, and an a
 | `mcp` | the agent surface on stdio, proxied to the running app |
 | `serve` | the app in the foreground, which is what the launcher runs |
 | `stop` | the app, and optionally any process of this app still building |
+| `generations` | every generation on disk with its size, and the one search reads; `--use ID` searches a retained one instead |
+| `remove-generation` | a generation search does not read, deleted after its id is repeated |
 | `help` | every command grouped by the work, or one page of it; needs no project |
 
 `status` is the exception a person reads most, so it prints the same lean verdict an agent gets and takes `--verbose` for the complete payload; every other command prints the complete payload. An agent's tool answer is projected to the fields an agent acts on, and the mode is the `runtime.tool_detail` setting.

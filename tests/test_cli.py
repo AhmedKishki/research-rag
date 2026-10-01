@@ -71,6 +71,16 @@ class RecordingService:
     async def list_sources(self) -> dict[str, Any]:
         return self._record("list_sources", {})
 
+    async def use_generation(self, generation_id: str) -> dict[str, Any]:
+        return self._record("use_generation", {"generation_id": generation_id})
+
+    async def remove_generation(
+        self, generation_id: str, *, confirm: str
+    ) -> dict[str, Any]:
+        return self._record(
+            "remove_generation", {"generation_id": generation_id, "confirm": confirm}
+        )
+
     async def get_passage(
         self, chunk_id: str, *, context_chunks: int = 1
     ) -> dict[str, Any]:
@@ -158,6 +168,22 @@ class Operations:
         return await self.service.set_source_metadata(
             metadata, source_path=source_path, source_id=source_id
         )
+
+    async def generations(self) -> dict[str, Any]:
+        return {
+            "generations": [{"generation_id": "20260930T191235Z-45608dc5"}],
+            "retained_generation_count": 1,
+            "retained_generation_bytes": 1024,
+            "current_generation_id": "20260930T191235Z-45608dc5",
+        }
+
+    async def use_generation(self, generation_id: str) -> dict[str, Any]:
+        return await self.service.use_generation(generation_id)
+
+    async def remove_generation(
+        self, generation_id: str, *, confirm: str
+    ) -> dict[str, Any]:
+        return await self.service.remove_generation(generation_id, confirm=confirm)
 
 
 def test_init_creates_a_project_and_records_the_name_it_was_given(
@@ -823,3 +849,51 @@ def test_start_reports_a_launcher_that_fails(
     with pytest.raises(ResearchError, match="did not start") as failure:
         _start(args, config)
     assert "research-rag-ui.log" in str(failure.value)
+
+
+def test_generations_lists_and_can_roll_back() -> None:
+    """`generations` is a listing, and `--use` is the one call that moves the pointer."""
+
+    service = Operations()
+
+    listed = asyncio.run(_operate(_args("generations"), service))
+
+    assert listed["generations"] == [{"generation_id": "20260930T191235Z-45608dc5"}]
+    assert listed["retained_generation_count"] == 1
+    assert listed["current_generation_id"] == "20260930T191235Z-45608dc5"
+    # A listing must not move anything, so nothing reached the service.
+    assert service.service.calls == []
+
+    rolled = asyncio.run(
+        _operate(_args("generations", "--use", "20260930T191235Z-45608dc5"), service)
+    )
+
+    assert rolled["operation"] == "use_generation"
+    assert rolled["arguments"] == {"generation_id": "20260930T191235Z-45608dc5"}
+
+
+def test_remove_generation_carries_the_repeated_id() -> None:
+    """The command line passes the confirmation through rather than inventing one."""
+
+    service = Operations()
+    generation_id = "20260930T191235Z-45608dc5"
+
+    removed = asyncio.run(
+        _operate(
+            _args("remove-generation", generation_id, "--confirm", generation_id),
+            service,
+        )
+    )
+
+    assert removed["operation"] == "remove_generation"
+    assert removed["arguments"] == {
+        "generation_id": generation_id,
+        "confirm": generation_id,
+    }
+
+
+def test_remove_generation_refuses_without_a_confirmation() -> None:
+    """`--confirm` is required, so a listing cannot become a deletion by accident."""
+
+    with pytest.raises(SystemExit):
+        _parser().parse_args(["remove-generation", "20260930T191235Z-45608dc5"])

@@ -134,6 +134,20 @@ HELP_GROUPS: tuple[tuple[str, tuple[tuple[str, str], ...]], ...] = (
                     "each with the command that fixes it."
                 ),
             ),
+            (
+                "generations",
+                (
+                    "Every generation on disk with its size, and the one search reads. "
+                    "With --use, point the project at a retained one instead."
+                ),
+            ),
+            (
+                "remove-generation",
+                (
+                    "Delete a generation search does not read, after repeating its id. "
+                    "The originals are untouched; rebuilding costs one ingestion."
+                ),
+            ),
         ),
     ),
     (
@@ -556,6 +570,38 @@ def _parser() -> argparse.ArgumentParser:
 
     commands.add_parser(
         "sources", help="List the project's sources and their review state."
+    )
+
+    generations = commands.add_parser(
+        "generations",
+        help="List the retained generations, or search one instead of the current one.",
+    )
+    generations.add_argument(
+        "--use",
+        dest="use_generation",
+        metavar="GENERATION_ID",
+        help=(
+            "Point the project at this retained generation, after validating its "
+            "artifacts and both indexes. Search reads it from the next call."
+        ),
+    )
+
+    remove = commands.add_parser(
+        "remove-generation",
+        help="Delete a retained generation that is not the one search reads.",
+    )
+    remove.add_argument(
+        "generation_id", metavar="GENERATION_ID", help="The directory name to remove."
+    )
+    remove.add_argument(
+        "--confirm",
+        required=True,
+        metavar="GENERATION_ID",
+        help=(
+            "Repeat the id. Removal is permanent and the space comes back only "
+            "from a rebuild, so the second name is the check that this is the one "
+            "you meant."
+        ),
     )
 
     context = commands.add_parser(
@@ -1093,6 +1139,30 @@ class Local:
             metadata, source_path=source_path, source_id=source_id
         )
 
+    async def generations(self) -> dict[str, Any]:
+        # The inventory already exists in the status payload, so a listing reads
+        # it rather than walking the directory a second time with a second shape.
+        status = await self._require().status()
+        generations = status.get("generations")
+        return {
+            "generations": generations if isinstance(generations, list) else [],
+            "retained_generation_count": int(
+                status.get("retained_generation_count") or 0
+            ),
+            "retained_generation_bytes": int(
+                status.get("retained_generation_bytes") or 0
+            ),
+            "current_generation_id": status.get("generation_id"),
+        }
+
+    async def use_generation(self, generation_id: str) -> dict[str, Any]:
+        return await self._require().use_generation(generation_id)
+
+    async def remove_generation(
+        self, generation_id: str, *, confirm: str
+    ) -> dict[str, Any]:
+        return await self._require().remove_generation(generation_id, confirm=confirm)
+
 
 class Remote:
     """The running app's operations, awaited.
@@ -1152,6 +1222,17 @@ class Remote:
             source_path=source_path, source_id=source_id, metadata=metadata
         )
 
+    async def generations(self) -> dict[str, Any]:
+        return await self.control.generations()
+
+    async def use_generation(self, generation_id: str) -> dict[str, Any]:
+        return await self.control.use_generation(generation_id)
+
+    async def remove_generation(
+        self, generation_id: str, *, confirm: str
+    ) -> dict[str, Any]:
+        return await self.control.remove_generation(generation_id, confirm=confirm)
+
 
 async def _operate(
     args: argparse.Namespace,
@@ -1201,6 +1282,14 @@ async def _operate(
             source_path=args.source,
             source_id=args.source_id,
             metadata=_metadata_body(args),
+        )
+    if command == "generations":
+        if args.use_generation:
+            return await operations.use_generation(args.use_generation)
+        return await operations.generations()
+    if command == "remove-generation":
+        return await operations.remove_generation(
+            args.generation_id, confirm=args.confirm
         )
     raise ResearchError(f"Unknown command: {command}")
 

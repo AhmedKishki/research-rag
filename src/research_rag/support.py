@@ -1010,6 +1010,13 @@ INGESTION_IDENTITY_POLICY_VERSION = 3
 
 METADATA_STORAGE_POLICY = "automatic_only_runtime_overlay_v1"
 
+# The shape the builder writes for a build identifier, and the shape nothing
+# else may supply. A generation directory is named by a caller in `generations`,
+# `use_generation`, and `remove_generation`, so those three check the name against
+# this rather than joining it to a path: a name that does not look like a build
+# identifier never reaches the filesystem as one.
+GENERATION_ID_PATTERN = r"\d{8}T\d{6}Z-[0-9a-f]{8}"
+
 _WORD = re.compile(r"[^\W_]+", re.UNICODE)
 
 

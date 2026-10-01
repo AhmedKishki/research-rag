@@ -52,6 +52,7 @@ from .storage import (
     StorageError,
     atomic_write_json,
     atomic_write_jsonl,
+    directory_statistics,
     fsync_directories,
     fsync_directory,
     iter_jsonl,
@@ -64,6 +65,7 @@ from .support import (
     CLEANING_POLICY_VERSION,
     DEFAULT_RETRIEVAL_METHOD,
     EXTRACTION_POLICY_VERSION,
+    GENERATION_ID_PATTERN,
     INGESTION_IDENTITY_POLICY_VERSION,
     METADATA_STORAGE_POLICY,
     RETRIEVAL_METHODS,
@@ -391,7 +393,7 @@ class IngestionWorkflow:
         build_id = (
             str(journal.get("build_id") or "") if isinstance(journal, dict) else ""
         )
-        valid_build_id = bool(re.fullmatch(r"\d{8}T\d{6}Z-[0-9a-f]{8}", build_id))
+        valid_build_id = bool(re.fullmatch(GENERATION_ID_PATTERN, build_id))
         project_matches = bool(
             isinstance(journal, dict)
             and journal.get("project_id") == self.config.project_id
@@ -519,7 +521,7 @@ class IngestionWorkflow:
             not isinstance(journal, dict)
             or journal.get("schema_version") != PENDING_ACTIVATION_VERSION
             or journal.get("project_id") != self.config.project_id
-            or not re.fullmatch(r"\d{8}T\d{6}Z-[0-9a-f]{8}", build_id)
+            or not re.fullmatch(GENERATION_ID_PATTERN, build_id)
         ):
             self._discard_invalid_activation_journal(
                 journal,
@@ -2132,6 +2134,174 @@ class IngestionWorkflow:
                 }
 
             raise ResearchError(f"Unsupported ingestion checkpoint phase: {phase}")
+
+    def _generation_root(self, generation_id: str) -> Path:
+        """Resolve one generation directory by name, refusing any other name.
+
+        The name arrives from a caller, so it is matched against the pattern the
+        builder writes and refused otherwise. Joining a caller's string to a
+        directory and resolving the result would work too, and would be the wrong
+        shape: this keeps a name that is not a build identifier from ever
+        becoming a path, and the check is one line rather than a containment test
+        whose edge cases are the interesting part.
+        """
+
+        if not re.fullmatch(GENERATION_ID_PATTERN, generation_id):
+            raise ResearchError(
+                f"{generation_id!r} is not a generation id; the id is the "
+                "directory name, such as 20260930T191235Z-45608dc5"
+            )
+        return self.config.generations_root / generation_id
+
+    def _pending_activation_build_id(self) -> str | None:
+        """The build a pending activation is waiting to move into place, if any."""
+
+        if not self._pending_activation_path.exists():
+            return None
+        try:
+            journal = read_json(self._pending_activation_path)
+        except (OSError, ValueError):
+            return None
+        if not isinstance(journal, dict):
+            return None
+        build_id = journal.get("build_id")
+        return build_id if isinstance(build_id, str) and build_id else None
+
+    async def use_generation(self, generation_id: str) -> dict[str, Any]:
+        """Search a retained generation instead of the current one.
+
+        A build always moves forward, so a reader who wants the previous
+        generation has no way back to it. This is that way: it validates the
+        target's artifacts and both indexes exactly as an activation does, and
+        only then moves the pointer, so a rollback that lands on a damaged
+        generation fails instead of bricking every read surface.
+        """
+
+        async with self._operation():
+            root = self._generation_root(generation_id)
+            if not root.is_dir() or root.is_symlink():
+                raise ResearchError(f"No retained generation named {generation_id}")
+            current = self._load_current_optional()
+            if current is not None and root.name == str(
+                current[1].get("generation_id")
+            ):
+                return {
+                    "status": "unchanged",
+                    "generation_id": generation_id,
+                    "message": f"Generation {generation_id} is already the one in use.",
+                }
+            pending = self._pending_activation_build_id()
+            if pending is not None and pending != generation_id:
+                raise ResearchError(
+                    f"A pending activation is waiting to switch to {pending}. Run "
+                    "ingest to finish or supersede it before moving the pointer "
+                    "somewhere else, or it will move the pointer again."
+                )
+            try:
+                manifest = read_json(root / "manifest.json")
+            except (OSError, ValueError) as exc:
+                raise ResearchError(
+                    f"Generation {generation_id} has no readable manifest"
+                ) from exc
+            if (
+                not isinstance(manifest, dict)
+                or manifest.get("generation_id") != generation_id
+            ):
+                raise ResearchError(
+                    f"Generation {generation_id} does not match its own manifest"
+                )
+            try:
+                await self._validate_generation_for_activation(root, manifest)
+            except ResearchError as exc:
+                raise ResearchError(
+                    f"Generation {generation_id} failed validation and was not "
+                    f"selected: {exc}"
+                ) from exc
+            atomic_write_json(
+                self.config.current_path,
+                {"schema_version": 1, "generation_id": generation_id},
+            )
+            fsync_directory(self.config.generations_root)
+            self._loaded_generation = None
+            return {
+                "status": "changed",
+                "generation_id": generation_id,
+                "previous_generation_id": (
+                    None if current is None else str(current[1].get("generation_id"))
+                ),
+                "effective_immediately": True,
+                "message": (
+                    f"Search now reads generation {generation_id}. The corpus is "
+                    "unchanged; run ingest to build the current sources again."
+                ),
+            }
+
+    async def remove_generation(
+        self,
+        generation_id: str,
+        *,
+        confirm: str,
+    ) -> dict[str, Any]:
+        """Delete a retained generation that is not the one search reads.
+
+        Removal is permanent and the space is only recoverable by rebuilding, so
+        the caller has to repeat the id: a generation named by a listing and
+        removed by a copy of that listing is a mistake that cannot be walked
+        back, and the second name is the only check that the reader meant this
+        one. The current generation is refused because deleting it makes every
+        read surface fail, and a generation a pending activation names is
+        refused because that activation is about to move it into place.
+        """
+
+        async with self._operation():
+            root = self._generation_root(generation_id)
+            if confirm != generation_id:
+                raise ResearchError(
+                    f"Pass --confirm {generation_id} to remove that generation"
+                )
+            if not root.is_dir() or root.is_symlink():
+                raise ResearchError(f"No retained generation named {generation_id}")
+            current = self._load_current_optional()
+            if current is not None and root.name == str(
+                current[1].get("generation_id")
+            ):
+                raise ResearchError(
+                    f"Generation {generation_id} is the one search reads, so it "
+                    "cannot be removed. Point the project at another with "
+                    "'research-rag generations --use OTHER_ID', then remove this "
+                    "one."
+                )
+            pending = self._pending_activation_build_id()
+            if pending == generation_id:
+                raise ResearchError(
+                    f"Generation {generation_id} is waiting to become the one "
+                    "search reads. Run ingest to finish it, or remove it after a "
+                    "superseding build."
+                )
+            try:
+                file_count, size_bytes = directory_statistics(root)
+            except OSError as exc:
+                raise ResearchError(
+                    f"Generation {generation_id} could not be measured: {exc}"
+                ) from exc
+            try:
+                shutil.rmtree(root)
+            except OSError as exc:
+                raise ResearchError(
+                    f"Generation {generation_id} could not be removed: {exc}"
+                ) from exc
+            fsync_directory(self.config.generations_root)
+            return {
+                "status": "removed",
+                "generation_id": generation_id,
+                "freed_file_count": file_count,
+                "freed_bytes": size_bytes,
+                "recoverable_by": "ingest",
+                "message": (
+                    f"Removed {generation_id} and freed {size_bytes} bytes. The "
+                    "originals are untouched; rebuilding costs one ingestion."
+                ),
+            }
 
     async def ingest(
         self,
