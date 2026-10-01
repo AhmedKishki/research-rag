@@ -87,7 +87,7 @@ Corrupt extraction units are omitted whole rather than indexed as garbage, and t
 
 ## Settings
 
-`research-rag config` prints every effective value and the layer it came from. It prints and does not write: to change a value, edit `.research-rag/config.toml`, or override one for a single command with `--set key=value`, or add a layer with `--config PATH`. A key that decides what a generation contains makes the corpus stale until you re-ingest; a runtime key does not. `research-rag help settings` names which is which.
+`research-rag config` prints every effective value, the layer it came from, and what a change to each one costs. The workspace in the browser writes those values into `.research-rag/config.toml` after naming which ones force a rebuild, and it preserves every key it did not change, so a hand edit in that file survives. A value the environment, the command line, or `--config PATH` supplied is shown read-only, because those layers outrank the project file. To change a value outside the browser, edit that file, override one for a single command with `--set key=value`, or add a layer with `--config PATH`. `research-rag help settings` names the layers and the cost.
 
 A corpus in a language the embedding model does not cover is reported rather than silently embedded. `research-rag help filters` names the layers; the section above shows them in use.
 
@@ -163,7 +163,7 @@ research-rag --project-root /path/to/project ui --stop     # stop it and what it
 
 The launcher claims the first free loopback port at or above the one it was generated with and records the port it chose, so two projects never serve from the same port. `research-rag serve` is the same workspace in the foreground on a fixed port, and is what the launcher runs.
 
-The workspace binds loopback only and has no authentication, which is correct for an address no other machine can reach. It has no retrieval mode, no reranking switch, and no chunk tuning, because every search is hybrid and reranked. Metadata, source selection, category partitions, and project metadata are there.
+The workspace binds loopback only and has no authentication, which is correct for an address no other machine can reach. It has no retrieval mode, no reranking switch, and no chunk tuning, because every search is hybrid and reranked. Metadata, source selection, category partitions, project metadata, and this project's settings are there.
 
 ## Limitations
 
@@ -175,6 +175,7 @@ The workspace binds loopback only and has no authentication, which is correct fo
 - **A generation the app cannot serve.** `status` puts `ingest` in `requires`, and `status --verbose` gives the reason. The old generation stays searchable with a warning.
 - **A search answers nothing.** Read `withheld_candidates`: it names the gate that dropped each candidate, which is usually the dense floor or the minimum passage length.
 - **The UltraRAG runtime is broken.** `doctor` names the file; `doctor --repair-runtime` moves the old tree aside and installs the pinned one.
+- **A workspace settings save rewrites the whole file.** Comments in `.research-rag/config.toml` are not preserved; keys are. A save merges into what is there and changes only the keys you saved.
 
 ## UltraRAG credit and licensing
 
