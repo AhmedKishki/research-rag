@@ -34,7 +34,7 @@ _EXACT_VECTORS_RELATIVE = Path("portable") / "embeddings.npy"
 
 # The generation-relative directory each dense backend writes its index into.
 # The service and its ingestion workflow both read this mapping, so it lives with
-# the backends it names rather than in either caller.
+# the backends it names, not in either caller.
 DENSE_INDEX_PATHS = {
     QDRANT_BACKEND_NAME: "indexes/qdrant",
     EXACT_BACKEND_NAME: "indexes/vectors",
@@ -48,9 +48,8 @@ class DenseTokenAuditUnavailable(RuntimeError):
 class RerankerUnavailable(RuntimeError):
     """Raised when the optional reranker model cannot be loaded.
 
-    The service treats this as a recoverable condition: reranking is skipped,
-    the unranked candidate order is returned, and the response discloses the
-    fallback instead of failing the search.
+    The service treats this as recoverable: reranking is skipped and the response
+    discloses the fallback.
     """
 
 
@@ -131,11 +130,10 @@ def _load_embedder(
     threads: int | None = None,
     model: str = DEFAULT_EMBEDDING_MODEL,
 ) -> TextEmbedding:
-    """Load the pinned CPU embedding model from the shared model cache.
+    """The pinned CPU embedding model from the shared model cache.
 
-    `threads` sets the ONNX Runtime intra-op and inter-op thread count. The
-    default is left to the runtime; MEASUREMENTS.md records the measured effect
-    of setting it on one machine.
+    `threads` sets the ONNX Runtime thread count, left to the runtime by default;
+    MEASUREMENTS.md records the measured effect.
     """
 
     facts = resolve_embedding_model(model)
@@ -156,11 +154,10 @@ def _load_cross_encoder(
     offline: bool,
     model: str = DEFAULT_RERANKER_MODEL,
 ) -> TextCrossEncoder:
-    """Load one pinned CPU cross-encoder from the shared model cache.
+    """One pinned CPU cross-encoder from the shared model cache.
 
-    Any load failure means the reranker cannot run — most often an offline call
-    whose model is not cached yet — so it is reported as ``RerankerUnavailable``
-    for the caller to degrade from rather than as an opaque model error.
+    Any load failure means the reranker cannot run, most often an offline call whose
+    model is not cached, so it is reported as ``RerankerUnavailable``.
     """
 
     name, revision = resolve_reranker_model(model)
@@ -185,13 +182,11 @@ def _load_cross_encoder(
 
 
 def _load_audit_tokenizer(embedder: TextEmbedding) -> Tokenizer:
-    """Return a non-truncating tokenizer matching the embedding model.
+    """A non-truncating tokenizer matching the embedding model.
 
-    The embedder's own tokenizer truncates at the model limit, which would hide
-    the overflow the ingestion audit exists to measure, so the pinned tokenizer
-    file is loaded separately and truncation is disabled on that copy.
+    The embedder's own tokenizer truncates at the model limit, which would hide the
+    overflow the ingestion audit measures, so the pinned file is loaded separately.
     """
-
     model_dir = getattr(embedder.model, "_model_dir", None)
     tokenizer_path = Path(str(model_dir)) / "tokenizer.json" if model_dir else None
     if tokenizer_path is None or not tokenizer_path.is_file():
@@ -221,7 +216,7 @@ class LocalQdrantDenseBackend:
         self.offline = offline
         self.embedding_threads = embedding_threads
         self.reranker_model = reranker_model
-        # The model's own facts — name, revision, dimension, token limit, and any
+        # The model's facts — name, revision, dimension, token limit, and any
         # required prefix — come from the pinned table rather than the caller.
         self.embedding_facts: EmbeddingModel = resolve_embedding_model(embedding_model)
         # Throughput only: a batch of 1 returns exactly the same floats as a
@@ -242,10 +237,10 @@ class LocalQdrantDenseBackend:
         return self._embedding_model
 
     def _cross_encoder(self, model: str | None = None) -> TextCrossEncoder:
-        """Return the pinned cross-encoder for one model, loading it on demand.
+        """The pinned cross-encoder for one model, loaded on demand.
 
-        A run that compares rerankers needs more than one model, so each model is
-        loaded at most once and kept for the life of the backend.
+        A run comparing rerankers needs more than one, so each is loaded at most once
+        and kept for the backend's life.
         """
 
         name = model or self.reranker_model
@@ -277,7 +272,7 @@ class LocalQdrantDenseBackend:
         return self._audit_tokenizer
 
     def embedding_token_counts(self, texts: list[str]) -> list[int]:
-        """Return the embedding tokenizer length of each text, untruncated."""
+        """The embedding tokenizer length of each text, untruncated."""
 
         if not texts:
             return []
@@ -585,15 +580,14 @@ def _read_index_object(path: Path, label: str) -> dict[str, Any]:
 class LocalVectorDenseBackend:
     """Exact dense search over a generation's portable float32 vectors.
 
-    The generation already stores one float32 row per chunk in stable chunk
-    order, so a dense index needs only a small descriptor plus per-row identity
-    for filtering, and search is an exact cosine scan. That removes the
-    whole-corpus index build and its per-point device cost at the corpus sizes
-    this server targets, and it makes dense scoring exactly reproducible.
+    The generation already stores one float32 row per chunk in stable chunk order, so
+    the index needs only a descriptor plus per-row identity, and search is an exact
+    cosine scan. That removes the whole-corpus index build and its per-point device
+    cost, and makes dense scoring exactly reproducible.
 
-    An index lives at `<generation>/indexes/<name>` and references the portable
-    vector file relative to the generation root, so the descriptor stays valid
-    when the generation directory is copied elsewhere.
+    The index lives at `<generation>/indexes/<name>` and references the portable vector
+    file relative to the generation root, so a copied generation keeps a valid
+    descriptor.
     """
 
     def __init__(
@@ -610,7 +604,7 @@ class LocalVectorDenseBackend:
         self.offline = offline
         self.embedding_threads = embedding_threads
         self.reranker_model = reranker_model
-        # The model's own facts — name, revision, dimension, token limit, and any
+        # The model's facts — name, revision, dimension, token limit, and any
         # required prefix — come from the pinned table rather than the caller.
         self.embedding_facts: EmbeddingModel = resolve_embedding_model(embedding_model)
         # Throughput only: a batch of 1 returns exactly the same floats as a
@@ -634,10 +628,10 @@ class LocalVectorDenseBackend:
         return self._embedding_model
 
     def _cross_encoder(self, model: str | None = None) -> TextCrossEncoder:
-        """Return the pinned cross-encoder for one model, loading it on demand.
+        """The pinned cross-encoder for one model, loaded on demand.
 
-        A run that compares rerankers needs more than one model, so each model is
-        loaded at most once and kept for the life of the backend.
+        A run comparing rerankers needs more than one, so each is loaded at most once
+        and kept for the backend's life.
         """
 
         name = model or self.reranker_model
@@ -665,7 +659,7 @@ class LocalVectorDenseBackend:
         return self._audit_tokenizer
 
     def embedding_token_counts(self, texts: list[str]) -> list[int]:
-        """Return the embedding tokenizer length of each text, untruncated."""
+        """The embedding tokenizer length of each text, untruncated."""
 
         if not texts:
             return []

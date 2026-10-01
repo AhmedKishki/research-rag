@@ -1,6 +1,6 @@
 # Storage contract
 
-Every file this app writes, what it means, and which part is worth backing up. Read this before editing a project by hand.
+Every file this app writes, what it means, and which is worth backing up. Read this before editing a project by hand.
 
 ## The tree
 
@@ -34,23 +34,23 @@ my-research-project/
 ~/.cache/research-ultra-rag-mcp/models/  shared model binaries only
 ```
 
-Two roots carry the name of the MCP server this app was seeded from rather than the app's own, so both products read the same machine while the migration runs:
+Two roots carry the name of the MCP server this app was seeded from rather than the app's own, so both products read the same machine during the migration:
 
 - `~/.config/research-ultra-rag-mcp/config.toml` is the user settings file.
-- `~/.cache/research-ultra-rag-mcp/models/` holds the embedding and reranker binaries, about 150 MB in total. It is the only state shared across projects, and only because those files are immutable once downloaded.
+- `~/.cache/research-ultra-rag-mcp/models/` holds the embedding and reranker binaries, about 150 MB in total. It is the only cross-project shared state, and only because those files are immutable once downloaded.
 
 `tests/test_data_roots.py` asserts both, with the reason each is retained. Renaming either is a migration, not a refactor.
 
-Everything else inside `.research-rag/` is byte-compatible with `research-ultra-rag-mcp`, which is frozen and still installed on the machines that carry it. The app names no product in the on-disk state, so both read and write the same project. A field or schema version this app changes is read by that product too, so the format is frozen until it is not installed.
+Everything else inside `.research-rag/` is byte-compatible with `research-ultra-rag-mcp`, which is frozen and still installed on the machines that carry it. The app names no product in the on-disk state, so both read and write the same project. A field or schema version changed here is read by that product too, so the format is frozen while it is installed.
 
 ## Portable state
 
-These four files are your decisions about the project. They are the part worth backing up, and the part that survives a rebuild.
+These four files are your decisions about the project, the part worth backing up, and the part that survives a rebuild.
 
 | File | What it holds | Keyed by |
 |---|---|---|
 | `project.json` | project name, stable id, sources directory | — |
-| `source-catalog.json` | the durable source-id registry this app maintains | normalized source-relative path |
+| `source-catalog.json` | the durable source-id registry | normalized source-relative path |
 | `source-metadata.json` | the reviewed metadata overlay | normalized source-relative path |
 | `source-exclusions.json` | each exclusion decision and its reason | normalized source-relative path |
 
@@ -67,7 +67,7 @@ These four files are your decisions about the project. They are the part worth b
 }
 ```
 
-`project_id` is authoritative and never rewritten. `source_directory` is relative to the project root, and every command reuses it when `--source-directory` is omitted; an explicit differing value is refused rather than quietly accepted.
+`project_id` is authoritative and never rewritten. `source_directory` is relative to the project root, and every command reuses it when `--source-directory` is omitted; a differing explicit value is refused rather than quietly accepted.
 
 ## Derived state
 
@@ -80,7 +80,7 @@ Two commands move a generation, and both refuse the one search reads:
 - `research-rag generations --use GENERATION_ID` points the project at a retained generation. It validates that generation's artifacts and both indexes exactly as a build's activation does, and only then rewrites `current.json`, so a rollback that lands on a damaged generation fails instead of bricking every read surface. The originals are not rebuilt, so the corpus the pointer now describes is whatever that generation indexed.
 - `research-rag remove-generation GENERATION_ID --confirm GENERATION_ID` deletes one permanently. The repeat is the check: a generation named by a listing and removed by a copy of that listing is a mistake that cannot be walked back. It also refuses a generation a pending activation has named, because that activation is about to move it into place. The space comes back only from a rebuild, which costs one ingestion; the original files are not touched.
 
-A running app may still hold a generation: the retrieval gateway keeps a live index against whichever generation it last loaded, and the exact dense backend memory-maps a generation's vector file for the process's lifetime. Neither refuses a delete — an unlinked mapping keeps reading the old bytes until its last reference drops, and a later open returns a missing-file error rather than a failure at the delete. That is why both commands take the project lock and why the current generation is refused rather than merely warned about.
+A running app may still hold a generation: the retrieval gateway keeps a live index against whichever generation it last loaded, and the exact dense backend memory-maps a generation's vector file for the process's lifetime. Neither refuses a delete — an unlinked mapping keeps reading the old bytes until its last reference drops, and a later open returns a missing-file error rather than a failure at the delete. That is why both commands take the project lock and refuse the current generation rather than merely warning about it.
 
 ### Generation layout
 
@@ -95,15 +95,15 @@ generations/<generation-id>/
   indexes/qdrant/               the dense index, when the manifest names it
 ```
 
-`manifest.json` decides what a generation is. It carries the schema version, the extraction policy, the chunking configuration, the retrieval-policy fingerprint, the model and revision that produced the vectors, the dense backend, and the file map. Two generations are interchangeable only when their manifests agree, which is what makes reuse safe; a generation whose policy fingerprint does not match the current settings is reported as requiring a new ingestion.
+`manifest.json` decides what a generation is. It carries the schema version, the extraction policy, the chunking configuration, the retrieval-policy fingerprint, the model and revision that produced the vectors, the dense backend, and the file map. Two generations are interchangeable only when their manifests agree, which makes reuse safe; a generation whose policy fingerprint does not match the current settings is reported as requiring a new ingestion.
 
-`indexes/` names vary by backend and the manifest records which one a generation uses. Never assume a fixed directory name.
+`indexes/` names vary by backend; the manifest records which one a generation uses. Never assume a fixed directory name.
 
 ### The artifact lookup
 
 `artifact-lookup.sqlite3` holds only identifiers, ordinals, content hashes, byte offsets into the canonical JSONL files, and one integer retrieval verdict per chunk. It never stores passage text, and it may be rebuilt from the canonical files when it is missing.
 
-The stored verdict is a bitmask over properties of the chunk alone — corrupt text, extraction artifact — and it must mirror the query-time check exactly. See `AGENTS.md` for the rules that govern it.
+The stored verdict is a bitmask over properties of the chunk alone — corrupt text, extraction artifact — and it must mirror the query-time check exactly. `AGENTS.md` has the rules that govern it.
 
 ## Generations
 
@@ -154,7 +154,7 @@ How a hand edit behaves:
 - An entry of `{}` clears every reviewed field for that source; so does deleting the whole entry.
 - `research-rag metadata` and the workspace dialog rewrite only the named source's entry, so every other hand edit in the file survives.
 
-Mistakes fail loudly rather than doing nothing quietly:
+Mistakes fail loudly:
 
 - an unknown field name is rejected with `Unsupported metadata fields: …`;
 - a wrong type, such as `"year": "2003"`, is rejected with that field's rule;
@@ -223,7 +223,7 @@ research-rag \
 
 ## Outside the project
 
-One account's project register lives beside its settings, at `~/.config/research-ultra-rag-mcp/projects.json`: one entry per project holding its `project_id`, `project_name`, `project_root`, and `registered_at`. It is deliberately outside the project directory, because a register that travelled inside a project could not list the projects that had none. It holds no corpus, no index, no review, and no derived state, so a project that is deleted costs only its name in that file, and a register that is deleted costs only the names, which `research-rag init` restores. Deleting the file is always safe; a damaged one is reported rather than guessed at, and an entry that is not a pointer is skipped so one unreadable project cannot hide the rest.
+One account's project register lives beside its settings, at `~/.config/research-ultra-rag-mcp/projects.json`: one entry per project holding its `project_id`, `project_name`, `project_root`, and `registered_at`. It is deliberately outside the project directory, because a register that travelled inside a project could not list the projects that had none. It holds no corpus, no index, no review, and no derived state, so a deleted project costs only its name in that file, and a deleted register costs only the names, which `research-rag init` restores. Deleting the file is always safe; a damaged one is reported rather than guessed at, and an entry that is not a pointer is skipped so one unreadable project cannot hide the rest.
 
 ## Versioned state
 

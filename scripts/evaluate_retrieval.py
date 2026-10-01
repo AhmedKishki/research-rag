@@ -1,35 +1,22 @@
 """Measure retrieval quality against a judged query set.
 
-This is the harness behind the numbers in ``MEASUREMENTS.md``. It answers the
-question the rest of the repository could not: is retrieval here *good*, and
-which mode is best for which kind of question?
+Harness behind the numbers in ``MEASUREMENTS.md``. It runs a judged query set
+(``evaluation/ai-and-fetishism-queries.json`` by default) through the service
+method behind the public ``search`` tool and reports success@k, MRR, nDCG@10,
+document success, and the mean number of distinct sources a result spans. Every
+mode passes ``rerank`` explicitly, so no number depends on the tool default; the
+``hybrid+rerank`` row is what a default search now does.
 
-It runs a judged query set (``evaluation/ai-and-fetishism-queries.json`` by
-default) through the **public** MCP ``search`` tool of a real project, for
-BM25, dense, hybrid, and reranked hybrid, and reports success@k, MRR, nDCG@10,
-document-level success, and the mean number of distinct sources a result spans.
-Retrieval goes exclusively through the public tool
-surface, so gates, disclosures, and ranking are whatever an agent would see.
-Every mode passes ``rerank`` explicitly, so these numbers do not depend on the
-tool default; the ``hybrid+rerank`` row is what a default search now does.
-
-Judgments are known-item: each query is judged relevant to exactly one chunk,
-identified by a verbatim snippet so the target can be re-resolved after
-re-ingestion. That measures findability of a designated passage, not
-exhaustive recall. It also reads the generation's canonical ``chunks.jsonl``
-**read-only** to resolve snippets; it never writes inside the project and never
-mutates the knowledge base.
-
-Measure one project:
+Judgments are known-item: one relevant chunk per query, named by a verbatim
+snippet so the target re-resolves after re-ingestion. That measures the
+findability of a designated passage, not exhaustive recall. ``chunks.jsonl`` is
+read read-only; nothing inside the project is written.
 
     uv run python scripts/evaluate_retrieval.py --project /mnt/data/my-project
 
-Validate the judged set without searching:
-
-    uv run python scripts/evaluate_retrieval.py --project /mnt/data/my-project --validate-only
-
-The first search of a run pays a cold index load, so the harness performs one
-throwaway warm-up search and reports its cost separately.
+Add --validate-only to check the judged set without searching. A throwaway
+warm-up search runs first, because the first search pays a cold index load; its
+cost is reported separately.
 """
 
 from __future__ import annotations
@@ -61,10 +48,9 @@ from research_rag.ultrarag import (
 )
 
 DEFAULT_JUDGMENTS = Path("evaluation/ai-and-fetishism-queries.json")
-# The reranked mode is measured once per selected reranker, because the model is
-# an engine setting: a second model is a second row over the same queries rather
-# than a second mode. The default model keeps the plain ``hybrid+rerank`` label
-# that the published numbers already use.
+# The reranked mode is one row per selected reranker: the model is an engine
+# setting, so a second model is a second row over the same queries, not a second
+# mode. The default model keeps the plain ``hybrid+rerank`` label.
 RERANK_MODE = "hybrid+rerank"
 MODES = ("bm25", "dense", "hybrid", RERANK_MODE)
 QUERY_CLASSES = ("quote", "paraphrase", "entity")
@@ -150,7 +136,7 @@ STOPWORDS = frozenset(
 
 
 class EvaluationError(RuntimeError):
-    """Raised when the judged set or the project cannot be evaluated safely."""
+    """Raised when the judged set or the project cannot be evaluated."""
 
 
 def normalize(value: str) -> str:
@@ -160,8 +146,6 @@ def normalize(value: str) -> str:
 
 
 def content_tokens(value: str) -> set[str]:
-    """Return the query-relevant vocabulary of a string."""
-
     return {
         token
         for token in TOKEN_PATTERN.findall(value.casefold())
@@ -179,7 +163,7 @@ def lexical_overlap(query: str, text: str) -> float:
 
 
 def reciprocal_rank(ranked: list[str], relevant: set[str]) -> float:
-    """Reciprocal rank of the first relevant item, or 0 when none is ranked."""
+    """First relevant item's reciprocal rank, 0 when none is ranked."""
 
     for rank, item in enumerate(ranked, 1):
         if item in relevant:
@@ -242,10 +226,8 @@ def load_generation(
 ) -> tuple[list[dict[str, Any]], dict[str, dict[str, Any]]]:
     """Read a generation's canonical chunks and its manifest document records.
 
-    The manifest is authoritative for where a document came from: chunk records
-    carry ``document_id`` and ``source_id`` but no path, so a judged target is
-    resolved through the manifest rather than through a path copied into each
-    chunk.
+    Chunk records carry ``document_id`` and ``source_id`` but no path, so the
+    manifest is the only place a target's path resolves.
     """
 
     manifest_path = generation_root / "manifest.json"
@@ -292,18 +274,16 @@ def resolve_targets(
     *,
     skip: frozenset[str] = frozenset(),
 ) -> dict[str, dict[str, Any]]:
-    """Resolve every judged target to one chunk of the measured generation.
+    """Resolve every judged target to exactly one chunk of the measured generation.
 
-    A target names a source path and a verbatim snippet of the passage, so it
-    survives re-ingestion and chunk-ID changes. The path is matched against the
-    manifest's documents, which also keeps the judgment working when the source
-    was renamed between generations. Ambiguity is an error rather than a guess:
-    a snippet matching two chunks would make the judgment meaningless.
+    A target names a source path and a verbatim snippet, so it survives
+    re-ingestion, chunk-ID changes, and a rename. Ambiguity is an error: a snippet
+    matching two chunks would make the judgment meaningless.
 
-    A target named in ``skip`` is deliberately left unresolved. A judged source
-    the corpus no longer holds — one the reviewer excluded, say — is a benchmark
-    decision rather than a measurement, so it is named on the command line and
-    in the report instead of silently relaxing resolution for every target.
+    A target in ``skip`` stays unresolved on purpose. A judged source the corpus
+    no longer holds is a benchmark decision, not a measurement, so it is named on
+    the command line and in the report rather than relaxing resolution for all
+    targets.
     """
 
     by_document: dict[str, list[dict[str, Any]]] = {}
@@ -424,8 +404,6 @@ def _percent(value: float) -> str:
 
 
 def print_summary(section: str, summary: dict[str, Any]) -> None:
-    """Print one aligned table per report section."""
-
     print()
     print(f"== {section} ==")
     width = max(15, *(len(mode) for mode in summary)) if summary else 15
@@ -561,8 +539,6 @@ def _selection(value: str, allowed: tuple[str, ...], label: str) -> list[str]:
 
 
 def _mode_settings(mode: str) -> dict[str, Any]:
-    """Return the engine settings that name one measured mode."""
-
     if mode == RERANK_MODE:
         return {"retrieval_method": "hybrid", "rerank": True}
     return {"retrieval_method": mode, "rerank": False}
@@ -572,8 +548,6 @@ def _mode_variants(
     modes: list[str],
     reranker_models: list[str],
 ) -> list[tuple[str, dict[str, Any]]]:
-    """Return every mode to measure as a labeled run plus its engine settings."""
-
     variants: list[tuple[str, dict[str, Any]]] = []
     for mode in modes:
         if mode != RERANK_MODE:
@@ -664,8 +638,6 @@ async def _run_one(
 
 
 async def evaluate(args: argparse.Namespace) -> dict[str, Any]:
-    """Run the judged set through the public tool surface and report quality."""
-
     project = args.project.expanduser().resolve()
     judgments_path = args.judgments.expanduser().resolve()
     if not project.is_dir():
@@ -717,9 +689,9 @@ async def evaluate(args: argparse.Namespace) -> dict[str, Any]:
         runtime_root=args.runtime_root,
         embedding_threads=args.embedding_threads,
     )
-    # Which reranker each row measures. Without the flag the run measures what
-    # this server would serve; with it, exactly the models named on the command
-    # line, each over the same queries under the same conditions.
+    # Without --reranker-model a run measures what this server would serve; with
+    # it, exactly the models named, each over the same queries under the same
+    # conditions.
     reranker_models = (
         _selection(
             ",".join(args.reranker_model),
@@ -758,9 +730,9 @@ async def evaluate(args: argparse.Namespace) -> dict[str, Any]:
             "top_k": args.top_k,
             "deep_top_k": args.deep_top_k,
             "include_staleness": False,
-            # The penalty is applied at query time over candidates the
-            # generation already ranked, so the generation's recorded policy
-            # cannot carry it and a report that measures it must name it here.
+            # Applied at query time over already-ranked candidates, so the
+            # generation's recorded policy cannot carry it and a report that
+            # measures it must name it here.
             "selection_policy": {
                 "method": "greedy_source_diversity",
                 "source_diversity_penalty": config.settings.source_diversity_penalty,

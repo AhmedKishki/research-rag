@@ -1,14 +1,10 @@
 """The agent surface: seven operations and one resource over one project.
 
-This module is the whole of what an agent sees. It builds a `FastMCP` instance
-whose tools and resources call the app's one `ResearchService`, and it owns the
-lean/full answer projection, because that projection exists for this reader and
-for no other: an agent's answer is 10.8 kB lean against 19.8 kB full on the
-reference corpus, and the workspace and the command line both want the full one.
-
-The app process owns the service, the gateway, and the port, and mounts this on
-one loopback port beside the browser workspace. Nothing here starts a process,
-resolves a project, or parses a command line.
+Its tools and resources reach the app's one `ResearchService` through a lean/full
+projection built for this reader and no other: an agent's answer is 10.8 kB lean
+against 19.8 kB full on the reference corpus, and the workspace and the command
+line both want the full one. Nothing here starts a process, resolves a project,
+or parses a command line.
 """
 
 from __future__ import annotations
@@ -233,10 +229,9 @@ def create_mcp(
 ) -> FastMCP[Any]:
     """Build the agent surface over the app's one service.
 
-    `connect` returns the running app's service, opening the gateway on the
-    first call, so a client that only lists tools never starts a process. A
-    client waits for the handshake before it will call anything, so the
-    handshake must not depend on work no tool has asked for.
+    `connect` opens the gateway on the first call, so a client that only lists
+    tools never starts a process. A client waits for the handshake before it calls
+    anything, so the handshake must not depend on unasked-for work.
     """
 
     app = FastMCP(
@@ -253,9 +248,8 @@ def create_mcp(
     ) -> T:
         """Run one service operation, connecting the gateway if it is not up yet.
 
-        Connection failures are translated like any other workflow failure, so a
-        gateway that cannot start is reported by the tool the user called rather
-        than by a server that never answered its handshake.
+        Connection failures become workflow failures, so a gateway that cannot
+        start is reported by the tool the user called.
         """
 
         async def run() -> T:
@@ -264,8 +258,6 @@ def create_mcp(
         return await _tool_call(run)
 
     def _present(operation: str, payload: dict[str, Any]) -> dict[str, Any]:
-        """Return a tool answer in this surface's configured detail mode."""
-
         from ..support import ResearchError
 
         try:
@@ -280,9 +272,8 @@ def create_mcp(
     async def _status_payload() -> dict[str, Any]:
         """Return the `status` answer, plus the app's own state.
 
-        The workspace and the attached clients are the app's state rather than
-        the project's, and a client that is about to start a browser needs to
-        know whether there is one to open.
+        The workspace and the attached clients are the app's state, not the
+        project's, and a client about to open a browser needs to know that.
         """
 
         payload = _present(
@@ -302,27 +293,25 @@ def create_mcp(
         """Report whether this project can be searched, and what must happen first.
 
         Call this first, and before telling the user their corpus is up to date.
-        `ready` says a generation exists and `stale` says its sources still match
-        the directory, so `ready: false` or `stale: true` means the corpus is not
-        what the user has. `requires` names the calls that close the gap:
-        `ingest` rebuilds the generation, `restart_app` restarts this process so
-        it runs the installed code. It is absent when nothing is required.
+        `ready: false` or `stale: true` means the corpus is not what the user has.
+        `requires` names the calls that close the gap: `ingest` rebuilds the
+        generation, `restart_app` restarts this process so it runs the installed
+        code. It is absent when nothing is required.
 
         `blocked_by` and `degraded` name what stands between this project and a
         search that answers, each with the reason and the command that fixes it.
-        They are absent when there is nothing to act on. A tool error that names a
-        gateway log holds the same information: read the log before retrying.
-        `ui_url` is where the browser workspace for this project is served, and
-        `mcp_clients` counts the agents attached to this app.
+        A tool error naming a gateway log holds the same information: read the log
+        before retrying. `ui_url` is where this project's browser workspace is
+        served. `mcp_clients` counts the agents attached to this app.
         """
+
         return await _status_payload()
 
     @app.resource(
         "research://status",
         name="current generation status",
         description=(
-            "Readiness, freshness, and the selected generation for this project: "
-            "the same answer the status tool gives."
+            "Readiness, freshness, and the selected generation for this project."
         ),
         mime_type="application/json",
     )
@@ -345,11 +334,10 @@ def create_mcp(
         Writes persistent state and may download a model, so get the user's
         agreement first. A long build answers status=in_progress: call it again
         until it returns ready or unchanged, then report what changed. One call
-        covers at most `ingestion.work_budget_seconds` of work, so a build larger
-        than that budget needs repeated identical calls; a client that stops
-        repeating them cannot finish it, and the project's own config is where the
-        budget is raised. A rejected call means another process holds the project
-        and its message names that build; progress that goes backwards is reported
+        covers at most `ingestion.work_budget_seconds` of work, so a larger build
+        needs repeated identical calls, and the project's own config is where the
+        budget is raised. A rejected call means another process holds the project,
+        and its message names that build. Progress that goes backwards is reported
         as `superseded_build`, because a changed corpus cannot resume the old one.
         """
 
@@ -384,10 +372,9 @@ def create_mcp(
 
         Each passage gives its source filename, its authors, its position, and
         cleaned text. Quote only from the original at that locator. Ask for more
-        passages before concluding that the corpus has nothing: the reranker
-        reorders about twice as many candidates as top_k, so a low top_k hides
-        candidates from it, and a question asked in different words is a
-        different search rather than a narrower one.
+        passages before concluding the corpus has nothing: the reranker reorders
+        about twice as many candidates as top_k, so a low top_k hides candidates
+        from it. A question asked in other words is a different search.
         """
 
         return _present(
@@ -432,10 +419,9 @@ def create_mcp(
         says whether a search can reach the source: a source that is only on disk
         or only reviewed needs `ingest` first.
 
-        It is a lookup and not a listing: ask about a name rather than for the
-        corpus. A source whose file is gone or whose metadata was reviewed is
-        still answerable, and a match count above the returned rows means `limit`
-        hid some.
+        It is a lookup, not a listing: ask about a name rather than for the corpus.
+        A source whose file is gone or whose metadata was reviewed is still
+        answerable. A match count above the returned rows means `limit` hid some.
         """
 
         return _present(
@@ -461,6 +447,7 @@ def create_mcp(
         Use it to read around a hit. The text is still cleaned for retrieval, so
         quote from the original at the passage's locator.
         """
+
         return _present(
             "get_passage",
             await _service_call(lambda instance: instance.get_passage(chunk_id)),
@@ -482,8 +469,8 @@ def create_mcp(
         """Exclude a source from retrieval, or restore one, without touching the file.
 
         Act only after the agent or user has reviewed the source, and give an
-        exclusion its reason. The decision binds the current retrieval at once
-        and the next ingestion; re-ingest to drop an excluded source physically.
+        exclusion its reason. The decision binds current retrieval at once and the
+        next ingestion. Re-ingest to drop an excluded source physically.
         """
 
         return _present(
@@ -513,11 +500,10 @@ def create_mcp(
 
         Fields: title, authors, year, doi, language, categories, keywords, and
         project. `language` takes ISO 639 codes, one per language the source is
-        written in, and a code BM25 has no stopword list for is accepted because
-        the metadata describes the source rather than the index. An empty review
-        clears the entry so automatic metadata applies again. The review is
-        authoritative at read time, so it binds current retrieval without
-        re-ingesting, and the same JSON file may be edited by hand.
+        written in, and a code BM25 has no stopword list for is accepted. An empty
+        review clears the entry, so automatic metadata applies again. The review
+        is authoritative at read time, so it binds retrieval without re-ingesting.
+        The same JSON file may be edited by hand.
         """
 
         return _present(

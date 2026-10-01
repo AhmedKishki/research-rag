@@ -69,12 +69,11 @@ def _no_collapsed_repetitions_in_the_suite(
 ) -> None:
     """Declare that this suite's embedder cannot tell a repeat from a theme.
 
-    Every build and every search here runs on a hand-written embedder, and that
-    embedder cannot tell a passage repeated from two passages about one subject:
-    a test corpus of two related sentences is a corpus the cosine would collapse
-    to one. A number no cosine can reach says exactly that — nothing is close
-    enough — and the tests about the rule pass their own threshold, which is a
-    stronger statement than this one.
+    Every build and search here runs on a hand-written embedder that cannot tell
+    a repeated passage from two passages about one subject: a corpus of two
+    related sentences is one a cosine would collapse. A number no cosine can
+    reach says nothing is close enough, and the tests about the rule pass their
+    own threshold, which is the stronger statement.
     """
 
     monkeypatch.setenv("RESEARCH_ULTRARAG_RETRIEVAL_DUPLICATE_COSINE", "2.0")

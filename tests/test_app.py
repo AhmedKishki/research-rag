@@ -247,8 +247,8 @@ async def test_the_agent_surface_declares_the_schema_an_agent_reads(
     """The names are pinned elsewhere; this pins what an agent is actually told.
 
     A tool that keeps its name while losing a parameter is invisible to a name
-    check and fatal to a client, and a tool that stops saying it is destructive
-    turns a call an agent must confirm into one it may fire without asking.
+    check and fatal to a client. A tool that stops saying it is destructive turns
+    a call an agent must confirm into one it may fire without asking.
     """
 
     config = resolve_config(project, vanilla_executable=sys.executable)
@@ -297,8 +297,8 @@ async def test_the_control_api_moves_a_generation_the_way_the_service_does(
     """The control API is a request path, not a second writer.
 
     The confirmation crosses the wire because the command line already had to
-    repeat the id; a control surface that dropped the repeat would be a surface
-    that deletes a generation a person did not choose.
+    repeat the id; a control surface that dropped the repeat would delete a
+    generation a person did not choose.
     """
 
     config = resolve_config(project, vanilla_executable=sys.executable)

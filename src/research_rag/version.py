@@ -58,8 +58,9 @@ def checkout_revision() -> str | None:
     A version number cannot tell two checkouts apart: two copies of the same
     version may sit 63 commits apart, and only the commit identifies which one is
     answering.
+
     The installed distribution's ``direct_url.json`` records the commit when it
-    was installed from a checkout, which is the only case worth reporting.
+    was installed from a checkout, the only case worth reporting.
     """
 
     try:
@@ -81,8 +82,8 @@ def working_tree_revision() -> str | None:
     """Return the commit checked out beside this process, or None.
 
     The loaded package is one directory and the checkout is another, and the
-    difference between them is exactly the fault this reports: a server
-    answering from a copy of the code that is no longer the one on disk.
+    difference between them is the fault this reports: a server answering from a
+    copy of the code that is no longer the one on disk.
     """
 
     package_root = Path(__file__).resolve().parents[2]

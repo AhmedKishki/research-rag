@@ -1,25 +1,19 @@
 """Measure the per-unit write pattern on a real project build.
 
-This is the harness behind the numbers in ``MEASUREMENTS.md``. It builds the same
-corpus twice on the device you point ``--root`` at, using the real vanilla
-gateway, real tokenizer chunking, and real embeddings, and changes nothing but
-the write pattern:
+Harness behind the numbers in ``MEASUREMENTS.md``. One corpus is built twice on
+the device ``--root`` names, through the real gateway, tokenizer chunking, and
+embeddings, changing nothing but the write pattern:
 
-* ``paired`` formats every atomic write durably, one directory fsync per file,
-  and makes the handoff file durable too.
-* ``grouped`` is what the server does: a unit's artifacts defer their directory
-  fsync and the group is committed once, before the checkpoint that claims the
-  unit is complete.
+* ``paired`` (before) fsyncs every atomic write's directory and the handoff file.
+* ``grouped`` (after) is the server: a unit's artifacts defer that fsync, and the
+  group commits once, before the checkpoint claiming the unit complete.
 
-The second run of any pair benefits from a warm page cache, so the default
-``--order both`` runs both orders and prints both tables. Read the difference,
-not the absolute numbers.
-
-Point ``--root`` at the device under test:
+A pair's second run reads a warm page cache, so the default ``--order both``
+prints both orders. Read the difference, not the absolute numbers.
 
     uv run python scripts/benchmark_write_pattern.py --root /mnt/data/rr-write-bench
 
-The first run downloads the pinned models if they are not cached yet.
+The first run downloads the models.
 """
 
 from __future__ import annotations
@@ -76,12 +70,9 @@ def write_pdf(path: Path, pages: list[str], *, title: str) -> None:
 
 
 def build_corpus(project: Path, *, sources: int, pages: int) -> None:
-    """Write a corpus whose page lengths vary, the way real chunks do.
-
-    Uniform short pages hide the embedding padding cost and make I/O the only
-    measured effect, so each page repeats its sentence a different number of
-    times. Page 0 is the shortest and the last page of each source is the
-    longest, which is also the shape that punishes large inference batches.
+    """Write a corpus whose page lengths vary: uniform short pages hide the
+    embedding padding cost, and pages that grow within a source punish large
+    inference batches.
     """
     root = project / "sources"
     root.mkdir(parents=True, exist_ok=True)
@@ -103,7 +94,7 @@ def build_corpus(project: Path, *, sources: int, pages: int) -> None:
 
 
 class durable_writes:
-    """Restore the pre-Step-2a write pattern for the duration of a run."""
+    """Force the per-file durable write pattern for a run's duration."""
 
     def __enter__(self) -> None:
         names = (
@@ -137,9 +128,9 @@ class durable_writes:
 class chunk_batch:
     """Force a chunker batch size for the duration of a run.
 
-    The value is a setting, so this sets the environment variable the settings
-    layer reads rather than patching a module constant: a run that resolves its
-    configuration inside this context sees the forced value.
+    The size is a setting, so the environment variable the settings layer reads
+    is what gets set, and a run resolving its configuration inside this context
+    sees it.
     """
 
     VARIABLE = "RESEARCH_ULTRARAG_CHUNKING_BATCH_UNITS"
@@ -159,7 +150,7 @@ class chunk_batch:
 
 
 class embedding_batch:
-    """Force the ONNX inference batch size for the duration of a run."""
+    """Force the ONNX inference batch size for a run's duration."""
 
     VARIABLE = "RESEARCH_ULTRARAG_EMBEDDING_INFERENCE_BATCH_SIZE"
 
@@ -183,7 +174,7 @@ def patch_for(variant: str, side: str) -> AbstractContextManager[None]:
     if variant == "chunk-batch":
         return chunk_batch(1 if side == "before" else 16)
     if variant == "embedding-batch":
-        # 64 was the previous constant; 1 is what the current code uses.
+        # 1 is current because FastEmbed pads a batch to its longest sequence.
         return embedding_batch(64 if side == "before" else 1)
     raise SystemExit(f"unsupported variant: {variant}")
 

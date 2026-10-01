@@ -1,4 +1,4 @@
-# Default settings for research-rag.
+# Defaults for research-rag.
 #
 # This file ships inside the package and holds every tunable this app reads.
 # A layer above it names only what it changes; layers win per key, lowest first:
@@ -9,28 +9,28 @@
 #              <  RESEARCH_ULTRARAG_* environment variables
 #              <  --set key=value
 #
-# `research-rag config` prints the merged result and names the
-# layer that supplied each value. A key that is not declared here is refused in
-# every layer, so a typo is an error rather than a silent default.
+# `research-rag config` prints the merged result and the layer that supplied
+# each value. A key not declared here is refused in every layer, so a typo is an
+# error rather than a silent default.
 #
 # A setting whose class is `identity` decides what a generation contains: its
 # value is recorded in the generation (the retrieval-policy fingerprint for
 # ranking, the chunk settings for chunking), and changing it means the next
 # ingestion builds a new generation instead of mixing two. `AGENTS.md` records
-# the constants that deliberately stay in code: schema and policy versions, and
-# the names and paths that make up the project boundary.
+# the constants that stay in code: schema and policy versions, and the names and
+# paths that make up the project boundary.
 
 [language]
 # The languages the corpus is written in, as ISO 639-1 codes (en, de, fr, ...):
-# one code, or several separated by commas for a corpus in more than one
-# language, most-used-first. Every language named decides whether the embedding
-# model below covers the text, and a mismatch is reported by `status` instead of
-# being silently embedded. Only a language BM25 can tokenize is accepted, because
+# one code, or several separated by commas for a mixed-language corpus,
+# most-used-first. Every language named decides whether the embedding
+# model below covers the text, and a mismatch is reported by `status` rather than
+# silently embedded. Only a language BM25 can tokenize is accepted, because
 # the stopword list comes from it. (identity: part of the ranking policy.)
 corpus = "en"
 # Which language's stopword list BM25 filters with. Empty means the first
-# language named above, because BM25 takes a single list and a corpus in several
-# languages has to point it at one of them; set it to choose another.
+# language named above: BM25 takes a single list, and a corpus in several
+# languages has to point it at one of them. Set it to choose another.
 # (identity: part of the ranking policy.)
 bm25_stopwords = ""
 
@@ -40,7 +40,7 @@ offline = false
 # debug, info, warn, or error.
 log_level = "warn"
 # Detail of the answers an agent's tool calls receive: 'lean' is what an agent
-# acts on, 'full' is the complete payload. The workspace and the command line
+# acts on, 'full' is the complete payload. The workspace and command line
 # always print the complete one.
 tool_detail = "lean"
 # ONNX Runtime threads for the embedding model; 0 leaves the choice to the runtime.
@@ -48,14 +48,14 @@ embedding_threads = 0
 # CPU niceness for this process and its children. 0 leaves priority unchanged;
 # 10 or higher keeps a desktop responsive while a build saturates every core.
 nice = 0
-# Shared FastEmbed model cache; empty means this user's per-user cache.
+# Shared FastEmbed model cache; empty means this user's cache.
 model_cache_root = ""
 
 [retrieval]
 # How alike two passages may be before one search answer shows only the
 # better-ranked of them. Two sources can hold the same text — an essay on its own
 # and the same essay inside a book — and a search that answers the same question
-# twice with two copies of one passage is not an answer. The words are compared
+# twice with two copies of one passage is not an answer. Words are compared
 # first and cost nothing; this number decides the part cosine decides, and a
 # number no cosine can reach decides that nothing is close enough rather than
 # turning the check off. (runtime)
@@ -96,8 +96,8 @@ maximum_withheld_examples = 5
 # already selected from the same source. The charge is taken once per repeat at
 # the final top_k pick, over candidates fusion and reranking already ranked, so
 # it can reorder a result but never add or drop a candidate: 0 keeps the ranked
-# order exactly, and 1 takes every other source before it repeats one. A BM25 or
-# dense ranking without reranking carries no score to charge a repeat against,
+# order exactly, and 1 takes every other source before it repeats one. Without
+# reranking a BM25 or dense ranking carries no score to charge a repeat against,
 # so it keeps its own order too. On the reference corpus 0.15, 0.25, and 0.4
 # score identically on success, MRR, nDCG, and document success, each costing one
 # query's target a slide from rank 4 to 5, and differ only in spread: mean
@@ -123,7 +123,7 @@ dense_relative_similarity_margin = 0.10
 # searches returned were. The reference project sets 12 and no judged target is
 # under 30 words, so the value costs that measured set nothing; 20 also removes
 # 12-to-19-word captions and copyright lines. Off by default, because a corpus
-# of deliberately short passages is a legitimate corpus and this drops them.
+# of deliberately short passages is legitimate and this drops them.
 # (runtime)
 minimum_passage_words = 0
 # The same floor in the unit a chunk is built in: a fraction of the generation's
@@ -132,8 +132,8 @@ minimum_passage_words = 0
 # fragment. A tenth of the packaged 384 tokens is 38, and on the reference corpus
 # that drops 23.6% of the chunks while removing 1.9% of its text; every judged
 # target there is above 168 tokens, so the rule costs the measured set nothing.
-# It is a corpus judgement rather than an improvement, which is why the packaged
-# value is off. (runtime)
+# It is a corpus judgement rather than an improvement, so the packaged value is
+# off. (runtime)
 minimum_passage_token_fraction = 0.0
 
 [chunking]
@@ -155,7 +155,7 @@ batch_units = 16
 # Soft time budget for one ingest call; exhausting it returns a checkpointed
 # in_progress result rather than losing work. A build larger than one budget needs
 # one call per slice, so a client that stops repeating identical calls needs this
-# set below its own request timeout, high enough that one call carries the build.
+# below its own request timeout, high enough that one call carries the build.
 work_budget_seconds = 1800
 # Chunks embedded per gateway call, and PDF pages extracted per call. Throughput only.
 embedding_batch_size = 64

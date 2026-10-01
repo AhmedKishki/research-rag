@@ -1305,8 +1305,8 @@ def test_a_page_before_the_label_tree_still_gets_a_usable_locator(
 
     PyMuPDF's label lookup filters the document's label tree and indexes the
     result, so a document whose labels begin on page 2 makes its own call raise
-    on page 1. The locator falls back to the physical page, because a locator
-    has to resolve to something.
+    on page 1. The locator falls back to the physical page: a locator has to
+    resolve to something.
     """
 
     path = tmp_path / "labels-start-at-page-two.pdf"

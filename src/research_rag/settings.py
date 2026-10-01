@@ -1,29 +1,16 @@
 """Every tunable this server reads, as one registry over a shared layer stack.
 
-No tunable is hard-coded here. `default.toml`, which ships inside this package,
-holds the values the server uses when nobody says otherwise, and every layer
-above it names only what it changes. Later layers win **per key**:
+`default.toml` in this package holds the defaults; each layer above names only what
+it changes, and later layers win **per key**:
 
     default.toml  <  user config  <  project config  <  environment  <  command line
 
-The stack itself, the registry's `Setting` type, the coercion every layer shares,
-the provenance, and the three path helpers live in the separately versioned
-`config-ultra-rag-mcp` library, pinned by commit. What is left here is this
-server's own vocabulary: the keys, their types and bounds, the packaged default,
-and the effective settings the code reads.
+The layer machinery lives in the pinned `config-ultra-rag-mcp` library.
 
-`SETTINGS` is the registry. Each entry declares the key, the type and bounds the
-value must satisfy, which layer class it belongs to, and the name it takes in
-the environment. Two rules follow from it:
-
-* a key that is not in the registry is an error, in every layer, so a typo is
-  refused instead of being ignored;
-* a setting whose class is ``identity`` changes what a generation *is*, so its
-  value enters the retrieval-policy fingerprint and changing it means the next
-  ingestion is a new generation rather than a silent mix of two.
-
-`AGENTS.md` records the constants that deliberately stay in code, because a
-generation's identity and the security boundary must not be configurable.
+A key absent from `SETTINGS` is an error in every layer. An ``identity`` setting
+changes what a generation *is*, so it enters the retrieval-policy fingerprint and
+changing it makes the next ingestion a new generation rather than a silent mix of
+two.
 """
 
 from __future__ import annotations
@@ -53,18 +40,16 @@ from .rerankers import RERANKER_MODELS
 
 Layer = Literal["identity", "engine", "runtime"]
 
-# The names this app resolves its own settings layers by, which the shared stack
-# takes as arguments. `PROJECT_CONFIG_RELATIVE` is name-free because it lives
-# inside the project; the two names that are not name-free are the MCP server's,
-# retained deliberately:
-#
-# `USER_CONFIG_DIRECTORY` is `research-ultra-rag-mcp` and
-# `SETTINGS_ENVIRONMENT_PREFIX` is `RESEARCH_ULTRARAG_`, so this app reads the
-# same `~/.config` directory and the same environment variables the MCP server
-# wrote. Renaming either splits one user's settings across two products: the
-# MCP server's file is silently ignored, and the environment a user exported for
-# the MCP server stops reaching this app. Revisit both only after that server
-# retires; `tests/test_data_roots.py` fails if either changes before then.
+# The names this app resolves its own settings layers by. `PROJECT_CONFIG_RELATIVE`
+# is name-free because it lives inside the project. The other two are the MCP
+# server's, retained deliberately: `USER_CONFIG_DIRECTORY` is
+# `research-ultra-rag-mcp` and `SETTINGS_ENVIRONMENT_PREFIX` is
+# `RESEARCH_ULTRARAG_`, so this app reads the same `~/.config` directory and the
+# same environment variables the MCP server wrote. Renaming either splits one
+# user's settings across two products: the MCP server's file is silently ignored,
+# and the environment a user exported for it stops reaching this app. Revisit both
+# only after that server retires; `tests/test_data_roots.py` fails if either
+# changes before then.
 USER_CONFIG_DIRECTORY = "research-ultra-rag-mcp"
 PROJECT_CONFIG_RELATIVE = Path(".research-rag") / "config.toml"
 SETTINGS_ENVIRONMENT_PREFIX = "RESEARCH_ULTRARAG_"
@@ -82,8 +67,8 @@ DEFAULT_LANGUAGE = "en"
 LANGUAGE_PATTERN = r"^[a-z]{2,3}$"
 # The longest one ingest call may be told to run. A caller driving a build in one
 # call sets the budget below its own client's request timeout; a caller that wraps
-# this server in another process has to allow longer than this, or the wrapper's
-# timeout fires first and the work continues unseen.
+# this server in another process has to allow longer, or the wrapper's timeout
+# fires first and the work continues unseen.
 MAXIMUM_WORK_BUDGET_SECONDS = 3600
 
 # bm25s ships a stopword list for exactly these languages and rejects every other
@@ -96,12 +81,11 @@ BM25_STOPWORD_LANGUAGES = frozenset(
 
 
 def bm25_stopwords(language: str) -> frozenset[str] | None:
-    """Return one language's BM25 stopword list, or None when there is none.
+    """One language's BM25 stopword list, or None when there is none.
 
-    The list is the one bm25s itself filters with, so a detector built on it
-    scores the same function words the lexical half will ignore. None means
-    bm25s is absent or does not know the language: a caller treats that as
-    "not detectable here", never as a wrong answer.
+    The list bm25s itself filters with, so a detector built on it scores the same
+    function words the lexical half ignores. None means bm25s is absent or unknown for
+    that language, never a wrong answer.
     """
 
     code = str(language).strip().casefold()
@@ -158,13 +142,11 @@ FALLBACK_GATE_STOPWORDS = frozenset(
 
 
 def _english_plus_stopwords() -> frozenset[str]:
-    """Return bm25s's fuller English list, or nothing when bm25s is absent.
+    """bm25s's fuller English list, or nothing when bm25s is absent.
 
-    bm25s filters with the shorter list when it is asked for ``en``, and that
-    list keeps question words and do-support forms. The lexical gate needs the
-    fuller list, because those words anchor no query.
+    bm25s filters with the shorter list for ``en``, which keeps question words and
+    do-support forms. The gate needs the fuller list: those anchor no query.
     """
-
     try:
         from bm25s.stopwords import STOPWORDS_EN_PLUS
     except ImportError:
@@ -173,12 +155,10 @@ def _english_plus_stopwords() -> frozenset[str]:
 
 
 def resolve_gate_stopwords(languages: Sequence[str]) -> frozenset[str]:
-    """Return the function words the lexical abstention gate ignores.
+    """The function words the lexical abstention gate ignores.
 
-    The gate stops at least what the index stops, so a query cannot be admitted
-    on a token BM25 never scored, and it stops what carries no topic. English
-    takes bm25s's fuller list, every other corpus language takes its own, and
-    the fallback words are always stopped.
+    At least what the index stops, so no query is admitted on a token BM25 never
+    scored. English takes bm25s's fuller list, every other language its own.
     """
 
     words: set[str] = set(FALLBACK_GATE_STOPWORDS)
@@ -193,11 +173,9 @@ def resolve_gate_stopwords(languages: Sequence[str]) -> frozenset[str]:
 def normalize_corpus_languages(value: Any) -> tuple[str, ...]:
     """Parse `language.corpus` into the languages a corpus is written in.
 
-    One code is the common case and stays exactly what it was, so a corpus in a
-    single language spells its setting the way it always did. Several codes
-    describe a corpus in more than one language. The order is kept as written
-    rather than sorted, because the value is part of the ranking policy and
-    `de,en` and `en,de` are the same corpus only if nothing reads the order.
+    Order is kept as written rather than sorted, because the value is part of the
+    ranking policy: `de,en` and `en,de` are the same corpus only if nothing reads the
+    order.
     """
 
     if isinstance(value, (list, tuple)):
@@ -228,13 +206,12 @@ def normalize_corpus_languages(value: Any) -> tuple[str, ...]:
 
 
 def _bm25_stopword_roundtrip_error(language: str) -> str | None:
-    """Return why a stopword list cannot survive bm25s's own save/load, if any.
+    """Why a stopword list cannot survive bm25s's own save/load, if any.
 
     bm25s 0.3.10 wrote its stopwords file with a non-JSON escape for non-ASCII
-    characters, so a German corpus failed in the BM25 index phase after
-    extraction and embedding had already finished. This check exercises the
-    *installed* bm25s's serializer, so it turns that failure into a settings-time
-    error and is self-healing once a fixed bm25s is pinned.
+    characters, so a German corpus failed in the BM25 index phase after extraction and
+    embedding had finished. Exercising the *installed* serializer makes that a
+    settings-time error, and stops mattering once bm25s is fixed.
     """
 
     try:
@@ -263,7 +240,7 @@ def _bm25_stopword_roundtrip_error(language: str) -> str | None:
 
 # The registry, in the order `--print-config` prints it. Every value in
 # `default.toml` is validated against this table, and a `--set` or environment
-# name that is not here is refused.
+# name absent here is refused.
 SETTINGS: tuple[Setting, ...] = (
     Setting(
         key="language.corpus",
@@ -272,10 +249,9 @@ SETTINGS: tuple[Setting, ...] = (
         layer="identity",
         doc=(
             "The languages the corpus is written in, as ISO 639-1 codes: one "
-            "code, or several separated by commas for a corpus in more than one "
-            "language. A language BM25 cannot tokenize is refused, because the "
-            "stopword list comes from it, and every language named has to be "
-            "covered by the embedding model."
+            "code, or several separated by commas. A language BM25 cannot "
+            "tokenize is refused, because the stopword list comes from it, and "
+            "every language named must be covered by the embedding model."
         ),
         env="RESEARCH_ULTRARAG_LANGUAGE_CORPUS",
     ),
@@ -286,8 +262,7 @@ SETTINGS: tuple[Setting, ...] = (
         layer="identity",
         doc=(
             "Which language's stopword list BM25 filters with. Empty means the "
-            "first language in language.corpus, because BM25 takes a single list "
-            "and a corpus in several languages has to point it at one of them."
+            "first language in language.corpus, because BM25 takes a single list."
         ),
         env="RESEARCH_ULTRARAG_LANGUAGE_BM25_STOPWORDS",
     ),
@@ -320,8 +295,8 @@ SETTINGS: tuple[Setting, ...] = (
         normalize_case=True,
         doc=(
             "Agent answer detail: 'lean' returns the fields an agent acts on, "
-            "'full' returns the complete payload for debugging retrieval or "
-            "ingestion. The workspace and the command line always use 'full'."
+            "'full' returns the complete payload. The workspace and the command "
+            "line always use 'full'."
         ),
         choices=TOOL_DETAIL_MODES,
         env="RESEARCH_ULTRARAG_TOOL_DETAIL",
@@ -346,8 +321,8 @@ SETTINGS: tuple[Setting, ...] = (
         layer="runtime",
         doc=(
             "CPU niceness for this process and every child it starts; 0 leaves "
-            "priority unchanged, and a higher value keeps the machine responsive "
-            "during a long build by yielding to whatever else is running."
+            "priority unchanged, and a higher value yields to whatever else is "
+            "running during a long build."
         ),
         minimum=0,
         maximum=19,
@@ -426,8 +401,8 @@ SETTINGS: tuple[Setting, ...] = (
         doc=(
             "Dense relevance gate: a candidate below this cosine similarity is "
             "withheld rather than ranked. Measured: a fused ranking is "
-            "insensitive to the values below this default and loses answers "
-            "above it, while a dense-only ranking wants a much lower value."
+            "insensitive below this default and loses answers above it, while a "
+            "dense-only ranking wants a much lower value."
         ),
         minimum=-1.0,
         maximum=1.0,
@@ -440,7 +415,7 @@ SETTINGS: tuple[Setting, ...] = (
         layer="identity",
         doc=(
             "Most candidates the cross-encoder reorders by score; the unranked "
-            "tail is appended after them so a reference group is still reachable."
+            "tail is appended after them, so a reference group is reachable."
         ),
         minimum=1,
         maximum=5000,
@@ -452,8 +427,8 @@ SETTINGS: tuple[Setting, ...] = (
         kind=int,
         layer="identity",
         doc=(
-            "Depth of the reranked window as a multiple of the requested top_k. "
-            "The window is max(top_k * this, rerank_window_floor), capped by "
+            "Depth of the reranked window as a multiple of the requested top_k: "
+            "max(top_k * this, rerank_window_floor), capped by "
             "rerank_max_candidates and the fused candidate count. Measured: 20 "
             "is the shallowest window that reaches the plateau, and each ten "
             "more candidates cost about 0.7 s per query."
@@ -525,15 +500,14 @@ SETTINGS: tuple[Setting, ...] = (
         layer="runtime",
         doc=(
             "How alike two passages may be before one search answer shows only "
-            "the better-ranked of them. Two sources can hold the same text — an "
-            "essay on its own and the same essay inside a book — and a search "
-            "that answered the same question twice with two copies of one "
-            "passage is not an answer. The words are compared first, which need "
-            "no vector and cost nothing, and this number decides the part cosine "
-            "decides: the statement that says the same thing in other words. A "
-            "number no cosine can reach decides that nothing is close enough "
-            "rather than turning the check off, because the words are compared "
-            "whatever it says."
+            "the better-ranked of them. Two sources can hold the same text, and a "
+            "search that answered the same question twice with two copies of one "
+            "passage is not an answer. The words are compared first, which needs "
+            "no vector; this number decides the part cosine decides, the "
+            "statement that says the same thing in other words. A number no "
+            "cosine can reach decides that nothing is close enough rather than "
+            "turning the check off, because the words are compared whatever it "
+            "says."
         ),
         minimum=-1.0,
         maximum=2.0,
@@ -547,12 +521,12 @@ SETTINGS: tuple[Setting, ...] = (
         doc=(
             "Share of a candidate's normalized relevance charged for each "
             "candidate already selected from the same source, so one prolific "
-            "source cannot fill the answer. Applied to the final top_k pick "
-            "over candidates that were already ranked: it reorders what the "
-            "fusion and the reranker returned, and can neither add nor remove "
-            "a candidate. Zero returns the ranked order unchanged, and so does "
-            "an unreranked BM25 or dense ranking, which has no score to charge "
-            "a repeat against."
+            "source cannot fill the answer. Applied to the final top_k pick over "
+            "candidates that were already ranked: it reorders what the fusion "
+            "and the reranker returned, and can neither add nor remove a "
+            "candidate. Zero returns the ranked order unchanged, and so does an "
+            "unreranked BM25 or dense ranking, which has no score to charge a "
+            "repeat against."
         ),
         minimum=0.0,
         maximum=1.0,
@@ -566,9 +540,9 @@ SETTINGS: tuple[Setting, ...] = (
         doc=(
             "How far below the query's own best dense similarity a candidate may "
             "score and still be admitted when it misses the cosine floor, so a "
-            "short or abstract query whose whole candidate list sits in a narrow "
-            "band is not left with a handful of passages. The rescue applies only "
-            "when at least one candidate cleared the floor, so a query the corpus "
+            "short or abstract query whose candidate list sits in a narrow band "
+            "is not left with a handful of passages. The rescue applies only when "
+            "at least one candidate cleared the floor, so a query the corpus "
             "cannot support still abstains. 0 applies the floor to every "
             "candidate. Runtime: it re-ranks a query and changes no artifact."
         ),
@@ -600,13 +574,12 @@ SETTINGS: tuple[Setting, ...] = (
         layer="runtime",
         doc=(
             "Smallest candidate a query may return, as a fraction of the "
-            "generation's recorded `chunking.size`. A chunk is built to hold "
-            "`chunking.size` tokens, so a candidate holding a small fraction of "
-            "that is a fragment — an index line, a heading, a caption — whatever "
-            "its word count happens to be. Counted in the tokens the generation "
-            "was chunked with, over the returned text, so a contextual header "
-            "cannot make a fragment look long. 0 admits every candidate. Runtime: "
-            "it filters a query and changes no artifact."
+            "generation's recorded `chunking.size`. A chunk holding a small "
+            "fraction of that is a fragment — an index line, a heading, a "
+            "caption — whatever its word count. Counted in the tokens the "
+            "generation was chunked with, over the returned text, so a "
+            "contextual header cannot make a fragment look long. 0 admits every "
+            "candidate. Runtime: it filters a query and changes no artifact."
         ),
         minimum=0.0,
         maximum=1.0,
@@ -643,8 +616,7 @@ SETTINGS: tuple[Setting, ...] = (
             "embedded from, never to the text a search returns, so returned "
             "text stays quote-clean. A re-ingest with it on recomputes every "
             "vector, because vector reuse is keyed on the passage. Measured "
-            "neutral on the reference corpus, so the default is off and a "
-            "project opts in."
+            "neutral on the reference corpus, so the default is off."
         ),
         env="RESEARCH_ULTRARAG_CHUNKING_HEADERS",
     ),
@@ -669,10 +641,10 @@ SETTINGS: tuple[Setting, ...] = (
         layer="runtime",
         doc=(
             "Soft time budget for one ingest call; exhausting it returns a "
-            "checkpointed in_progress result instead of losing work. A build larger "
-            "than one budget needs one call per slice, which an agent whose client "
-            "stops repeating identical calls cannot finish: set this below that "
-            "client's own request timeout so a single call can carry the build."
+            "checkpointed in_progress result instead of losing work. A build "
+            "larger than one budget needs one call per slice, which an agent "
+            "whose client stops repeating identical calls cannot finish: set "
+            "this below that client's own request timeout."
         ),
         minimum=10,
         maximum=MAXIMUM_WORK_BUDGET_SECONDS,
@@ -777,14 +749,11 @@ SETTINGS_SECTIONS = tuple(
 
 
 def sources_for(project_root: str | Path) -> SettingsSources:
-    """Return where this server's file layers live for one project.
+    """Where this server's file layers live for one project.
 
-    The three names are this server's own: the account directory that applies to
-    every project, the project file inside `.research-rag`, and the packaged
-    default that ships beside this module. The shared stack reads them and
-    nothing else.
+    The three names are this server's own: the account directory applying to every
+    project, the project file inside `.research-rag`, and the packaged default.
     """
-
     project = Path(project_root)
     return SettingsSources(
         default_file=default_config_path(__file__),
@@ -892,12 +861,10 @@ class EffectiveSettings:
         return settings
 
     # The embedding model carries facts that must not be configured twice: its
-    # vector dimension, its token limit, its revision, and the languages it covers.
+    # vector dimension, token limit, revision, and covered languages.
 
     @property
     def embedding_facts(self) -> EmbeddingModel:
-        """Return the pinned facts of the configured embedding model."""
-
         return resolve_embedding_model(self.embedding_model)
 
     @property
@@ -922,8 +889,8 @@ class EffectiveSettings:
     def bm25_stopwords_language(self) -> str:
         """The one language whose stopword list BM25 filters with.
 
-        BM25 takes a single list, so a corpus in several languages filters the
-        function words of the first language it names unless another is chosen.
+        A corpus in several languages filters the first language it names unless
+        another is chosen.
         """
 
         return self.bm25_stopwords or self.corpus_languages[0]
@@ -932,12 +899,10 @@ class EffectiveSettings:
     def gate_stopwords(self) -> frozenset[str]:
         """The function words the lexical abstention gate ignores.
 
-        Built from every corpus language plus the one BM25 filters with, so a
-        contentless query abstains in any language of the corpus. English uses
-        bm25s's fuller list because the index's own list keeps question words
-        and do-support forms, which anchor no query.
+        Every corpus language plus the one BM25 filters with, so a contentless query
+        abstains in any language of the corpus. English uses bm25s's fuller list; the
+        index's own keeps question words.
         """
-
         return resolve_gate_stopwords(
             (*self.corpus_languages, self.bm25_stopwords_language)
         )
@@ -975,7 +940,6 @@ class EffectiveSettings:
 
     def as_values(self) -> dict[str, Any]:
         """Return the effective values keyed by field, the shape the stack reads."""
-
         return {item.name: getattr(self, item.name) for item in fields(self)}
 
     def value(self, key: str) -> Any:

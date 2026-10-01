@@ -2172,9 +2172,9 @@ class IngestionWorkflow:
 
         A build always moves forward, so a reader who wants the previous
         generation has no way back to it. This is that way: it validates the
-        target's artifacts and both indexes exactly as an activation does, and
-        only then moves the pointer, so a rollback that lands on a damaged
-        generation fails instead of bricking every read surface.
+        target's artifacts and both indexes exactly as an activation does, then
+        moves the pointer, so a rollback that lands on a damaged generation
+        fails instead of bricking every read surface.
         """
 
         async with self._operation():
@@ -2313,7 +2313,7 @@ class IngestionWorkflow:
     ) -> dict[str, Any]:
         """Create or refresh the generation that search reads.
 
-        An omitted parameter comes from the merged settings, which is where the
+        An omitted parameter comes from the merged settings, where the
         chunking values live; a caller that passes one gets it checked here.
         """
 
@@ -2510,8 +2510,8 @@ class IngestionWorkflow:
                 raise
             if superseded_build is not None:
                 # Progress that goes backwards has to be explained: a caller looping
-                # on ingest otherwise reads a discarded build as its own mistake and
-                # retries the same call, which is what it will do again.
+                # on ingest otherwise reads a discarded build as its own mistake
+                # and retries the same call, which is what it will do again.
                 result["superseded_build"] = superseded_build
                 result["message"] = (
                     f"Build {superseded_build['build_id']} was discarded because the "

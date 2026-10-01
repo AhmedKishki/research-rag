@@ -435,10 +435,10 @@ def test_the_generated_launcher_starts_and_stops_the_real_workspace(
 ) -> None:
     """The generated script, run as written, must serve and stop this project.
 
-    Every other test in this file replaces the launcher's body with a stub, so
-    none of them can see that the command the script builds is one the installed
-    parser accepts. That gap is what let the options sit after the subcommand
-    through: the script ran, the port never opened, and every test passed.
+    Every other test here replaces the launcher's body with a stub, so none can
+    see that the command the script builds is one the installed parser accepts.
+    That gap let the options sit after the subcommand through: the script ran,
+    the port never opened, and every test passed.
     """
 
     config = resolve_config(project, vanilla_executable=sys.executable)

@@ -2,9 +2,9 @@
 
 The UI runs in this process and calls `ResearchService` directly. The MCP server
 this app was seeded from served the same interface by starting a private stdio
-copy of itself and forwarding each call across that boundary; the shared UI
+copy of itself and forwarding each call across that boundary. The shared UI
 already requested the complete payload, so nothing is lost by answering in
-process and one process, one lock, and one generation replace a process tree.
+process, and one process, one lock, and one generation replace a process tree.
 
 `ResearchUIAdapter.call` is the whole boundary. The shared UI sends its full
 optional argument set for every route, including fields a capability has turned
@@ -47,7 +47,7 @@ UI_NAME = "research-rag-ui"
 MAX_ERROR_LENGTH = 1200
 # The passed passages a browser request may ask for, and the neighbours it may
 # read around a hit. The bounds are the search workflow's own: a browser is not
-# a place where an unbounded budget belongs.
+# a place for an unbounded budget.
 MAXIMUM_TOP_K = 50
 MAXIMUM_CONTEXT_CHUNKS = 5
 
@@ -83,9 +83,9 @@ RESEARCH_UI_PROFILE = UIProfile(
         # off and the panel and its routes stay absent.
         clients=True,
         # A build leaves its predecessor on disk, so a reader in the workspace
-        # can see what those builds cost and reclaim one. The listing is free —
-        # it is already in the status payload — and the removal asks for the id
-        # twice, which the shared workspace insists on before it calls here.
+        # can see what those builds cost and reclaim one. The listing is free: it is
+        # already in the status payload. The removal asks for the id twice,
+        # which the shared workspace insists on before it calls here.
         generations=True,
     ),
 )
@@ -94,11 +94,10 @@ RESEARCH_UI_PROFILE = UIProfile(
 # its full optional set for every route, so an argument absent here is one this
 # app does not serve and must not forward.
 #
-# The six filter layers the service supports are all here. A layer the app
-# serves and the workspace drops is a filter a reader can type into the command
-# line and cannot type into the browser, which is the disagreement this file
-# exists to prevent, so the set is the service's own and the profile below
-# decides what the browser offers.
+# All six filter layers the service supports are here. A layer the app serves
+# and the workspace drops is a filter a reader can type into the command line
+# and not into the browser, the disagreement this file exists to prevent. The
+# set is the service's own; the profile below decides what the browser offers.
 _SEARCH_ARGUMENTS = frozenset(
     {
         "query",
@@ -151,9 +150,10 @@ class ResearchUIAdapter:
     """Answer the shared UI's workspace operations from one research service.
 
     The service is the app's, so the workspace, the agent, and the command line
-    are three readers of one state. The client methods are the same registry the
-    agent's `status` counts and the command line lists: a person in the browser
-    and a person in a terminal see the same agents and drop the same sessions.
+    are three readers of one state. The client methods read the same registry
+    the agent's `status` counts and the command line lists: a person in the
+    browser and a person in a terminal see the same agents and drop the same
+    sessions.
     """
 
     def __init__(
@@ -177,8 +177,8 @@ class ResearchUIAdapter:
         """The registry, or a refusal when this adapter was built without one.
 
         A test that serves the workspace over a stand-in service has no process
-        behind it, and a stand-in is not a server: naming that is better than
-        reporting an empty list that reads as "no agents are attached".
+        behind it, and a stand-in is not a server. Naming that beats reporting an
+        empty list that reads as "no agents are attached".
         """
 
         if self.clients is None:
@@ -311,9 +311,9 @@ class ResearchUIAdapter:
                     "A generation removal needs a generation_id string"
                 )
             # The confirmation is carried, not defaulted. The shared workspace
-            # already refuses a mismatch before it gets here; forwarding
-            # anything but the id the reader typed is how a browser would come
-            # to mean "yes" on a click.
+            # already refuses a mismatch before it gets here. Forwarding anything
+            # but the id the reader typed is how a browser would come to mean
+            # "yes" on a click.
             confirm = arguments.get("confirm")
             if not isinstance(confirm, str):
                 raise UIRequestError("A generation removal needs a confirm string")
@@ -364,13 +364,13 @@ def create_ui_app(
     The adapter is always handed the service rather than a factory, because the
     app process owns the gateway and there is exactly one of it: a factory here
     would open a second one for the workspace alone. The client registry is
-    passed in for the same reason, and is absent when the workspace is served
-    without a process behind it.
+    passed in for the same reason, and is absent when no process serves the
+    workspace.
     """
 
     # More than one project can be served at the same time, so each one names the
-    # project it serves instead of showing a generic label: a browser window
-    # must be able to say which knowledge base it belongs to.
+    # project it serves instead of showing a generic label. A browser window must
+    # be able to say which knowledge base it belongs to.
     profile = replace(RESEARCH_UI_PROFILE, project_fallback_name=config.project_name)
     return create_shared_ui_app(
         profile=profile,

@@ -1,11 +1,11 @@
-// Paste the entry a project prints for itself:
+// Print the entry a project makes for itself:
 //   research-rag --project-root <project> doctor --mcp-entry
-// and check one that is already in place without editing it:
+// Check one already in place, without editing it:
 //   research-rag --project-root <project> doctor --check-entry <this file>
 //
-// The entry is the stdio bridge, so it starts the app for the project if it is
-// not already up. Add `--runtime-root` only when a project keeps its derived
-// state on a different device.
+// This entry is the stdio bridge, so it starts the app for the project if it is
+// not up. Add `--runtime-root` only when a project keeps its derived state on
+// another device.
 {
   "mcp": {
     "research-rag": {

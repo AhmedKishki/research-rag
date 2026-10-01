@@ -248,7 +248,7 @@ def test_summarize_reports_modes_and_classes_separately(evaluation) -> None:
     assert summary["bm25"]["overall"]["success_at_1"] == pytest.approx(0.5)
     assert summary["bm25"]["overall"]["mrr"] == pytest.approx(0.5)
     # Source spread is reported beside the quality columns, because a reordering
-    # change that holds success flat is only interesting if it moves this one.
+    # change that holds success flat matters only if it moves this one.
     assert summary["bm25"]["overall"]["mean_distinct_sources"] == pytest.approx(4.0)
     assert summary["bm25"]["per_class"]["quote"]["query_count"] == 1
     assert summary["bm25"]["per_class"]["quote"]["success_at_1"] == pytest.approx(1.0)

@@ -29,11 +29,11 @@ class ExtractionError(RuntimeError):
 _HORIZONTAL_SPACE = re.compile(r"[\t\f\v \u00a0]+")
 _LIST_ITEM = re.compile(r"^(?:[-*•]|\d+[.)]|[A-Za-z][.)])\s+")
 _CONTROL_CHARACTERS = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]")
-# Compatibility folding is deliberately limited to the two blocks that English
-# scholarship actually produces: Mathematical Alphanumeric Symbols (letters that
-# come from formula fonts and are otherwise unmatchable by typed queries) and
-# Alphabetic Presentation Forms (fi/fl/ff ligatures). Global NFKC would also fold
-# superscripts, subscripts, and symbols that carry meaning in citations.
+# Compatibility folding is limited to the two blocks English scholarship
+# produces: Mathematical Alphanumeric Symbols (letters from formula fonts,
+# otherwise unmatchable by typed queries) and Alphabetic Presentation Forms
+# (fi/fl/ff ligatures). Global NFKC would also fold superscripts, subscripts,
+# and symbols that carry meaning in citations.
 _FOLDABLE_CHARACTERS = re.compile(r"[\U0001d400-\U0001d7ff\ufb00-\ufb06\ufb13-\ufb17]")
 _DOI = re.compile(r"\b10\.\d{4,9}/[-._;()/:A-Z0-9]+", re.IGNORECASE)
 _URL = re.compile(r"^(?:https?://|www\.|(?:dx\.)?doi\.org/)", re.IGNORECASE)
@@ -134,7 +134,6 @@ def _ends_sentence(value: str) -> bool:
 
 def _fold_compatibility_characters(value: str) -> str:
     """Fold formula-font letters and presentation ligatures to plain text."""
-
     if not _FOLDABLE_CHARACTERS.search(value):
         return value
     return _FOLDABLE_CHARACTERS.sub(
@@ -188,7 +187,7 @@ def normalize_inline_text(value: str) -> str:
 
 
 def _script_family(character: str) -> str | None:
-    """Return a stable, dependency-free script family for alphabetic text."""
+    """Script family for alphabetic text, resolved without a dependency."""
 
     if not character.isalpha():
         return None
@@ -233,13 +232,7 @@ def _script_family(character: str) -> str | None:
 
 
 def _text_signals(value: str) -> tuple[list[str], list[str]]:
-    """Return corruption evidence and advisory script notes for one text value.
-
-    Corruption evidence withholds text from retrieval. Script notes never do:
-    English-language scholarship legitimately quotes Greek, Cyrillic, Arabic, and
-    other scripts, so a mixed-script passage is reported for inspection instead of
-    being discarded.
-    """
+    """Corruption evidence and script notes, per the rules `text_health_reasons` sets."""
 
     raw = unicodedata.normalize("NFC", value)
     normalized = normalize_inline_text(raw)
@@ -286,31 +279,30 @@ def _text_signals(value: str) -> tuple[list[str], list[str]]:
 
 
 def text_corruption_reasons(value: str) -> list[str]:
-    """Return the corruption evidence that withholds extraction text.
+    """The corruption evidence that withholds extraction text.
 
     Only incoherent output is withheld: replacement characters, private-use or
-    unassigned code points, and known damaged encoding sequences. Script mixing
-    and non-Latin dominance are reported by `text_script_notes` instead, so
-    legitimate quotations remain retrievable.
+    unassigned code points, and known damaged encoding sequences. Script mixing and
+    non-Latin dominance are notes, so quotations stay retrievable.
     """
 
     return _text_signals(value)[0]
 
 
 def text_script_notes(value: str) -> list[str]:
-    """Return advisory non-Latin or mixed-script notes that never withhold text."""
+    """Advisory non-Latin or mixed-script notes that never withhold text."""
 
     return _text_signals(value)[1]
 
 
 def has_searchable_alphanumeric_content(value: str) -> bool:
-    """Return whether normalized text contains a Unicode letter or number."""
+    """Whether normalized text contains a Unicode letter or number."""
 
     return any(character.isalnum() for character in normalize_inline_text(value))
 
 
 def text_health_reasons(value: str) -> list[str]:
-    """Identify extraction text that is corrupt or has no searchable content."""
+    """Corrupt text, or text with no searchable content."""
 
     reasons = text_corruption_reasons(value)
     normalized = normalize_inline_text(value)
@@ -321,20 +313,16 @@ def text_health_reasons(value: str) -> list[str]:
 
 # Retrieval rejects a candidate for exactly two reasons, and both are properties
 # of the chunk text plus its stored quality flags rather than of the query. They
-# are therefore computed once when the artifact lookup is built and stored as a
-# bitmask, which removes the per-query text scans from the candidate gate.
+# are computed once when the artifact lookup is built and stored as a bitmask,
+# which removes the per-query text scans from the candidate gate.
 CHUNK_FLAG_CORRUPT_TEXT = 1
 CHUNK_FLAG_EXTRACTION_ARTIFACT = 2
 
 
 def chunk_health_flags(text: str, *, quality_flags: object = None) -> int:
-    """Return the precomputed retrieval-rejection verdict for one chunk.
-
-    A chunk is an extraction artifact when it carries that quality flag or when
-    it has no searchable alphanumeric content, which mirrors the query-time
-    check exactly so the rejection counters cannot change.
+    """A precomputed verdict: an extraction artifact, or has no searchable
+    alphanumeric content. Mirrors the query-time check, so counters cannot change.
     """
-
     flags = 0
     if text_corruption_reasons(text):
         flags |= CHUNK_FLAG_CORRUPT_TEXT
@@ -497,9 +485,9 @@ def _title_and_embedded_byline(
 
 
 # A language is detected from how much of a language's own function-word
-# inventory a text sample uses. Coverage rather than raw share, because bm25s's
-# lists are wildly different sizes (33 English words against 499 Korean ones) and
-# a share would hand every sample to the longest list.
+# inventory a text sample uses. Coverage, not raw share, because bm25s's lists are
+# very different sizes (33 English words against 499 Korean ones) and a share
+# would hand every sample to the longest list.
 _LANGUAGE_WORD = re.compile(r"[^\W\d_]+", re.UNICODE)
 _LANGUAGE_SAMPLE_TOKENS = 4000
 _LANGUAGE_MINIMUM_TOKENS = 120
@@ -516,16 +504,11 @@ def _iso_language_code(value: str) -> str:
 
 
 def _detect_language(text: str) -> str:
-    """Return the code whose stopword list a text sample covers most fully.
+    """The code whose stopword list a text sample covers most fully.
 
-    The candidate lists are the ones BM25 filters with, so a language detected
-    here is one whose function words the lexical half will ignore. A sample with
-    too few tokens, one whose best candidate does not clear a coverage floor, or
-    one whose best candidate does not clearly beat the runner-up returns empty
-    rather than a guess, and the caller records the language as missing. The floor
-    is what rejects a language outside the candidate set, whose texts cover no
-    list at all. CJK text is not separated into words here, so those sources
-    report no detection.
+    Too few tokens, a best candidate below a coverage floor, or a best candidate not
+    clearly beating the runner-up returns empty, not a guess. CJK text is not split
+    into words, so it reports nothing.
     """
 
     tokens = _LANGUAGE_WORD.findall(text.casefold())[:_LANGUAGE_SAMPLE_TOKENS]
@@ -629,7 +612,7 @@ def _pdf_author_list(metadata: dict[str, Any]) -> list[str]:
 
 
 def _pdf_line_text(spans: list[dict[str, Any]]) -> str:
-    """Join extracted spans without guessing replacements for ambiguous glyphs."""
+    """Join extracted spans, guessing no replacement for an ambiguous glyph."""
 
     return "".join(str(span.get("text") or "") for span in spans)
 
@@ -862,11 +845,9 @@ def _front_matter_identity(
 
 
 def _pdf_declared_language(document: pymupdf.Document) -> str:
-    """Return the language a PDF declares for itself, or an empty string.
+    """A `/Lang` entry in the PDF catalog, exposed as `Document.language`.
 
-    A PDF may carry a `/Lang` entry in its catalog, which PyMuPDF exposes as
-    `Document.language`. Many carry none, and the caller falls back to detection
-    over the text sample.
+    Many PDFs carry none, and the caller then detects over the text.
     """
 
     try:
@@ -1087,7 +1068,7 @@ def _nearby_region_labels(
     region: _Region,
     blocks: list[_TextBlock],
 ) -> list[_TextBlock]:
-    """Attach only explicit, nearby captions and marker legends to a region."""
+    """Attach only explicit, nearby captions and marker legends."""
 
     caption_pattern = _TABLE_CAPTION if region.kind == "table" else _FIGURE_CAPTION
     result: list[_TextBlock] = []
@@ -1122,7 +1103,7 @@ def _label_annotations(
 
 
 def _quality_flags(text: str, kind: str) -> list[str]:
-    """Mark extraction debris that meets deterministic rejection rules."""
+    """Extraction debris meeting the deterministic rejection rules."""
 
     normalized = normalize_inline_text(text)
     alphabetic = sum(character.isalpha() for character in normalized)
@@ -1137,7 +1118,7 @@ def _quality_flags(text: str, kind: str) -> list[str]:
 def _split_prose_and_lists(
     blocks: list[_TextBlock],
 ) -> list[tuple[str, list[_TextBlock]]]:
-    """Preserve reading order while separating list blocks from prose blocks."""
+    """Reading order preserved, list blocks separated from prose blocks."""
 
     groups: list[tuple[str, list[_TextBlock]]] = []
     for block in blocks:
@@ -1161,8 +1142,8 @@ def _pdf_locator(page: pymupdf.Page, page_number: int) -> dict[str, Any]:
     # PyMuPDF's own label lookup filters the document's label tree and indexes
     # the result, so a tree that starts after the page being asked about makes it
     # index an empty list and raise IndexError: a document whose labels begin on
-    # page 2 raises on page 1. A locator has to resolve to something, and the
-    # physical page number always does.
+    # page 2 raises on page 1. A locator has to resolve, and the physical page
+    # number always does.
     try:
         page_label = str(page.get_label() or page_number)
     except (RuntimeError, ValueError, IndexError):
@@ -1348,7 +1329,7 @@ def _epub_visible_identity(
     book: epub.EpubBook,
     filename_stem: str,
 ) -> tuple[str, list[str]]:
-    """Read a conservative title/byline fallback from the first visible sections."""
+    """Conservative title/byline fallback from the first visible sections."""
 
     for spine_entry in book.spine[:5]:
         item_id = spine_entry[0] if isinstance(spine_entry, tuple) else spine_entry
@@ -1394,7 +1375,7 @@ def _epub_visible_identity(
 
 
 def _epub_text_sample(book: epub.EpubBook, items: int = 3) -> str:
-    """Return the visible text of the first few spine documents."""
+    """Visible text of the first few spine documents."""
 
     parts: list[str] = []
     for spine_entry in book.spine[:items]:
@@ -1429,7 +1410,7 @@ def _extract_epub(
 
 
 def pdf_page_count(source: SourceFile) -> int:
-    """Return the physical page count after validating a PDF for extraction."""
+    """Physical page count, after validating the PDF for extraction."""
 
     try:
         document = pymupdf.open(source.path)
@@ -1450,7 +1431,7 @@ def scan_pdf_pages(
     start_index: int,
     page_count: int,
 ) -> list[dict[str, Any]]:
-    """Capture a consecutive page batch using one PDF document handle."""
+    """A consecutive page batch, from one PDF document handle."""
 
     if start_index < 0:
         raise ValueError("start_index must be non-negative")
@@ -1511,7 +1492,7 @@ def prepare_scanned_pdf(
     digest: str,
     page_scans: list[dict[str, Any]],
 ) -> tuple[dict[str, Any], list[str]]:
-    """Resolve PDF metadata and repeated margins from completed page scans."""
+    """PDF metadata and repeated margins, from completed page scans."""
 
     try:
         document = pymupdf.open(source.path)
@@ -1563,7 +1544,7 @@ def extract_scanned_pdf_pages(
     page_scans: list[dict[str, Any]],
     repeated_margins: list[str],
 ) -> list[tuple[int, list[dict[str, Any]], bool, int]]:
-    """Extract a scanned page batch using one PDF document handle."""
+    """A scanned page batch, from one PDF document handle."""
 
     if not page_scans:
         raise ValueError("page_scans must not be empty")
@@ -1602,7 +1583,7 @@ def prepare_epub_extraction(
     source: SourceFile,
     digest: str,
 ) -> tuple[dict[str, Any], int]:
-    """Resolve EPUB metadata and return its deterministic spine work count."""
+    """EPUB metadata and its deterministic spine work count."""
 
     try:
         book = epub.read_epub(str(source.path), options={"ignore_ncx": True})
@@ -1686,7 +1667,7 @@ def prepare_epub_extraction(
 
 
 def _epub_fragment(tag: Tag) -> tuple[str, str] | None:
-    """Return an existing XHTML fragment and its source attribute verbatim."""
+    """An existing XHTML fragment and its source attribute, verbatim."""
 
     for attribute in ("id", "name"):
         value = tag.get(attribute)
@@ -1703,7 +1684,7 @@ def _epub_fragment(tag: Tag) -> tuple[str, str] | None:
 
 
 def _epub_element_path(tag: Tag) -> str:
-    """Return a deterministic, human-inspectable path within one XHTML item."""
+    """A deterministic, human-inspectable path within one XHTML item."""
 
     parts: list[str] = []
     current: Tag | None = tag
@@ -1726,7 +1707,7 @@ def _epub_element_path(tag: Tag) -> str:
 def _epub_semantic_blocks(
     soup: BeautifulSoup,
 ) -> list[tuple[Tag, tuple[str, str] | None]]:
-    """Return outermost semantic blocks and a nearest standalone anchor."""
+    """Outermost semantic blocks and a nearest standalone anchor."""
 
     tags = list(soup.find_all(True))
     positions = {id(tag): index for index, tag in enumerate(tags)}
@@ -1770,7 +1751,7 @@ def _epub_text_segments(
     element: Tag,
     initial_anchor: tuple[str, str, str] | None,
 ) -> list[tuple[str, tuple[str, str, str] | None]]:
-    """Split visible block text at nested XHTML anchors without marker leakage."""
+    """Split visible block text at nested XHTML anchors, leaking no marker."""
 
     segments: list[tuple[str, tuple[str, str, str] | None]] = []
     parts: list[str] = []
@@ -1849,7 +1830,7 @@ def extract_epub_spine_item(
     document_record: dict[str, Any],
     spine_index: int,
 ) -> tuple[list[dict[str, Any]], bool]:
-    """Extract one EPUB spine entry while preserving its original locator."""
+    """One EPUB spine entry, with its original locator preserved."""
 
     try:
         book = epub.read_epub(str(source.path), options={"ignore_ncx": True})
@@ -2011,8 +1992,6 @@ def extract_sources(
     sources: tuple[SourceFile, ...],
     source_digests: dict[str, str] | None = None,
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
-    """Return indexed documents and cleaned semantic units."""
-
     documents: list[dict[str, Any]] = []
     units: list[dict[str, Any]] = []
     for source in sources:

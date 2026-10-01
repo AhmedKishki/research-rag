@@ -34,7 +34,7 @@ def test_declared_version_matches_the_installed_distribution() -> None:
     with pyproject.open("rb") as handle:
         declared = tomllib.load(handle)["project"]["version"]
 
-    # A version bumped without `uv sync` is exactly the drift this guards against.
+    # A version bumped without `uv sync` is the drift this guards against.
     assert installed_version() == declared
 
 

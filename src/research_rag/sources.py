@@ -140,11 +140,11 @@ def _string_list(value: Any, field: str) -> list[str]:
 def _language_list(value: Any, field: str) -> list[str]:
     """Normalize a source's languages to lowercase ISO 639 codes.
 
-    A source carries none, one, or several languages, because metadata records
-    what the source is written in, which is not the same question as whether
-    BM25 can tokenize it. A code BM25 has no stopword list for is accepted here
-    and surfaced as a corpus-level warning, because refusing it would force the
-    metadata to misdescribe a source that really is in that language.
+    A source carries none, one, or several languages. Metadata records what the
+    source is written in, which is not the same question as whether BM25 can
+    tokenize it. A code BM25 has no stopword list for is accepted here and
+    surfaced as a corpus-level warning, because refusing it would force the
+    metadata to misdescribe a source that is in that language.
     """
 
     languages: list[str] = []

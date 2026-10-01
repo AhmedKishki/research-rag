@@ -124,8 +124,8 @@ class Operations:
     """The two implementations `_run` chooses between, as one object.
 
     The command line does not know or care whether an answer came from the app
-    over loopback or from a service it opened itself, so the test double for the
-    surface is a stand-in for the *interface*, not for either implementation.
+    over loopback or from a service it opened itself, so the double stands in for
+    the *interface*, not for either implementation.
     """
 
     def __init__(self) -> None:
@@ -218,8 +218,8 @@ def test_init_records_the_project_so_the_install_can_name_it(
 
     report = _init(_args("--project-root", str(project), "init"))
 
-    # The project owns its state; the record is a pointer to it, written beside
-    # the settings this account already has, so one install can name the project.
+    # The project owns its state; the record points at it and sits beside the
+    # settings this account already has, so one install can name the project.
     assert report["registered"] == {
         "project_id": report["project_id"],
         "project_name": "thesis",
@@ -603,9 +603,9 @@ def test_the_stop_sweep_reads_a_path_as_a_path_not_as_a_program(tmp_path: Path) 
     """`.research-rag` is in every project path, so a substring test lies.
 
     A marker test that looks for the product name inside an argument reads a
-    project directory as though it were the program being run. The name has to
-    be a whole argument, or the sweep's second half, which exists to keep
-    another project's process out of it, is undone by its first.
+    project directory as though it were the program being run. The name has to be
+    a whole argument, or the sweep's second half, which keeps another project's
+    process out of it, is undone by its first.
     """
 
     from research_rag.surfaces.cli import _invokes_this_app

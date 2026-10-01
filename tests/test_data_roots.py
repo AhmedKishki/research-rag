@@ -1,18 +1,18 @@
 """The names this app inherited, and the ones that are its own.
 
-Three locations carry the MCP server's name rather than this app's. It is frozen
-and still installed on the machines that have it, and it reads those paths: a
-renamed user settings directory is read by neither product, a renamed model
-cache re-downloads about 150 MB on the first build, and a renamed launcher state
-file leaves the frozen product's pid file with nothing to stop it. Renaming any
-of them costs a user their settings, their models, or a running workspace, and
+Three locations carry the MCP server's name rather than this app's. It is frozen,
+still installed on the machines that have it, and reads those paths: a renamed
+user settings directory is read by neither product, a renamed model cache
+re-downloads about 150 MB on the first build, and a renamed launcher state file
+leaves the frozen product's pid file with nothing to stop it. Renaming any of
+them costs a user their settings, their models, or a running workspace, and
 nothing fails until then.
 
 The rest are this app's own and must stay that way, so a second product can
 never stop this one's process or land beside it in a project.
 
-Every constant here is asserted, so a later rename has to delete its assertion
-and state the migration that makes it safe. It is the same review either way.
+Every constant here is asserted, so a later rename must delete its assertion and
+state the migration that makes it safe.
 """
 
 from __future__ import annotations
@@ -83,10 +83,8 @@ def test_the_launcher_runs_this_apps_own_command() -> None:
     assert launcher_module.UI_COMMAND == "research-rag"
     assert launcher_module.SERVE_COMMAND == "serve"
     template = launcher_module._TEMPLATE
-    # Every option is global, so the subcommand goes last; argparse reads them
-    # in front of the command they belong to.
-    # A global option belongs in front of the subcommand and a subcommand's own
-    # option behind it, so the generated command is the one the parser accepts.
+    # Global options go in front of the subcommand and its own options behind it,
+    # so the generated command is the one the parser accepts.
     assert '"$UI_COMMAND" --project-root "$PROJECT_ROOT"' in template
     assert '@SERVE@ --port "$PORT"' in template
     assert "@SERVE@ --project-root" not in template
@@ -99,9 +97,8 @@ def test_the_agent_answer_detail_is_declared_and_used() -> None:
 
     A settings file the frozen product wrote names it, and the layer stack refuses
     an undeclared key in every layer, so the key cannot be dropped while that
-    product is installed. Removing it is also the one change that would make an
-    agent's answers stop being projectable, so the test names the reader as well
-    as the key.
+    product is installed. Removing it would also stop an agent's answers being
+    projectable, so the test names the reader as well as the key.
     """
 
     keys = {setting.key for setting in SETTINGS}
@@ -118,11 +115,10 @@ def test_the_agent_answer_detail_is_declared_and_used() -> None:
         if "tool_detail" in path.read_text(encoding="utf-8")
     )
     # `surfaces/cli.py` names the key in the `help settings` page rather than
-    # reading it, and a page that told a reader what a change costs without
-    # naming the key would be less use than the page is worth. What the assertion
-    # still guards is the reader set: a module that behaves differently on the
-    # key has to be added here deliberately, and the agent surface stays the one
-    # that acts on its value.
+    # reading it, and a page that did not name the key would say less than the
+    # page is worth. The assertion guards the reader set: a module that behaves
+    # differently on the key is added here deliberately, and the agent surface
+    # stays the one that acts on its value.
     assert readers == [
         "src/research_rag/config.py",
         "src/research_rag/settings.py",

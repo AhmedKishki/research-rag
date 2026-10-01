@@ -347,8 +347,8 @@ def test_authors_and_titles_filter_the_corpus_by_name(project: Path) -> None:
     Both are phrases, so they match as case-insensitive substrings of the values
     the query path already holds: a surname finds its author without the
     bibliography's punctuation, and a remembered title fragment finds the work
-    without reproducing its subtitle. Reviewed values win over extracted ones,
-    which is what makes the filter useful on a corpus whose extraction is wrong.
+    without its subtitle. Reviewed values win over extracted ones, which makes
+    the filter useful on a corpus whose extraction is wrong.
     """
 
     async def exercise() -> None:

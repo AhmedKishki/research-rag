@@ -52,8 +52,8 @@ def atomic_write_json(path: Path, value: Any, *, fsync_parent: bool = True) -> N
     """Write JSON atomically.
 
     Pass ``fsync_parent=False`` to defer the directory fsync when several files
-    are committed together; a caller that defers must persist the parents with
-    :func:`fsync_directories` before committing any state that depends on them.
+    are committed together. A caller that defers must persist the parents with
+    :func:`fsync_directories` before committing state that depends on them.
     On a spinning disk a directory fsync costs about 57 ms, so a group of
     related writes is much cheaper than one per file.
     """
@@ -87,8 +87,8 @@ def write_handoff_jsonl(path: Path, records: Iterable[dict[str, Any]]) -> None:
     """Write a file that only a peer process reads and no resume path trusts.
 
     It must be *visible* to another process on this machine, which closing the
-    file guarantees, but it is rewritten before every use and deleted
-    afterwards, so paying for durability would only slow the caller down.
+    file guarantees. It is rewritten before every use and deleted afterwards,
+    so durability would only slow the caller down.
     """
 
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -124,8 +124,8 @@ def fsync_directories(paths: Iterable[Path]) -> None:
 def directory_statistics(path: Path) -> tuple[int, int]:
     """Return ``(file_count, total_bytes)`` for the regular files under a directory.
 
-    Symlinks and unreadable entries are skipped rather than failing the caller:
-    this describes retained state, it does not validate it. On the reference
+    Symlinks and unreadable entries are skipped rather than failing the caller.
+    This describes retained state; it does not validate it. On the reference
     project a 105 MB generation measures in about 2 ms from a warm cache, so it
     is cheap enough to report alongside every retained generation.
     """
@@ -214,13 +214,13 @@ def _reject_unknown_metadata_version(path: Path, value: dict[str, Any]) -> None:
     """Refuse metadata written for a later version of this package.
 
     The file says `schema_version: 1`, which reads as "this shape is known". It
-    stopped meaning that the moment a field was added: `language` arrived, the
+    stopped meaning that once a field was added: `language` arrived, the
     number stayed 1, and a server that predates the field rejected the whole
     file with `Unsupported metadata fields: language`. Nothing in the file said
     which version wrote it, so the error named a field rather than the cause.
 
     A writer now records the fields it understood. A file without the key was
-    written before this, and is accepted: its contents are validated field by
+    written before this and is accepted: its contents are validated field by
     field anyway, and refusing it would break every existing project.
     """
 
@@ -259,8 +259,8 @@ def write_metadata_overrides(
         {
             "schema_version": 1,
             # The fields this writer understood. An older server that reads the
-            # file can then refuse it as too new, rather than rejecting each
-            # entry one unknown field at a time.
+            # file can refuse it as too new rather than reject each entry one
+            # unknown field at a time.
             "written_with": {
                 "metadata_fields": sorted(METADATA_FIELDS),
             },
@@ -285,8 +285,8 @@ def load_source_catalog(path: Path, *, project_id: str) -> dict[str, str]:
     if not isinstance(sources, dict):
         raise StorageError(f"Invalid source catalog mapping: {path}")
 
-    # Import lazily to keep the general JSON storage helpers independent while
-    # still validating the project-derived identity at this trust boundary.
+    # Import lazily to keep these JSON helpers independent of `sources`, while
+    # still validating project-derived identity at this trust boundary.
     from .sources import ALLOWED_SOURCE_EXTENSIONS, stable_source_id
 
     result: dict[str, str] = {}

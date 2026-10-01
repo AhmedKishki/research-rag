@@ -89,7 +89,7 @@ def gateway_start_failure(config: ResearchConfig, exc: BaseException) -> ToolErr
     transport already writes, and a caller who never opens that file has only the
     client's own "connection closed". This carries the reason, the last lines of
     every log the run produced, and the path of each one, so a tool answer names
-    the cause instead of restating the symptom.
+    the cause rather than restating the symptom.
     """
 
     gateway_log = gateway_log_path(config)
@@ -121,7 +121,7 @@ def call_timeout_failure(
 
     The vanilla tools are namespaced, so the tool name says which component was
     busy, and that component writes its own stderr beside the gateway's. Naming
-    both is enough to see what the component was doing; no process tree is
+    both is enough to see what the component was doing. No process tree is
     inspected to work it out.
     """
 
@@ -163,9 +163,9 @@ class LazyGateway:
 
     Which operations need the gateway is not a property of the surface: the
     BM25 index is initialized through it when a generation is loaded for
-    querying, so a search needs one and a `status` usually does not. Rather than
-    predict that and start a process nothing may call, the connection opens on
-    the first call and is closed with the process that owns this object.
+    querying, so a search needs one and a `status` usually does not. Predicting
+    that would start a process nothing may call, so the connection opens on the
+    first call and is closed with the process that owns this object.
 
     The workspace and the terminal both hold one of these for their whole run, so
     the gateway is a child of the process a user stopped rather than an orphan.

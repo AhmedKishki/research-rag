@@ -23,8 +23,8 @@ from .settings import (
     sources_for,
 )
 
-# The one console script this product installs, named here because the health
-# report prints commands an operator can paste.
+# The one console script this product installs, named because the health report
+# prints commands an operator can paste.
 CLI_COMMAND = "research-rag"
 
 
@@ -40,21 +40,19 @@ _RUNTIME_MARKER = ".research-ultra-rag-runtime.json"
 # top-level invocation, so no exported setting can turn one server into a chain
 # of them.
 MANAGED_CHILD_ENV = "RESEARCH_ULTRARAG_MANAGED_CHILD"
-# The process that started a child. A child that is orphaned before it can look at
-# its own parent — a client that dies in the moment between spawning and startup —
-# still knows who owned it and can end itself with them.
+# The process that started a child. A child orphaned before it can read its own
+# parent, a client that dies between spawning and startup, still knows who owned
+# it and can end itself with them.
 OWNER_PID_ENV = "RESEARCH_ULTRARAG_OWNER_PID"
 TOP_LEVEL_ONLY_ENV = ("RESEARCH_ULTRARAG_UI_PORT",)
 
 
 def child_process_environment() -> dict[str, str]:
-    """Return the environment for a server this process starts.
+    """The environment for a server this process starts.
 
-    The child inherits this process's environment except for the variables that
-    describe a top-level invocation, and it carries the marker that makes it
-    refuse to host a UI of its own plus the identity of its owner. An inherited
-    owner id is overwritten, because the owner is always the process that starts
-    the child rather than whatever started that one.
+    The child inherits this process's environment except the top-level-only variables,
+    plus the marker that makes it refuse to host a UI and the identity of its owner.
+    An inherited owner id is overwritten.
     """
 
     environment = dict(os.environ)
@@ -66,7 +64,7 @@ def child_process_environment() -> dict[str, str]:
 
 
 def declared_owner_pid() -> int | None:
-    """Return the process that declared itself this one's owner, if any."""
+    """The process that declared itself this one's owner, if any."""
 
     raw = os.environ.get(OWNER_PID_ENV)
     if raw is None or not raw.strip().isdigit():
@@ -84,16 +82,12 @@ def is_managed_child() -> bool:
 def apply_process_priority(nice: int) -> int | None:
     """Raise this process's niceness to ``nice``, and report what it became.
 
-    One call covers the whole process tree: children inherit the value, so the
-    vanilla gateway, the UltraRAG children it starts, and every model thread
-    below them all yield the same way. Niceness is relative, so the increment is
-    the difference from the current value, and a process already at or above the
-    target is left alone — which makes a second call in a child harmless.
+    One call covers the whole process tree, because children inherit the value. The
+    increment is the difference from the current value, and a process at or above the
+    target is left alone, making a second call in a child harmless.
 
-    A refusal returns ``None`` instead of raising: a priority preference must
-    never stop a server from starting.
+    A refusal returns ``None`` rather than raising.
     """
-
     if nice <= 0:
         return None
     try:
@@ -203,7 +197,7 @@ class ResearchConfig:
 
 
 def configured_source_directory(project_root: str | Path) -> str:
-    """Reuse an initialized project's source setting, or return the default."""
+    """An initialized project's source setting, or the default."""
 
     descriptor_path = (
         Path(project_root).expanduser().resolve() / ".research-rag" / "project.json"
@@ -345,7 +339,6 @@ def _write_project_descriptor(
     source_directory: str,
 ) -> None:
     """Replace the descriptor atomically, so a reader never sees a partial one."""
-
     temporary = descriptor_path.with_name(
         f".{descriptor_path.name}.{uuid.uuid4().hex}.tmp"
     )
@@ -368,7 +361,7 @@ def _write_project_descriptor(
 
 
 def _normalize_project_name(name: str) -> str:
-    """Return the name to record, refusing one that is not a usable project name."""
+    """The name to record, refusing one that is not a usable project name."""
 
     normalized = name.strip()
     if not normalized:
@@ -384,13 +377,11 @@ def _initialize_portable_project(
     source_directory: str,
     name: str | None = None,
 ) -> tuple[str, str]:
-    """Create or validate the small, Git-friendly project descriptor.
+    """Create or validate the portable project descriptor.
 
-    ``name`` names the project. A project being created takes it, and falls back
-    to the directory name when no caller supplies one. An existing project keeps
-    the name it recorded unless a caller names it explicitly. The stable
-    ``project_id`` is never rewritten either way, so naming a project cannot
-    invalidate a generation.
+    A created project takes ``name``, falling back to the directory name; an existing
+    one keeps its recorded name. The stable ``project_id`` is never rewritten, so
+    naming cannot invalidate a generation.
     """
 
     portable_root.mkdir(parents=True, exist_ok=True)
@@ -442,21 +433,19 @@ def _initialize_portable_project(
 
 
 def project_command(project_root: str | Path, *arguments: str) -> str:
-    """Return a copy-pasteable command naming one project, quoting what needs it."""
+    """A copy-pasteable command naming one project, quoting what needs it."""
 
     parts = (CLI_COMMAND, "--project-root", str(project_root), *arguments)
     return " ".join(shlex.quote(part) for part in parts)
 
 
 def runtime_root_claim_problem(candidate: Path, project_id: str) -> str | None:
-    """Return why this directory may not hold this project's derived state.
+    """Why this directory may not hold this project's derived state.
 
     A relocated root carries a marker naming its owning project, so two projects
-    can never silently share one set of generations and an unrelated directory is
-    never adopted. The default in-project root needs no marker, because the
-    project owns it by construction; pass it anyway to read the marker that is
-    there. This reads, so a health report can ask the same question the
-    configuration asks when it claims the root.
+    cannot silently share one set of generations and an unrelated directory is never
+    adopted. The default in-project root needs no marker: the project owns it. This
+    reads, so a health report can ask the same question.
     """
 
     if not candidate.exists():
@@ -498,9 +487,8 @@ def _prepare_runtime_root(
 ) -> Path:
     """Claim or validate the directory that holds disposable derived state.
 
-    A relocated root carries a marker naming its owning project, so two projects
-    can never silently share one set of generations and an unrelated directory is
-    never adopted. The default in-project root needs no marker.
+    A relocated root is marked as `runtime_root_claim_problem` describes. The
+    default in-project root needs no marker.
     """
 
     if not marker_required:
@@ -552,15 +540,13 @@ def resolve_config(
     settings_overrides: Sequence[str] = (),
     environ: Mapping[str, str] | None = None,
 ) -> ResearchConfig:
-    """Resolve the project boundary, then merge every settings layer.
+    """The project boundary, then every settings layer.
 
     Every keyword above is the *command-line* layer: passing one overrides the
-    environment and the config files for this invocation, and leaving it unset
-    inherits from them.
+    environment and the config files for this invocation.
 
-    ``project_name`` is the exception, because a project name is not a setting.
-    It is the name recorded in the project descriptor, and only `init` supplies
-    one, so every other caller leaves the recorded name alone.
+    ``project_name`` is the exception: a project name is not a setting, and only
+    `init` supplies one.
     """
     project = Path(project_root).expanduser().resolve()
     if not project.is_dir():
@@ -632,8 +618,8 @@ def resolve_config(
         settings = EffectiveSettings.from_values(values)
     except SettingsError as exc:
         # One error type for the caller: a settings layer problem is a
-        # configuration problem, whether it came from a file, the environment,
-        # or the command line.
+        # configuration problem, whether it came from a file, the environment, or
+        # the command line.
         raise ConfigurationError(str(exc)) from exc
 
     portable.mkdir(parents=True, exist_ok=True)
@@ -663,11 +649,12 @@ def resolve_config(
     )
     # `research-ultra-rag-mcp` is the MCP server's directory name, kept so this
     # app reads the same ~150 MB of embedding and reranker binaries that server
-    # downloaded. A name that matched this product would leave every existing
-    # cache behind and re-download both models on the first build, silently,
-    # because the first build is the only thing that needs them. Revisit after
-    # that server retires; `tests/test_data_roots.py` fails if it changes before
-    # then.
+    # downloaded. A name matching this product would leave every existing cache
+    # behind and re-download both models on the first build, silently, because the
+    # first build is the only thing that needs them. `USER_CONFIG_DIRECTORY` and
+    # `SETTINGS_ENVIRONMENT_PREFIX` are inherited for the same reason and cost the
+    # user their settings rather than their models. Revisit all three after that
+    # server retires; `tests/test_data_roots.py` fails if any changes before then.
     configured_model_cache = (
         settings.model_cache_root
         if settings.model_cache_root is not None
@@ -689,9 +676,9 @@ def resolve_config(
     (state / "failures").mkdir(exist_ok=True)
     (state / "ultrarag-runtime").mkdir(exist_ok=True)
     configured_model_cache.mkdir(parents=True, exist_ok=True)
-    # Initialising the project leaves a machine-local UI launcher under the
-    # project's own state root and, when absent, a single symlink to it in the
-    # project root. Both are created only when missing and never overwritten.
+    # Initialising the project leaves a machine-local UI launcher under
+    # the project's own state root and, when absent, a single symlink to it in
+    # the project root. Both are created only when missing, never overwriting.
     ensure_ui_launcher(
         project_root=project,
         portable_root=portable,

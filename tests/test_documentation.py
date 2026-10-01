@@ -1,9 +1,9 @@
 """The documents must describe the software that is installed.
 
-The failure this file prevents is specific: an install that works, documented in
-a way that leads a reader to a command that no longer exists, or a capability that
-was removed with its description still in the manual. Both are invisible to the
-test suite and visible to the first person who follows the documentation.
+The failure this file prevents is specific: an install that works, documented so a
+reader follows a command that no longer exists, or a capability removed with its
+description still in the manual. Both are invisible to the test suite and visible
+to the first person who follows the documentation.
 """
 
 from __future__ import annotations
@@ -224,9 +224,8 @@ def test_the_help_menu_accounts_for_every_command() -> None:
     """Every installed command is in the menu, and in it exactly once.
 
     The menu is hand-written because argparse cannot group commands by the work
-    they do, and a hand-written list drifts the moment a command is added. This
-    is what makes adding one a two-line change: register it, and say here what
-    it is for.
+    they do, and a hand-written list drifts as soon as a command is added. Adding
+    one is a two-line change: register it, and say here what it is for.
     """
 
     from research_rag.surfaces.cli import HELP_GROUPS
@@ -264,5 +263,5 @@ def test_a_subject_page_names_a_command_and_the_help_menu_prints() -> None:
         assert topic in menu, f"the menu does not offer the {topic!r} page"
         assert page.strip().endswith("."), f"{topic}: a page is not a finished answer"
     # The menu says the one thing a first call has to know, which the usage
-    # block above it cannot: that the three surfaces share one process.
+    # block above it cannot: the three surfaces share one process.
     assert "one app" in menu

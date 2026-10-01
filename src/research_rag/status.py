@@ -39,10 +39,10 @@ def generation_upgrade_reasons(
 ) -> list[str]:
     """Return the policy mismatches a generation has, without touching disk.
 
-    This is the part of a status report that depends only on the manifest and the
-    current policy constants, so a caller that skipped the staleness check can
-    still report whether the generation needs an upgrade. The fingerprint is the
-    caller's: a process computes it once from the settings it resolved.
+    Only the manifest and the current policy constants decide the answer, so a
+    caller that skipped the staleness check can still report whether the
+    generation needs an upgrade. The fingerprint is the caller's: a process
+    computes it once from the settings it resolved.
     """
 
     retrieval = manifest.get("retrieval", {})
@@ -93,8 +93,7 @@ def generation_inventory(
     These are exactly the directories a prune would consider, so `status`
     reports them with their size and file count. A generation whose manifest is
     missing, unreadable, or not JSON is reported with a ``manifest_error``
-    instead of raising: the purpose is transparency about what occupies disk,
-    and a status call must still answer when one retained generation is
+    instead of raising: the report must answer when one retained generation is
     damaged. This runs only on the read-only ``status`` surface, never on the
     search path, because it walks each generation's files.
     """
@@ -152,8 +151,8 @@ class StatusWorkflow:
     ) -> dict[str, Any]:
         """Summarize the project, reusing a caller already-parsed pointer.
 
-        `search` already holds the selected generation and its manifest, so it
-        passes them in rather than making this read and parse them again.
+        `search` already holds the selected generation and its manifest, and
+        passes them in instead of making this read and parse them again.
         """
 
         try:
@@ -420,7 +419,7 @@ class StatusWorkflow:
                 )
             )
             # The dependency report is built from the payload this method already
-            # produced, so the health answer and the status answer cannot be taken
+            # produced, so the health answer and the status answer cannot come
             # from two different states of the project.
             report = await asyncio.to_thread(health_report, self.config, payload)
             payload.update(report.as_status_fields())

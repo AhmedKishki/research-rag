@@ -1,8 +1,7 @@
 """Pure helpers: values, identities, fingerprints, and the shared exceptions.
 
-Nothing here imports the service, the MCP surface, or an entry point, so this
-module is a leaf. It exists so the parts of `service.py` that only compute a
-value can be read and tested without the orchestration around them.
+Imports nothing from the service, the MCP surface, or an entry point, so it stays
+a leaf.
 """
 
 from __future__ import annotations
@@ -50,16 +49,13 @@ from .sources import (
 def retrieval_policy_fingerprint(settings: EffectiveSettings) -> str:
     """Return the identity of the ranking policy these settings describe.
 
-    The fusion constants and the relevance gates decide what a search returns,
-    so their values are part of what a generation *is*: a generation that
-    recorded a different policy than this process runs is not reusable, and the
-    next ingestion builds a new generation instead of mixing two.
+    The fusion constants and gates decide what a search returns, so they are part
+    of what a generation *is*, and a generation recording a different policy is
+    not reusable.
 
-    A value stays out when it only reorders what those already return. The
-    source-diversity penalty is taken at the final top_k pick over candidates
-    fusion and reranking ranked first, so it changes no stored artifact, and
-    fingerprinting it would report every existing generation as needing a
-    rebuild that reproduces the same index byte for byte.
+    A value stays out when it only reorders what those already return: the
+    source-diversity penalty is taken at the final top_k pick and changes no stored
+    artifact, so fingerprinting it would report a byte-identical rebuild.
     """
 
     return value_fingerprint(
@@ -94,12 +90,10 @@ def _selection_relevance(
 ) -> dict[str, float]:
     """Normalize the score an order was built from onto ``0.0..1.0``.
 
-    The best-scored candidate is 1.0 and the worst-scored is 0.0, so the
-    diversity penalty is a share of this ranking's own confidence instead of a
-    share of the candidate list, which would grow with however deep the pool
-    happens to be. A candidate the order carries without a score -- the
-    unranked tail appended after a reranked window -- is 0.0, because it is
-    already ranked last and yields to every scored candidate first.
+    The best-scored candidate is 1.0 and the worst is 0.0, so the diversity
+    penalty is a share of this ranking's confidence rather than of the pool's
+    depth. An unscored candidate -- the unranked tail after a reranked window --
+    is 0.0, and a flat score band leaves every scored candidate at 1.0.
     """
 
     relevance = dict.fromkeys(ordered_ids, 0.0)
@@ -125,9 +119,8 @@ def _selection_relevance(
 def _passage_equality_key(text: str) -> str:
     """Return the words of a passage, so two copies of it read the same.
 
-    Case, punctuation and spacing are what two copies of one passage differ by —
-    one file's text extraction and another's do not agree on them — and none of
-    that is a difference in what the passage says.
+    Two copies differ only in case, punctuation, and spacing, which changes no
+    meaning.
     """
 
     return " ".join(_WORD.findall(str(text).casefold()))
@@ -143,20 +136,14 @@ def _source_diverse_selection(
 ) -> list[str]:
     """Pick ``top_k`` candidates, charging a source for each of its repeats.
 
-    Greedy maximal-marginal-relevance selection over a fused order: a
-    candidate's adjusted score is its relevance minus ``penalty`` for every
-    candidate already taken from the same source. The best adjusted score wins,
-    with the fused position and then the chunk ID settling ties, so one query
-    always yields one order.
+    Greedy maximal-marginal-relevance over a fused order: a candidate's adjusted
+    score is its relevance minus ``penalty`` per candidate already taken from the
+    same source, with fused position then chunk ID settling ties.
 
-    A penalty at or below zero, a pool no deeper than the request, or a pool
-    where no candidate carries a score returns the plain slice and leaves the
-    ranking exactly as it was. Unscored means an unreranked BM25 or dense
-    ranking, which offers no relevance to charge against: the penalty would
-    otherwise be the only signal left and would replace that ranking with a
-    round-robin over sources. A source that is the only one with relevant
-    candidates still fills the answer: its repeats are charged like any other,
-    but nothing else is left to outrank them.
+    A penalty at or below zero, a pool no deeper than the request, or a pool with
+    no scored candidate returns the plain slice, because an unreranked ranking
+    offers no relevance to charge against, so the penalty alone would make it a
+    round-robin over sources.
     """
 
     if penalty <= 0.0 or len(ordered_ids) <= top_k or not scores:
@@ -258,16 +245,12 @@ def _checkpoint_identity(
 ) -> str:
     """Fingerprint the inputs a staged build may resume from.
 
-    The ranking policy is deliberately absent. It decides how a generation is
-    *searched*, not what its artifacts contain: extraction, chunk boundaries, and
-    vectors are identical whatever the weights, gates, or window are, so a
-    ranking edit must not discard a build in progress. The policy still reaches
-    the manifest at publish time, so the record stays truthful; measured on the
-    reference corpus, a ranking edit reuses every chunk and vector and costs about
-    two minutes instead of a full rebuild.
-
-    Contextual chunk headers are not a ranking policy: they decide the text a
-    vector covers, so they belong here and a resume cannot mix the two.
+    The ranking policy is deliberately absent: it decides how a generation is
+    *searched*, not what its artifacts contain, so a ranking edit reuses every
+    chunk and vector at a measured cost of about two minutes rather than a full
+    rebuild. The policy still reaches the manifest at publish time. Contextual
+    chunk headers are not a ranking policy, because they decide the text a vector
+    covers.
     """
 
     return value_fingerprint(
@@ -326,9 +309,8 @@ def _citation(document: dict[str, Any], locator: dict[str, Any]) -> str:
 def _content_tokens(value: str, stopwords: frozenset[str]) -> set[str]:
     """Return meaningful Unicode word tokens used for lexical abstention.
 
-    ``stopwords`` is the gate's resolved function-word set, which stops at
-    least what the index stops and also the question and do-support words no
-    query is anchored by.
+    ``stopwords`` is the gate's resolved function-word set, which stops at least
+    what the index stops.
     """
 
     return {
@@ -344,9 +326,9 @@ def document_frequencies(
 ) -> Counter[str]:
     """Count, for each content token, how many of these texts contain it.
 
-    Distinct tokens per text, so a passage that repeats a word does not make it
-    look common. This is the table a feedback rule weights against, and it costs
-    a full pass over the corpus, so a caller builds it once and keeps it.
+    Distinct tokens per text, so a repeated word does not look common. A feedback
+    rule weights against this table and it costs a full corpus pass, so build it
+    once.
     """
 
     frequencies: Counter[str] = Counter()
@@ -362,8 +344,8 @@ def _inverse_document_frequency(
 ) -> float:
     """Return a term's rarity weight, smoothed so a ubiquitous term stays positive.
 
-    Without a table the weight is 1, which leaves a caller that has none with the
-    unweighted ranking rather than a wrong one.
+    Without a table the weight is 1, so a caller that has none gets the
+    unweighted ranking.
     """
 
     if not frequencies or corpus_size <= 0:
@@ -382,16 +364,12 @@ def _pseudo_relevance_terms(
 ) -> list[str]:
     """Mine expansion terms from the first-pass lexical leaders.
 
-    A candidate is scored by how many leaders use it times how rare it is across
-    the generation. Leader support alone mines the words that appear everywhere —
-    *about*, *between*, *have* — because those are what leaders share, and they
-    discriminate nothing; the rarity weight is what makes a term the author
-    chose beat a term the language supplies.
+    A candidate is scored by leader support times rarity, because support alone
+    mines the words that appear everywhere and discriminate nothing.
 
-    Ordered by score then term, so the same query expands the same way on every
-    run: a feedback rule that is not reproducible cannot be measured. Terms the
-    query already contains are skipped, because they would change nothing and
-    would hide whether the expansion did anything at all.
+    Ordered by score then term, so one query expands the same way on every run.
+    Terms the query already holds are skipped: they would change nothing and hide
+    whether the expansion did anything.
     """
 
     if maximum_terms <= 0:
@@ -433,9 +411,8 @@ def _requested_ids(values: list[str] | None) -> list[str]:
 def _normalized_scalar(value: Any) -> set[str]:
     """Normalize one scalar metadata value, or nothing when it is empty.
 
-    `title` is a single string where `authors`, `categories`, and the other list
-    fields are lists, and iterating a string yields its characters, so the two
-    shapes cannot share one normalizer.
+    `title` is a string where `authors` and the other list fields are lists, and
+    iterating a string yields its characters.
     """
 
     text = normalize_inline_text(str(value or ""))
@@ -445,11 +422,8 @@ def _normalized_scalar(value: Any) -> set[str]:
 def _matches_name_filter(supplied: set[str], values: set[str]) -> bool:
     """Whether one of the supplied phrases appears inside one of these values.
 
-    Titles and author names are phrases, not controlled tags, so a substring is
-    the honest comparison: a surname finds the author without the caller
-    reproducing a bibliography's punctuation, and a remembered title fragment
-    finds the work without reproducing its subtitle. Both sides arrive casefolded
-    from `_normalized_filter`.
+    Titles and author names are phrases, not controlled tags, so a substring is the
+    right comparison. Both sides arrive casefolded.
     """
 
     if not supplied:
@@ -471,16 +445,13 @@ def _document_matches_metadata(
 ) -> bool:
     """Match one document against the reviewed-metadata filter layers.
 
-    `project` records which project a source was gathered for, `categories` the
-    branches it belongs to, `keywords` the terms that identify it, and `language`
-    what it is written in. A source normally carries one project, so that layer is
-    a passthrough inside a one-project server and becomes meaningful when a corpus
-    is copied or shared.
+    `keywords` is all-of; `project`, `categories`, `language` and `authors` are
+    any-of. The project layer is a passthrough inside a one-project server and
+    matters when a corpus is copied or shared.
 
-    `title` and `authors` are read as names rather than as tags, so they match by
-    case-insensitive substring through `_matches_name_filter`. Reviewed values
-    override the extracted ones wherever they exist, which is why these filters
-    read the effective document the query path already holds.
+    `title` and `authors` are names rather than tags, so they match by
+    case-insensitive substring. Reviewed values override extracted ones, so these
+    filters read the effective document the query path already holds.
     """
 
     document_categories = _normalized_filter(document.get("categories"))
@@ -508,10 +479,9 @@ def _metadata_inventory(
 ) -> list[dict[str, Any]]:
     """Count searchable sources per reviewed value of one list-valued field.
 
-    Reviewed values are free strings, so this is the inventory an agent uses to
-    see a corpus partition (categories) or its project tags before searching. A
-    source is counted once per value it carries, and reviewed exclusions are not
-    counted.
+    Reviewed values are free strings, so this is the inventory an agent uses before
+    searching. A source counts once per value it carries, and reviewed exclusions
+    are not counted.
     """
 
     display: dict[str, str] = {}
@@ -538,7 +508,7 @@ def _public_document(document: dict[str, Any]) -> dict[str, Any]:
     """Return document metadata without extraction-related line wrapping."""
 
     result = dict(document)
-    # These fields existed in older immutable generations but are internal
+    # These fields existed in older immutable generations and are internal
     # implementation details, not reviewed metadata or useful diagnostics.
     result.pop("metadata_confidence", None)
     result.pop("metadata_override_revision", None)
@@ -620,13 +590,10 @@ def _effective_document_metadata(
     """Overlay current reviewed metadata without mutating generation artifacts.
 
     Generation documents retain the metadata snapshot used while building their
-    immutable indexes.  The portable reviewed-metadata file is authoritative at
-    read time, so corrections can take effect without rebuilding those indexes.
+    indexes; the portable reviewed-metadata file is authoritative at read time.
 
-    Older generations do not retain the automatic value hidden by a reviewed
-    bibliographic override.  If such an override is later removed, use a safe
-    deterministic fallback instead of silently retaining the value the user
-    removed.  A later ingestion can recover automatic metadata from the source.
+    An older generation does not retain the automatic value a reviewed override hid,
+    so removing one uses a deterministic fallback.
     """
 
     normalized_override = _canonical_metadata_override(override)
@@ -674,7 +641,7 @@ def _effective_document_metadata(
             removed_reviewed_value = True
 
     # Categories, keywords, and the project tag have no automatic extraction
-    # source, so the current reviewed lists can be represented exactly even on
+    # source, so the current reviewed lists are represented exactly even on
     # old generations.
     for field in ("categories", "keywords", "project"):
         result[field] = list(normalized_override.get(field, []))
@@ -742,7 +709,7 @@ def _chunk_text(chunk: dict[str, Any]) -> str:
 
 # The chunker counts a chunk in GPT-2 tokens and the generation records that
 # name, so a length rule stated as a fraction of the chunk size and a token count
-# are the same unit. The counter is imported and loaded on first use, so a query
+# are one unit. The counter is imported and loaded on first use, so a query
 # that applies no token floor never pays for the dependency.
 TOKENIZER_REPOSITORIES = {"gpt2": "openai-community/gpt2"}
 
@@ -780,10 +747,9 @@ def passage_token_count(text: str, tokenizer: str) -> int:
 def _embedding_text(chunk: dict[str, Any]) -> str:
     """Return the text a chunk is embedded from, contextual header included.
 
-    A header is prepended to what the dense half embeds and never to what a
-    search returns, so a returned passage stays quotable as it stands. A
-    generation built without headers has no separate embedding text, and the
-    canonical passage text is what was embedded.
+    A header is prepended to what the dense half embeds and never to what a search
+    returns, so a returned passage stays quotable. A generation built without
+    headers has no separate embedding text.
     """
 
     return str(chunk.get("embedding_text") or _chunk_text(chunk))
@@ -792,12 +758,9 @@ def _embedding_text(chunk: dict[str, Any]) -> str:
 def _chunk_header(document: dict[str, Any], locator: dict[str, Any]) -> str:
     """Return the context line prepended to a chunk's embedding text.
 
-    The parts are what a passage cannot say about itself: the source it came from
-    and the section it sits in. A PDF locator carries a page and a page label
-    rather than a section, so a PDF chunk is headed by its title alone instead of
-    by a fabricated section.
+    The parts are what a passage cannot say about itself. A PDF locator carries a
+    page rather than a section, so a PDF chunk is headed by its title alone.
     """
-
     title = normalize_inline_text(str(document.get("title") or ""))
     section = normalize_inline_text(str(locator.get("section_title") or ""))
     parts = [part for part in (title, section) if part]
@@ -929,9 +892,8 @@ def _is_extraction_artifact(chunk: dict[str, Any]) -> bool:
 def _candidate_flags(chunk: dict[str, Any]) -> int:
     """Return the stored retrieval-rejection verdict for one candidate.
 
-    The artifact lookup computes this when it is built, so a query does not
-    rescan chunk text. A generation whose lookup predates the stored verdict
-    falls back to computing the same flags here.
+    The artifact lookup computes this when it is built, so a query does not rescan
+    chunk text. A lookup predating it falls back to computing the same flags here.
     """
 
     stored = chunk.get(LOOKUP_HEALTH_FLAGS_KEY)
@@ -968,11 +930,9 @@ def _record_embedding_token_counts(
 ) -> bool:
     """Record each built chunk's embedding token count and truncation flag.
 
-    FastEmbed silently truncates input that exceeds the embedding model's limit,
-    so the dense vector of such a chunk covers only a prefix while BM25 indexes
-    the whole text. The audit makes that visible per chunk. Returning False means
-    the tokenizer could not be inspected; the fields stay absent and the build
-    metrics report the audit as unavailable rather than inventing a value.
+    FastEmbed silently truncates input past the embedding model's limit, so a
+    chunk's dense vector covers only a prefix while BM25 indexes the whole text.
+    False means the tokenizer could not be inspected, so the fields stay absent.
     """
 
     if not chunks:

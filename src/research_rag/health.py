@@ -1,22 +1,15 @@
 """Named dependency checks for one project, read by `status` and by the doctor.
 
-Every check reads. Nothing here starts a process, opens a network connection, or
-writes to the project, so the whole report can be produced before the first tool
-call has decided to start the vanilla gateway.
+Every check reads: no process, no network, no write, so the report can be built
+before the gateway is opened.
 
 A check states one of four conditions:
 
-- `ok`: there is nothing to do.
-- `warn`: the app answers, but the answer is worse than it should be.
-- `blocked`: the app cannot do its job until this is acted on.
-- `unknown`: this check did not run. It is never healthy, and the doctor names
-  every check that did not run, so "not checked" cannot be read as "fine".
-
-The two model tables are two checks. A missing embedding model prevents a build
-from being dense, and a missing reranker only removes the ranking that every
-search otherwise applies, so the first can block while the second only degrades.
-`degraded` is therefore the list of conditions that reduce an answer without
-stopping it, and it is expected when a model is deliberately absent.
+- `ok`: nothing to do.
+- `warn`: the app answers, but the answer is worse.
+- `blocked`: the app cannot work until this is acted on.
+- `unknown`: the check did not run. Never healthy, and the doctor names every one
+  that did not run, so "not checked" cannot read as "fine".
 """
 
 from __future__ import annotations
@@ -42,23 +35,20 @@ BLOCKED = "blocked"
 UNKNOWN = "unknown"
 
 # A new generation is written while the retained ones stay on disk, so a build
-# needs about as much free space as the generations already occupy. A build
-# blocks below that, and the report calls the headroom thin below twice it.
+# needs about as much free space as the generations already occupy. A build blocks
+# below that, and the report calls the headroom thin below twice it.
 CAPACITY_APPROACHING_FACTOR = 2
-
-# A FastEmbed cache entry is a Hugging Face repository directory, and its name
-# is the repository with the separator replaced.
 
 _VANILLA_CACHE_LOCK = threading.Lock()
 # The managed runtime is validated by hashing its whole tree, which reads 11 MB.
-# One process keeps the answer and re-reads only when the marker that identifies
-# the installed snapshot changes, so a repeated status costs one marker stat.
+# One process keeps the answer and re-reads only when the marker identifying the
+# installed snapshot changes, so a repeated status costs one marker stat.
 _VANILLA_CACHE: dict[tuple[Any, ...], Check] = {}
 
 
 @dataclass(frozen=True, slots=True)
 class Check:
-    """One named condition, its state, and what to do about it."""
+    """One named condition, its state, and the remedy."""
 
     name: str
     state: str
@@ -82,7 +72,7 @@ class Check:
         }
 
     def as_disclosure(self) -> dict[str, Any]:
-        """Return the shape `blocked_by` and `degraded` use in a tool answer."""
+        """The shape `blocked_by` and `degraded` use in a tool answer."""
 
         return {
             "check": self.name,
@@ -93,7 +83,7 @@ class Check:
 
 @dataclass(frozen=True, slots=True)
 class HealthReport:
-    """Every check for one project, with the two conditions a caller must act on."""
+    """Every check for one project, and the two conditions a caller must act on."""
 
     checks: tuple[Check, ...]
 
@@ -128,7 +118,7 @@ class HealthReport:
         }
 
     def as_status_fields(self) -> dict[str, Any]:
-        """Return the status-payload fields this report owns."""
+        """The status-payload fields this report owns."""
 
         return {
             "checks": [check.as_dict() for check in self.checks],
@@ -147,13 +137,12 @@ def _command(config: ResearchConfig, *arguments: str) -> str:
 
 
 def _marker_key(runtime: Any, root: Path, offline: bool) -> tuple[Any, ...]:
-    """Return the cache key for one managed runtime.
+    """The cache key for one managed runtime: path, mode, and the marker's
+    `(mtime, size)`.
 
-    The key holds the path, the mode, and the marker's `(mtime, size)`: an
-    absent snapshot blocks offline and only warns online, so a cached answer for
-    one mode is not an answer for the other.
+    An absent snapshot blocks offline and only warns online, so a cached answer for one
+    mode is not an answer for the other.
     """
-
     name = getattr(runtime, "MARKER_FILENAME", ".vanilla-ultra-rag-runtime.json")
     try:
         observed = (root / name).stat()
@@ -171,13 +160,12 @@ def _cached_snapshot(
     revision: str,
     repository: str | None,
 ) -> Path | None:
-    """Return the cached snapshot of a pinned revision, or None when absent.
+    """The cached snapshot of a pinned revision, or None when absent.
 
-    A reranker name is the repository it is fetched from, so its cache directory
-    follows from that name. The embedding model's repository is FastEmbed's own
-    registry entry rather than the pinned name, and reading that registry would
-    import the whole embedding stack for one directory name, so a pinned
-    embedding revision is looked up across the cached repositories instead.
+    A reranker name is the repository it is fetched from, so its cache directory follows
+    from that name. The embedding model's repository is FastEmbed's own registry entry,
+    and reading that would import the whole embedding stack for one directory name, so a
+    pinned revision is looked up across the cached repositories.
     """
 
     if repository is not None:
@@ -199,14 +187,12 @@ def _model_check(
     consequence: str,
     offline_state: str,
 ) -> Check:
-    """Report one pinned model against the cache it must already be in.
+    """One pinned model against the cache it must already be in.
 
-    `offline_state` is the state an absent model takes when no download is
-    possible. It differs per model: without the embedding model no build can be
-    dense, while a search without the reranker still answers, unranked, so its
-    absence is a degradation whatever the mode.
+    `offline_state` is what an absent model takes with no download possible, and it
+    differs per model: no embedding model, no dense build; no reranker, an unranked
+    answer.
     """
-
     snapshot = _cached_snapshot(config.model_cache_root, revision, repository)
     if snapshot is not None:
         return Check(
@@ -269,8 +255,8 @@ def _validate_managed_runtime(
     try:
         validator(root)
     except Exception as exc:  # noqa: BLE001 - any failure is a blocked runtime.
-        # Every failure of the pinned validator is a blocked runtime, including
-        # the exception types a release it did not predict would raise.
+        # Every failure blocks, including an exception type the release did not
+        # predict.
         reason = str(exc)
         if getattr(exc, "difference", None) is None:
             reason += (
@@ -296,8 +282,8 @@ def _vanilla_runtime_check(config: ResearchConfig) -> Check:
 
         locator = getattr(vanilla, "managed_runtime_path", None)
     except Exception as exc:  # noqa: BLE001 - a broken install fails to import.
-        # A broken install can fail on import in more than one way, and a health
-        # report exists to name that rather than to raise it.
+        # A broken install fails on import in more than one way, and a health
+        # report names that rather than raising it.
         return Check(
             "vanilla_runtime",
             UNKNOWN,
@@ -426,10 +412,9 @@ def _capacity_check(config: ResearchConfig, status: Mapping[str, Any]) -> Check:
 def _code_currency_check() -> Check:
     """Whether this process is older than the code installed beside it.
 
-    The versions are read through their module so one process's answer follows
-    the module it patched rather than the value this module captured at import.
+    The versions are read through their module, so an answer follows the module it
+    patched.
     """
-
     running = version_module.APP_VERSION
     installed = version_module.installed_version()
     drift = version_module.checkout_drift()
@@ -461,11 +446,10 @@ def health_report(
     config: ResearchConfig,
     status: Mapping[str, Any],
 ) -> HealthReport:
-    """Return every named check for this project, from one implementation.
+    """Every named check for this project, from one implementation.
 
-    `status` is the payload the caller already produced, so the dependency
-    answer and the status answer describe the same state rather than two reads
-    that can disagree.
+    `status` is the payload the caller already produced, so the dependency and
+    status answers describe one state.
     """
 
     embedding = resolve_embedding_model(config.settings.embedding_model)

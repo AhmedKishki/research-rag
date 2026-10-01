@@ -1,12 +1,11 @@
 """`research-rag doctor`: say what is wrong with this installation.
 
-Every repair is a flag. With none of them the command reads: it runs the same
-dependency checks `research-rag status` reports, prints one line per check, and
-exits nonzero when something is blocked. It writes nothing — not even a client
-entry, which it prints and validates with `--mcp-entry` and `--check-entry`.
-
-`--prefetch-models` and `--repair-runtime` are the two operations that reach the
-network, and neither is implied by the other.
+With no repair flag the command reads: it runs the dependency checks
+`research-rag status` reports, prints one line per check, and exits nonzero when
+something is blocked. It writes nothing, not even a client entry, which it prints and
+validates with `--mcp-entry` and `--check-entry`. `--prefetch-models` and
+`--repair-runtime` are the only operations that reach the network, and neither
+implies the other.
 """
 
 from __future__ import annotations
@@ -29,12 +28,12 @@ _HASH_IN_MESSAGE = re.compile(r"got\s+([0-9a-f]{8,64})")
 
 
 class DoctorError(ValueError):
-    """Raised when the doctor cannot run the check it was asked to run."""
+    """Raised when the check it was asked to run cannot run."""
 
 
 @dataclass(frozen=True, slots=True)
 class DoctorResult:
-    """What the doctor printed, and the exit code that follows from it."""
+    """The printed lines, and the exit code that follows from them."""
 
     lines: tuple[str, ...]
     exit_code: int
@@ -64,8 +63,8 @@ def _observed_hash(root: Path, message: str, runtime: Any) -> str:
 def repair_runtime(config: ResearchConfig) -> tuple[str, ...]:
     """Move a mismatched snapshot aside, install the pinned one, and re-validate.
 
-    The evidence is kept rather than deleted: a tree that failed validation is
-    what explains the failure, and an operator may want to look inside it.
+    The evidence is kept rather than deleted: a tree that failed validation is what
+    explains the failure.
     """
 
     from vanilla_ultra_rag_mcp import runtime as vanilla
@@ -103,8 +102,7 @@ def repair_runtime(config: ResearchConfig) -> tuple[str, ...]:
 
 
 def prefetch_models(config: ResearchConfig) -> tuple[str, ...]:
-    """Load the pinned models into the configured cache, and report the change."""
-
+    """The pinned models into the configured cache, and the change."""
     from .dense import _load_cross_encoder, _load_embedder
     from .storage import directory_statistics
 
@@ -122,7 +120,7 @@ def prefetch_models(config: ResearchConfig) -> tuple[str, ...]:
 
 
 def _argument_value(arguments: list[str], name: str) -> str | None:
-    """Return one argument's value, whether it was written `--name value` or `--name=value`."""
+    """One argument's value, whether written `--name value` or `--name=value`."""
 
     for index, argument in enumerate(arguments):
         if argument == name and index + 1 < len(arguments):
@@ -149,20 +147,17 @@ _ENTRY_TIMEOUT_MS = 3_600_000
 
 
 def _project_server_command() -> Path:
-    """The console script this environment installed, which an entry should run."""
+    """The console script this environment installed."""
 
     return Path(sys.executable).parent / SERVER_COMMAND
 
 
 def mcp_url_block(config: ResearchConfig) -> str:
-    """Return the URL entry, which points at the app rather than at a proxy.
+    """The URL entry, which points at the app rather than at a proxy.
 
-    The port is the one the app claimed and the launcher chose at start, so this
-    is the entry to print for a project whose app is already up. When it is not,
-    the default is named and the reader is told to start the app first, because
-    the port is chosen at start and is not knowable before that.
+    The port is the one the app claimed at start. When no app is up the default is named
+    and the reader is told to start the app first: the port is not knowable before then.
     """
-
     from .app import recorded_port
     from .launcher import DEFAULT_UI_PORT
 
@@ -185,11 +180,9 @@ def mcp_url_block(config: ResearchConfig) -> str:
 
 
 def mcp_entry_block(config: ResearchConfig) -> str:
-    """Return the stdio client entry for the resolved configuration.
+    """The stdio client entry for the resolved configuration.
 
-    One of two. A client that can open a socket is better served by the URL entry
-    below, which reaches the app itself rather than a proxy to it; this one is for
-    a client that speaks only stdio, and it names the bridge and the project.
+    One of two: a client that can open a socket is better served by the URL entry.
     """
 
     arguments = [
@@ -264,11 +257,10 @@ def _entries(document: Any, path: Path) -> dict[str, Any]:
 
 
 def _arguments_of(entry: Any) -> list[str]:
-    """Return one entry's command and arguments as a single argv.
+    """One entry's command and arguments as a single argv.
 
-    A client that splits them writes the executable as `command` and the
-    arguments as `args`; a client that keeps one list writes both in `command`.
-    Both describe the same process, so both are read the same way.
+    A client may split them into `command` and `args` or keep one list in `command`;
+    both describe the same process.
     """
 
     if not isinstance(entry, dict):
@@ -289,10 +281,9 @@ def _arguments_of(entry: Any) -> list[str]:
 def _runs_this_app(entry: Any) -> bool:
     """Whether one entry runs this app's agent surface over stdio.
 
-    The key is the user's own name for the entry — a project may keep several
-    entries and label them any way it likes — so the entry is recognized by what
-    it runs, and the `mcp` argument is required: `research-rag ui` and
-    `research-rag search` run the same executable and are not agent entries.
+    A project may keep several entries and label them any way it likes, so the entry is
+    recognized by what it runs. The `mcp` argument is required: `research-rag ui` and
+    `research-rag search` run the same executable.
     """
 
     arguments = _arguments_of(entry)
@@ -304,7 +295,7 @@ def _runs_this_app(entry: Any) -> bool:
 
 
 def _entry_url(entry: Any) -> str | None:
-    """Return the URL an entry points at, if it is a URL entry."""
+    """The URL an entry points at, if it is a URL entry."""
 
     if not isinstance(entry, dict):
         return None
@@ -313,7 +304,7 @@ def _entry_url(entry: Any) -> str | None:
 
 
 def _check_url_entry(name: str, url: str) -> list[Check]:
-    """Check one URL entry, which reaches the app itself rather than a proxy."""
+    """One URL entry, which reaches the app itself rather than a proxy."""
 
     from .surfaces.mcp import MCP_PATH
 
@@ -470,7 +461,7 @@ def check_entry(config: ResearchConfig, path: str | Path) -> tuple[Check, ...]:
 
 
 def _runtime_root_argument(arguments: list[str]) -> str | None:
-    """Return one command line's ``--runtime-root`` value, if it carries one."""
+    """A command line's ``--runtime-root`` value, if it carries one."""
 
     for index, argument in enumerate(arguments):
         if argument == "--runtime-root" and index + 1 < len(arguments):
@@ -481,10 +472,9 @@ def _runtime_root_argument(arguments: list[str]) -> str | None:
 
 
 def _server_lines(config: ResearchConfig, running: list[tuple[int, str]]) -> list[str]:
-    """Report the processes serving this project, and the command that stops them.
+    """The processes serving this project, and the command that stops them.
 
-    The doctor is not one of them, so it drops itself from the list rather than
-    reporting its own process as something to stop.
+    The doctor is not one of them, so it drops itself from the list.
     """
 
     servers = [
@@ -525,7 +515,7 @@ def run_doctor(
     prefetch: bool = False,
     repair: bool = False,
 ) -> DoctorResult:
-    """Run the checks and the requested operation, and return what to print."""
+    """The checks and the requested operation, and what to print."""
 
     if prefetch and repair:
         raise DoctorError(
