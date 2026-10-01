@@ -107,7 +107,7 @@ Corrupt extraction units are omitted whole rather than indexed as garbage, and t
 
 ## Settings
 
-`research-rag config` prints every effective value, the layer it came from, and what a change to each one costs. The workspace in the browser writes those values into `.research-rag/config.toml` after naming which ones force a rebuild, and it preserves every key it did not change, so a hand edit in that file survives. A value the environment, the command line, or `--config PATH` supplied is shown read-only, because those layers outrank the project file. To change a value outside the browser, edit that file, override one for a single command with `--set key=value`, or add a layer with `--config PATH`. `research-rag help settings` names the layers and the cost.
+`research-rag config` prints every effective value, the layer it came from, what each key does, and what a change to each one costs. The workspace in the browser writes those values into `.research-rag/config.toml` after naming which ones force a rebuild, and it preserves every key it did not change, so a hand edit in that file survives. A value the environment, the command line, or `--config PATH` supplied is shown read-only, because those layers outrank the project file. To change a value outside the browser, edit that file, override one for a single command with `--set key=value`, or add a layer with `--config PATH`. `research-rag help settings` names the layers, the description, and the cost.
 
 A corpus in a language the embedding model does not cover is reported rather than silently embedded. `research-rag help filters` names the layers; the section above shows them in use.
 
@@ -147,7 +147,7 @@ An agent gets eight tools and one resource, and every answer is the lean project
 | `passage` | one passage and its neighbours |
 | `include` / `exclude` | reversible retrieval decisions for a whole file or one passage (`--chunk CHUNK_ID`), enforced immediately |
 | `metadata` | one source's reviewed bibliographic override |
-| `config` | every effective setting and the layer it came from |
+| `config` | every effective setting, what the key does, and the layer it came from |
 | `doctor` | one line per dependency, with the command that fixes it |
 | `start` / `ui` | the app, started; `ui` also opens a browser |
 | `clients` / `disconnect` | the agents attached to the app, and ending one |
@@ -201,7 +201,7 @@ research-rag --project-root /path/to/project ui --stop     # stop it and what it
 
 The launcher claims the first free loopback port at or above the one it was generated with and records the port it chose, so two projects never serve from the same port. `research-rag serve` is the same workspace in the foreground on a fixed port, and is what the launcher runs.
 
-The workspace binds loopback only and has no authentication, which is correct for an address no other machine can reach. It has no retrieval mode, no reranking switch, and no chunk tuning, because every search is hybrid and reranked. Metadata, source selection, category partitions, project metadata, and this project's settings are there. The workspace has a tab per job: **Search**, **Sources**, **Config**, and **MCP**, and the generations, partitions, languages, and SQL console panels sit under the search view.
+The workspace binds loopback only and has no authentication, which is correct for an address no other machine can reach. It has no retrieval mode, no reranking switch, and no chunk tuning, because every search is hybrid and reranked. Metadata, source selection, category partitions, project metadata, and this project's settings, each with the description the registry declares for it, are there. The workspace has a tab per job: **Search**, **Sources**, **Config**, and **MCP**, and the generations, partitions, languages, and SQL console panels sit under the search view.
 
 One installation serves several projects. The header names the project the page is serving and offers the others: a project whose app is up opens in a new tab, and one whose app is down shows the command that starts it rather than a link that would fail. The **MCP** tab carries the address this app serves agents on and the client entry `research-rag doctor --mcp-entry` prints, copyable as it is.
 
