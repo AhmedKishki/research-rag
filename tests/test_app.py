@@ -616,6 +616,7 @@ async def test_the_control_api_answers_the_account_and_the_client_entry(
         # This project's own app is the one serving the request, and it is named
         # with the address a reader can open.
         assert body["projects"][0]["app"] == {
+            "attached_to": None,
             "running": True,
             "url": app.url,
             "port": app.port,

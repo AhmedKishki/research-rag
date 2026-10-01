@@ -48,6 +48,58 @@ CLIENT_IDLE_SECONDS = 90.0
 CLIENT_NAME_HEADER = "x-research-rag-client"
 PORT_FILE = "research-rag-ui.port"
 PID_FILE = "research-rag-ui.pid"
+# Which terminal the app is attached to, or absent when it has none. A detached
+# app and one a reader is watching look identical from another terminal
+# otherwise, and the difference decides whether Ctrl-C there closes anything.
+TTY_FILE = "research-rag-ui.tty"
+
+
+def _own_tty() -> str | None:
+    """The terminal this process is attached to, or None when it has none."""
+
+    try:
+        return os.ttyname(0)
+    except OSError:
+        return None
+
+
+def _record_state(config: ResearchConfig, port: int) -> None:
+    """Write the running state a second terminal reads to find this app.
+
+    The generated launcher writes these for the app it starts, and an app a
+    reader started by hand writes them for itself, so `clients`, `stop`, and the
+    workspace's project selector see the same thing either way.
+    """
+
+    state = config.state_root
+    tty = _own_tty()
+    with contextlib.suppress(OSError):
+        state.mkdir(parents=True, exist_ok=True)
+        (state / PORT_FILE).write_text(f"{port}\n", encoding="utf-8")
+        (state / PID_FILE).write_text(f"{os.getpid()}\n", encoding="utf-8")
+        if tty is None:
+            (state / TTY_FILE).unlink(missing_ok=True)
+        else:
+            (state / TTY_FILE).write_text(f"{tty}\n", encoding="utf-8")
+
+
+def _forget_state(config: ResearchConfig) -> None:
+    """Remove the running state this process wrote, and no other process's.
+
+    An app that is stopping must not delete the record of an app that has since
+    taken the project over, so the pid is compared before anything is removed.
+    """
+
+    state = config.state_root
+    try:
+        recorded = int((state / PID_FILE).read_text(encoding="utf-8").strip())
+    except (OSError, ValueError):
+        return
+    if recorded != os.getpid():
+        return
+    for name in (PORT_FILE, PID_FILE, TTY_FILE):
+        with contextlib.suppress(OSError):
+            (state / name).unlink(missing_ok=True)
 
 
 class ClientError(Exception):
@@ -440,6 +492,7 @@ class App:
             )
         )
         self.started_at = _now()
+        _record_state(self.config, self.port)
         self._task = asyncio.create_task(self._server.serve(sockets=[claim]))
         self._task.add_done_callback(self._task_finished)
 
@@ -458,6 +511,7 @@ class App:
                     f"{failure.__class__.__name__}: {failure}"
                 )
         self._release_claim()
+        _forget_state(self.config)
 
     def _release_claim(self) -> None:
         """Close the claimed socket, which uvicorn also closes on shutdown."""
@@ -489,6 +543,7 @@ class App:
                 await task
         self._release_claim()
         await self.gateway.aclose()
+        _forget_state(self.config)
 
 
 @asynccontextmanager
@@ -556,6 +611,7 @@ __all__ = [
     "CONTROL_PREFIX",
     "PID_FILE",
     "PORT_FILE",
+    "TTY_FILE",
     "UI_HOST",
     "App",
     "Client",

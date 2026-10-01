@@ -192,6 +192,23 @@ It reports which kind of install this is, and compares it with the repository's 
 
 ## Use the workspace
 
+The shortest way in is no command at all. It opens the workspace in a browser and serves it from the terminal you typed it in:
+
+```bash
+research-rag
+```
+
+```
+AI and fetishism — workspace attached to /dev/pts/5
+  http://127.0.0.1:5051
+  pid 4080404 · log /path/to/project/.research-rag/runtime/logs/research-rag-ui.log
+  Ctrl-C stops the app and the gateway it started.
+```
+
+That terminal owns the app: Ctrl-C stops it and the gateway it opened, and closing the window ends it the same way, because a closed terminal sends the signal Ctrl-C would. Nothing survives it. If the installation holds more than one project it asks which, in the terminal, and a terminal that cannot answer — a script, a pipe — is given the list and the command to run instead of a prompt nobody will read. An app already up for that project is reported and left alone: two apps on one project would each hold the lock and open a gateway.
+
+The app records the same state whichever way it was started, so another terminal can find and stop it, and `research-rag projects` says whether each project's app is up and which terminal it is attached to — an attached app stops with that terminal, a detached one does not.
+
 ```bash
 research-rag --project-root /path/to/project ui            # start and print the URL
 research-rag --project-root /path/to/project ui --open     # and open a browser
