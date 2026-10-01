@@ -64,7 +64,7 @@ Any question that needs a user choice must be presented as a numbered list of co
 - Python: `>=3.11,<3.13`
 - FastMCP: `3.4.0`, used only to reach the pinned vanilla gateway
 - Vanilla gateway commit: `fc339c259a672ca4dacb525840eba851d01c4b75`
-- Shared UI commit: `98a97a9`
+- Shared UI commit: `924a281`
 - Shared settings-core commit: `cbd47bb46efe85340de34f8f8f13fc6516e7fecb`
 - Upstream UltraRAG: `0.3.0.2` at `3a709a2aea3fbe46acca59c422621c94b6e86857`
 

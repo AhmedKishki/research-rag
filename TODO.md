@@ -20,7 +20,6 @@ Open work, grouped by the problem each item solves. A finished item leaves this 
 
 What a reader is told has to match what the app holds.
 
-- [ ] **Surface the retained-generation inventory in the workspace.** Feature. `status` reports `generations` and `retained_generation_bytes`; the pinned status view shows none of them, so a browser cannot see what a prune would consider.
 - [ ] **Give `stale` one meaning.** Feature. In the no-generation branch it doubles as "ready to build", so a caller cannot tell a corpus that changed from one that was never built.
 - [ ] **Report activation failures as structured values** instead of one all-or-nothing message. Feature. A failed activation says that it failed rather than which step failed and what it left on disk.
 - [ ] **Decide whether `search --method` and `--no-rerank` stay.** Decision. They exist so a row of `MEASUREMENTS.md` can be reproduced on demand, and no reader-facing surface offers either. `AGENTS.md` records the exception; removing them is a deliberate simplification, not a cleanup.

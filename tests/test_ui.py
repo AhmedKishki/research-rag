@@ -154,6 +154,15 @@ class FakeResearchService:
             "message": "Reviewed metadata saved.",
         }
 
+    async def remove_generation(
+        self, generation_id: str, *, confirm: str
+    ) -> dict[str, Any]:
+        self._record(
+            "remove_generation",
+            {"generation_id": generation_id, "confirm": confirm},
+        )
+        return {"status": "removed", "generation_id": generation_id}
+
 
 def _client(project: Path) -> tuple[TestClient, FakeResearchService]:
     config = resolve_config(project, vanilla_executable=sys.executable)
@@ -415,6 +424,7 @@ def test_an_unserved_search_argument_never_reaches_the_service(
         "get_passage",
         "set_source_inclusion",
         "set_source_metadata",
+        "remove_generation",
     }
 
 
@@ -571,3 +581,53 @@ def test_a_workspace_disconnect_is_held_to_the_write_rules(project: Path) -> Non
     assert cross_origin.status_code == 403
     assert form.status_code == 415
     assert registry.report()[0]["attached"] is True
+
+
+def test_the_workspace_removes_a_generation_only_with_the_id_repeated(
+    project: Path,
+) -> None:
+    """A browser may not turn a listing into a deletion with one click.
+
+    The shared workspace already refuses a confirmation that does not repeat the
+    id, so the half that matters here is that the adapter forwards the pair
+    rather than defaulting the confirmation. Forwarding one field and inventing
+    the other is how a click would come to mean yes.
+    """
+
+    from ui_ultra_rag_mcp import UIRequestError
+
+    from research_rag.surfaces.ui import ResearchUIAdapter
+
+    config = resolve_config(project)
+    service = FakeResearchService()
+    adapter = ResearchUIAdapter(config, service)  # type: ignore[arg-type]
+    generation_id = "20260930T191235Z-45608dc5"
+
+    result = asyncio.run(
+        adapter.call(
+            "remove_generation",
+            {"generation_id": generation_id, "confirm": generation_id},
+        )
+    )
+
+    assert result == {"status": "removed", "generation_id": generation_id}
+    assert (
+        "remove_generation",
+        {"generation_id": generation_id, "confirm": generation_id},
+    ) in (service.calls)
+    for body in (
+        {"generation_id": generation_id},
+        {"generation_id": generation_id, "confirm": 7},
+        {"confirm": generation_id},
+    ):
+        with pytest.raises(UIRequestError):
+            asyncio.run(adapter.call("remove_generation", body))
+
+
+def test_the_workspace_serves_the_generation_panel(project: Path) -> None:
+    """The panel is on because the app retains generations a rebuild leaves behind."""
+
+    from research_rag.surfaces.ui import RESEARCH_UI_PROFILE
+
+    assert RESEARCH_UI_PROFILE.capabilities.generations is True
+    assert RESEARCH_UI_PROFILE.capabilities.clients is True
