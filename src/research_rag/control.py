@@ -5,13 +5,16 @@ every command-line operation arrives here over loopback, on the port and process
 that serves the workspace and the agent surface.
 
 It names what the command line sends and the command line names what it sends, so
-the two cannot drift without a test saying so. Loopback only, JSON only, and the
-service is the only writer.
+the two cannot drift without a test saying so. Loopback only, and the service is
+the only writer. A settings write carries the browser's own gates as well, because
+it changes what the project's next build records.
 """
 
 from __future__ import annotations
 
+import ipaddress
 from typing import TYPE_CHECKING, Any
+from urllib.parse import urlsplit
 
 import httpx
 from starlette.requests import Request
@@ -32,8 +35,62 @@ class ControlError(Exception):
     """A control call the app refused, or could not be delivered to one."""
 
 
+LOOPBACK_HOSTS = frozenset({"127.0.0.1", "localhost", "::1"})
+
+
 def _json(payload: Any, status_code: int = 200) -> JSONResponse:
     return JSONResponse(payload, status_code=status_code)
+
+
+def _is_loopback(request: Request) -> bool:
+    """Whether the request arrived from this machine.
+
+    The app binds a loopback port, so a request from anywhere else reached it
+    through something that chose to forward it, and that something is not this
+    machine's own browser.
+    """
+
+    client = request.client
+    if client is None:
+        return False
+    host = (client.host or "").casefold()
+    if host in LOOPBACK_HOSTS:
+        return True
+    try:
+        return ipaddress.ip_address(host).is_loopback
+    except ValueError:
+        return False
+
+
+def _write_refusal(request: Request) -> JSONResponse | None:
+    """Refuse a write that did not come from this machine's own page.
+
+    A settings write changes what a project's next build records, so it takes the
+    same three gates as the workspace's own writes: same-origin, JSON only, and
+    loopback only. The shared package holds the browser copy of these; the control
+    router cannot use them, because a terminal has no origin to compare.
+    """
+
+    if not _is_loopback(request):
+        return _json(
+            {"error": "Control writes are refused from another host"}, status_code=403
+        )
+    if request.headers.get("sec-fetch-site", "").casefold() == "cross-site":
+        return _json({"error": "Cross-origin writes are blocked"}, status_code=403)
+    origin = request.headers.get("origin")
+    if origin:
+        parsed = urlsplit(origin)
+        if parsed.scheme not in {
+            "http",
+            "https",
+        } or parsed.netloc != request.headers.get("host", ""):
+            return _json({"error": "Cross-origin writes are blocked"}, status_code=403)
+    content_type = request.headers.get("content-type", "").split(";", 1)[0]
+    if content_type.casefold() != "application/json":
+        return _json(
+            {"error": "Write requests require application/json"}, status_code=415
+        )
+    return None
 
 
 async def _body(request: Request) -> dict[str, Any]:
@@ -224,6 +281,44 @@ async def _source_metadata(app: App, request: Request) -> JSONResponse:
     )
 
 
+async def _settings_read(app: App, _request: Request) -> JSONResponse:
+    return _json(await app.service.settings_read())
+
+
+async def _settings_write(app: App, request: Request) -> JSONResponse:
+    refusal = _write_refusal(request)
+    if refusal is not None:
+        return refusal
+    body = await _body(request)
+    # The body names settings and nothing else. A path would move the file a
+    # write lands in, so one is refused rather than ignored.
+    unknown = set(body) - {"values", "expected_revision", "confirm"}
+    if unknown:
+        raise ResearchError(
+            "A settings write takes values, expected_revision, and confirm: "
+            f"{', '.join(sorted(unknown))}"
+        )
+    values = body.get("values")
+    if not isinstance(values, dict) or not values:
+        raise ResearchError("a settings write needs a values object")
+    expected_revision = body.get("expected_revision")
+    if not isinstance(expected_revision, str) or not expected_revision.strip():
+        raise ResearchError(
+            "a settings write needs the expected_revision it read, so a change "
+            "made since is refused instead of overwritten"
+        )
+    confirm = body.get("confirm", False)
+    if not isinstance(confirm, bool):
+        raise ResearchError("confirm must be a boolean")
+    return _json(
+        await app.service.settings_write(
+            values,
+            expected_revision=expected_revision,
+            confirm=confirm,
+        )
+    )
+
+
 async def _handle(app: App, endpoint: Any, request: Request) -> JSONResponse:
     """Turn a named failure into a named error, and leave the rest to the app.
 
@@ -265,6 +360,8 @@ def control_routes(app: App) -> list[Route]:
         route("/generations", _generations, ["GET"]),
         route("/generations/use", _use_generation, ["POST"]),
         route("/generations/remove", _remove_generation, ["POST"]),
+        route("/settings", _settings_read, ["GET"]),
+        route("/settings", _settings_write, ["POST"]),
     ]
 
 
@@ -382,6 +479,26 @@ class Control:
             "POST",
             "/generations/remove",
             json={"generation_id": generation_id, "confirm": confirm},
+        )
+
+    def settings(self) -> dict[str, Any]:
+        return self._call("GET", "/settings")
+
+    def write_settings(
+        self,
+        values: dict[str, Any],
+        *,
+        expected_revision: str,
+        confirm: bool = False,
+    ) -> dict[str, Any]:
+        return self._call(
+            "POST",
+            "/settings",
+            json={
+                "values": values,
+                "expected_revision": expected_revision,
+                "confirm": confirm,
+            },
         )
 
 

@@ -163,6 +163,28 @@ class FakeResearchService:
         )
         return {"status": "removed", "generation_id": generation_id}
 
+    async def settings_read(self) -> dict[str, Any]:
+        self._record("settings_read", {})
+        return {"revision": "rev-1", "sections": [], "message": "38 settings."}
+
+    async def settings_write(
+        self, values: dict[str, Any], *, expected_revision: str, confirm: bool = False
+    ) -> dict[str, Any]:
+        self._record(
+            "settings_write",
+            {
+                "values": values,
+                "expected_revision": expected_revision,
+                "confirm": confirm,
+            },
+        )
+        return {
+            "revision": "rev-2",
+            "changed": sorted(values),
+            "requires_ingest": True,
+            "message": "Saved.",
+        }
+
 
 def _client(project: Path) -> tuple[TestClient, FakeResearchService]:
     config = resolve_config(project, vanilla_executable=sys.executable)
@@ -425,6 +447,8 @@ def test_an_unserved_search_argument_never_reaches_the_service(
         "set_source_inclusion",
         "set_source_metadata",
         "remove_generation",
+        "settings_read",
+        "settings_write",
     }
 
 
@@ -631,3 +655,74 @@ def test_the_workspace_serves_the_generation_panel(project: Path) -> None:
 
     assert RESEARCH_UI_PROFILE.capabilities.generations is True
     assert RESEARCH_UI_PROFILE.capabilities.clients is True
+
+
+def test_the_workspace_forwards_a_settings_write_whole(project: Path) -> None:
+    """The values, the revision, and the confirmation all reach the service.
+
+    The workspace sends its own field names, and the revision is the server's
+    comparison token. Dropping one would let a browser write over a change it
+    never saw, and defaulting the confirmation would let a click mean yes on a
+    change that forces a rebuild.
+    """
+
+    from ui_ultra_rag_mcp import UIRequestError
+
+    from research_rag.surfaces.ui import ResearchUIAdapter
+
+    config = resolve_config(project)
+    service = FakeResearchService()
+    adapter = ResearchUIAdapter(config, service)  # type: ignore[arg-type]
+
+    result = asyncio.run(
+        adapter.call(
+            "settings_write",
+            {
+                "values": {"retrieval.rrf_k": 40},
+                "expected_revision": "rev-1",
+                "confirm": True,
+            },
+        )
+    )
+
+    assert result == {
+        "revision": "rev-2",
+        "changed": ["retrieval.rrf_k"],
+        "requires_ingest": True,
+        "message": "Saved.",
+    }
+    assert service.calls[-1] == (
+        "settings_write",
+        {
+            "values": {"retrieval.rrf_k": 40},
+            "expected_revision": "rev-1",
+            "confirm": True,
+        },
+    )
+    for body in (
+        {"expected_revision": "rev-1", "confirm": True},
+        {"values": {"retrieval.rrf_k": 40}, "confirm": True},
+        {"values": {"retrieval.rrf_k": 40}, "expected_revision": ""},
+        {
+            "values": {"retrieval.rrf_k": 40},
+            "expected_revision": "rev-1",
+            "confirm": "yes",
+        },
+    ):
+        with pytest.raises(UIRequestError):
+            asyncio.run(adapter.call("settings_write", body))
+
+
+def test_the_workspace_reads_the_settings_the_server_resolved(project: Path) -> None:
+    """A read carries no argument of this app's, so none can be forwarded."""
+
+    from research_rag.surfaces.ui import ResearchUIAdapter
+
+    config = resolve_config(project)
+    service = FakeResearchService()
+    adapter = ResearchUIAdapter(config, service)  # type: ignore[arg-type]
+
+    result = asyncio.run(adapter.call("settings_read", {}))
+
+    assert result["revision"] == "rev-1"
+    assert service.calls == [("settings_read", {})]

@@ -86,6 +86,27 @@ def post(url: str, path: str, payload: dict[str, Any]) -> tuple[int, Any]:
         connection.close()
 
 
+def post_ordered(
+    url: str, path: str, payload: dict[str, Any], headers: dict[str, str]
+) -> tuple[int, Any]:
+    """One POST whose headers are exactly what the caller asked for.
+
+    The gates this app puts on a settings write are header gates, so a test that
+    could not set a header would not be testing them.
+    """
+
+    connection = http.client.HTTPConnection(
+        "127.0.0.1", int(url.rpartition(":")[2]), timeout=30
+    )
+    try:
+        encoded = json.dumps(payload).encode("utf-8")
+        connection.request("POST", path, body=encoded, headers=headers)
+        response = connection.getresponse()
+        return response.status, json.loads(response.read().decode("utf-8"))
+    finally:
+        connection.close()
+
+
 async def wait_until_ready(app: App) -> None:
     for _ in range(400):
         if app.ready:
@@ -149,6 +170,21 @@ class FakeService:
     ) -> dict[str, Any]:
         return self._record(
             "remove_generation", {"generation_id": generation_id, "confirm": confirm}
+        )
+
+    async def settings_read(self) -> dict[str, Any]:
+        return self._record("settings_read", {})
+
+    async def settings_write(
+        self, values: dict[str, Any], *, expected_revision: str, confirm: bool = False
+    ) -> dict[str, Any]:
+        return self._record(
+            "settings_write",
+            {
+                "values": values,
+                "expected_revision": expected_revision,
+                "confirm": confirm,
+            },
         )
 
 
@@ -237,6 +273,133 @@ async def test_the_control_api_and_the_agent_surface_share_one_service(
             assert optional not in through_tool or through_tool[optional] is None
         assert through_tool["query"] == through_control["query"]
         assert through_tool["top_k"] == through_control["top_k"]
+    finally:
+        await app.stop()
+
+
+async def test_a_control_settings_write_reaches_the_one_service(project: Path) -> None:
+    """The command line and the workspace change one project's settings."""
+
+    config = resolve_config(project, vanilla_executable=sys.executable)
+    app = App(config, port=free_port())
+    fake = FakeService()
+    app.service = fake  # type: ignore[assignment]
+    await app.start()
+    try:
+        await wait_until_ready(app)
+        code, body = await asyncio.to_thread(get, app.url, "/control/settings")
+        assert code == 200
+        assert body["operation"] == "settings_read"
+        code, body = await asyncio.to_thread(
+            post,
+            app.url,
+            "/control/settings",
+            {
+                "values": {"retrieval.rrf_k": 40},
+                "expected_revision": "rev-1",
+                "confirm": True,
+            },
+        )
+        assert code == 200
+        assert body["arguments"]["values"] == {"retrieval.rrf_k": 40}
+        assert body["arguments"]["confirm"] is True
+        assert [name for name, _ in fake.calls] == ["settings_read", "settings_write"]
+    finally:
+        await app.stop()
+
+
+async def test_a_control_settings_write_is_refused_from_another_site(
+    project: Path,
+) -> None:
+    """A settings write changes what the next build records, so origin matters."""
+
+    config = resolve_config(project, vanilla_executable=sys.executable)
+    app = App(config, port=free_port())
+    fake = FakeService()
+    app.service = fake  # type: ignore[assignment]
+    await app.start()
+    try:
+        await wait_until_ready(app)
+        code, body = await asyncio.to_thread(
+            post_ordered,
+            app.url,
+            "/control/settings",
+            {"values": {"retrieval.rrf_k": 40}, "expected_revision": "r"},
+            {
+                "Content-Type": "application/json",
+                "Sec-Fetch-Site": "cross-site",
+            },
+        )
+        assert code == 403
+        assert "Cross-origin" in body["error"]
+        # A page on another site must not be able to make the app record anything.
+        assert fake.calls == []
+
+        host = app.url.rpartition(":")[2]
+        code, body = await asyncio.to_thread(
+            post_ordered,
+            app.url,
+            "/control/settings",
+            {"values": {"retrieval.rrf_k": 40}, "expected_revision": "r"},
+            {
+                "Content-Type": "application/json",
+                "Origin": f"http://elsewhere.example:{host}",
+            },
+        )
+        assert code == 403
+        assert fake.calls == []
+    finally:
+        await app.stop()
+
+
+async def test_a_control_settings_write_requires_a_json_body(project: Path) -> None:
+    config = resolve_config(project, vanilla_executable=sys.executable)
+    app = App(config, port=free_port())
+    fake = FakeService()
+    app.service = fake  # type: ignore[assignment]
+    await app.start()
+    try:
+        await wait_until_ready(app)
+        code, body = await asyncio.to_thread(
+            post_ordered,
+            app.url,
+            "/control/settings",
+            {"values": {"retrieval.rrf_k": 40}, "expected_revision": "r"},
+            {"Content-Type": "text/plain"},
+        )
+        assert code == 415
+        assert "application/json" in body["error"]
+        assert fake.calls == []
+    finally:
+        await app.stop()
+
+
+async def test_a_control_settings_write_takes_no_path_in_its_body(
+    project: Path,
+) -> None:
+    """The file a write lands in is the project's own, and no body may move it."""
+
+    config = resolve_config(project, vanilla_executable=sys.executable)
+    app = App(config, port=free_port())
+    fake = FakeService()
+    app.service = fake  # type: ignore[assignment]
+    await app.start()
+    try:
+        await wait_until_ready(app)
+        code, body = await asyncio.to_thread(
+            post,
+            app.url,
+            "/control/settings",
+            {
+                "values": {"retrieval.rrf_k": 40},
+                "expected_revision": "r",
+                "confirm": True,
+                "path": "/etc/research-rag/config.toml",
+            },
+        )
+        assert code == 400
+        assert "path" in body["error"]
+        assert fake.calls == []
     finally:
         await app.stop()
 

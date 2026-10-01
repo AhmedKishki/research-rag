@@ -121,6 +121,8 @@ _OPERATION_ARGUMENTS: Mapping[str, frozenset[str]] = {
     "set_source_inclusion": frozenset({"source_path", "included", "reason"}),
     "set_source_metadata": frozenset({"source_path", "metadata"}),
     "remove_generation": frozenset({"generation_id", "confirm"}),
+    "settings_read": frozenset(),
+    "settings_write": frozenset({"values", "expected_revision", "confirm"}),
 }
 
 
@@ -318,6 +320,28 @@ class ResearchUIAdapter:
             if not isinstance(confirm, str):
                 raise UIRequestError("A generation removal needs a confirm string")
             return await self.service.remove_generation(generation_id, confirm=confirm)
+        if operation == "settings_read":
+            return await self.service.settings_read()
+        if operation == "settings_write":
+            values = arguments.get("values")
+            if not isinstance(values, Mapping) or not values:
+                raise UIRequestError(
+                    "A settings write needs a values object naming what to change"
+                )
+            expected_revision = arguments.get("expected_revision")
+            if not isinstance(expected_revision, str) or not expected_revision.strip():
+                raise UIRequestError(
+                    "A settings write needs the expected_revision it read, so a "
+                    "change made since is refused instead of overwritten"
+                )
+            confirm = arguments.get("confirm", False)
+            if not isinstance(confirm, bool):
+                raise UIRequestError("confirm must be a boolean")
+            return await self.service.settings_write(
+                dict(values),
+                expected_revision=expected_revision,
+                confirm=confirm,
+            )
         raise UIRequestError(
             f"Research operation {operation!r} is not available",
             status_code=404,

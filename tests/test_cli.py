@@ -773,6 +773,25 @@ def test_set_overrides_reach_the_settings_by_resolving_in_this_process(
     assert config.settings_provenance["retrieval.rrf_k"] == "command line"
 
 
+def test_config_prints_what_a_change_to_every_key_costs(
+    project: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """`config` stays read-only, and it shows the cost before a file is edited."""
+
+    args = _args("--project-root", str(project), "config")
+
+    asyncio.run(cli_module._run(args))
+
+    printed = capsys.readouterr().out
+    assert "What a change to each key costs" in printed
+    # A key the registry labels `identity` but no generation reads costs nothing,
+    # and one the fingerprint records costs a rebuild.
+    assert "retrieval.rerank_max_candidates" in printed
+    assert "retrieval.rrf_k" in printed
+    assert "dense.embedding_model" in printed
+    assert not (project / ".research-rag" / "config.toml").exists()
+
+
 def _launched(project: Path, monkeypatch: pytest.MonkeyPatch, returncode: int = 0):
     """Generate the launcher, and record the commands the launcher is called with."""
 

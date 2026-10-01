@@ -53,6 +53,7 @@ from ..registry import resolve as resolve_registered
 from ..rerankers import RERANKER_MODEL_CHOICES
 from ..service import ResearchService
 from ..settings import SETTINGS
+from ..settings_document import describe_costs
 from ..support import DEFAULT_RETRIEVAL_METHOD, RETRIEVAL_METHODS, ResearchError
 from ..tool_views import lean_status
 from ..ultrarag import LazyGateway, VanillaUltraRAG
@@ -285,18 +286,23 @@ and `config` prints every effective value with the layer it came from:
   3. the project file, <project>/.research-rag/config.toml
   4. an extra file named by --config PATH
 
-`config` prints and does not write. To change a value, edit the project file; the
-two global options below are per-call and are not recorded anywhere.
+`config` prints and does not write. The browser workspace writes the project file
+for you, refusing a change it cannot validate and naming what the change costs.
+The two global options below are per-call and are not recorded anywhere.
 
   --set key=value    override one value for this command, repeatable, and
                      forgotten when the command ends
   --config PATH      add one more layer for this command
 
-What a change costs. Most keys decide what a generation contains, so changing one
-and then searching answers `stale` until `ingest` runs again, and a value that
-changes retrieval changes the answer to a question already asked. A few keys do
-not: runtime.tool_detail, the search depth, the network-binding host, and the
-process priority are read per call and cost nothing.
+What a change costs is computed, not declared. `config` prints it: each key is
+costed by applying a change to it and recomputing what a build records, the
+retrieval-policy fingerprint, the recorded chunk settings, and the recorded
+models. A key that moves none of them costs nothing and the next search uses the
+new value at once, which is what `runtime.tool_detail` and the batch sizes do. A
+key that moves the fingerprint or the chunk settings makes search answer `stale`
+until `ingest` runs again, which changes the answer to a question already asked.
+A key that changes a model downloads it: a new embedding model recomputes every
+vector, and a new reranker is loaded by the next search.
 
 `doctor` reports which layer a value came from when a setting does not do what
 the project expected, and the file path it would be changed in.
@@ -1595,6 +1601,7 @@ async def _run(args: argparse.Namespace) -> CommandResult:
                 SETTINGS, config.settings.as_values(), config.settings_provenance
             )
         )
+        print(describe_costs(config.settings))
         return CommandResult()
     if args.command == "start":
         return CommandResult(payload=_start(args, config))
