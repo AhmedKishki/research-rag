@@ -306,8 +306,24 @@ def _entry_url(entry: Any) -> str | None:
     return url.strip() if isinstance(url, str) and url.strip() else None
 
 
+def _loopback_url(url: str) -> bool:
+    """Whether a URL entry names this machine.
+
+    A client configuration holds every server its owner uses, so an entry
+    pointing somewhere else is that server's and this one has nothing to say
+    about it. Naming this app over a network address is not a case to report
+    either: the app serves loopback only, so such an entry cannot reach it.
+    """
+
+    if not url.startswith(("http://", "https://")):
+        return False
+    authority = url.split("//", 1)[1]
+    host = authority.split("/", 1)[0].split(":", 1)[0]
+    return host in ("127.0.0.1", "localhost", "::1")
+
+
 def _check_url_entry(name: str, url: str) -> list[Check]:
-    """One URL entry, which reaches the app itself rather than a proxy."""
+    """One loopback URL entry, which reaches the app rather than a proxy."""
 
     from .surfaces.mcp import MCP_PATH
 
@@ -322,15 +338,6 @@ def _check_url_entry(name: str, url: str) -> list[Check]:
         )
         return findings
     authority = url.split("//", 1)[1]
-    host = authority.split("/", 1)[0].split(":", 1)[0]
-    if host not in ("127.0.0.1", "localhost", "::1"):
-        findings.append(
-            Check(
-                "entry.url",
-                "blocked",
-                f"{name} points at {host}, and this app serves loopback only.",
-            )
-        )
     route = "/" + authority.split("/", 1)[1] if "/" in authority else "/"
     if not route.rstrip("/").endswith(MCP_PATH):
         findings.append(
@@ -358,7 +365,9 @@ def check_entry(config: ResearchConfig, path: str | Path) -> tuple[Check, ...]:
     mine = [
         name
         for name, entry in entries.items()
-        if _runs_this_app(entry) or _entry_url(entry) is not None
+        if _runs_this_app(entry)
+        or (url := _entry_url(entry)) is not None
+        and _loopback_url(url)
     ]
     if not mine:
         raise DoctorError(f"No {SERVER_COMMAND} entry in {entry_path}")

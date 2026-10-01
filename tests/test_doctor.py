@@ -336,19 +336,44 @@ def test_a_correct_url_entry_passes(tmp_path: Path, config: ResearchConfig) -> N
     assert findings[0].state == "ok"
 
 
-def test_a_url_entry_must_be_loopback_and_at_the_agent_surface(
+def test_another_servers_url_entry_is_left_alone(
     tmp_path: Path, config: ResearchConfig
 ) -> None:
+    """A client file holds every server its owner uses, and this is one of ours.
+
+    A remote entry belongs to another product, and reporting it as this app's
+    would name a fault it cannot have: the app serves loopback only, so a remote
+    URL was never an entry for it.
+    """
+
     path = _entry_file(
         tmp_path,
-        json.dumps({"mcpServers": {"rag": {"url": "https://example.com/mcp"}}}),
+        json.dumps(
+            {
+                "mcp": {
+                    "github": {"url": "https://api.githubcopilot.com/mcp/"},
+                    "rag": {"url": "http://127.0.0.1:5051/mcp", "timeout": 3_600_000},
+                }
+            }
+        ),
     )
 
     findings = check_entry(config, path)
 
-    states = {check.name: check.state for check in findings}
-    assert states["entry.url"] == "blocked"
-    assert "loopback only" in next(c.reason for c in findings if c.name == "entry.url")
+    assert [check.name for check in findings] == ["entry"]
+    assert findings[0].state == "ok"
+
+
+def test_a_file_of_only_other_servers_names_no_entry_of_ours(
+    tmp_path: Path, config: ResearchConfig
+) -> None:
+    path = _entry_file(
+        tmp_path,
+        json.dumps({"mcp": {"github": {"url": "https://api.githubcopilot.com/"}}}),
+    )
+
+    with pytest.raises(DoctorError, match="No research-rag entry"):
+        check_entry(config, path)
 
 
 def test_a_url_entry_at_the_wrong_route_is_a_warning(
