@@ -8,7 +8,11 @@ from pathlib import Path
 
 import pytest
 from conftest import write_pdf, write_reviewed_metadata
-from test_service import FakeDenseBackend, FakeUltraRAG
+from test_service import (
+    FakeDenseBackend,
+    FakeUltraRAG,
+    ProgressivelyFilteredUltraRAG,
+)
 
 from research_rag.config import resolve_config
 from research_rag.service import ResearchError, ResearchService
@@ -476,3 +480,98 @@ def test_author_and_title_filters_combine_with_each_other(project: Path) -> None
         assert disagreeing["filters"]["active_document_count"] == 0
 
     asyncio.run(exercise())
+
+
+def test_a_filter_never_widens_past_the_candidate_ceiling(project: Path) -> None:
+    asyncio.run(_assert_a_filter_never_widens_past_the_candidate_ceiling(project))
+
+
+async def _assert_a_filter_never_widens_past_the_candidate_ceiling(
+    project: Path,
+) -> None:
+    """A narrow filter must not cost a full ranking per doubling of the window.
+
+    Filters drop passages after the corpus is ranked, so a filter naming one source
+    cannot fill a top_k of five and the widening loop keeps doubling. Without a
+    ceiling it walks the whole corpus, which is where a one-author query spent a
+    minute before it could answer at all.
+    """
+
+    for index in range(40):
+        write_pdf(
+            project / "sources" / f"corpus-{index:02d}.pdf",
+            [f"Corpus filler passage number {index} about labour evidence."],
+        )
+    config = resolve_config(project, vanilla_executable=sys.executable)
+    ultrarag = ProgressivelyFilteredUltraRAG()
+    service = ResearchService(  # type: ignore[arg-type]
+        config,
+        ultrarag,
+        dense=FakeDenseBackend(),
+    )
+    write_pdf(
+        project / "sources" / "zz-target.pdf",
+        ["Target labour evidence."],
+        title="Target",
+    )
+    await service.ingest(chunk_size=100, chunk_overlap=10)
+    write_reviewed_metadata(config, "zz-target.pdf", {"authors": ["Pushkala Prasad"]})
+
+    ultrarag.search_depths.clear()
+    search = await service.search(
+        "labour evidence",
+        top_k=5,
+        authors_any=["Pushkala Prasad"],
+        retrieval_method="bm25",
+    )
+
+    ceiling = config.settings.maximum_candidates
+    assert search["filters"]["corpus_chunk_count"] > ceiling, (
+        "the corpus must be larger"
+    )
+    assert ultrarag.search_depths, "the retriever must have been asked"
+    assert max(ultrarag.search_depths) <= ceiling
+    assert search["filters"]["window_chunk_count"] <= ceiling
+    assert search["filters"]["window_is_whole_corpus"] is False
+
+
+def test_an_empty_answer_names_the_window_it_reached(project: Path) -> None:
+    asyncio.run(_assert_an_empty_answer_names_the_window_it_reached(project))
+
+
+async def _assert_an_empty_answer_names_the_window_it_reached(project: Path) -> None:
+    """An empty result must not read as an empty corpus when the window was bounded.
+
+    The answer says how much of the corpus the ranking reached, and that filters
+    drop after ranking rather than before it, because both are what a reader needs
+    to tell a filter that matches nothing from a filter the window never reached.
+    """
+
+    config = resolve_config(project, vanilla_executable=sys.executable)
+    ultrarag = ProgressivelyFilteredUltraRAG()
+    service = ResearchService(  # type: ignore[arg-type]
+        config,
+        ultrarag,
+        dense=FakeDenseBackend(),
+    )
+    write_pdf(
+        project / "sources" / "quiet.pdf",
+        ["A passage with no shared wording at all."],
+        title="Quiet",
+    )
+    await service.ingest(chunk_size=100, chunk_overlap=10)
+    write_reviewed_metadata(config, "quiet.pdf", {"authors": ["Nobody Atall"]})
+
+    search = await service.search(
+        "cobalt",
+        top_k=5,
+        authors_any=["Nobody Atall"],
+        retrieval_method="bm25",
+    )
+
+    filters = search["filters"]
+    assert "drop passages after the corpus is ranked" in filters["note"]
+    assert "window_chunk_count" in filters["note"]
+    assert filters["window_chunk_count"] >= 1
+    assert filters["corpus_chunk_count"] >= filters["window_chunk_count"]
+    assert isinstance(filters["window_is_whole_corpus"], bool)

@@ -221,6 +221,36 @@ def test_no_document_names_a_surface_that_moved(document: str) -> None:
     assert "create_research_transport" not in text, document
 
 
+def test_a_shipped_client_template_names_a_project_after_the_command() -> None:
+    """A copied template is the first entry a reader writes, so its order must work.
+
+    `--project-name` belongs to the `mcp` subcommand, so an entry that puts it
+    first has the parser read the project name as the command: the server exits
+    before it can answer, and the client reports a closed connection with no
+    cause. Nothing else in the suite reads these two files.
+    """
+
+    import json
+
+    from research_rag.doctor import _strip_jsonc
+
+    for name in ("mcp_settings.example.json", "kilo-mcp.example.jsonc"):
+        document = json.loads(_strip_jsonc((ROOT / name).read_text(encoding="utf-8")))
+        servers = document.get("mcpServers") or document["mcp"]
+        entry = next(iter(servers.values()))
+        # One template splits the command and its arguments, the other lists them.
+        arguments = (
+            entry["command"]
+            if isinstance(entry.get("command"), list)
+            else [entry["command"], *entry["args"]]
+        )
+
+        assert arguments[1] == "mcp", name
+        assert arguments.index("--project-name") > arguments.index("mcp"), name
+        assert "--project-root" not in arguments, name
+        assert arguments[-1] != "mcp", name
+
+
 def test_the_help_menu_accounts_for_every_command() -> None:
     """Every installed command is in the menu, and in it exactly once.
 

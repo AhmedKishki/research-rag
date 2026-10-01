@@ -9,6 +9,7 @@ these tests never download anything.
 from __future__ import annotations
 
 import json
+import sys
 from pathlib import Path
 from typing import Any
 
@@ -304,8 +305,9 @@ def test_the_two_entries_reach_the_app_two_ways(config: ResearchConfig) -> None:
     assert url["url"].startswith("http://127.0.0.1:")
     assert url["url"].endswith("/mcp")
     # The stdio entry names the bridge explicitly: `research-rag ui` runs the same
-    # executable and is not an agent entry.
-    assert command[-1] == "mcp"
+    # executable and is not an agent entry, and the command comes before its own
+    # options because that is the only order the parser accepts.
+    assert command[1] == "mcp"
     assert Path(command[0]).name == "research-rag"
     assert stdio_entry["mcp"]["research-rag"]["timeout"] == 3_600_000
 
@@ -320,6 +322,72 @@ def test_the_stdio_entry_names_a_project_and_not_a_directory(
     assert command[command.index("--project-name") + 1] == config.project_name
     assert "--project-root" not in command
     assert str(config.project_root) not in command
+
+
+def test_the_stdio_entry_puts_the_command_before_its_own_options(
+    config: ResearchConfig,
+) -> None:
+    """The parser only accepts them after it, and the wrong order closes the session.
+
+    An entry reading `research-rag --project-name NAME mcp` makes the parser take
+    `NAME` as the command, so the server exits before it can answer and the client
+    reports a closed connection with no cause.
+    """
+
+    command = json.loads(mcp_entry_block(config))["mcp"]["research-rag"]["command"]
+
+    assert command[1] == "mcp"
+    assert command.index("--project-name") > command.index("mcp")
+
+
+def test_an_option_before_the_command_is_refused(
+    tmp_path: Path, config: ResearchConfig
+) -> None:
+    """The check exists for the failure a reader cannot see from the entry alone."""
+
+    path = _entry_file(
+        tmp_path,
+        json.dumps(
+            {
+                "mcp": {
+                    "rag": {
+                        "command": [
+                            str(_project_server_command()),
+                            "--project-name",
+                            config.project_name,
+                            "mcp",
+                        ],
+                        "timeout": 3_600_000,
+                    }
+                }
+            }
+        ),
+    )
+
+    findings = check_entry(config, path)
+    finding = next(c for c in findings if c.name == "entry.argument_order")
+
+    assert finding.state == "blocked"
+    assert "--project-name" in finding.reason
+    assert "Put `mcp` first" in finding.reason
+
+
+def test_a_relocated_runtime_root_also_follows_the_command(
+    tmp_path: Path,
+) -> None:
+    project = tmp_path / "relocated"
+    (project / "sources").mkdir(parents=True)
+    config = resolve_config(
+        project,
+        vanilla_executable=sys.executable,
+        runtime_root=tmp_path / "elsewhere",
+    )
+
+    command = json.loads(mcp_entry_block(config))["mcp"]["research-rag"]["command"]
+
+    assert command[1] == "mcp"
+    assert command.index("--runtime-root") > command.index("mcp")
+    assert command.index("--project-name") > command.index("mcp")
 
 
 def test_a_correct_url_entry_passes(tmp_path: Path, config: ResearchConfig) -> None:

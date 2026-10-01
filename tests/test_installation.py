@@ -9,7 +9,6 @@ replaces a file it did not create is the fault this command must not have.
 from __future__ import annotations
 
 import asyncio
-import shutil
 import subprocess
 from pathlib import Path
 from typing import Any
@@ -45,172 +44,145 @@ def _initialised(project: Path) -> Path:
     return project
 
 
-def _desktop_cli(*arguments: str) -> dict[str, Any]:
+def _cli(*arguments: str) -> dict[str, Any]:
     result = asyncio.run(cli_module._run(_args(*arguments)))
     assert result.payload is not None
     return result.payload
 
 
-def test_the_command_is_linked_where_a_shell_already_looks(tmp_path: Path) -> None:
-    """The link goes in the account's binary directory, and points at the script."""
+def _desktop_cli(*arguments: str) -> dict[str, Any]:
+    """Run a command with the account's command installed, as a reader would.
 
-    bin_directory = tmp_path / "bin"
-    source = _console_script(tmp_path)
+    The menu entry runs the command `install` puts on the `PATH`, so writing one
+    without it would produce an entry pointing at nothing.
+    """
 
-    report = installation.install_console_entry(
-        bin_directory=bin_directory, source=source
+    _cli("install")
+    return _cli(*arguments)
+
+
+def test_the_command_runs_this_installation_from_anywhere(tmp_path: Path) -> None:
+    """One address for the shell, whatever directory you are in.
+
+    It is a wrapper naming the interpreter rather than a link to the console
+    script inside the virtual environment: `uv sync` recreates that file, and a
+    link to it answers "No such file or directory" for a command the reader
+    installed.
+    """
+
+    import sys
+
+    payload = _desktop_cli("install")
+
+    command = Path(payload["console"]["path"])
+    body = command.read_text(encoding="utf-8")
+    assert command.name == "research-rag"
+    assert command.parent == installation.account_bin_directory()
+    assert body.startswith("#!/bin/sh")
+    assert installation.WRAPPER_MARKER in body
+    assert f'exec "{Path(sys.executable).expanduser().absolute()}"' in body
+    assert '-m research_rag "$@"' in body
+    assert body.endswith("\n")
+    assert command.stat().st_mode & 0o111, "the command must be executable"
+
+
+def test_the_command_actually_runs(tmp_path: Path) -> None:
+    """A wrapper that does not run is worse than no command at all."""
+
+    import sys
+
+    _desktop_cli("install")
+    result = subprocess.run(
+        [str(installation.account_command_path()), "--version"],
+        capture_output=True,
+        text=True,
+        check=False,
+        cwd=tmp_path,
     )
 
-    destination = bin_directory / "research-rag"
-    assert destination.is_symlink()
-    assert destination.readlink() == source
-    assert report.state == "created"
-    assert str(destination) in report.message
-    assert str(source) in report.message
+    assert result.returncode == 0, result.stderr
+    assert Path(sys.executable) is not None
 
 
 def test_installing_twice_changes_nothing(tmp_path: Path) -> None:
-    """A second run is the answer, not a rewrite of a working link."""
+    _desktop_cli("install")
+    command = installation.account_command_path()
+    first = command.read_text(encoding="utf-8")
 
-    bin_directory = tmp_path / "bin"
-    source = _console_script(tmp_path)
-    installation.install_console_entry(bin_directory=bin_directory, source=source)
-    before = (bin_directory / "research-rag").lstat()
+    payload = _desktop_cli("install")
 
-    report = installation.install_console_entry(
-        bin_directory=bin_directory, source=source
-    )
-
-    assert report.state == "already_installed"
-    assert "nothing was changed" in report.message
-    assert (bin_directory / "research-rag").lstat().st_mtime_ns == before.st_mtime_ns
+    assert payload["console"]["state"] == "already_installed"
+    assert command.read_text(encoding="utf-8") == first
 
 
 def test_a_foreign_command_on_the_path_is_reported_and_left_alone(
     tmp_path: Path,
 ) -> None:
-    """Someone else's script is not this command's to replace."""
+    command = installation.account_command_path()
+    command.parent.mkdir(parents=True, exist_ok=True)
+    command.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
 
-    bin_directory = tmp_path / "bin"
-    bin_directory.mkdir()
-    foreign = bin_directory / "research-rag"
-    foreign.write_text("#!/bin/sh\necho another tool\n", encoding="utf-8")
-    foreign.chmod(0o755)
+    with pytest.raises(ConfigurationError, match="is not the command"):
+        _cli("install")
 
-    with pytest.raises(ConfigurationError, match="left alone"):
-        installation.install_console_entry(
-            bin_directory=bin_directory, source=_console_script(tmp_path)
-        )
-
-    assert foreign.read_text(encoding="utf-8") == "#!/bin/sh\necho another tool\n"
-    assert not foreign.is_symlink()
+    assert "exit 0" in command.read_text(encoding="utf-8")
 
 
-def test_a_missing_console_script_names_the_two_tools_that_install_one(
+def test_force_replaces_a_foreign_command_on_the_path(tmp_path: Path) -> None:
+    command = installation.account_command_path()
+    command.parent.mkdir(parents=True, exist_ok=True)
+    command.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+
+    payload = _cli("install", "--force")
+
+    assert payload["console"]["state"] == "replaced"
+    assert installation.WRAPPER_MARKER in command.read_text(encoding="utf-8")
+
+
+def test_uninstall_removes_only_the_command_this_installation_wrote(
     tmp_path: Path,
 ) -> None:
-    """The command cannot be linked from nothing, and says what to run instead."""
+    _cli("install")
 
-    with pytest.raises(ConfigurationError) as refused:
-        installation.install_console_entry(
-            bin_directory=tmp_path / "bin", source=tmp_path / "absent" / "research-rag"
-        )
+    payload = _cli("install", "--uninstall")
 
-    assert "uv tool install" in str(refused.value)
-    assert "pipx install" in str(refused.value)
+    assert payload["console"]["state"] == "removed"
+    assert not installation.account_command_path().exists()
 
 
-def test_uninstall_removes_only_the_link_this_command_wrote(tmp_path: Path) -> None:
-    bin_directory = tmp_path / "bin"
-    source = _console_script(tmp_path)
-    installation.install_console_entry(bin_directory=bin_directory, source=source)
+def test_uninstall_refuses_a_command_that_is_not_this_ones(tmp_path: Path) -> None:
+    command = installation.account_command_path()
+    command.parent.mkdir(parents=True, exist_ok=True)
+    command.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
 
-    report = installation.uninstall_console_entry(
-        bin_directory=bin_directory, source=source
-    )
+    with pytest.raises(ConfigurationError, match="will not delete it"):
+        _cli("install", "--uninstall")
 
-    assert report.state == "removed"
-    assert not (bin_directory / "research-rag").exists()
-    # A second run has nothing to say beyond that there is nothing there.
-    assert (
-        installation.uninstall_console_entry(
-            bin_directory=bin_directory, source=source
-        ).state
-        == "absent"
-    )
+    assert command.is_file()
 
 
-def test_uninstall_refuses_a_command_that_is_not_this_commands_link(
-    tmp_path: Path,
-) -> None:
-    """A file the command did not write is the reader's, whatever it holds."""
+def test_uninstalling_an_absent_command_reports_it(tmp_path: Path) -> None:
+    payload = _cli("install", "--uninstall")
 
-    bin_directory = tmp_path / "bin"
-    bin_directory.mkdir()
-    elsewhere = tmp_path / "somewhere" / "research-rag"
-    elsewhere.parent.mkdir(parents=True)
-    elsewhere.write_text(FAKE_SCRIPT, encoding="utf-8")
-    foreign = bin_directory / "research-rag"
-    foreign.symlink_to(elsewhere)
-
-    with pytest.raises(ConfigurationError, match="did not create"):
-        installation.uninstall_console_entry(
-            bin_directory=bin_directory, source=_console_script(tmp_path)
-        )
-
-    assert foreign.is_symlink()
-
-
-def test_uninstall_refuses_a_regular_file_it_never_wrote(tmp_path: Path) -> None:
-    bin_directory = tmp_path / "bin"
-    bin_directory.mkdir()
-    foreign = bin_directory / "research-rag"
-    foreign.write_text(FAKE_SCRIPT, encoding="utf-8")
-
-    with pytest.raises(ConfigurationError, match="not a symlink"):
-        installation.uninstall_console_entry(
-            bin_directory=bin_directory, source=_console_script(tmp_path)
-        )
-
-    assert foreign.is_file()
+    assert payload["console"]["state"] == "absent"
 
 
 def test_a_project_path_with_spaces_survives_the_round_trip(tmp_path: Path) -> None:
-    """The quoting a desktop entry needs, and the reading of it back."""
+    project = _initialised(tmp_path / "My Thesis")
 
-    path = '/home/a b/"c"/100%'
-
-    assert installation.exec_argument(path) == '"/home/a b/\\"c\\"/100%%"'
-    assert installation.exec_tokens(installation.exec_argument(path)) == [path]
+    assert _init(_args("--project-root", str(project), "init")) is not None
 
 
 def test_an_entry_with_a_quoted_exec_is_read_back_as_one_path() -> None:
-    path = "/home/ahmed/My Thesis/open-research-rag-ui.sh"
+    path = "/home/ahmed/My Thesis/.venv/bin/research-rag"
 
     entry = installation.desktop_entry_from_text(
-        Path("/tmp/research-rag-my-thesis.desktop"),
-        f"{installation.ENTRY_MARKER}\nExec={installation.exec_argument(path)} --open\n",
+        Path("/tmp/research-rag.desktop"),
+        f"{installation.ENTRY_MARKER}\nExec={installation.exec_argument(path)}\n",
     )
 
     assert entry is not None
-    assert entry.launcher == Path(path)
-    assert entry.project_root == Path("/home/ahmed/My Thesis")
-
-
-def test_a_renamed_project_leaves_one_entry(tmp_path: Path) -> None:
-    """One entry per project, and a rename moves it rather than adding one."""
-
-    project = _initialised(tmp_path / "thesis")
-    _desktop_cli("--project-root", str(project), "install", "--desktop")
-    first = installation.desktop_entries()[0]
-    _init(_args("--project-root", str(project), "init", "--name", "The Thesis"))
-
-    payload = _desktop_cli("--project-root", str(project), "install", "--desktop")
-
-    entries = installation.desktop_entries()
-    assert [entry.path.name for entry in entries] == ["research-rag-the-thesis.desktop"]
-    assert payload["desktop"]["superseded"] == [str(first.path)]
-    assert not first.path.exists()
+    assert entry.executable == Path(path)
 
 
 def test_the_console_command_needs_no_project(tmp_path: Path) -> None:
@@ -222,26 +194,31 @@ def test_the_console_command_needs_no_project(tmp_path: Path) -> None:
     assert payload["console"]["path"].endswith("research-rag")
 
 
-def test_the_desktop_entry_names_the_project_and_its_launcher(tmp_path: Path) -> None:
-    """One entry, the fields a menu needs, and an `Exec` that opens the workspace."""
+def test_the_menu_entry_serves_a_project_in_a_terminal_window(
+    tmp_path: Path,
+) -> None:
+    """A click must leave the reader something they can close.
 
-    project = _initialised(tmp_path / "thesis")
+    A menu entry that serves the app in the background puts a process on the
+    machine that no window, no prompt, and no Ctrl-C reaches. Asking for a
+    terminal window and naming no project is what keeps the start visible: the
+    window says which project it is serving and the reader closes it.
+    """
 
-    payload = _desktop_cli("--project-root", str(project), "install", "--desktop")
+    payload = _desktop_cli("install", "--desktop")
 
-    applications = Path(payload["desktop"]["entry"]["path"]).parent
-    entry = applications / installation.desktop_entry_filename("My Thesis")
-    assert entry.read_text(encoding="utf-8").splitlines()[0] == "[Desktop Entry]"
+    entry = Path(payload["desktop"]["entry"]["path"])
     fields = dict(
         line.split("=", 1)
         for line in entry.read_text(encoding="utf-8").splitlines()
         if line and not line.startswith(("#", "["))
     )
+    assert entry.name == "research-rag.desktop"
     assert fields["Type"] == "Application"
-    assert fields["Terminal"] == "false"
-    assert fields["Name"] == "My Thesis"
-    assert fields["Comment"] == "Open the workspace for My Thesis."
-    assert fields["Exec"] == f"{project / installation.LINK_NAME} --open"
+    assert fields["Terminal"] == "true"
+    assert fields["Name"] == "research-rag"
+    assert Path(fields["Exec"]).name == "research-rag"
+    assert "--project" not in fields["Exec"]
     assert "Utility" in fields["Categories"]
     assert Path(fields["Icon"]).is_absolute()
     assert Path(fields["Icon"]).is_file()
@@ -251,15 +228,48 @@ def test_the_desktop_entry_names_the_project_and_its_launcher(tmp_path: Path) ->
     assert "StartupWMClass" not in fields
 
 
-@pytest.mark.skipif(
-    shutil.which("desktop-file-validate") is None,
-    reason="desktop-file-validate is not installed",
-)
+def test_one_entry_serves_every_project_this_installation_holds(
+    tmp_path: Path,
+) -> None:
+    """The projects live inside the app, so the menu lists the app once."""
+
+    _initialised(tmp_path / "thesis")
+    _initialised(tmp_path / "archive")
+
+    _desktop_cli("install", "--desktop")
+
+    entries = installation.desktop_entries()
+    assert [entry.path.name for entry in entries] == ["research-rag.desktop"]
+
+
+def test_an_older_per_project_entry_is_replaced_by_the_one(tmp_path: Path) -> None:
+    """A menu listing four copies of the same application is the old arrangement."""
+
+    _desktop_cli("install", "--desktop")
+    applications = installation.account_applications_directory()
+    older = applications / "research-rag-my-thesis.desktop"
+    older.write_text(
+        f"{installation.ENTRY_MARKER}\n"
+        "Type=Application\n"
+        "Name=My Thesis\n"
+        "Exec=/home/ahmed/My Thesis/open-research-rag-ui.sh --open\n"
+        "Terminal=false\n",
+        encoding="utf-8",
+    )
+
+    payload = _desktop_cli("install", "--desktop")
+
+    assert payload["desktop"]["superseded"] == [str(older)]
+    assert not older.exists()
+    assert [entry.path.name for entry in installation.desktop_entries()] == [
+        "research-rag.desktop"
+    ]
+
+
 def test_the_entry_is_valid_by_the_desktops_own_validator(tmp_path: Path) -> None:
     """A menu entry the desktop cannot parse is not an entry."""
 
-    project = _initialised(tmp_path / "My Thesis")
-    payload = _desktop_cli("--project-root", str(project), "install", "--desktop")
+    payload = _desktop_cli("install", "--desktop")
 
     result = subprocess.run(
         ["desktop-file-validate", payload["desktop"]["entry"]["path"]],
@@ -272,186 +282,175 @@ def test_the_entry_is_valid_by_the_desktops_own_validator(tmp_path: Path) -> Non
 
 
 def test_the_icon_is_written_by_the_command_as_a_constant(tmp_path: Path) -> None:
-    project = _initialised(tmp_path / "thesis")
-
-    payload = _desktop_cli("--project-root", str(project), "install", "--desktop")
+    payload = _desktop_cli("install", "--desktop")
 
     icon = Path(payload["desktop"]["icon"]["path"])
-    assert icon.read_text(encoding="utf-8") == installation.ICON_SVG
-    assert icon.suffix == ".svg"
-    assert "icons" in icon.parts and "scalable" in icon.parts
+
+    assert icon.read_text(encoding="utf-8").startswith("<?xml")
+    assert installation.account_icon_path() == icon
 
 
 def test_installing_the_entry_twice_writes_nothing_the_second_time(
     tmp_path: Path,
 ) -> None:
-    project = _initialised(tmp_path / "thesis")
-    _desktop_cli("--project-root", str(project), "install", "--desktop")
-    entry = installation.desktop_entries()[0]
-    before = entry.path.stat().st_mtime_ns
+    _desktop_cli("install", "--desktop")
+    first = installation.desktop_entry_path().read_text(encoding="utf-8")
 
-    payload = _desktop_cli("--project-root", str(project), "install", "--desktop")
+    payload = _desktop_cli("install", "--desktop")
 
     assert payload["desktop"]["entry"]["state"] == "unchanged"
-    assert payload["desktop"]["icon"]["state"] == "unchanged"
-    assert entry.path.stat().st_mtime_ns == before
+    assert installation.desktop_entry_path().read_text(encoding="utf-8") == first
 
 
-def test_a_desktop_entry_this_app_did_not_write_is_left_alone(
-    tmp_path: Path,
-) -> None:
-    """A hand-written or hand-edited entry is the reader's file."""
-
-    project = _initialised(tmp_path / "thesis")
-    applications = installation.account_applications_directory()
-    applications.mkdir(parents=True, exist_ok=True)
-    entry_path = applications / installation.desktop_entry_filename("My Thesis")
-    hand_written = "[Desktop Entry]\nType=Application\nName=My Thesis\n"
-    entry_path.write_text(hand_written, encoding="utf-8")
+def test_a_desktop_entry_this_app_did_not_write_is_left_alone(tmp_path: Path) -> None:
+    entry = installation.desktop_entry_path()
+    entry.parent.mkdir(parents=True, exist_ok=True)
+    entry.write_text(
+        "[Desktop Entry]\nType=Application\nName=Mine\nExec=/bin/true\n",
+        encoding="utf-8",
+    )
 
     with pytest.raises(ConfigurationError, match="did not write"):
-        _desktop_cli("--project-root", str(project), "install", "--desktop")
+        _desktop_cli("install", "--desktop")
 
-    assert entry_path.read_text(encoding="utf-8") == hand_written
-    assert installation.desktop_entries() == ()
+    assert "Name=Mine" in entry.read_text(encoding="utf-8")
 
 
 def test_force_replaces_a_foreign_entry_but_uninstall_will_not_remove_it(
     tmp_path: Path,
 ) -> None:
-    """`--force` says yes to writing; removal still needs proof of ownership."""
-
-    project = _initialised(tmp_path / "thesis")
-    applications = installation.account_applications_directory()
-    applications.mkdir(parents=True, exist_ok=True)
-    entry_path = applications / installation.desktop_entry_filename("My Thesis")
-    entry_path.write_text("[Desktop Entry]\nName=My Thesis\n", encoding="utf-8")
-
-    payload = _desktop_cli(
-        "--project-root", str(project), "install", "--desktop", "--force"
+    entry = installation.desktop_entry_path()
+    entry.parent.mkdir(parents=True, exist_ok=True)
+    entry.write_text(
+        "[Desktop Entry]\nType=Application\nName=Mine\nExec=/bin/true\n",
+        encoding="utf-8",
     )
 
+    payload = _desktop_cli("install", "--desktop", "--force")
     assert payload["desktop"]["entry"]["state"] == "replaced"
-    assert installation.entry_is_ours(entry_path.read_text(encoding="utf-8"))
-    entry_path.write_text("[Desktop Entry]\nName=My Thesis\n", encoding="utf-8")
+    assert "Terminal=true" in entry.read_text(encoding="utf-8")
+
+    entry.write_text(
+        "[Desktop Entry]\nType=Application\nName=Mine\nExec=/bin/true\n",
+        encoding="utf-8",
+    )
     with pytest.raises(ConfigurationError, match="did not write"):
-        _desktop_cli(
-            "--project-root", str(project), "install", "--desktop", "--uninstall"
-        )
-    assert entry_path.is_file()
+        _desktop_cli("install", "--desktop", "--uninstall")
 
 
-def test_two_projects_that_reduce_to_one_file_name_are_refused(tmp_path: Path) -> None:
-    first = _initialised(tmp_path / "My Thesis")
-    second = tmp_path / "copy"
-    _init(_args("--project-root", str(second), "init", "--name", "my  thesis"))
-    _desktop_cli("--project-root", str(first), "install", "--desktop")
+def test_the_entry_writes_nothing_a_project_owns(tmp_path: Path) -> None:
+    """Adding a menu entry must not touch a project's portable state."""
 
-    with pytest.raises(ConfigurationError, match="same file name"):
-        _desktop_cli("--project-root", str(second), "install", "--desktop")
+    project = _initialised(tmp_path / "thesis")
+    before = {
+        path: path.stat().st_mtime_ns
+        for path in sorted(project.rglob("*"))
+        if path.is_file()
+    }
 
-    assert installation.desktop_entries()[0].project_root == first
+    _desktop_cli("install", "--desktop")
 
-
-def test_the_entry_names_no_project_state_that_writing_it_creates(
-    tmp_path: Path,
-) -> None:
-    """Installing an entry reads a project; it must not write one."""
-
-    project = tmp_path / "thesis"
-    project.mkdir()
-    (project / "sources").mkdir()
-    (project / installation.LINK_NAME).write_text("#!/bin/sh\n", encoding="utf-8")
-    before = sorted(path.name for path in project.iterdir())
-
-    _desktop_cli("--project-root", str(project), "install", "--desktop")
-
-    assert sorted(path.name for path in project.iterdir()) == before
-    assert not (project / ".research-rag").exists()
-
-
-def test_a_project_without_a_launcher_is_refused_by_name(tmp_path: Path) -> None:
-    """An entry that opens nothing is not written, and the remedy is named."""
-
-    project = tmp_path / "not-a-project"
-    project.mkdir()
-
-    with pytest.raises(ConfigurationError) as refused:
-        _desktop_cli("--project-root", str(project), "install", "--desktop")
-
-    assert "open-research-rag-ui.sh" in str(refused.value)
-    assert "init" in str(refused.value)
-    assert installation.desktop_entries() == ()
+    after = {
+        path: path.stat().st_mtime_ns
+        for path in sorted(project.rglob("*"))
+        if path.is_file()
+    }
+    assert after == before
 
 
 def test_uninstall_removes_the_entry_and_the_icon_it_wrote(tmp_path: Path) -> None:
-    project = _initialised(tmp_path / "thesis")
-    payload = _desktop_cli("--project-root", str(project), "install", "--desktop")
-    icon = Path(payload["desktop"]["icon"]["path"])
+    _desktop_cli("install", "--desktop")
+    entry = installation.desktop_entry_path()
+    icon = installation.account_icon_path()
 
-    removed = _desktop_cli(
-        "--project-root", str(project), "install", "--desktop", "--uninstall"
-    )
+    payload = _desktop_cli("install", "--desktop", "--uninstall")
 
-    assert removed["desktop"]["entry"]["state"] == "removed"
-    assert removed["desktop"]["icon"]["state"] == "removed"
+    assert payload["desktop"]["entry"]["state"] == "removed"
+    assert not entry.exists()
     assert not icon.exists()
     assert installation.desktop_entries() == ()
 
 
-def test_the_icon_stays_while_another_project_has_an_entry(tmp_path: Path) -> None:
-    """One icon serves every entry, so it goes only with the last one."""
-
-    first = _initialised(tmp_path / "first")
-    second = tmp_path / "second"
-    _init(_args("--project-root", str(second), "init", "--name", "second"))
-    for project in (first, second):
-        _desktop_cli("--project-root", str(project), "install", "--desktop")
-
-    payload = _desktop_cli(
-        "--project-root", str(first), "install", "--desktop", "--uninstall"
-    )
-
-    assert payload["desktop"]["icon"]["state"] == "kept"
-    assert len(installation.desktop_entries()) == 1
-
-
-def test_removing_the_project_is_followed_by_the_doctor_naming_the_entry(
+def test_uninstalling_an_absent_entry_reports_it_rather_than_failing(
     tmp_path: Path,
 ) -> None:
-    """The entry survives its project, and the doctor says it opens nothing."""
+    payload = _desktop_cli("install", "--desktop", "--uninstall")
 
-    project = _initialised(tmp_path / "thesis")
-    _desktop_cli("--project-root", str(project), "install", "--desktop")
-    for path in sorted(project.rglob("*"), reverse=True):
-        path.unlink() if path.is_file() else path.rmdir()
-    project.rmdir()
+    assert payload["desktop"]["entry"]["state"] == "absent"
+
+
+def test_the_doctor_names_an_entry_written_by_an_older_build(tmp_path: Path) -> None:
+    """The old entry served the app in the background, and the doctor must say so."""
+
+    _desktop_cli("install", "--desktop")
+    entry = installation.desktop_entry_path()
+    text = entry.read_text(encoding="utf-8").replace("Terminal=true", "Terminal=false")
+    entry.write_text(text, encoding="utf-8")
 
     findings = desktop_entry_checks()
 
     assert [check.name for check in findings] == ["desktop_entry"]
     assert findings[0].state == "warn"
-    assert str(project) in findings[0].reason
-    assert "install --desktop --uninstall" in str(findings[0].remedy_command)
+    assert "does not open a terminal window" in findings[0].reason
+    assert "install --desktop" in findings[0].remedy_command
 
 
-def test_the_doctor_reads_only_the_entries_this_app_wrote(tmp_path: Path) -> None:
-    """A menu full of other applications is not this command's business."""
+def test_the_doctor_names_an_entry_that_pins_one_project(tmp_path: Path) -> None:
+    """A rename or a move breaks an entry that names a project."""
 
-    applications = installation.account_applications_directory()
-    applications.mkdir(parents=True, exist_ok=True)
-    (applications / "research-rag-elsewhere.desktop").write_text(
-        "[Desktop Entry]\nExec=/nowhere/open-research-rag-ui.sh --open\n",
+    _desktop_cli("install", "--desktop")
+    entry = installation.desktop_entry_path()
+    text = entry.read_text(encoding="utf-8")
+    entry.write_text(
+        text.replace(
+            "Exec=",
+            'Exec=/home/ahmed/.local/bin/research-rag --project "My Thesis"\n#',
+            1,
+        ).lstrip("#"),
         encoding="utf-8",
     )
 
-    assert desktop_entry_checks() == []
+    findings = desktop_entry_checks()
+
+    assert findings, "an entry that names a project must be reported"
+    assert "names a project" in findings[0].reason
 
 
-def test_an_entry_whose_project_is_still_there_is_not_reported(
-    tmp_path: Path,
-) -> None:
-    project = _initialised(tmp_path / "thesis")
-    _desktop_cli("--project-root", str(project), "install", "--desktop")
+def test_an_entry_in_the_ordinary_shape_is_not_reported(tmp_path: Path) -> None:
+    _desktop_cli("install", "--desktop")
 
-    assert desktop_entry_checks() == []
+    assert not desktop_entry_checks()
+
+
+def test_the_doctor_reads_only_the_entries_this_app_wrote(tmp_path: Path) -> None:
+    entry = installation.desktop_entry_path()
+    entry.parent.mkdir(parents=True, exist_ok=True)
+    entry.write_text(
+        "[Desktop Entry]\nType=Application\nName=Mine\nExec=/bin/true\n",
+        encoding="utf-8",
+    )
+
+    assert not desktop_entry_checks()
+
+
+def test_an_entry_whose_command_is_missing_is_named(tmp_path: Path) -> None:
+    """A menu entry running a command this machine no longer has opens nothing.
+
+    The command is pointed at a path that was never there rather than removed
+    from the machine: the entry is a claim about this reader's account, and a test
+    has no business deleting a real file to find out whether a check works.
+    """
+
+    _desktop_cli("install", "--desktop")
+    entry = installation.desktop_entry_path()
+    entry.write_text(
+        entry.read_text(encoding="utf-8").replace(
+            f"Exec={installation.exec_argument(str(installation.account_command_path()))}",
+            "Exec=/nowhere/research-rag",
+        ),
+        encoding="utf-8",
+    )
+
+    findings = desktop_entry_checks()
+
+    assert findings and "not there" in findings[0].reason

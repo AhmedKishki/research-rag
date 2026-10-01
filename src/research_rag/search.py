@@ -328,6 +328,7 @@ class SearchWorkflow:
         dict[str, int],
         dict[str, dict[str, Any]],
         dict[str, list[dict[str, Any]]],
+        int,
     ]:
         if limit <= 0:
             return (
@@ -340,6 +341,7 @@ class SearchWorkflow:
                 },
                 {},
                 {},
+                0,
             )
         # An exclusion is a candidate this window can no longer use, so the
         # window widens past it instead of returning fewer passages than asked
@@ -355,6 +357,19 @@ class SearchWorkflow:
             or document_filter
             or excluded_document_ids
             or excluded_chunk_ids
+        )
+        # The window widens past candidates the filters will drop, so an exclusion
+        # does not shrink top_k. It stops at the candidate ceiling the settings
+        # already declare, which is the same bound the dense depth takes: past it
+        # no measurement has found a ranking decision, and reaching for it costs a
+        # second full scan of the corpus per doubling. Filters narrow what a
+        # ranking returns rather than what it ranks, so a narrow filter can still
+        # find nothing inside the ceiling; the response says so rather than
+        # reporting an empty window as an empty corpus.
+        ceiling = (
+            min(total_chunk_count, self.config.settings.maximum_candidates)
+            if filtered
+            else total_chunk_count
         )
         requested = min(
             total_chunk_count,
@@ -464,11 +479,11 @@ class SearchWorkflow:
             if (
                 len(ranking) == limit
                 or not filtered
-                or requested >= total_chunk_count
+                or requested >= ceiling
                 or len(passages) < requested
             ):
-                return ranking, rejected, resolved, rejected_examples
-            requested = min(total_chunk_count, requested * 2)
+                return ranking, rejected, resolved, rejected_examples, requested
+            requested = min(ceiling, requested * 2)
 
     @staticmethod
     def _fuse_rankings(
@@ -719,6 +734,7 @@ class SearchWorkflow:
                 await self._ensure_loaded(generation_root, manifest)
 
             bm25_ranking: list[str] = []
+            bm25_window = 0
             dense_hits: list[DenseSearchHit] = []
             withheld: dict[str, dict[str, Any]] = {}
             bm25_examples: dict[str, list[dict[str, Any]]] = {}
@@ -772,6 +788,7 @@ class SearchWorkflow:
                     bm25_rejected,
                     bm25_chunks,
                     bm25_examples,
+                    bm25_window,
                 ) = bm25_result
                 chunks_by_id.update(bm25_chunks)
             elif use_bm25:
@@ -780,6 +797,7 @@ class SearchWorkflow:
                     bm25_rejected,
                     bm25_chunks,
                     bm25_examples,
+                    bm25_window,
                 ) = await self._bm25_ranking(
                     query,
                     lookup,
@@ -835,6 +853,7 @@ class SearchWorkflow:
                         bm25_rejected,
                         bm25_chunks,
                         bm25_examples,
+                        prf_window,
                     ) = await self._bm25_ranking(
                         f"{query} {' '.join(prf_terms)}",
                         lookup,
@@ -855,6 +874,9 @@ class SearchWorkflow:
                         token_policy=passage_token_policy,
                     )
                     chunks_by_id.update(bm25_chunks)
+                    # The feedback pass searched a second window, so the answer
+                    # reports the wider of the two rather than the first.
+                    bm25_window = max(bm25_window, prf_window)
 
             dense_chunks = await asyncio.to_thread(
                 lookup.chunks_by_ids,
@@ -1151,11 +1173,18 @@ class SearchWorkflow:
                     "unknown_source_ids": unknown_source_ids,
                     "unknown_exclude_source_ids": unknown_exclude_source_ids,
                     "active_document_count": len(active_document_ids),
+                    "corpus_chunk_count": total_chunk_count,
+                    "window_chunk_count": bm25_window or candidate_depth,
+                    "window_is_whole_corpus": (bm25_window or candidate_depth)
+                    >= total_chunk_count,
                     "note": (
-                        "Filters narrow the corpus before ranking, so top_k counts "
-                        "matches inside the selection and an empty result reads as "
-                        "'no source matches these filters' rather than 'the corpus "
-                        "is silent'. Reviewed source exclusions always win: a "
+                        "Filters drop passages after the corpus is ranked, so an "
+                        "empty result reads as 'nothing the window reached matches "
+                        "these filters' rather than 'no source carries them'. "
+                        "window_chunk_count is how much of the corpus the ranking "
+                        "reached; when it is below corpus_chunk_count a narrow "
+                        "filter can find nothing it did not reach. Reviewed source "
+                        "exclusions always win: a "
                         "source_ids entry for an excluded source stays excluded. "
                         "Unresolved IDs are reported in unknown_source_ids and "
                         "unknown_exclude_source_ids; an include list that resolves "
