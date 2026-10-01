@@ -12,6 +12,7 @@ it changes what the project's next build records.
 
 from __future__ import annotations
 
+import asyncio
 import ipaddress
 from typing import TYPE_CHECKING, Any
 from urllib.parse import urlsplit
@@ -23,6 +24,8 @@ from starlette.routing import Route
 
 from .app import CONTROL_PREFIX, ClientError, running_url
 from .config import ResearchConfig
+from .doctor import mcp_entry_block
+from .registry import account_projects
 from .support import ResearchError
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
@@ -339,6 +342,24 @@ async def _settings_write(app: App, request: Request) -> JSONResponse:
     )
 
 
+async def _projects(app: App, _request: Request) -> JSONResponse:
+    """Every project this installation serves, read over the control API.
+
+    The account record and the probe each project's own app are the ones the
+    workspace's selector uses, so a terminal and a browser cannot disagree about
+    which projects exist or which are up. The probe is blocking loopback I/O, so
+    it runs off the event loop rather than holding up the app serving it.
+    """
+
+    return _json(await asyncio.to_thread(account_projects))
+
+
+async def _agent_entry(app: App, _request: Request) -> JSONResponse:
+    """This project's client entry, the text `doctor --mcp-entry` prints."""
+
+    return _json({"entry": mcp_entry_block(app.config)})
+
+
 async def _handle(app: App, endpoint: Any, request: Request) -> JSONResponse:
     """Turn a named failure into a named error, and leave the rest to the app.
 
@@ -383,6 +404,8 @@ def control_routes(app: App) -> list[Route]:
         route("/generations/remove", _remove_generation, ["POST"]),
         route("/settings", _settings_read, ["GET"]),
         route("/settings", _settings_write, ["POST"]),
+        route("/projects", _projects, ["GET"]),
+        route("/agent-entry", _agent_entry, ["GET"]),
     ]
 
 
@@ -538,6 +561,12 @@ class Control:
                 "confirm": confirm,
             },
         )
+
+    def projects(self) -> dict[str, Any]:
+        return self._call("GET", "/projects")
+
+    def agent_entry(self) -> dict[str, Any]:
+        return self._call("GET", "/agent-entry")
 
 
 def connect(config: ResearchConfig) -> Control | None:

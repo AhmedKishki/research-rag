@@ -555,7 +555,14 @@ def test_an_unserved_search_argument_never_reaches_the_service(
         "remove_generation",
         "settings_read",
         "settings_write",
+        "list_projects",
+        "agent_entry",
     }
+    # The account's projects and this project's client entry are both read from
+    # what this app already knows, so neither takes an argument the workspace
+    # could have asked something for.
+    assert _OPERATION_ARGUMENTS["list_projects"] == frozenset()
+    assert _OPERATION_ARGUMENTS["agent_entry"] == frozenset()
 
 
 def test_an_unknown_operation_is_refused(project: Path) -> None:
@@ -832,3 +839,85 @@ def test_the_workspace_reads_the_settings_the_server_resolved(project: Path) -> 
 
     assert result["revision"] == "rev-1"
     assert service.calls == [("settings_read", {})]
+
+
+def test_the_workspace_serves_the_account_record_not_the_served_project(
+    project: Path,
+) -> None:
+    """One installation serves several projects, so the workspace says which.
+
+    The listing is the account's own record rather than this project's descriptor,
+    read through the same function `research-rag projects` prints, so a browser
+    and a terminal name the same projects and cannot disagree about which are up.
+    """
+
+    from research_rag import registry
+    from research_rag.registry import account_projects
+    from research_rag.surfaces.ui import ResearchUIAdapter
+
+    other = project.parent / "other-project"
+    (other / "sources").mkdir(parents=True)
+    config = resolve_config(project, vanilla_executable=sys.executable)
+    served = ResearchUIAdapter(config, FakeResearchService())  # type: ignore[arg-type]
+    # The account holds this project and another one, which is the arrangement a
+    # workspace's selector exists for.
+    registry.register(config.project_id, config.project_name, config.project_root)
+    other_config = resolve_config(other, vanilla_executable=sys.executable)
+    registry.register(other_config.project_id, other_config.project_name, other)
+    service = FakeResearchService()
+    adapter = ResearchUIAdapter(config, service)  # type: ignore[arg-type]
+
+    result = asyncio.run(adapter.call("list_projects", {}))
+
+    assert [entry["project_name"] for entry in result["projects"]] == [
+        "other-project",
+        "research-project",
+    ]
+    # The page marks the project it is actually serving, not the first entry.
+    assert result["current"] == config.project_name
+    assert result["message"] == ""
+    for entry in result["projects"]:
+        # A project whose app is not up has no URL, and the workspace is told so
+        # rather than handed one it could not open.
+        assert entry["running"] is False
+        assert entry["url"] is None
+        assert entry["attached_clients"] == 0
+        assert Path(entry["project_root"]).is_absolute()
+    # The names, roots, and states are the account record's own, not a second
+    # reading of it: the terminal's listing and the browser's are one answer.
+    assert [entry["project_name"] for entry in account_projects()["projects"]] == [
+        "other-project",
+        "research-project",
+    ]
+    # The service was never asked: a project this app does not serve has no
+    # service to answer for it.
+    assert service.calls == []
+    assert served.config.project_name == config.project_name
+
+
+def test_the_agent_entry_is_the_text_the_doctor_prints(project: Path) -> None:
+    """A client's configuration is one generator, whichever surface produced it.
+
+    A browser that generated its own entry would be a second place for it to be
+    wrong, and the reader would have two entries to choose between.
+    """
+
+    from research_rag.doctor import mcp_entry_block
+    from research_rag.surfaces.ui import ResearchUIAdapter
+
+    config = resolve_config(project)
+    service = FakeResearchService()
+    adapter = ResearchUIAdapter(config, service)  # type: ignore[arg-type]
+
+    result = asyncio.run(adapter.call("agent_entry", {}))
+
+    assert result == {"entry": mcp_entry_block(config)}
+    # The entry names the project rather than its directory, so one entry serves
+    # the project on every machine where it was initialised.
+    entry = json.loads(result["entry"])["mcp"]["research-rag"]
+    assert entry["command"][entry["command"].index("--project-name") + 1] == (
+        config.project_name
+    )
+    assert "--project-root" not in entry["command"]
+    assert str(project) not in result["entry"]
+    assert service.calls == []

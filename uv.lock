@@ -2206,7 +2206,7 @@ requires-dist = [
     { name = "qdrant-client", specifier = "==1.19.1" },
     { name = "tokenizers", specifier = ">=0.20,<1" },
     { name = "tokie", specifier = ">=0.1,<1" },
-    { name = "ui-ultra-rag-mcp", git = "https://github.com/AhmedKishki/ui-ultra-rag-mcp.git?rev=fd5219b" },
+    { name = "ui-ultra-rag-mcp", git = "https://github.com/AhmedKishki/ui-ultra-rag-mcp.git?rev=713715b" },
     { name = "vanilla-ultra-rag-mcp", git = "https://github.com/AhmedKishki/vanilla-ultra-rag-mcp-server.git?rev=fc339c259a672ca4dacb525840eba851d01c4b75" },
 ]
 
@@ -2547,8 +2547,8 @@ wheels = [
 
 [[package]]
 name = "ui-ultra-rag-mcp"
-version = "0.13.0"
-source = { git = "https://github.com/AhmedKishki/ui-ultra-rag-mcp.git?rev=fd5219b#fd5219ba93eb259065130ee9ecee78a2e14dfc3d" }
+version = "0.14.0"
+source = { git = "https://github.com/AhmedKishki/ui-ultra-rag-mcp.git?rev=713715b#713715bb4cc024b27aca70315d7f890476c89475" }
 dependencies = [
     { name = "starlette" },
     { name = "uvicorn" },

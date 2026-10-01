@@ -17,6 +17,10 @@ two projects at the same moment.
 A project's recorded name is the address an agent's client entry carries, so one
 entry names the same project on every machine where that project was
 initialised, and the directory stays a fact of each machine.
+
+The record also answers what is up: `account_projects` reads it and probes each
+project's own app, so the command line and the workspace report one list rather
+than two that can disagree.
 """
 
 from __future__ import annotations
@@ -272,14 +276,104 @@ def registered_at_label(project: RegisteredProject) -> str:
     return parsed.astimezone().strftime("%Y-%m-%d %H:%M")
 
 
+def project_app_state(project_root: Path) -> dict[str, Any]:
+    """Whether an app is serving one project, and what that app reports.
+
+    The probe reaches the project's own control API, so the answer is the one
+    `research-rag clients` gives rather than a second reading of the same state,
+    and a project with no app up is reported as such rather than started: a
+    listing is a question about what exists.
+
+    The imports are local because the record itself is a pointer file and the
+    modules that answer about a running app pull in the web stack. Nothing here
+    is cached: every call reads the record and asks again.
+    """
+
+    from .app import running_url
+    from .config import resolve_config
+    from .control import Control, ControlError
+    from .tool_views import lean_status
+
+    config = resolve_config(project_root)
+    url = running_url(config)
+    state: dict[str, Any] = {
+        "app": {"running": url is not None, "url": url, "port": _port_of(url)},
+        "attached_clients": 0,
+    }
+    if url is None:
+        return state
+    try:
+        with Control(url, timeout=10.0) as handle:
+            verdict = lean_status(handle.status())
+            clients = handle.clients()
+    except ControlError as exc:
+        state["error"] = str(exc)
+        return state
+    state["attached_clients"] = len(clients)
+    for key in ("ready", "stale", "requires"):
+        if key in verdict:
+            state[key] = verdict[key]
+    return state
+
+
+def _port_of(url: str | None) -> int | None:
+    if not url:
+        return None
+    _, _, port = url.rpartition(":")
+    return int(port) if port.isdigit() else None
+
+
+def account_projects() -> dict[str, Any]:
+    """Every registered project, and whether an app is serving it.
+
+    This is the one answer to that question: the command line prints it and the
+    workspace selects from it, so a project the terminal calls down is a project
+    the browser calls down too.
+    """
+
+    from .config import ConfigurationError
+
+    entries: list[dict[str, Any]] = []
+    for project in load():
+        entry: dict[str, Any] = {
+            "project_name": project.project_name,
+            "project_id": project.project_id,
+            "project_root": str(project.project_root),
+            "registered_at": registered_at_label(project),
+            "root_exists": (project.project_root / ".research-rag").is_dir(),
+            "app": {"running": False, "url": None, "port": None},
+            "attached_clients": 0,
+        }
+        if entry["root_exists"]:
+            try:
+                entry.update(project_app_state(project.project_root))
+            except (ConfigurationError, ResearchError) as exc:
+                entry["error"] = str(exc)
+        entries.append(entry)
+    answer: dict[str, Any] = {
+        "registry_path": str(registry_path()),
+        "project_count": len(entries),
+        "projects": entries,
+    }
+    if not entries:
+        answer["message"] = (
+            "No project is registered yet. Run 'research-rag --project-root "
+            "<path> init' once per project, and this install can address each one "
+            "by name."
+        )
+    return answer
+
+
 __all__ = [
     "REGISTRY_FILE",
     "SCHEMA_VERSION",
     "RegisteredProject",
+    "account_projects",
     "forget",
     "load",
     "matches",
     "named",
+    "project_app_state",
     "register",
     "registered_at_label",
     "registry_path",
