@@ -4,7 +4,11 @@ import asyncio
 from pathlib import Path
 from typing import Any
 
-from .config import ResearchConfig, initialise_command, project_command
+from .config import (
+    ResearchConfig,
+    initialise_command,
+    project_selection_command,
+)
 from .generation import value_fingerprint
 from .health import health_report
 from .sources import (
@@ -139,7 +143,7 @@ def not_served_status(config: ResearchConfig, reason: str) -> dict[str, Any]:
     return blocked_status(
         reason,
         check="app.serving",
-        remedy=project_command(config.project_root, "ui"),
+        remedy=project_selection_command(config.project_name, "start"),
         initialised=True,
     )
 

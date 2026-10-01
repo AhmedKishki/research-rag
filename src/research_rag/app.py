@@ -591,6 +591,20 @@ def recorded_port(config: ResearchConfig) -> int | None:
     return port if alive(pid) else None
 
 
+def recorded_pid(config: ResearchConfig) -> int | None:
+    """Return the pid a running app recorded for this project, if it is still alive.
+
+    The companion to `recorded_port`: a pid file survives a terminal that closed,
+    so the process behind it is checked rather than trusted.
+    """
+
+    try:
+        pid = int((config.state_root / PID_FILE).read_text(encoding="utf-8").strip())
+    except (OSError, ValueError):
+        return None
+    return pid if alive(pid) else None
+
+
 def running_url(config: ResearchConfig) -> str | None:
     """The running app's base URL, or None when the project has no app up."""
 

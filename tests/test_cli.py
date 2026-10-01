@@ -818,15 +818,17 @@ def test_start_serves_in_this_terminal_and_records_the_port_it_chose(
     args = _args("--project-root", str(project), "start", "--port", "5099")
     config = _resolve(args)
 
-    _start(args, config)
+    asyncio.run(_start(args, config))
 
     assert served == [(config, 5099, False)]
 
 
-def test_ui_serves_in_this_terminal_and_opens_a_browser(
+def test_start_opens_a_browser_only_when_asked(
     project: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    """The command line is where this app is worked from, so a browser is opt-in."""
+
     opened: list[str] = []
     served: list[object] = []
 
@@ -836,13 +838,13 @@ def test_ui_serves_in_this_terminal_and_opens_a_browser(
 
     monkeypatch.setattr(cli_module, "_open_browser", opened.append)
     monkeypatch.setattr(cli_module, "_serve_attached", _serving)
-    args = _args("--project-root", str(project), "ui", "--port", "5099")
+    args = _args(
+        "--project-root", str(project), "--start-ui", "start", "--port", "5099"
+    )
     config = _resolve(args)
 
-    _start(args, config)
+    asyncio.run(_start(args, config))
 
-    # The attached run owns the browser: it opens once the app answers, so the
-    # command hands it the port it was told to use and asks for the workspace.
     assert served == [(config, 5099, True)]
     assert opened == []
 
@@ -870,7 +872,7 @@ def test_start_leaves_an_app_another_terminal_owns_alone(
         str(os.getpid()), encoding="utf-8"
     )
 
-    _start(args, config)
+    asyncio.run(_start(args, config))
 
     assert served == []
     assert "already served" in capsys.readouterr().out

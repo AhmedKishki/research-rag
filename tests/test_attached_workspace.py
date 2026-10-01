@@ -181,7 +181,9 @@ def test_a_bare_call_with_one_project_opens_it_in_a_browser(
 
     cli._bare_workspace(_no_arguments())
 
-    assert served == {"name": "Only One", "open_browser": True}
+    # Serving never opens a browser on its own: the command line is where this app is
+    # worked from, so a browser appears only when `--start-ui` asks for one.
+    assert served == {"name": "Only One", "open_browser": False}
 
 
 def test_a_bare_call_with_several_projects_asks_which(
@@ -255,7 +257,8 @@ def test_a_bare_call_reports_an_app_already_up(
     cli._bare_workspace(_no_arguments())
 
     out = capsys.readouterr().out
-    assert opened == ["http://127.0.0.1:5051"]
+    # Reporting the app another terminal owns never opens a browser either.
+    assert opened == []
     assert "already served" in out
     assert "Ctrl-C here would not stop it" in out
     assert "stop" in out

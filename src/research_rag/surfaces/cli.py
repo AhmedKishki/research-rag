@@ -40,7 +40,14 @@ from typing import Any, Self
 from config_ultra_rag_mcp import describe_settings
 
 from .. import bridge
-from ..app import UI_HOST, App, _claim_loopback_port, _own_tty, running_url
+from ..app import (
+    UI_HOST,
+    App,
+    _claim_loopback_port,
+    _own_tty,
+    recorded_pid,
+    running_url,
+)
 from ..config import (
     CLI_COMMAND,
     DEFAULT_UI_PORT,
@@ -111,10 +118,6 @@ HELP_GROUPS: tuple[tuple[str, tuple[tuple[str, str], ...]], ...] = (
                     "sources directory. Call it again to resume a build that ran "
                     "out of time."
                 ),
-            ),
-            (
-                "ui",
-                "Bring the app up and open the workspace.",
             ),
         ),
     ),
@@ -380,6 +383,15 @@ def _parser() -> argparse.ArgumentParser:
         "--project-root",
         default=os.environ.get("RESEARCH_RAG_PROJECT_ROOT"),
         help="Project root holding .research-rag (default: the current directory).",
+    )
+    parser.add_argument(
+        "--start-ui",
+        dest="start_ui",
+        action="store_true",
+        help=(
+            "Open the workspace in a browser as well as serving it. Serving never "
+            "opens one by itself, so a browser appears only when this is passed."
+        ),
     )
     parser.add_argument(
         "--version",
@@ -738,23 +750,9 @@ def _parser() -> argparse.ArgumentParser:
     )
 
     browser = commands.add_parser(
-        "start", help="Bring this project's app up, and report where it is."
-    )
-    browser.add_argument(
-        "--open", action="store_true", help="Open the workspace in a browser."
+        "start", help="Serve this project's app from this terminal, and say where."
     )
     browser.add_argument("--port", type=int, help="Serve on a different port.")
-
-    open_ui = commands.add_parser(
-        "ui", help="Bring the app up and open the workspace in a browser."
-    )
-    open_ui.add_argument(
-        "--no-open",
-        dest="open",
-        action="store_false",
-        help="Start it without opening a browser.",
-    )
-    open_ui.add_argument("--port", type=int, help="Serve on a different port.")
 
     commands.add_parser(
         "clients", help="List the MCP clients attached to this project's app."
@@ -947,7 +945,7 @@ def _init(args: argparse.Namespace) -> dict[str, Any]:
             f"Add PDF or EPUB sources to {config.source_root}.",
             project_command(config.project_root, "ingest"),
             project_command(config.project_root, "search", "your question"),
-            project_command(config.project_root, "ui"),
+            project_command(config.project_root, "start"),
         ],
     }
 
@@ -1060,6 +1058,16 @@ def _terminate(pids: list[int]) -> list[int]:
     return forced
 
 
+def _ask_to_stop(pid: int) -> OSError | None:
+    """Ask one app to stop, and report why it could not be asked."""
+
+    try:
+        os.kill(pid, signal.SIGTERM)
+    except OSError as exc:
+        return exc
+    return None
+
+
 def _stop(args: argparse.Namespace, config: ResearchConfig) -> dict[str, Any]:
     """Stop this project's app, and with ``--servers`` every process serving it.
 
@@ -1076,7 +1084,20 @@ def _stop(args: argparse.Namespace, config: ResearchConfig) -> dict[str, Any]:
         "attached_to": app_state.get("attached_to"),
         "url": app_state.get("url"),
     }
+    # The app is asked to stop, never killed: it closes its own gateway and releases
+    # its own lock on the way out, and a terminal that is still there says so.
+    pid = recorded_pid(config)
+    report["stopped"] = False
+    if pid is not None:
+        report["stopped"] = _ask_to_stop(pid) is None
+        report["pid"] = pid
     if not args.servers:
+        report["notes"] = [
+            (
+                "An app belongs to the terminal that started it: it ends there, "
+                "and this command does not start it again."
+            )
+        ]
         return report
     found = _service_processes(config.project_root)
     report["servers"] = [{"pid": pid, "command": command} for pid, command in found]
@@ -1587,12 +1608,15 @@ def _only_project_or_ask() -> Path:
 
 
 def _bare_workspace(args: argparse.Namespace) -> CommandResult:
-    """Open the workspace in this terminal, attached to it.
+    """Serve this project's workspace from this terminal, attached to it.
+
+    Nothing opens a browser unless `--start-ui` asked for one, because the command
+    line is where this app is worked from and a browser that appears unasked takes
+    the reader out of it.
 
     An app already up for the project is reported rather than started a second
     time, because two apps on one project would each hold the lock and open a
-    gateway, and because the reader is asking for a workspace, not for a second
-    process. Its terminal is not this one, so this call says so and returns the
+    gateway. Its terminal is not this one, so this call says so and returns the
     reader to their prompt instead of occupying it.
     """
 
@@ -1603,14 +1627,15 @@ def _bare_workspace(args: argparse.Namespace) -> CommandResult:
     )
     url = running_url(config)
     if url is not None:
-        _open_browser(url)
+        if getattr(args, "start_ui", False):
+            _open_browser(url)
         sys.stdout.write(
             f"{config.project_name} is already served at {url} by a process this "
             f"terminal does not own; Ctrl-C here would not stop it. "
             f"'{CLI_NAME} stop' stops it, and a bare call then serves it here.\n"
         )
         return CommandResult()
-    return _serve_attached_sync(config, open_browser=True)
+    return _serve_attached_sync(config, open_browser=getattr(args, "start_ui", False))
 
 
 def _serve_attached_sync(
@@ -1621,7 +1646,7 @@ def _serve_attached_sync(
     return asyncio.run(_serve_attached(config, port=None, open_browser=open_browser))
 
 
-def _start(args: argparse.Namespace, config: ResearchConfig) -> CommandResult:
+async def _start(args: argparse.Namespace, config: ResearchConfig) -> CommandResult:
     """Serve this project from this terminal until the terminal or the app ends.
 
     Attached is the whole point, so this is the same run the bare call makes: the
@@ -1636,7 +1661,7 @@ def _start(args: argparse.Namespace, config: ResearchConfig) -> CommandResult:
 
     url = running_url(config)
     if url is not None:
-        if args.open:
+        if args.start_ui:
             _open_browser(url)
         sys.stdout.write(
             f"{config.project_name} is already served at {url} by a process this "
@@ -1644,7 +1669,7 @@ def _start(args: argparse.Namespace, config: ResearchConfig) -> CommandResult:
             f"'{CLI_NAME} stop' stops it, and this command then serves it here.\n"
         )
         return CommandResult()
-    return asyncio.run(_serve_attached(config, port=args.port, open_browser=args.open))
+    return await _serve_attached(config, port=args.port, open_browser=args.start_ui)
 
 
 def _open_browser(url: str) -> None:
@@ -1820,7 +1845,7 @@ async def _update(args: argparse.Namespace) -> dict[str, Any]:
     payload["project_state_changes"] = changes
     payload["project_state_untouched"] = not changes
     payload["start_again"] = [
-        project_command(one.project.project_root, "ui")
+        project_command(one.project.project_root, "start")
         for one in stopped
         if one.stopped
     ]
@@ -1981,9 +2006,7 @@ async def _run(args: argparse.Namespace) -> CommandResult:
         print(describe_costs(config.settings))
         return CommandResult()
     if args.command == "start":
-        return CommandResult(payload=_start(args, config))
-    if args.command == "ui":
-        return CommandResult(payload=_start(args, config))
+        return await _start(args, config)
     if args.command == "clients":
         return CommandResult(payload=_clients(config))
     if args.command == "disconnect":
