@@ -3,7 +3,12 @@
 Nothing here reaches a network. Every external command goes through an injected
 runner that answers from a recorded table, so a test can put the remote anywhere
 it likes, including out of reach, and the decision it checks is the one the
-command makes in production.
+command makes in production. `tests/test_release.py` holds the tests that need
+real tags, and builds them in a temporary repository.
+
+The decision under test is the release one: whether this checkout is at, behind,
+or ahead of the latest published release. The branch head is reported beside that
+answer and never decides it.
 """
 
 from __future__ import annotations
@@ -21,13 +26,16 @@ import research_rag.surfaces.cli as cli_module
 from research_rag import registry
 from research_rag import update as update_module
 from research_rag.launcher import launcher_path
+from research_rag.release import FOUND, NONE, Release, ReleaseSet
 from research_rag.support import ResearchError
 from research_rag.surfaces.cli import _parser
+from research_rag.version import version_block
 
 CHECKOUT = update_module.CHECKOUT
 DISTRIBUTION = update_module.DISTRIBUTION
 COMMIT = "a" * 40
 REMOTE_HEAD = "b" * 40
+RELEASE_COMMIT = "c" * 40
 
 
 class Recorder:
@@ -61,7 +69,38 @@ class Recorder:
         return tuple(command) in self.calls
 
 
-def _checkout(root: Path, *, behind: str = "0", changed: str = "README.md") -> Recorder:
+def _tag_listing(*tags: tuple[str, str]) -> str:
+    """What `git ls-remote --tags origin` prints for the tags it is given."""
+
+    return "".join(f"{commit}\trefs/tags/{tag}\n" for tag, commit in tags)
+
+
+def _published(*versions: str) -> ReleaseSet:
+    """The release set a remote whose tags are these versions publishes."""
+
+    if not versions:
+        return ReleaseSet(
+            NONE,
+            detail=(
+                "the remote publishes no tag naming a release version, so it has "
+                "published no release"
+            ),
+        )
+    newest = versions[-1]
+    return ReleaseSet(
+        FOUND,
+        Release(newest, f"v{newest}", RELEASE_COMMIT),
+        detail=f"release {newest} is the highest version the remote's tags name",
+    )
+
+
+def _checkout(
+    root: Path,
+    *,
+    behind: str = "0",
+    changed: str = "README.md",
+    versions: tuple[str, ...] = ("0.1.0",),
+) -> Recorder:
     """The answers one git checkout gives, as `git -C <root> ...`."""
 
     return Recorder(
@@ -73,6 +112,9 @@ def _checkout(root: Path, *, behind: str = "0", changed: str = "README.md") -> R
             f"git -C {root} rev-parse HEAD": COMMIT,
             f"git -C {root} rev-parse origin/main": REMOTE_HEAD,
             f"git -C {root} fetch --quiet --prune --tags": "",
+            f"git -C {root} ls-remote --tags origin": _tag_listing(
+                *((f"v{version}", RELEASE_COMMIT) for version in versions)
+            ),
             f"git -C {root} rev-list --count HEAD..origin/main": behind,
             f"git -C {root} diff --name-only HEAD..origin/main": changed,
         }
@@ -89,6 +131,7 @@ def _local(checkout: Path | None, **overrides: Any) -> update_module.LocalState:
         "commit": COMMIT if checkout is not None else None,
         "tool": None if checkout is not None else "uv",
         "tool_specifier": None if checkout is not None else "git+https://example",
+        "declared": "0.1.0" if checkout is not None else None,
     }
     values.update(overrides)
     return update_module.LocalState(**values)
@@ -113,45 +156,183 @@ def _a_dead_pid() -> int:
     return finished.pid
 
 
-def test_a_checkout_behind_by_three_plans_a_pull_a_lock_and_a_sync(
+def test_a_checkout_behind_a_release_plans_to_detach_onto_the_release_tag(
     tmp_path: Path,
 ) -> None:
-    """The plan names what it would run, in order, and why the lock step is there."""
+    """The plan moves to the release itself, and names the tag it moves to."""
 
-    local = _local(tmp_path)
-    remote = update_module.RemoteState(
-        reachable=True, head=REMOTE_HEAD, behind=3, pins_moving=True
+    plan = update_module.plan_update(
+        _local(tmp_path),
+        update_module.RemoteState(
+            reachable=True,
+            head=REMOTE_HEAD,
+            behind=3,
+            pins_moving=True,
+            releases=_published("0.1.0", "0.2.0"),
+        ),
     )
 
-    plan = update_module.plan_update(local, remote)
-
     assert plan.available is True
-    assert plan.behind == 3
-    assert plan.local_revision == COMMIT[:12]
-    assert plan.remote_revision == REMOTE_HEAD[:12]
-    assert plan.labels() == ("git pull --ff-only", "uv lock", "uv sync")
-    assert "3 commit(s) ahead" in plan.notes[0]
+    assert plan.release_position == update_module.BEHIND_RELEASE
+    assert plan.release_version == "0.2.0"
+    assert plan.labels() == ("git checkout --detach v0.2.0", "uv lock", "uv sync")
+    assert "behind release 0.2.0, tagged v0.2.0" in " ".join(plan.notes)
+
+
+def test_the_answer_prints_the_command_that_returns_to_the_branch(
+    tmp_path: Path,
+) -> None:
+    """Installing a release leaves the checkout detached, so the way back is named."""
+
+    plan = update_module.plan_update(
+        _local(tmp_path),
+        update_module.RemoteState(
+            reachable=True, releases=_published("0.1.0", "0.2.0")
+        ),
+    )
+
+    assert f"git -C {tmp_path} checkout main" in " ".join(plan.notes)
 
 
 def test_a_commit_that_moves_no_pin_needs_no_lock(tmp_path: Path) -> None:
     plan = update_module.plan_update(
         _local(tmp_path),
         update_module.RemoteState(
-            reachable=True, head=REMOTE_HEAD, behind=1, pins_moving=False
+            reachable=True,
+            behind=1,
+            pins_moving=False,
+            releases=_published("0.1.0", "0.2.0"),
         ),
     )
 
-    assert plan.labels() == ("git pull --ff-only", "uv sync")
+    assert plan.labels() == ("git checkout --detach v0.2.0", "uv sync")
 
 
-def test_a_checkout_level_with_its_remote_has_nothing_to_do(tmp_path: Path) -> None:
+def test_a_checkout_at_the_release_has_nothing_to_apply(tmp_path: Path) -> None:
     plan = update_module.plan_update(
-        _local(tmp_path), update_module.RemoteState(reachable=True, behind=0)
+        _local(tmp_path),
+        update_module.RemoteState(
+            reachable=True,
+            behind=0,
+            releases=_published("0.1.0"),
+        ),
     )
 
     assert plan.available is False
     assert plan.commands == ()
-    assert "level with origin/main" in plan.notes[0]
+    assert plan.release_position == update_module.AT_RELEASE
+    assert plan.release_version == "0.1.0"
+    assert "at release 0.1.0, tagged v0.1.0" in " ".join(plan.notes)
+
+
+def test_the_release_version_decides_and_not_the_branch_head(tmp_path: Path) -> None:
+    """A branch ahead of its upstream is still at the release it declares."""
+
+    plan = update_module.plan_update(
+        _local(tmp_path),
+        update_module.RemoteState(
+            reachable=True,
+            behind=0,
+            releases=_published("0.1.0"),
+        ),
+    )
+
+    assert plan.available is False
+    assert plan.release_position == update_module.AT_RELEASE
+
+
+def test_a_checkout_ahead_of_the_release_reports_unreleased_work(
+    tmp_path: Path,
+) -> None:
+    """Ahead is a fact about this checkout, and it is never a reason to change one."""
+
+    plan = update_module.plan_update(
+        _local(tmp_path, declared="0.3.0"),
+        update_module.RemoteState(
+            reachable=True,
+            behind=0,
+            releases=_published("0.1.0", "0.2.0"),
+        ),
+    )
+
+    assert plan.available is False
+    assert plan.commands == ()
+    assert plan.release_position == update_module.AHEAD_OF_RELEASE
+    assert plan.release_version == "0.2.0"
+    assert "carries unreleased work" in " ".join(plan.notes)
+
+
+def test_a_repository_publishing_no_release_says_so_and_compares_nothing(
+    tmp_path: Path,
+) -> None:
+    plan = update_module.plan_update(
+        _local(tmp_path),
+        update_module.RemoteState(reachable=True, behind=4, releases=_published()),
+    )
+
+    assert plan.available is False
+    assert plan.commands == ()
+    assert plan.release_position == update_module.NO_RELEASE
+    said = " ".join(plan.notes)
+    assert "published no release" in said
+    assert "nothing can be compared with it" in said
+    assert "git tag v<version>" in said
+    assert "maintainer action" in said
+
+
+def test_two_tags_claiming_one_version_are_refused_rather_than_guessed(
+    tmp_path: Path,
+) -> None:
+    plan = update_module.plan_update(
+        _local(tmp_path),
+        update_module.RemoteState(
+            reachable=True,
+            releases=ReleaseSet(
+                "ambiguous", detail="two tags claim version 0.1.0 (v0.1.0, 0.1.0)"
+            ),
+        ),
+    )
+
+    assert plan.available is False
+    assert plan.commands == ()
+    assert plan.release_position == update_module.UNREADABLE_RELEASE
+    assert "Nothing was changed" in " ".join(plan.notes)
+
+
+def test_the_branch_head_position_is_reported_beside_the_release_answer(
+    tmp_path: Path,
+) -> None:
+    plan = update_module.plan_update(
+        _local(tmp_path),
+        update_module.RemoteState(
+            reachable=True,
+            head=REMOTE_HEAD,
+            behind=7,
+            releases=_published("0.1.0"),
+        ),
+    )
+
+    assert "7 commit(s) ahead" in " ".join(plan.notes)
+    assert plan.as_dict()["commits_behind_branch"] == 7
+
+
+def test_a_dirty_working_tree_refuses_the_update_and_names_the_files_in_the_way(
+    tmp_path: Path,
+) -> None:
+    plan = update_module.plan_update(
+        _local(tmp_path, dirty=("src/research_rag/update.py", "README.md")),
+        update_module.RemoteState(
+            reachable=True, releases=_published("0.1.0", "0.2.0")
+        ),
+    )
+
+    assert plan.commands == ()
+    assert plan.blocked is not None
+    refused = plan.blocked
+    assert "src/research_rag/update.py" in refused
+    assert "README.md" in refused
+    assert f"git -C {tmp_path} status" in refused
+    assert "Nothing was changed" in refused
 
 
 def test_an_unreachable_remote_is_an_answer_and_not_a_failure(tmp_path: Path) -> None:
@@ -181,12 +362,12 @@ def test_offline_asks_nothing_and_says_the_remote_was_not_asked(
     assert run.calls == []
 
 
-def test_the_probe_reads_the_checkout_it_is_given_and_nothing_more(
+def test_the_probe_reads_the_release_tags_and_the_branch_head_and_nothing_more(
     tmp_path: Path,
 ) -> None:
     root = tmp_path / "checkout"
     root.mkdir()
-    run = _checkout(root, behind="2", changed="pyproject.toml\nsrc/research_rag/app.py")
+    run = _checkout(root, behind="2", changed="pyproject.toml")
 
     local = update_module.LocalState(
         shape=CHECKOUT,
@@ -195,23 +376,41 @@ def test_the_probe_reads_the_checkout_it_is_given_and_nothing_more(
         branch="main",
         upstream="origin/main",
         commit=COMMIT,
+        declared="0.1.0",
     )
     remote = update_module.probe_remote(local, run)
     plan = update_module.plan_update(local, remote)
 
     assert remote.behind == 2
-    assert remote.pins_moving is True
-    assert plan.available is True
-    # A check asks the remote and stops there: no pull, no lock, no sync.
-    assert not run.ran("git", "pull", "--ff-only")
+    assert remote.releases.version == "0.1.0"
+    assert plan.available is False
+    # A check asks the remote and stops there: no checkout, no lock, no sync.
+    assert not run.ran("git", "checkout", "--detach", "v0.1.0")
     assert not run.ran("uv", "lock")
     assert not run.ran("uv", "sync")
+
+
+def test_the_probe_reports_the_untracked_files_nothing_else(tmp_path: Path) -> None:
+    """Only tracked paths block a move; an untracked file is left where it is."""
+
+    run = Recorder(
+        {
+            f"git -C {tmp_path} status --porcelain --untracked-files=no": (
+                " M src/research_rag/update.py\nA  tests/test_release.py\n"
+            )
+        }
+    )
+
+    assert update_module.dirty_files(tmp_path, run) == (
+        "src/research_rag/update.py",
+        "tests/test_release.py",
+    )
 
 
 def test_applying_runs_the_plan_and_reports_each_step(tmp_path: Path) -> None:
     run = Recorder(
         {
-            ("git", "pull", "--ff-only"): "Fast-forward\n",
+            ("git", "checkout", "--detach", "v0.2.0"): "HEAD is now at abc\n",
             ("uv", "lock"): "Resolved\n",
             ("uv", "sync"): "Installed\n",
         }
@@ -219,7 +418,10 @@ def test_applying_runs_the_plan_and_reports_each_step(tmp_path: Path) -> None:
     plan = update_module.plan_update(
         _local(tmp_path),
         update_module.RemoteState(
-            reachable=True, head=REMOTE_HEAD, behind=2, pins_moving=True
+            reachable=True,
+            behind=2,
+            pins_moving=True,
+            releases=_published("0.1.0", "0.2.0"),
         ),
     )
 
@@ -229,28 +431,29 @@ def test_applying_runs_the_plan_and_reports_each_step(tmp_path: Path) -> None:
     assert all(step["returncode"] == 0 for step in performed)
 
 
-def test_a_failing_step_stops_the_update_and_names_the_command(
-    tmp_path: Path,
-) -> None:
+def test_a_failing_step_stops_the_update_and_names_the_command(tmp_path: Path) -> None:
     run = Recorder(
         {
-            ("git", "pull", "--ff-only"): update_module.CommandResult(
-                1, "", "fatal: Not possible to fast-forward"
+            ("git", "checkout", "--detach", "v0.2.0"): update_module.CommandResult(
+                1, "", "error: Your local changes to the following files would be lost"
             )
         }
     )
     plan = update_module.plan_update(
         _local(tmp_path),
         update_module.RemoteState(
-            reachable=True, head=REMOTE_HEAD, behind=2, pins_moving=True
+            reachable=True,
+            behind=2,
+            pins_moving=True,
+            releases=_published("0.1.0", "0.2.0"),
         ),
     )
 
     with pytest.raises(ResearchError) as refused:
         update_module.apply_plan(plan, run=run, cwd=tmp_path)
 
-    assert "git pull --ff-only" in str(refused.value)
-    assert "Not possible to fast-forward" in str(refused.value)
+    assert "git checkout --detach v0.2.0" in str(refused.value)
+    assert "would be lost" in str(refused.value)
     assert not run.ran("uv", "sync")
 
 
@@ -498,7 +701,10 @@ def test_the_command_refuses_an_update_while_a_build_holds_the_lock(
         update_module,
         "probe_remote",
         lambda *_args, **_kwargs: update_module.RemoteState(
-            reachable=True, behind=2, pins_moving=True
+            reachable=True,
+            behind=2,
+            pins_moving=True,
+            releases=_published("0.1.0", "0.2.0"),
         ),
     )
 
@@ -534,17 +740,20 @@ def test_applying_stops_every_app_and_prints_the_command_that_starts_it_again(
         update_module,
         "probe_remote",
         lambda *_args, **_kwargs: update_module.RemoteState(
-            reachable=True, behind=1, pins_moving=True
+            reachable=True,
+            behind=1,
+            pins_moving=True,
+            releases=_published("0.1.0", "0.2.0"),
         ),
     )
     stopped = Recorder({f"{script} --stop": "Stopped the app for this project.\n"})
-    applied = Recorder({"uv tool upgrade research-rag": "Updated research-rag.\n"})
+    applied = Recorder({"git checkout --detach v0.2.0": "HEAD is now at abc\n"})
     monkeypatch.setattr(update_module, "subprocess_runner", stopped)
     monkeypatch.setattr(
         update_module,
         "apply_plan",
         lambda plan, **_kwargs: [
-            {"command": "uv tool upgrade research-rag", "returncode": 0, "output": ""}
+            {"command": "git checkout --detach v0.2.0", "returncode": 0, "output": ""}
         ],
     )
     monkeypatch.setattr(
@@ -582,7 +791,9 @@ def test_applying_with_nothing_to_apply_stops_nothing(
     monkeypatch.setattr(
         update_module,
         "probe_remote",
-        lambda *_args, **_kwargs: update_module.RemoteState(reachable=True, behind=0),
+        lambda *_args, **_kwargs: update_module.RemoteState(
+            reachable=True, behind=0, releases=_published("0.1.0")
+        ),
     )
     run = Recorder()
     monkeypatch.setattr(update_module, "subprocess_runner", run)
@@ -609,6 +820,52 @@ def test_a_relocated_runtime_root_is_read_from_the_launcher(tmp_path: Path) -> N
 
     assert project.state_root == elsewhere
     assert project.default_state_root == project.portable_root / "runtime"
+
+
+def test_the_version_flag_and_update_report_the_same_numbers(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """One install has one version, and both surfaces read it the same way."""
+
+    cli_module.main(["--version"])
+    printed = capsys.readouterr().out
+
+    payload = _run("--offline", "update").payload
+
+    assert payload is not None
+    assert payload["version"] == version_block()
+    assert printed.splitlines() == [
+        f"research-rag {version_block()['app']}",
+        f"installed {version_block()['installed']}",
+        (
+            f"UI {version_block()['ui']}"
+            if version_block()["ui"]
+            else "UI not installed"
+        ),
+        f"restart_required {str(version_block()['restart_required']).lower()}",
+    ]
+
+
+def test_the_check_reports_a_declared_version_that_names_no_release_here(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The declared version and the tag that claims it are checked where they are."""
+
+    monkeypatch.setattr(update_module, "nearest_checkout", lambda: tmp_path)
+    (tmp_path / "pyproject.toml").write_text(
+        '[project]\nversion = "9.9.9"\n', encoding="utf-8"
+    )
+    monkeypatch.setattr(
+        update_module,
+        "declared_version",
+        lambda _checkout: "9.9.9",
+    )
+
+    payload = _run("--offline", "update").payload
+
+    assert payload is not None
+    assert payload["declared_version_problems"] == []
+    assert payload["install"]["declared_version"] == "9.9.9"
 
 
 def test_offline_with_apply_is_refused_rather_than_reported_as_empty() -> None:
