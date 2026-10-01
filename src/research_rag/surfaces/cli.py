@@ -24,8 +24,13 @@ import subprocess
 import sys
 import textwrap
 import time
-from collections.abc import AsyncIterator, Sequence
-from contextlib import AbstractContextManager, asynccontextmanager, nullcontext
+from collections.abc import AsyncIterator, Iterator, Sequence
+from contextlib import (
+    AbstractContextManager,
+    asynccontextmanager,
+    contextmanager,
+    nullcontext,
+)
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Self
@@ -34,7 +39,7 @@ from config_ultra_rag_mcp import describe_settings
 
 from .. import bridge
 from .. import launcher as launcher_module
-from ..app import UI_HOST, App
+from ..app import UI_HOST, App, _claim_loopback_port, _own_tty, running_url
 from ..config import (
     CLI_COMMAND,
     ConfigurationError,
@@ -64,6 +69,10 @@ DEFAULT_DEPTH = 10
 # reason: a client that offers only an environment block still has to name a
 # project.
 PROJECT_NAME_ENV = "RESEARCH_ULTRARAG_PROJECT_NAME"
+# How far above the default port an attached app looks for a free one. The
+# launcher's own script has no bound and keeps going; a bound keeps a terminal
+# from appearing to hang on a machine whose ports are all taken.
+_PORT_ATTEMPTS = 32
 # What a project's own .gitignore keeps out of version control: the derived
 # state that can be rebuilt, and the machine-local launcher. The descriptor,
 # catalogs, and review files are small, portable, and worth keeping.
@@ -1459,6 +1468,232 @@ class CommandResult:
     text: str | None = None
 
 
+async def _serve_attached(
+    config: ResearchConfig,
+    *,
+    port: int | None,
+    open_browser: bool,
+) -> CommandResult:
+    """Serve this project in this terminal until the terminal or the app ends.
+
+    Attached is the whole point: the process stays in the foreground and in this
+    terminal's process group, so Ctrl-C and a closed window both reach it, and
+    the stop below shuts the gateway it opened down rather than orphaning one.
+
+    The port is claimed the way the launcher's own script claims it — the first
+    free one at or above the default — so a second project on the same machine
+    does not fail where a detached one would have moved.
+    """
+
+    # A port named by the caller is the one they asked for, and it is tried once:
+    # its refusal is the app's own sentence, which names the alternative. A port
+    # chosen here is this app's to move, so it walks forward past one that is taken.
+    first = port if port is not None else _a_free_port()
+    app: App | None = None
+    for offset in (0,) if port is not None else range(_PORT_ATTEMPTS):
+        app = App(config, port=first + offset)
+        await app.start()
+        if app.error is None:
+            break
+    if app is None or app.error is not None:
+        # Every candidate was taken. The last refusal is the app's own, naming the
+        # port and the fact that a project already serves it.
+        raise ResearchError(app.error if app is not None and app.error else "no port")
+    if open_browser:
+        _open_browser(app.url)
+    _attached_banner(config, app)
+    with _closing_with_the_terminal() as closing:
+        try:
+            await _wait_until_stopped(app, closing)
+        finally:
+            await app.stop()
+    sys.stdout.write(f"Stopped. {config.project_name} is no longer served.\n")
+    return CommandResult()
+
+
+async def _wait_until_stopped(app: App, closing: _Closing) -> None:
+    """Return when the app stops serving, when the terminal closes, or on Ctrl-C.
+
+    Three things can end an attached run and they are the same ending: the
+    serving task finishing on its own, this terminal going away, and the reader
+    pressing Ctrl-C. Whichever arrives first, the caller stops the app on the way
+    out, so a gateway this app opened is never left serving nothing.
+    """
+
+    serving = asyncio.ensure_future(app.wait())
+    asked = asyncio.ensure_future(closing.asked.wait())
+    try:
+        await asyncio.wait((serving, asked), return_when=asyncio.FIRST_COMPLETED)
+    except (KeyboardInterrupt, asyncio.CancelledError):
+        pass
+    finally:
+        # Only the wait on the closing is cancelled here. The serving task is left
+        # for `App.stop`, which asks uvicorn to shut down and then waits for it;
+        # cancelling this waiter would put a CancelledError inside that task and
+        # turn an orderly stop into a traceback.
+        asked.cancel()
+
+
+def _a_free_port() -> int:
+    """Return a port nothing is listening on, or None when the range is full.
+
+    This is a probe, and the app's own claim is the listen, so the answer can be
+    taken by something else between the two. The window is the length of one
+    socket round trip and the alternative — starting a whole app to see whether it
+    binds — is worse: it builds a service and records state for a port this call
+    is only going to measure.
+    """
+
+    first = launcher_module.DEFAULT_UI_PORT
+    for candidate in range(first, first + _PORT_ATTEMPTS):
+        try:
+            claim = _claim_loopback_port(UI_HOST, candidate)
+        except OSError:
+            continue
+        claim.close()
+        return candidate
+    raise ResearchError(
+        f"No free loopback port in the next {_PORT_ATTEMPTS} from {first}, so the "
+        f"app for a project on this machine was not started; pass --port to choose "
+        "one."
+    )
+
+
+def _attached_banner(config: ResearchConfig, app: App) -> None:
+    """Say what is running, where it is, and what closes it."""
+
+    lines = [
+        f"{config.project_name} — workspace attached to {_own_tty() or 'no terminal'}",
+        f"  {app.url}",
+        f"  pid {os.getpid()} · log {config.state_root / 'logs' / 'research-rag-ui.log'}",
+        "  Ctrl-C stops the app and the gateway it started.",
+    ]
+    sys.stdout.write("\n".join(lines) + "\n")
+    sys.stdout.flush()
+
+
+class _Closing:
+    """The stop a terminal closing, or a signal, asks for."""
+
+    def __init__(self) -> None:
+        self.asked = asyncio.Event()
+
+    def request(self) -> None:
+        """Say once that the terminal is going, and ask the app to stop."""
+
+        if not self.asked.is_set():
+            sys.stdout.write("\nClosing.\n")
+            sys.stdout.flush()
+            self.asked.set()
+
+
+@contextmanager
+def _closing_with_the_terminal() -> Iterator[_Closing]:
+    """Treat a closed window and a `kill` as the Ctrl-C they are.
+
+    Closing a terminal sends SIGHUP and a `kill` sends SIGTERM. Python's default
+    for both ends the process, which would leave the gateway this app opened
+    running with nothing serving it, so each is turned into the orderly stop a
+    Ctrl-C already performs. A platform that cannot install a handler for one of
+    them keeps its default rather than refusing to serve.
+    """
+
+    closing = _Closing()
+    loop = asyncio.get_running_loop()
+    installed: list[int] = []
+    for number in (signal.SIGHUP, signal.SIGTERM):
+        try:
+            loop.add_signal_handler(number, closing.request)
+        except (NotImplementedError, RuntimeError, ValueError, OSError):
+            continue
+        installed.append(number)
+    try:
+        yield closing
+    finally:
+        for number in installed:
+            with contextlib.suppress(NotImplementedError, RuntimeError, ValueError):
+                loop.remove_signal_handler(number)
+
+
+def _only_project_or_ask() -> Path:
+    """The project a bare call serves, chosen by the reader when there is a choice.
+
+    A bare call is the one command a reader types without thinking, so it needs
+    no project argument to be useful. One project on the machine is unambiguous.
+    Several is a decision only the reader can make, so it is asked for in the
+    terminal rather than guessed, and a terminal that cannot answer — a script, a
+    pipe — is given the list and the command to run rather than a prompt that
+    will never be read.
+
+    The list is the one `projects` prints, so the two cannot disagree about what
+    this installation holds.
+    """
+
+    registered = account_projects()["projects"]
+    if not registered:
+        raise ConfigurationError(
+            "No project is initialised on this machine, so there is no workspace "
+            f"to open. Create one with '{CLI_NAME} init --project-root DIR --name "
+            "NAME'."
+        )
+    if len(registered) == 1:
+        return Path(str(registered[0]["project_root"]))
+    if not sys.stdin.isatty():
+        raise ConfigurationError(
+            f"This installation holds {len(registered)} projects, so a bare call "
+            "cannot choose between them. Name one: "
+            + ", ".join(
+                f"--project {str(entry['project_name'])!r}" for entry in registered
+            )
+            + "."
+        )
+    sys.stdout.write("Which project\n")
+    for index, entry in enumerate(registered, start=1):
+        running = " — already served" if entry["app"]["running"] else ""
+        sys.stdout.write(f"  [{index}] {entry['project_name']}{running}\n")
+    sys.stdout.write("  [0] none of these\n")
+    sys.stdout.flush()
+    answer = input("Number: ").strip()
+    if not answer.isdigit() or not 1 <= int(answer) <= len(registered):
+        raise ConfigurationError("No project chosen, so nothing was started.")
+    return Path(str(registered[int(answer) - 1]["project_root"]))
+
+
+def _bare_workspace(args: argparse.Namespace) -> CommandResult:
+    """Open the workspace in this terminal, attached to it.
+
+    An app already up for the project is reported rather than started a second
+    time, because two apps on one project would each hold the lock and open a
+    gateway, and because the reader is asking for a workspace, not for a second
+    process. Its terminal is not this one, so this call says so and returns the
+    reader to their prompt instead of occupying it.
+    """
+
+    named = getattr(args, "project", None) or getattr(args, "project_root", None)
+    root = _project_path(args) if named else _only_project_or_ask()
+    config = resolve_config(
+        root, source_directory=configured_source_directory(root), **_config_kwargs(args)
+    )
+    url = running_url(config)
+    if url is not None:
+        _open_browser(url)
+        sys.stdout.write(
+            f"{config.project_name} is already served at {url} by a process this "
+            f"terminal does not own; Ctrl-C here would not stop it. "
+            f"'{CLI_NAME} stop' stops it, and a bare call then serves it here.\n"
+        )
+        return CommandResult()
+    return _serve_attached_sync(config, open_browser=True)
+
+
+def _serve_attached_sync(
+    config: ResearchConfig, *, open_browser: bool
+) -> CommandResult:
+    """Run the attached app on the running loop of this process."""
+
+    return asyncio.run(_serve_attached(config, port=None, open_browser=open_browser))
+
+
 async def _serve(args: argparse.Namespace, config: ResearchConfig) -> CommandResult:
     """Serve the app in the foreground until this process is stopped.
 
@@ -1468,19 +1703,7 @@ async def _serve(args: argparse.Namespace, config: ResearchConfig) -> CommandRes
     the first free port at or above the default.
     """
 
-    port = args.port or launcher_module.DEFAULT_UI_PORT
-    app = App(config, port=port)
-    await app.start()
-    if app.error is not None:
-        raise ResearchError(app.error)
-    print(app.url, flush=True)
-    try:
-        await app.wait()
-    except (KeyboardInterrupt, asyncio.CancelledError):
-        pass
-    finally:
-        await app.stop()
-    return CommandResult()
+    return await _serve_attached(config, port=args.port, open_browser=False)
 
 
 def _start(args: argparse.Namespace, config: ResearchConfig) -> dict[str, Any]:
@@ -1757,6 +1980,9 @@ def _help_menu() -> str:
         f"which takes --project-name NAME so a client entry carries no path.\n"
         f"`install` needs no project unless --desktop is given, and `update`,\n"
         f"`help`, and `--version` need none.\n"
+        f"No command at all opens the workspace in a browser and serves it from\n"
+        f"this terminal, so Ctrl-C or closing the terminal stops it. It asks\n"
+        f"which project when this installation holds more than one.\n"
         f"`{CLI_NAME} --version` prints this app's version, the installed one,\n"
         f"the shared workspace's, and whether a restart is required.\n"
         f"One command's own options: `{CLI_NAME} COMMAND --help`.\n"
@@ -1862,7 +2088,22 @@ def main(argv: Sequence[str] | None = None) -> None:
         sys.stdout.write("\n".join(version_lines()) + "\n")
         return
     if args.command is None:
-        parser.error("the following arguments are required: COMMAND")
+        # No command is the one thing a reader types without thinking, so it opens
+        # the workspace rather than printing a menu: the workspace is what every
+        # other command in this app exists to reach, and the app it opens stays in
+        # this terminal, so closing the terminal closes it. Before the loop
+        # starts, because this call owns one.
+        try:
+            _bare_workspace(args)
+        except (
+            ConfigurationError,
+            ControlError,
+            ResearchError,
+            OSError,
+            ValueError,
+        ) as exc:
+            raise SystemExit(f"{CLI_NAME}: {exc}") from exc
+        return
     if args.command == "help":
         # Before the project is resolved: the menu is what a reader has
         # precisely when they have no project yet, and it must not fail on a

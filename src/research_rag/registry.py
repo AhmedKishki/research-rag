@@ -276,6 +276,18 @@ def registered_at_label(project: RegisteredProject) -> str:
     return parsed.astimezone().strftime("%Y-%m-%d %H:%M")
 
 
+def _attached_to(config: Any) -> str | None:
+    """The terminal a project's running app is attached to, if it is attached."""
+
+    from .app import TTY_FILE
+
+    try:
+        terminal = (config.state_root / TTY_FILE).read_text(encoding="utf-8").strip()
+    except OSError:
+        return None
+    return terminal or None
+
+
 def project_app_state(project_root: Path) -> dict[str, Any]:
     """Whether an app is serving one project, and what that app reports.
 
@@ -297,7 +309,15 @@ def project_app_state(project_root: Path) -> dict[str, Any]:
     config = resolve_config(project_root)
     url = running_url(config)
     state: dict[str, Any] = {
-        "app": {"running": url is not None, "url": url, "port": _port_of(url)},
+        "app": {
+            "running": url is not None,
+            "url": url,
+            "port": _port_of(url),
+            # Which terminal the serving process is attached to, or None when it
+            # was started detached. A reader deciding whether Ctrl-C in this
+            # terminal would stop that app needs the difference.
+            "attached_to": _attached_to(config),
+        },
         "attached_clients": 0,
     }
     if url is None:

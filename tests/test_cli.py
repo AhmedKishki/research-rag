@@ -325,7 +325,12 @@ def test_the_projects_listing_names_every_registered_project(
     # is on disk, and an app that is not up is reported as not up.
     for entry in listing.payload["projects"]:
         assert entry["root_exists"] is True
-        assert entry["app"] == {"running": False, "url": None, "port": None}
+        assert entry["app"] == {
+            "running": False,
+            "url": None,
+            "port": None,
+            "attached_to": None,
+        }
         assert entry["attached_clients"] == 0
         assert "ready" not in entry
 
