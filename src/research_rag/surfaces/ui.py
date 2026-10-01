@@ -87,6 +87,10 @@ RESEARCH_UI_PROFILE = UIProfile(
         # already in the status payload. The removal asks for the id twice,
         # which the shared workspace insists on before it calls here.
         generations=True,
+        # A reader tunes this project in the browser, and the cost of a change is
+        # named before anything is written, because a generation records most of
+        # these keys and a search would otherwise answer stale with no reason.
+        settings=True,
     ),
 )
 
