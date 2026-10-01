@@ -14,7 +14,7 @@
 
 - **A browser workspace, an agent surface, and a command line** are three front ends to one process per project.
 - **Every search is hybrid and reranked.**
-  - `MEASUREMENTS.md` carries the numbers, the weights, the gates, and the cost.
+  - `MEASUREMENTS.md` carries the harness commands and the decisions behind them.
 - **Review decisions survive a rebuild.**
   - A source's reviewed bibliography, categories, projects, keywords, language, title, and authors are a read-time overlay on the indexed corpus.
   - A rebuild never overwrites that overlay.
@@ -113,7 +113,7 @@ research-rag --project-root /path/to/project ui
 - What every search does:
   - A query carrying no topic word abstains rather than matching on a function word.
   - A thin answer is a reason to ask again, not a conclusion.
-- `research-rag search` carries `--method` and `--no-rerank` only to reproduce a row of `MEASUREMENTS.md`, and no reader-facing surface offers the choice.
+- `research-rag search` carries `--method` and `--no-rerank` only to reproduce a retrieval comparison on demand, and no reader-facing surface offers the choice.
 
 ## Narrow what a search reads
 

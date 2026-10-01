@@ -1,8 +1,8 @@
 """Measure the per-unit write pattern on a real project build.
 
-Harness behind the numbers in ``MEASUREMENTS.md``. One corpus is built twice on
-the device ``--root`` names, through the real gateway, tokenizer chunking, and
-embeddings, changing nothing but the write pattern:
+Harness behind the write-grouping decision in ``MEASUREMENTS.md``. One corpus is
+built twice on the device ``--root`` names, through the real gateway, tokenizer
+chunking, and embeddings, changing nothing but the write pattern:
 
 * ``paired`` (before) fsyncs every atomic write's directory and the handoff file.
 * ``grouped`` (after) is the server: a unit's artifacts defer that fsync, and the

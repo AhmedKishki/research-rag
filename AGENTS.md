@@ -6,7 +6,7 @@
 
 - What the app is:
   - A project-scoped research knowledge base built from original PDF and EPUB sources, over one loopback port, from one process.
-  - The reader concludes: the app never writes an answer, and the untouched PDF or EPUB is the quote authority.
+  - The reader concludes: the app never writes the conclusion, and the untouched PDF or EPUB is the quote authority.
   - The workspace, the agent's tools, and the command line are three front ends to that one process, which owns the project, its lock, and its UltraRAG gateway.
   - The only question a reader has to ask is whether the app is up.
 - Who it serves:
@@ -24,7 +24,7 @@
 | `README.md` | the user manual: what it does, how to run it, what it cannot do. Every installed command. |
 | `STORAGE.md` | the state format: every file, every field, portability, hand edits. The only place field names are defined. |
 | `FEATURES.md` | the capability inventory: what comes from UltraRAG, what this app adds, what is excluded, what is planned. |
-| `MEASUREMENTS.md` | the numbers, the limits they do not establish, and every constant, model, revision, and threshold. No other file states one. |
+| `MEASUREMENTS.md` | the protocol a measurement is taken by, the envelope this app is built for, and the mechanism behind each tunable. Constants, models, revisions, and thresholds are read from `default.toml` and the code, and no other file states one. |
 | `ROADMAP.md` / `TODO.md` | deferred ideas / open work. |
 | `AGENTS.md` | this file: rules that are not derivable from the code or the tests. |
 | A module's own docstring | why that module does what it does, and what it may never do. |
@@ -119,7 +119,7 @@
 
 ## Rules
 
-- A rule that a module's own docstring or a test already carries is not repeated here.
+- A test is the enforcer of a rule stated once here; a module's own docstring restating that rule in prose is the copy that drifts.
 
 ### The contract a reader relies on
 
@@ -136,7 +136,7 @@
 - A generation the app cannot serve is stated as `hybrid_ready: false` beside `generation_upgrade_required`, and it leaves the old one searchable with a warning.
 - Every operation takes only the arguments its reader must decide:
   - the agent's tools offer no retrieval mode, no output view, and no chunk tuning, because a capability the measurements already answer is an engine setting.
-  - the one recorded exception is `search --method` and `--no-rerank`, which exist to reproduce a row of `MEASUREMENTS.md`.
+  - the one recorded exception is `search --method` and `--no-rerank`, which exist so one query can be asked again in another mode.
 - `status` and an agent's `status` are the same answer, and two readers are bounded and share `tool_views`, so they cannot disagree.
 - An agent's client entry names a project and never a directory, so one entry serves that project on every machine where it was initialised:
   - `mcp` refuses `--project-root` and `--project`.
@@ -223,7 +223,7 @@
 - Ingestion selects only regular PDF and EPUB files beneath the configured sources directory.
   - Source symlinks and path traversal are rejected.
 - The underlying vanilla operations are never exposed, UltraRAG is never patched, and the dense backends never move into the gateway.
-- Every answer goes through the core, and one capability has one implementation, so the three surfaces cannot disagree.
+- Every payload goes through the core, and one capability has one implementation, so the three surfaces cannot disagree.
   - The workspace and the agent surface call a `ResearchService` method.
   - The command line is the third front end into that same service.
 - Settings are the workspace's to change and the command line's to read, never an agent's, and `research-rag config` stays read-only.
@@ -300,6 +300,10 @@ Terminal ── control ───┘      ├── shared workspace (surfaces/u
   - The commit message says what the change does and why.
   - The change is pushed to `origin main` before anything else starts.
   - A change that is not on the remote is lost, and the collection cannot record a pointer to a commit that is not there.
+- The work ends with a clean tree: commit all and push, whatever the work touched.
+  - `git status --short` reports nothing, and nothing of this work sits uncommitted when it is reported as finished.
+  - Work that arrived in the tree from elsewhere counts as part of the tree, so it is committed with this work or the reason it is not is stated.
+  - The collection's submodule pointer is pushed in its own commit after the child's, never in the same one.
 
 ## Validation
 
@@ -312,7 +316,7 @@ uv run python -m compileall -q src tests
 ```
 
 - A retrieval-quality claim is produced by `uv run python scripts/evaluate_retrieval.py --project <project> --offline`, with `--validate-only` added first.
-  - The result of that harness is recorded in `MEASUREMENTS.md`.
+  - A measurement that still holds is recorded in `MEASUREMENTS.md`; one that no longer does leaves the file.
   - A documented retrieval default never changes on an unrecorded run.
 - A workspace adapter change covers safe source-file resolution, the arguments each operation forwards, and the real host against an existing project without mutating its sources.
 - Shared workspace, JSON validation, capability, and same-origin changes belong in `ui-ultra-rag-mcp` and must pass that package's own tests before the pinned commit here is updated.

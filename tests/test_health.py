@@ -438,7 +438,7 @@ def test_the_tree_is_read_once_per_marker(
     healthy: ResearchConfig,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """The tree hash reads 11 MB, so a repeated status must not repeat it."""
+    """The tree hash reads every byte of it, so a repeated status must not repeat it."""
 
     reads: list[Path] = []
     root = Path(healthy.model_cache_root).parent / "runtime-cache" / "UltraRAG-test"

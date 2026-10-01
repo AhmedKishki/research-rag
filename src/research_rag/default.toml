@@ -173,8 +173,8 @@ backend = "auto"
 # CPU cross-encoder that reranks every search. Every supported name is pinned to a
 # revision in rerankers.py. (engine choice, recorded in the answer and the manifest.)
 reranker_model = "Xenova/ms-marco-MiniLM-L-6-v2"
-# Sequences per embedding inference. Throughput only: a batch of 1 returns exactly
-# the same floats as a batch of 64 (MEASUREMENTS.md).
+# Sequences per embedding inference. Throughput only: one sequence per inference
+# returns exactly the same floats as a large batch does (MEASUREMENTS.md).
 embedding_inference_batch_size = 1
 # Above this many chunks, `auto` selects the embedded ANN index instead of the exact
 # scan. (engine choice, recorded in every generation it builds.)

@@ -247,10 +247,9 @@ def _checkpoint_identity(
 
     The ranking policy is deliberately absent: it decides how a generation is
     *searched*, not what its artifacts contain, so a ranking edit reuses every
-    chunk and vector at a measured cost of about two minutes rather than a full
-    rebuild. The policy still reaches the manifest at publish time. Contextual
-    chunk headers are not a ranking policy, because they decide the text a vector
-    covers.
+    chunk and vector instead of rebuilding the corpus. The policy still reaches the
+    manifest at publish time. Contextual chunk headers are not a ranking policy,
+    because they decide the text a vector covers.
     """
 
     return value_fingerprint(

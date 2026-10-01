@@ -51,8 +51,8 @@ SETTINGS_ENVIRONMENT_PREFIX = "RESEARCH_ULTRARAG_"
 
 
 # The answer detail an agent's tool call receives. The browser workspace and the
-# command line always want the complete payload; the projection exists for the
-# one reader whose context is bounded, and `MEASUREMENTS.md` carries both sizes.
+# command line always want the complete payload; the projection exists for the one
+# reader whose context is bounded, and it drops what a question does not need.
 LEAN_TOOL_DETAIL = "lean"
 FULL_TOOL_DETAIL = "full"
 TOOL_DETAIL_MODES = (LEAN_TOOL_DETAIL, FULL_TOOL_DETAIL)
@@ -395,9 +395,9 @@ SETTINGS: tuple[Setting, ...] = (
         layer="identity",
         doc=(
             "Dense relevance gate: a candidate below this cosine similarity is "
-            "withheld rather than ranked. Measured: a fused ranking is "
-            "insensitive below this default and loses answers above it, while a "
-            "dense-only ranking wants a much lower value."
+            "withheld rather than ranked. A fused ranking is insensitive below the "
+            "default and loses answers above it, while a dense-only ranking wants a "
+            "much lower value."
         ),
         minimum=-1.0,
         maximum=1.0,
@@ -424,9 +424,9 @@ SETTINGS: tuple[Setting, ...] = (
         doc=(
             "Depth of the reranked window as a multiple of the requested top_k: "
             "max(top_k * this, rerank_window_floor), capped by "
-            "rerank_max_candidates and the fused candidate count. Measured: 20 "
-            "is the shallowest window that reaches the plateau, and each ten "
-            "more candidates cost about 0.7 s per query."
+            "rerank_max_candidates and the fused candidate count. Every extra "
+            "candidate costs a rerank, so this trades answer depth against "
+            "latency."
         ),
         minimum=1,
         maximum=1000,
@@ -452,9 +452,10 @@ SETTINGS: tuple[Setting, ...] = (
         layer="identity",
         doc=(
             "Pseudo-relevance feedback: mine terms from the lexical leaders and "
-            "search again with them, so a question that does not use the "
-            "author's words still reaches the passages that do. Off by default "
-            "until it is measured."
+            "search again with them, so a question that does not use the author's "
+            "words still reaches the passages that do. Off by default: the judged "
+            "set is known-item and cannot judge whether a query reaches more "
+            "passages by borrowing the author's vocabulary."
         ),
         env="RESEARCH_ULTRARAG_RETRIEVAL_PRF",
     ),
@@ -709,8 +710,8 @@ SETTINGS: tuple[Setting, ...] = (
         kind=int,
         layer="runtime",
         doc=(
-            "Sequences per embedding inference. Throughput only: a batch of 1 "
-            "returns exactly the same floats as a batch of 64 (MEASUREMENTS.md)."
+            "Sequences per embedding inference. Throughput only: padding to a "
+            "batch changes how long the batch takes, not the vectors it returns."
         ),
         minimum=1,
         maximum=1024,
