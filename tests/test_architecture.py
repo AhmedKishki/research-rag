@@ -167,7 +167,7 @@ def test_no_surface_imports_another_surface() -> None:
 
 
 def test_the_agent_surface_is_declared_once() -> None:
-    """The seven operations exist in one file, so an agent cannot get two answers.
+    """The eight operations exist in one file, so an agent cannot get two answers.
 
     `status` is the one operation declared twice: once for a project this
     machine serves, and once for a project its agent entry names and nothing
@@ -204,10 +204,11 @@ def test_the_agent_surface_is_declared_once() -> None:
         "find_source",
         "get_passage",
         "set_source_inclusion",
+        "set_chunk_inclusion",
         "set_source_metadata",
         "status_resource",
     }
-    assert len(operations) == 10, operations
+    assert len(operations) == 11, operations
     for name in set(operations) - {"status", "status_resource"}:
         assert operations.count(name) == 1, name
     assert operations.count("status") == 2

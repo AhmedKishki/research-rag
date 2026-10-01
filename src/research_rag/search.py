@@ -199,10 +199,12 @@ class SearchWorkflow:
         titles_any: set[str],
         document_filter: set[str],
         excluded_document_ids: set[str],
+        excluded_chunk_ids: set[str],
     ) -> bool:
         document = _document_for_chunk(chunk, documents_by_id)
         return not (
-            chunk["document_id"] in excluded_document_ids
+            str(chunk["chunk_id"]) in excluded_chunk_ids
+            or chunk["document_id"] in excluded_document_ids
             or (document_filter and chunk["document_id"] not in document_filter)
             or not _document_matches_metadata(
                 document,
@@ -317,6 +319,7 @@ class SearchWorkflow:
         titles_any: set[str],
         document_filter: set[str],
         excluded_document_ids: set[str],
+        excluded_chunk_ids: set[str],
         withheld: dict[str, dict[str, Any]],
         stopwords: frozenset[str],
         token_policy: dict[str, Any] | None = None,
@@ -338,6 +341,10 @@ class SearchWorkflow:
                 {},
                 {},
             )
+        # An exclusion is a candidate this window can no longer use, so the
+        # window widens past it instead of returning fewer passages than asked
+        # for. Without this clause a top_k of ten answers with nine the moment
+        # one chunk is excluded.
         filtered = bool(
             categories_any
             or keywords
@@ -347,6 +354,7 @@ class SearchWorkflow:
             or titles_any
             or document_filter
             or excluded_document_ids
+            or excluded_chunk_ids
         )
         requested = min(
             total_chunk_count,
@@ -405,6 +413,7 @@ class SearchWorkflow:
                             titles_any=titles_any,
                             document_filter=document_filter,
                             excluded_document_ids=excluded_document_ids,
+                            excluded_chunk_ids=excluded_chunk_ids,
                         )
                     ),
                     None,
@@ -581,6 +590,11 @@ class SearchWorkflow:
                 manifest,
                 exclusions,
             )
+            # A chunk id is derived from content, so the same passage keeps it
+            # across a rebuild of unchanged bytes: the decision is enforced by
+            # every id it names, and which of them this generation holds is
+            # reported by the review state rather than guessed here.
+            excluded_chunk_ids = set(self._chunk_exclusions())
 
             retrieval = manifest.get("retrieval", {})
             available_methods = set(retrieval.get("available_methods") or ["bm25"])
@@ -674,6 +688,25 @@ class SearchWorkflow:
                     else None
                 ),
             )
+            # The count above filters by document, so it still holds every
+            # excluded chunk inside the active documents. The dense backend
+            # filters by document too and cannot be asked for less, so the
+            # candidates it will drop are taken off the depth here instead:
+            # a post-query drop must not cost the reader a passage.
+            if excluded_chunk_ids:
+                excluded_chunks = await asyncio.to_thread(
+                    lookup.chunks_by_ids,
+                    sorted(excluded_chunk_ids),
+                )
+                active_chunk_count = max(
+                    0,
+                    active_chunk_count
+                    - sum(
+                        1
+                        for chunk in excluded_chunks.values()
+                        if str(chunk["document_id"]) in active_document_ids
+                    ),
+                )
             candidate_depth = min(
                 active_chunk_count,
                 self.config.settings.maximum_candidates,
@@ -727,6 +760,7 @@ class SearchWorkflow:
                         titles_any=title_any_filter,
                         document_filter=document_filter,
                         excluded_document_ids=excluded_document_ids,
+                        excluded_chunk_ids=excluded_chunk_ids,
                         withheld=withheld,
                         stopwords=gate_stopwords,
                         token_policy=passage_token_policy,
@@ -760,6 +794,7 @@ class SearchWorkflow:
                     titles_any=title_any_filter,
                     document_filter=document_filter,
                     excluded_document_ids=excluded_document_ids,
+                    excluded_chunk_ids=excluded_chunk_ids,
                     withheld=withheld,
                     stopwords=gate_stopwords,
                     token_policy=passage_token_policy,
@@ -814,6 +849,7 @@ class SearchWorkflow:
                         titles_any=title_any_filter,
                         document_filter=document_filter,
                         excluded_document_ids=excluded_document_ids,
+                        excluded_chunk_ids=excluded_chunk_ids,
                         withheld=withheld,
                         stopwords=gate_stopwords,
                         token_policy=passage_token_policy,
@@ -868,6 +904,7 @@ class SearchWorkflow:
                     titles_any=title_any_filter,
                     document_filter=document_filter,
                     excluded_document_ids=excluded_document_ids,
+                    excluded_chunk_ids=excluded_chunk_ids,
                 ):
                     continue
                 if self._passage_too_short(chunk, token_policy=passage_token_policy):
@@ -1100,6 +1137,7 @@ class SearchWorkflow:
                 "staleness_checked": include_staleness,
                 "generation_upgrade_required": bool(upgrade_reasons),
                 "excluded_source_count": len(exclusions),
+                "excluded_chunk_count": len(excluded_chunk_ids),
                 "filters": {
                     "categories_any": sorted(category_any_filter),
                     "projects_any": sorted(project_any_filter),
@@ -1291,6 +1329,15 @@ class SearchWorkflow:
         *,
         context_chunks: int = 1,
     ) -> dict[str, Any]:
+        """One passage and the neighbours around it, from the selected generation.
+
+        An excluded passage is refused here the way an excluded source is, because
+        a caller asking for it by name is asking for it as evidence. A neighbour
+        is context rather than a claim, so an excluded one is still returned: a
+        reader who opened a passage to see what surrounds it would otherwise lose
+        the shape of the argument to a decision about one passage inside it.
+        """
+
         if not 0 <= context_chunks <= 5:
             raise ResearchError("context_chunks must be between 0 and 5")
         async with self._operation():
@@ -1314,6 +1361,11 @@ class SearchWorkflow:
                 raise ResearchError(
                     "The source for this chunk is currently excluded from retrieval; "
                     "include the source before requesting its passage"
+                )
+            if chunk_id in self._chunk_exclusions():
+                raise ResearchError(
+                    "The requested chunk is currently excluded from retrieval; "
+                    "include the chunk before requesting its passage"
                 )
             if _is_extraction_artifact(target):
                 raise ResearchError(

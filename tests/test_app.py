@@ -39,6 +39,7 @@ OPERATIONS = (
     "find_source",
     "get_passage",
     "set_source_inclusion",
+    "set_chunk_inclusion",
     "set_source_metadata",
 )
 RESOURCES = ("research://status",)
@@ -437,6 +438,19 @@ async def test_the_agent_surface_declares_the_schema_an_agent_reads(
             )
             assert set(tools["search"].inputSchema["required"]) == {"query"}
             assert set(tools["ingest"].inputSchema["properties"]) == {"force_recompute"}
+            # A passage decision takes its identifier, its flag, and its reason,
+            # and nothing else: no generation to name, no way to exclude a batch
+            # in one call, and no reason-free way to remove a passage.
+            assert set(tools["set_chunk_inclusion"].inputSchema["properties"]) == {
+                "chunk_id",
+                "included",
+                "reason",
+            }
+            assert set(tools["set_chunk_inclusion"].inputSchema["required"]) == {
+                "chunk_id",
+                "included",
+            }
+            assert "included" in tools["set_source_inclusion"].inputSchema["required"]
             # Only the two operations that change a project's review state are
             # announced as writes, and only the exclusion is announced as
             # destructive: a client that prompts on the wrong one of these
@@ -447,6 +461,8 @@ async def test_the_agent_surface_declares_the_schema_an_agent_reads(
             assert tools["ingest"].annotations.readOnlyHint is False
             assert tools["set_source_metadata"].annotations.readOnlyHint is False
             assert tools["set_source_inclusion"].annotations.destructiveHint is True
+            assert tools["set_chunk_inclusion"].annotations.destructiveHint is True
+            assert tools["set_chunk_inclusion"].annotations.readOnlyHint is False
             assert tools["set_source_metadata"].annotations.destructiveHint is False
             instructions = client.initialize_result.instructions or ""
             assert "status" in instructions

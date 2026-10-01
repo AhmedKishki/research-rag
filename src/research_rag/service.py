@@ -42,6 +42,7 @@ from .storage import (  # noqa: F401
     atomic_write_json,
     atomic_write_jsonl,
     fsync_directories,
+    load_chunk_exclusions,
     load_current_generation,
     load_metadata_overrides,
     load_source_catalog,
@@ -283,6 +284,12 @@ class ResearchService(
     def _source_exclusions(self) -> dict[str, dict[str, str]]:
         try:
             return load_source_exclusions(self.config.source_exclusions_path)
+        except StorageError as exc:
+            raise ResearchError(str(exc)) from exc
+
+    def _chunk_exclusions(self) -> dict[str, dict[str, str]]:
+        try:
+            return load_chunk_exclusions(self.config.chunk_exclusions_path)
         except StorageError as exc:
             raise ResearchError(str(exc)) from exc
 

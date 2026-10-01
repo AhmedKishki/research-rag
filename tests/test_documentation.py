@@ -121,6 +121,7 @@ def test_the_storage_contract_names_every_project_file_the_app_writes() -> None:
         "source-catalog.json",
         "source-metadata.json",
         "source-exclusions.json",
+        "chunk-exclusions.json",
         "current.json",
         "manifest.json",
         "extracted-units.jsonl",

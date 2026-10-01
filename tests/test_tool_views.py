@@ -648,6 +648,71 @@ def test_inclusion_response_is_lean() -> None:
     assert "source_path" not in inclusion
 
 
+def test_a_chunk_decision_is_lean_and_says_whether_it_withholds_anything() -> None:
+    """The passage decision, its reason, and whether this generation holds it.
+
+    The same shape as a source decision with the chunk's own identifier, and the
+    one field the source answer has no use for: a decision about a chunk the
+    current generation does not hold is withholding nothing now, and a caller that
+    could not tell that apart would report a removal that removed nothing.
+    """
+
+    withheld = present_tool_response(
+        "set_chunk_inclusion",
+        {
+            "status": "changed",
+            "chunk_id": "chk_one",
+            "source_relative_path": "evidence.pdf",
+            "locator": "p. 3",
+            "included": False,
+            "reason": "Misread extraction.",
+            "source_file_changed": False,
+            "effective_immediately": False,
+            "generation_rebuild_recommended": False,
+            "in_current_generation": False,
+            "message": "Chunk exclusion saved, but this generation does not hold it.",
+        },
+        detail=LEAN_TOOL_DETAIL,
+    )
+    assert set(withheld) == {
+        "status",
+        "chunk_id",
+        "included",
+        "reason",
+        "effective_immediately",
+        "in_current_generation",
+        "message",
+    }
+    assert withheld["in_current_generation"] is False
+    assert withheld["effective_immediately"] is False
+    # The locator and the source path are what the caller's own chunk id already
+    # says, and no rebuild is ever recommended for a decision the filter applies.
+    assert "locator" not in withheld
+    assert "source_relative_path" not in withheld
+    assert "generation_rebuild_recommended" not in withheld
+    assert "source_file_changed" not in withheld
+
+    present = present_tool_response(
+        "set_chunk_inclusion",
+        {
+            "status": "changed",
+            "chunk_id": "chk_one",
+            "source_relative_path": "evidence.pdf",
+            "locator": "p. 3",
+            "included": False,
+            "reason": "Misread extraction.",
+            "source_file_changed": False,
+            "effective_immediately": True,
+            "generation_rebuild_recommended": False,
+            "in_current_generation": True,
+            "message": "Chunk exclusion saved and enforced for current retrieval.",
+        },
+        detail=LEAN_TOOL_DETAIL,
+    )
+    assert "in_current_generation" not in present
+    assert "effective_immediately" not in present
+
+
 def test_every_public_tool_has_a_lean_projection() -> None:
     for operation, payload in _every_tool_payload().items():
         lean = present_tool_response(operation, payload, detail=LEAN_TOOL_DETAIL)
@@ -998,6 +1063,19 @@ def _every_tool_payload() -> dict[str, dict[str, object]]:
             "effective_immediately": True,
             "generation_rebuild_recommended": True,
             "message": "Source exclusion saved and enforced for current retrieval.",
+        },
+        "set_chunk_inclusion": {
+            "status": "changed",
+            "chunk_id": "chk_one",
+            "source_relative_path": "evidence.pdf",
+            "locator": "p. 3",
+            "included": False,
+            "reason": "Misread extraction.",
+            "source_file_changed": False,
+            "effective_immediately": True,
+            "generation_rebuild_recommended": False,
+            "in_current_generation": True,
+            "message": "Chunk exclusion saved and enforced for current retrieval.",
         },
     }
 

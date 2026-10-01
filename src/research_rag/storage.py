@@ -410,6 +410,75 @@ def write_source_exclusions(
     )
 
 
+def load_chunk_exclusions(path: Path) -> dict[str, dict[str, str]]:
+    """Load the reviewed decisions about single passages.
+
+    An entry names one `chunk_id`, so the file is keyed by an identifier the
+    generation owns rather than by a path this project can normalize. The
+    recorded `generation_id` is what makes an entry this generation cannot match
+    identifiable by hand: a chunk id is derived from content, so the same text
+    keeps it across a rebuild and anything else changes it.
+    """
+
+    if not path.exists():
+        return {}
+    value = read_json(path)
+    if not isinstance(value, dict) or value.get("schema_version") != 1:
+        raise StorageError(f"Unsupported chunk-exclusion file: {path}")
+    chunks = value.get("chunks", {})
+    if not isinstance(chunks, dict):
+        raise StorageError(f"Invalid chunk-exclusion mapping: {path}")
+
+    normalized: dict[str, dict[str, str]] = {}
+    for chunk_id, record in chunks.items():
+        if not isinstance(chunk_id, str) or not chunk_id.strip():
+            raise StorageError(f"Invalid excluded chunk id: {path}")
+        if not isinstance(record, dict):
+            raise StorageError(
+                f"Invalid chunk exclusion record for {chunk_id!r}: {path}"
+            )
+        unknown = set(record) - {"reason", "excluded_at", "generation_id"}
+        if unknown:
+            raise StorageError(
+                f"Unsupported chunk exclusion fields for {chunk_id!r}: "
+                f"{', '.join(sorted(unknown))}"
+            )
+        reason = record.get("reason")
+        excluded_at = record.get("excluded_at")
+        generation_id = record.get("generation_id")
+        if not isinstance(reason, str) or not reason.strip():
+            raise StorageError(
+                f"Chunk exclusion for {chunk_id!r} requires a non-empty reason: {path}"
+            )
+        if not isinstance(excluded_at, str) or not excluded_at.strip():
+            raise StorageError(
+                f"Chunk exclusion for {chunk_id!r} requires excluded_at: {path}"
+            )
+        if not isinstance(generation_id, str) or not generation_id.strip():
+            raise StorageError(
+                f"Chunk exclusion for {chunk_id!r} requires generation_id: {path}"
+            )
+        normalized[chunk_id] = {
+            "reason": reason.strip(),
+            "excluded_at": excluded_at.strip(),
+            "generation_id": generation_id.strip(),
+        }
+    return dict(sorted(normalized.items()))
+
+
+def write_chunk_exclusions(
+    path: Path,
+    exclusions: dict[str, dict[str, str]],
+) -> None:
+    atomic_write_json(
+        path,
+        {
+            "schema_version": 1,
+            "chunks": dict(sorted(exclusions.items())),
+        },
+    )
+
+
 def load_current_generation(state_root: Path) -> tuple[Path, dict[str, Any]]:
     pointer = read_json(state_root / "current.json")
     if not isinstance(pointer, dict) or pointer.get("schema_version") != 1:
