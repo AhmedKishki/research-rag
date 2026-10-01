@@ -100,9 +100,9 @@ def test_embedding_threads_reach_the_model_loader(
 def test_embedding_token_audit_reports_a_missing_model_cache(
     tmp_path: Path,
 ) -> None:
-    # The audit must fail loudly to its caller instead of breaking ingestion, so
-    # a missing or offline model cache raises a dedicated error the service
-    # degrades from rather than an unrelated exception.
+    # The audit must fail loudly rather than break ingestion, so a missing or
+    # offline model cache raises a dedicated error the service degrades from
+    # rather than an unrelated exception.
     backend = LocalQdrantDenseBackend(tmp_path / "models", offline=True)
 
     with pytest.raises(DenseTokenAuditUnavailable):

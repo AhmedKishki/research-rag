@@ -1,19 +1,19 @@
 """The embedding models this server can drive, each pinned to a revision.
 
 The embedding model decides what the dense half of retrieval can match, so it is
-a setting rather than a constant — and it is a setting whose value is checked:
-every entry declares the languages it covers, and a corpus in a language the
-model was not trained for is reported instead of being silently mis-embedded.
+a setting rather than a constant, and a checked one: every entry declares the
+languages it covers, and a corpus in a language the model was not trained for is
+reported instead of being silently mis-embedded.
 
 FastEmbed resolves a name to whatever the hub serves that day, so each entry pins
-the revision its weights were resolved to, exactly as the reranker table does. A
-model that is not in this table is refused.
+the revision its weights were resolved to, as the reranker table does. A model
+outside this table is refused.
 
 Two facts travel with a model and are easy to get wrong by hand: its vector
 dimension, which the index and every stored vector depend on, and any prefix its
 training requires on a query or a passage. FastEmbed does not apply those
-prefixes itself, so a model that needs them declares them here and the dense
-backends add them.
+prefixes, so a model that needs them declares them here and the dense backends
+add them.
 """
 
 from __future__ import annotations
@@ -39,8 +39,8 @@ class EmbeddingModel:
     def covers(self, language: str) -> bool:
         """Whether this model was trained for that language.
 
-        An empty language tuple describes a multilingual model, which covers
-        any language this server can be pointed at.
+        An empty language tuple describes a multilingual model, which covers any
+        language this server can be pointed at.
         """
 
         if not self.languages:
@@ -113,8 +113,8 @@ EMBEDDING_MODELS: tuple[EmbeddingModel, ...] = (
 def models_covering(languages: Sequence[str]) -> tuple[EmbeddingModel, ...]:
     """Return the pinned models that cover every one of these languages.
 
-    Ordered smallest first, because the useful suggestion is the cheapest model
-    that can serve the corpus.
+    Ordered smallest first: the useful suggestion is the cheapest model that can
+    serve the corpus.
     """
 
     wanted = tuple(code.strip().casefold() for code in languages if code.strip())

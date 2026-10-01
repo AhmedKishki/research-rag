@@ -1,15 +1,12 @@
 """The project-local app launcher, its project-root link, and its lifecycle.
 
-The launcher is a machine-local convenience: it brings the app up for one project
-with that project's own runtime root and a port it chooses, records the pid and
-the port it actually served, and stops the whole process group again so nothing it
-started is left running. Nothing here reads or writes corpus state, and nothing
-here mutates a generation.
+The launcher is machine-local: it brings the app up for one project with that
+project's runtime root and a port it chooses, records the pid and port it served,
+and stops the whole process group so nothing it started is left running.
 
-Every path this module names is the app's own and carries `research-rag`, because
-the MCP server this product was seeded from generates its launcher beside it in
-the same project. Two products sharing one pid file would let each stop the
-other's process, so the names are distinct on purpose.
+Every path this module names carries `research-rag`, because the MCP server this
+product was seeded from generates its launcher beside it. Two products sharing one
+pid file would let each stop the other's process.
 """
 
 from __future__ import annotations
@@ -36,11 +33,11 @@ SERVE_COMMAND = "serve"
 
 
 def default_ui_command() -> str:
-    """Return the UI command to embed, preferring the running environment.
+    """The UI command to embed, preferring the running environment.
 
-    A launcher is run from a user shell, where the console script a server was
-    installed with is usually absent from `PATH`, so an absolute sibling of the
-    running interpreter is preferred over the bare name.
+    A launcher runs from a user shell, where the console script a server was installed
+    with is usually absent from `PATH`, so an absolute sibling of the running
+    interpreter wins over the bare name.
     """
 
     if sys.executable:
@@ -77,7 +74,7 @@ LOG_FILE="$STATE_ROOT/logs/research-rag-ui.log"
 LOCK_DIR="$STATE_ROOT/research-rag-ui.lock"
 # 0.25s steps: how long a launcher waits for another one that is choosing a port.
 LOCK_WAIT=40
-# Attempts at finding a port that this project's UI can actually bind.
+# Attempts at finding a port that this project's UI can bind.
 LAUNCH_ATTEMPTS=5
 # 0.25s steps a started UI gets to answer on its port before the attempt fails.
 READY_WAIT=80
@@ -115,9 +112,9 @@ serving_port() {
 }
 
 free_port() {
-  # The first free port at or above the requested one. A second project's
-  # launcher must never take a port another project's UI is already serving on,
-  # because opening that URL would show the wrong project.
+  # The first free port at or above the requested one. A second project's launcher
+  # must never take a port another project's UI is already serving on, because
+  # opening that URL would show the wrong project.
   "$PYTHON" -c "import socket, sys
 for candidate in range(int(sys.argv[1]), int(sys.argv[1]) + 100):
     try:
@@ -392,13 +389,13 @@ start
 
 
 def launcher_path(portable_root: Path) -> Path:
-    """Return the generated launcher's location inside the project."""
+    """The generated launcher's location inside the project."""
 
     return portable_root / LAUNCHER_DIRECTORY / LAUNCHER_NAME
 
 
 def link_path(project_root: Path) -> Path:
-    """Return the project-root link to the generated launcher."""
+    """The project-root link to the generated launcher."""
 
     return project_root / LINK_NAME
 
@@ -443,11 +440,11 @@ def ensure_ui_launcher(
     runtime_root: Path | None = None,
     ui_command: str | None = None,
 ) -> dict[str, Any]:
-    """Create the launcher and its project-root link when they are absent.
+    """Create the launcher and its project-root link when absent.
 
-    An existing launcher or project-root entry is never overwritten, so a user
-    edit survives. Failures are reported rather than raised: the launcher is a
-    convenience and must never stop the server from starting.
+    An existing entry is never overwritten, so a user edit survives. Failures are
+    reported rather than raised, because the launcher must never stop the server from
+    starting.
     """
 
     script = launcher_path(portable_root)
@@ -508,12 +505,9 @@ def ensure_ui_launcher(
 def launcher_serves_this_app(script: Path) -> bool:
     """Whether a generated launcher was written to run this app's own host.
 
-    The launcher is never overwritten, so a project that generated one before this
-    build keeps it, and a launcher that builds a command this build no longer
-    accepts fails on every start with an argparse message in a log file nobody
-    opens. The command is the discriminator: this app's launcher names the
-    subcommand it runs the workspace through, and the other product's launcher,
-    or an older one of this app's, does not.
+    A launcher that builds a command this build no longer accepts fails on every start
+    with an argparse message in a log file nobody opens. The command is the
+    discriminator: this app's launcher names the subcommand it runs through.
     """
 
     try:
@@ -554,17 +548,15 @@ def start_app(
     port: int | None = None,
     open_browser: bool = False,
 ) -> dict[str, Any]:
-    """Bring the app up for this project and report what it did.
+    """The app up for this project, and what it did.
 
-    The launcher does the starting rather than this module, because it already
-    owns the free-port choice, the lock that makes that choice exclusive, the pid
-    and port files, and the log. A start that races another is decided there.
+    The launcher starts it rather than this module, because it already owns the
+    free-port choice, the lock making that choice exclusive, the pid and port files,
+    and the log.
 
-    An app that is already up is reported as such and left alone: two apps on one
-    project would each hold the project lock and each open a gateway, which is the
-    duplication this product exists to remove.
+    An app already up is left alone. Two apps on one project would each hold the
+    project lock and open a gateway.
     """
-
     from .config import CLI_COMMAND, ConfigurationError
 
     script = launcher_path(config.portable_root)
@@ -631,7 +623,7 @@ def stop_app(config: ResearchConfig) -> dict[str, Any]:
 
 
 def _recorded_port(config: ResearchConfig) -> int | None:
-    """Return the port the launcher recorded, or None when it recorded none."""
+    """The port the launcher recorded, or None when it recorded none."""
 
     try:
         return int(
@@ -644,9 +636,9 @@ def _recorded_port(config: ResearchConfig) -> int | None:
 
 
 def _running_pid(config: ResearchConfig) -> int | None:
-    """Return the pid the launcher recorded while that process is still alive.
+    """The pid the launcher recorded while that process is still alive.
 
-    A pid file outlives its process, so the number alone is not a running app; the
+    A pid file outlives its process, so the number alone is not a running app. The
     same check the launcher's own stop path uses decides it here.
     """
 

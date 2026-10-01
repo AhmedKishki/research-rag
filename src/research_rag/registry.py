@@ -1,18 +1,18 @@
 """The projects one installation knows about.
 
 One command serves many projects. Each project is a directory holding
-`.research-rag` beside whatever the user keeps there, each one is served by its
-own app process on its own port, and nothing about one project's corpus reaches
-another. What is missing from that arrangement is the machine's memory: without a
-record, a caller can only reach a project by repeating its absolute path, and
-nothing can report every project the installation serves at once.
+`.research-rag` beside whatever the user keeps there, each is served by its own
+app process on its own port, and nothing about one project's corpus reaches
+another. What that arrangement lacks is the machine's memory: without a record a
+caller can only reach a project by repeating its absolute path, and nothing can
+report every project the installation serves at once.
 
-That record is a pointer and nothing else. It holds each project's stable
-`project_id`, its recorded name, and its root, and every byte of state stays in
-the project it belongs to, so registering a project is something a person can
-undo by deleting one file. The file sits beside the account settings this app
-already reads, so one user has one directory for both, and it is written
-atomically because two commands may register two projects at the same moment.
+The record is a pointer. It holds each project's stable `project_id`, its
+recorded name, and its root, and every byte of state stays in the project it
+belongs to, so registering a project is undone by deleting one file. The file
+sits beside the account settings this app already reads, so one user has one
+directory for both. It is written atomically because two commands may register
+two projects at the same moment.
 """
 
 from __future__ import annotations
@@ -101,7 +101,7 @@ def load() -> list[RegisteredProject]:
     """Return every registered project, newest record last and ordered by name.
 
     A record whose fields are not strings is not a pointer this module can follow,
-    so it is skipped rather than guessed at: one unreadable entry must not hide
+    so it is skipped rather than guessed at. One unreadable entry must not hide
     every project a user still has.
     """
 
@@ -136,9 +136,9 @@ def register(
 ) -> RegisteredProject:
     """Record one project, replacing any earlier record of the same root or id.
 
-    Re-registering an existing project refreshes its name and root rather than
-    adding a second entry, so `init` is safe to run again and a project that moved
-    is followed to where it went.
+    Re-registering a project refreshes its name and root rather than adding a
+    second entry, so `init` is safe to run again and a project that moved is
+    followed to where it went.
     """
 
     path = registry_path()
@@ -185,8 +185,8 @@ def forget(project_id: str) -> bool:
 def matches(query: str) -> list[RegisteredProject]:
     """Return the registered projects a name or id resolves to.
 
-    A selector is matched against the project's id and its name, case
-    insensitively, and exactly as the caller typed it: a substring is a guess
+    A selector is matched against a project's id and name, case
+    insensitively, and exactly as the caller typed it. A substring is a guess
     about a project's name, and the record has the name, so this is not the place
     to be generous.
     """

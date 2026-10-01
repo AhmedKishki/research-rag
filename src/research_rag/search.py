@@ -52,35 +52,21 @@ def _collapse_repetitions(
     vectors: Mapping[str, np.ndarray[Any, np.dtype[np.float32]]],
     threshold: float,
 ) -> tuple[list[str], list[dict[str, Any]]]:
-    """Return the ranked passages with near-repeats of them removed.
+    """The ranked passages with near-repeats of them removed.
 
-    The words first, because two copies of one passage differ by case and
-    punctuation and need no vector to recognise, and because that is the case a
-    collection holding one essay in two formats is made of. The cosine second, for
-    the passage that says the same thing in other words. A survivor is compared
-    only against survivors, so the first — and therefore the best-ranked — of a
-    repeated pair is the one kept.
-
-    The work is the number of candidates this search already holds, which is
-    `maximum_candidates` and not the size of the corpus, so a large collection
-    costs no more to search than a small one.
-
-    Both copies are reported with their sources, because the pair is the
-    actionable part: a person who sees one essay arriving from two files can
-    retire a source, and one who does not would keep an overlap they cannot see.
+    The words first, which need no vector, then the cosine for the passage that says the
+    same thing in other words. A survivor is compared only against survivors, so the
+    best-ranked of a repeated pair is kept. Both copies are reported with their sources.
     """
 
     def normalised(
         vector: np.ndarray[Any, np.dtype[np.float32]],
     ) -> np.ndarray[Any, np.dtype[np.float32]]:
-        """Return the vector at unit length, so the dot product is a cosine.
+        """The vector at unit length, so the dot product is a cosine.
 
-        The comparison is against a number between -1 and 1, so it is a cosine
-        and not a dot product: a store whose vectors are not already at unit
-        length would otherwise score two unrelated passages above any threshold
-        this setting allows.
+        A store whose vectors are not at unit length would otherwise score two
+        unrelated passages above any threshold this setting allows.
         """
-
         unit = np.asarray(vector, dtype=np.float32)
         length = float(np.linalg.norm(unit))
         if not np.isfinite(length) or length == 0.0:
@@ -106,8 +92,8 @@ def _collapse_repetitions(
         text = _chunk_text(chunks_by_id[chunk_id])
         words = _passage_equality_key(text)
         # A passage with no words is not a repetition of another with no words:
-        # an empty key would make every such passage match every other one, and
-        # there is nothing in it to say they are the same.
+        # an empty key would make every such passage match every other, and there
+        # is nothing in it to say they are the same.
         repeated = kept_words.get(words) if words else None
         if repeated is not None:
             collapsed.append(
@@ -153,13 +139,11 @@ class SearchWorkflow:
         chunks_by_id: dict[str, dict[str, Any]],
         documents_by_id: dict[str, dict[str, Any]],
     ) -> tuple[list[str], list[dict[str, Any]]]:
-        """Return the ranked passages with near-repeats of them removed.
+        """The ranked passages with near-repeats of them removed.
 
-        The vectors come from the generation's own portable matrix, read by
-        passage text through the sidecar that already maps a text to its row, so
-        the comparison costs one gather over the candidates this search holds and
-        touches nothing else in the collection. The matrix is mapped, not read, so
-        a large generation does not have to be resident to be searched.
+        The vectors come from the generation's own portable matrix, read by passage
+        text through the sidecar that maps a text to its row. The matrix is mapped,
+        not read, so a large generation need not be resident.
         """
 
         if len(ordered_ids) < 2:
@@ -232,12 +216,11 @@ class SearchWorkflow:
         )
 
     def _passage_token_policy(self, manifest: dict[str, Any]) -> dict[str, Any]:
-        """Return the token floor this query applies, and what it was read from.
+        """The token floor this query applies, and what it was read from.
 
-        The floor is a fraction of the chunk size the generation was built to,
-        read from the generation rather than from the current settings, so the
-        rule follows the corpus it filters. The tokenizer is the one the chunker
-        counted with, which is what makes a floor and a chunk size one unit.
+        A fraction of the chunk size the generation was built to, read from the
+        generation rather than the current settings, so the rule follows the corpus it
+        filters. The tokenizer is the one the chunker counted with.
         """
 
         fraction = self.config.settings.minimum_passage_token_fraction
@@ -302,7 +285,7 @@ class SearchWorkflow:
         documents_by_id: dict[str, dict[str, Any]],
         cosine_similarity: float | None = None,
     ) -> None:
-        """Name a dropped candidate's source, up to the configured example limit."""
+        """Name a dropped candidate's source, up to the example limit."""
 
         bucket = examples.setdefault(reason, [])
         if len(bucket) >= self.config.settings.maximum_withheld_examples:
@@ -518,13 +501,10 @@ class SearchWorkflow:
         chunks_path: Path,
         stopwords: frozenset[str],
     ) -> dict[str, int]:
-        """Return this generation's term frequencies, built once and then kept.
+        """This generation's term frequencies, built once and kept.
 
-        The table is what lets a feedback term be rare rather than merely
-        frequent. It costs a full pass over the corpus, so it is built on the
-        first search that asks for one and kept while that generation and that
-        function-word set stay current; nothing builds it while `retrieval.prf`
-        is off.
+        A feedback term must be rare, not merely frequent, which is what the table
+        gives. It costs a full pass, so it is built on the first search that asks.
         """
 
         cached = self._document_frequencies
@@ -558,15 +538,13 @@ class SearchWorkflow:
     ) -> dict[str, Any]:
         """Retrieve evidence.
 
-        The public MCP tool defaults ``rerank`` to true because it is the
-        largest measured quality gain (``MEASUREMENTS.md``); this lower-level API
-        keeps the neutral default so internal callers and tests state what they
-        want. When the reranker model cannot be loaded the search still succeeds
-        with the unranked candidate order and reports ``rerank_fallback``.
+        The public MCP tool defaults ``rerank`` to true, the largest measured quality
+        gain (``MEASUREMENTS.md``); this API keeps the neutral default. An unloadable
+        reranker model still returns a search, in unranked candidate order with
+        ``rerank_fallback``.
 
         ``rerank_model`` names a reranker for this call alone, so one process can
-        measure several models against the same generation. It defaults to the
-        engine's configured model, which is what every tool call uses.
+        compare models against the same generation.
         """
         query = query.strip()
         if not query:
@@ -908,7 +886,7 @@ class SearchWorkflow:
             # across fifty candidates, so a 0.72 floor kept six of them even though
             # the rest matched it about as closely. The margin admits that band, but
             # only once something has cleared the floor, so a query the corpus
-            # cannot support still abstains instead of returning its least-bad
+            # cannot support still abstains rather than returning its least-bad
             # passage.
             best_dense_score: float | None = None
             for dense_hit, _chunk in eligible_dense_hits:
@@ -1020,8 +998,8 @@ class SearchWorkflow:
 
             # A repeated passage is settled here, on the candidates this search
             # already holds, rather than by dropping a chunk at build time. Two
-            # copies of one passage stay in the corpus and stay independently
-            # citable, and the answer shows one of them.
+            # copies of one passage stay in the corpus and independently citable,
+            # and the answer shows one of them.
             ordered_ids, collapsed = await self._collapse_repetitions(
                 ordered_ids,
                 generation_root=generation_root,

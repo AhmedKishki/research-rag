@@ -23,10 +23,9 @@ from .dense import (
 
 # The storage writers and the source walk are re-exported because tests and
 # `scripts/benchmark_write_pattern.py` read them from this module. The code that
-# calls them lives in the workflow modules, so a patch that has to intercept a
-# call must target that module, not this one.
-# Read by tests through this module; the ingestion workflow calls it from its own
-# import.
+# calls them lives in the workflow modules, so a patch intercepting a call targets
+# that module, not this one.
+# Read by tests through this module; the ingestion workflow imports it separately.
 from .generation import value_fingerprint  # noqa: F401
 from .ingestion import IngestionWorkflow
 from .review import ReviewWorkflow
@@ -51,7 +50,7 @@ from .storage import (  # noqa: F401
     write_handoff_jsonl,
 )
 
-# The pure helpers moved to `support`; re-exported so every existing import
+# The pure helpers moved to `support`, re-exported so every existing import
 # path, including the tests that read them from this module, keeps working.
 from .support import (  # noqa: F401
     _WORD,
@@ -101,16 +100,16 @@ from .support import (  # noqa: F401
 )
 from .ultrarag import VanillaUltraRAG
 
-# How long a caller waits for another process's project lock before being told the
-# project is busy. Waiting longer does not help the caller: an MCP client gives up
-# on the request long before a build ends, and the work it was waiting for goes on
-# unseen. Reporting the resident build is more useful than outlasting the client.
+# How long a caller waits for another process's project lock before it is told the
+# project is busy. Waiting longer does not help: an MCP client gives up long before
+# a build ends, and the work it waited for goes on unseen. Reporting the resident
+# build is more useful than outlasting the client.
 PROJECT_LOCK_TIMEOUT_SECONDS = 20
 
 
-# The retrieval policy is fixed here — the tool offers exactly one way to
-# search — while the numbers that shape it live in the settings file, so fusion
-# weights, gates, batch sizes, and budgets are tunable without editing code.
+# The retrieval policy is fixed here: the tool offers exactly one way to search.
+# The numbers that shape it live in the settings file, so fusion weights, gates,
+# batch sizes, and budgets are tunable without editing code.
 class ResearchService(
     IngestionWorkflow,
     ReviewWorkflow,
@@ -168,18 +167,18 @@ class ResearchService(
         self._lock = asyncio.Lock()
         self._project_lock = AsyncFileLock(
             config.state_root / "project.lock",
-            # A caller must not sit in silence behind another build. A long build
-            # is driven by repeated short calls so that one caller never blocks
-            # another for minutes, and waiting here turns a busy project into a
-            # client timeout: the MCP client gives up long before the wait ends,
-            # and the work continues unseen.
+            # A caller must not sit in silence behind another build. A long build is
+            # driven by repeated short calls, so one caller never blocks another
+            # for minutes, and waiting here turns a busy project into a client
+            # timeout: the MCP client gives up long before the wait ends, and the
+            # work continues unseen.
             timeout=PROJECT_LOCK_TIMEOUT_SECONDS,
         )
         self._loaded_generation: str | None = None
         # Term rarity for pseudo-relevance feedback, as (generation id,
-        # function-word set, table). It is built on the first search that asks
-        # for one, so a process that never enables the feature never makes the
-        # pass over the corpus.
+        # function-word set, table). Built on the first search that asks for one,
+        # so a process that never enables the feature never makes the pass over
+        # the corpus.
         self._document_frequencies: (
             tuple[str, frozenset[str], dict[str, int]] | None
         ) = None
@@ -203,9 +202,9 @@ class ResearchService(
     def _resident_build_note(self) -> str:
         """Describe the build another process is running, when one is visible.
 
-        Read-only and best-effort: the note exists so that a caller told the
-        project is busy can see whether the resident build is moving, instead of
-        deciding between waiting blind and killing it.
+        Read-only and best-effort: a caller told the project is busy uses the
+        note to see whether the resident build is moving, instead of deciding
+        between waiting blind and killing it.
         """
 
         try:
@@ -240,10 +239,11 @@ class ResearchService(
 
     @staticmethod
     def _dense_backend_name(manifest: dict[str, Any] | None) -> str:
-        """Return the dense backend a generation recorded.
+        """
+        Return the dense backend a generation recorded.
 
-        Generations written before the backend was recorded always used the
-        embedded Qdrant index.
+        Generations written before the backend was recorded used the embedded
+        Qdrant index.
         """
 
         if manifest:
@@ -302,10 +302,10 @@ class ResearchService(
     ) -> tuple[set[str], list[str]]:
         """Resolve stable source IDs to document IDs in the given generation.
 
-        Returns the matched document IDs and the requested IDs that resolved to
-        nothing here. A source absent from the selected generation, or renamed or
-        moved since the generation was built, cannot resolve because a
-        `source_id` is derived from the current normalized relative path.
+        Return the matched document IDs and the requested IDs that resolved to
+        nothing in this generation. A source absent from the selected generation,
+        or renamed or moved since it was built, cannot resolve: a `source_id` is
+        derived from the current normalized relative path.
         """
 
         if not source_ids:

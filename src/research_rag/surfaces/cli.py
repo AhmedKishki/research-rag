@@ -2,16 +2,14 @@
 
 `research-rag` resolves a project, constructs a `ResearchService`, and calls it in
 this process. `ui` hands the browser workspace to the project's own generated
-launcher, and `serve` is the foreground workspace host that launcher runs; there
+launcher, and `serve` is the foreground workspace host that launcher runs. There
 is no second console script and no MCP surface, so the terminal and the browser
-answer from the same call on the same payload and cannot drift apart.
+answer from the same call on the same payload.
 
-Only a command that actually queries opens the vanilla gateway, and it is opened
-on the first call rather than chosen from the command line: the BM25 index is
-initialized through that gateway when a generation is loaded for querying.
-Commands that only read local state — `init`, `config`, `ui`, `sources`,
-`status`, `passage`, and the review commands — never start one, so they stay
-quick and keep working on a machine where no UltraRAG runtime is installed yet.
+Only a command that queries opens the vanilla gateway, and it opens on the first
+call rather than as a command-line choice: the BM25 index is initialized through
+that gateway when a generation loads for querying. Commands that only read local
+state never start one, so they work with no UltraRAG runtime installed.
 """
 
 from __future__ import annotations
@@ -61,9 +59,9 @@ from ..ultrarag import LazyGateway, VanillaUltraRAG
 
 CLI_NAME = CLI_COMMAND
 DEFAULT_DEPTH = 10
-# What a project's own .gitignore has to keep out of version control: the
-# derived state that can be rebuilt, and the machine-local launcher. The
-# descriptor, catalogs, and review files are small, portable, and worth keeping.
+# What a project's own .gitignore keeps out of version control: the derived
+# state that can be rebuilt, and the machine-local launcher. The descriptor,
+# catalogs, and review files are small, portable, and worth keeping.
 VERSION_CONTROL_NOTES = (
     ".research-rag/runtime/",
     ".research-rag/bin/",
@@ -76,15 +74,14 @@ VERSION_CONTROL_NOTES = (
 # editor that merely mentions the project path is never touched. The MCP server
 # this app was seeded from is deliberately absent: during the migration both
 # products can serve one project, and stopping this app's workspace must not stop
-# a server that a user started on purpose.
+# a server a user started on purpose.
 SERVICE_MARKERS = ("research_rag", "research-rag")
 STOP_GRACE_SECONDS = 5.0
 
-# The menu `research-rag help` prints. argparse already prints a usage block and
-# a per-command one; what it cannot print is the order of the work, which group a
-# command belongs to, and the three facts a first call needs: the project owns
-# one app, this command line reaches that app rather than starting its own, and
-# nothing here writes an original. Each command appears in exactly one group and
+# The menu `research-rag help` prints. argparse prints a usage block and a
+# per-command one; it cannot print the order of the work, which group a command
+# belongs to, or the fact that the three surfaces share one app. Each command
+# appears in exactly one group, and
 # `test_the_help_menu_accounts_for_every_command` fails when one is added to the
 # parser and not here.
 HELP_GROUPS: tuple[tuple[str, tuple[tuple[str, str], ...]], ...] = (
@@ -94,16 +91,16 @@ HELP_GROUPS: tuple[tuple[str, tuple[tuple[str, str], ...]], ...] = (
             (
                 "init",
                 (
-                    "Create the project identity and .research-rag, or attach to a "
-                    "directory you already have without moving a file."
+                    "Create the project identity and .research-rag, or attach to an "
+                    "existing directory."
                 ),
             ),
             (
                 "ingest",
                 (
                     "Extract, chunk, embed, and index the PDFs and EPUBs in the "
-                    "sources directory. Call it again to resume a build that ran out "
-                    "of its time budget."
+                    "sources directory. Call it again to resume a build that ran "
+                    "out of time."
                 ),
             ),
             (
@@ -119,7 +116,7 @@ HELP_GROUPS: tuple[tuple[str, tuple[tuple[str, str], ...]], ...] = (
                 "status",
                 (
                     "Whether the corpus is current, and what changed since the "
-                    "generation. A stale answer names the call that closes it, and "
+                    "generation. A stale answer names the call that closes it. "
                     "--verbose prints the whole payload."
                 ),
             ),
@@ -130,7 +127,7 @@ HELP_GROUPS: tuple[tuple[str, tuple[tuple[str, str], ...]], ...] = (
             (
                 "doctor",
                 (
-                    "What is wrong with this installation, one line per dependency, "
+                    "What is wrong with this installation: one line per dependency, "
                     "each with the command that fixes it."
                 ),
             ),
@@ -138,14 +135,14 @@ HELP_GROUPS: tuple[tuple[str, tuple[tuple[str, str], ...]], ...] = (
                 "generations",
                 (
                     "Every generation on disk with its size, and the one search reads. "
-                    "With --use, point the project at a retained one instead."
+                    "With --use, point the project at a retained one."
                 ),
             ),
             (
                 "remove-generation",
                 (
                     "Delete a generation search does not read, after repeating its id. "
-                    "The originals are untouched; rebuilding costs one ingestion."
+                    "Rebuilding costs one ingestion."
                 ),
             ),
         ),
@@ -175,10 +172,7 @@ HELP_GROUPS: tuple[tuple[str, tuple[tuple[str, str], ...]], ...] = (
         (
             (
                 "metadata",
-                (
-                    "Reviewed bibliography for one source. It survives a rebuild, "
-                    "which is what a rebuild re-extracts over."
-                ),
+                "Reviewed bibliography for one source. It survives a rebuild.",
             ),
             (
                 "exclude",
@@ -195,10 +189,7 @@ HELP_GROUPS: tuple[tuple[str, tuple[tuple[str, str], ...]], ...] = (
         (
             (
                 "start",
-                (
-                    "Bring the app up and report where it is. `ui` does the same and "
-                    "opens a browser."
-                ),
+                "Bring the app up and report where it is. `ui` also opens a browser.",
             ),
             (
                 "projects",
@@ -218,10 +209,7 @@ HELP_GROUPS: tuple[tuple[str, tuple[tuple[str, str], ...]], ...] = (
             ),
             (
                 "serve",
-                (
-                    "The app in the foreground on one port, which is what the "
-                    "generated launcher runs."
-                ),
+                "The app in the foreground on one port. The launcher runs this.",
             ),
         ),
     ),
@@ -232,16 +220,15 @@ HELP_GROUPS: tuple[tuple[str, tuple[tuple[str, str], ...]], ...] = (
                 "mcp",
                 (
                     "The agent surface on stdio, proxied to the running app, for a "
-                    "client that cannot open a socket. `help agents` has the client "
-                    "entry."
+                    "client that cannot open a socket. `help agents` has the entry."
                 ),
             ),
             (
                 "config",
                 (
                     "Every effective setting and the layer it came from. It prints and "
-                    "does not write; `help settings` names the layers and what a change "
-                    "costs."
+                    "does not write. `help settings` names the layers and what a "
+                    "change costs."
                 ),
             ),
         ),
@@ -253,8 +240,7 @@ HELP_GROUPS: tuple[tuple[str, tuple[tuple[str, str], ...]], ...] = (
 HELP_TOPICS: dict[str, str] = {
     "filters": """\
 search takes six filter layers, each an --option that may be repeated, and two
-switches that reach one source at a time. A filter that is given nothing is not
-applied.
+switches that reach one source at a time. A filter given nothing is not applied.
 
   --category C        keep passages whose source carries any of these categories
   --project P         keep passages whose source carries any of these project tags
@@ -266,13 +252,13 @@ applied.
   --exclude-source-id ID
                       search everything except these sources
 
-The category, project, keyword, language, author, and title layers are read from
-the source's reviewed metadata, not from the extracted text, so a filter that
-matches nothing reports nothing rather than a fallback. Set the metadata with
-`metadata` and the filters start working.
+The category, project, keyword, language, author, and title layers read the
+source's reviewed metadata, not the extracted text, so a filter matching nothing
+reports nothing rather than a fallback. Set the metadata with `metadata` and the
+filters start working.
 
-Two switches decide how the retrieval itself runs, and they are the app's
-settings rather than a per-search choice:
+Two switches decide how retrieval runs. They are the app's settings, not
+a per-search choice:
 
   --method M         bm25, dense, or hybrid; hybrid and reranking are the default
   --no-rerank        skip the cross-encoder, which is on by default and is most of
@@ -280,8 +266,8 @@ settings rather than a per-search choice:
 
 The agent surface has no such switches, and no method, depth, or reranking
 argument at all: it is always hybrid, always reranked, and its depth is a
-setting. `status` is the same. The reason is that a method chosen per call is a
-number a reader cannot reproduce from the answer they were given.
+setting. A method chosen per call is a number a reader cannot reproduce from the
+answer they were given.
 """,
     "settings": """\
 A project's settings resolve in four layers, each overriding the one above it,
@@ -303,9 +289,9 @@ What a change costs. Most keys decide what a generation contains, so changing on
 and then searching answers `stale` until `ingest` runs again, and a value that
 changes retrieval changes the answer to a question already asked. A few keys do
 not: runtime.tool_detail, the search depth, the network-binding host, and the
-process priority are read per call and cost nothing to change.
+process priority are read per call and cost nothing.
 
-`doctor` reports which layer a value came from when a setting is not doing what
+`doctor` reports which layer a value came from when a setting does not do what
 the project expected, and the file path it would be changed in.
 """,
     "agents": """\
@@ -313,8 +299,8 @@ The app serves MCP at /mcp on its own port, so a client that can open a socket
 needs only the URL. A client that speaks only stdio uses `research-rag mcp`,
 which makes sure the app is up and then proxies to it.
 
-Let the project print the entry for the machine it runs on, because the port is
-chosen at start and a hard-coded URL goes stale the first time it moves:
+Let the project print the entry for the machine it runs on: the port is chosen at
+start, and a hard-coded URL goes stale the first time it moves:
 
   research-rag --project-root DIR doctor --mcp-entry
   research-rag --project-root DIR doctor --check-entry <file>
@@ -328,9 +314,9 @@ Set RESEARCH_ULTRARAG_CLIENT_NAME so the app's client list can tell agents
 apart. `clients` lists them and `disconnect` ends one; the workspace shows the
 same list, so an agent ended in the browser is gone from the terminal too.
 
-What an agent gets is seven tools and one resource, and every answer is the lean
+An agent gets seven tools and one resource, and every answer is the lean
 projection: a question at a time, no inventory, no scores. `status` is a verdict
-and names the call that closes a gap rather than printing the whole corpus state.
+that names the call closing a gap rather than printing the whole corpus state.
 The full payload is `status --verbose` here and the workspace there.
 
 A generated sentence citing a passage is not for direct quotation. Take the
@@ -364,9 +350,9 @@ def _parser() -> argparse.ArgumentParser:
         ),
     )
     parser.add_argument(
-        # None rather than "." so that a call naming a registered project has not
-        # also named a path; the current directory is what an absent value means,
-        # and it is resolved where it is used.
+        # None rather than "." so a call naming a registered project has not also
+        # named a path. An absent value means the current directory, resolved
+        # where it is used.
         "--project-root",
         default=os.environ.get("RESEARCH_ULTRARAG_PROJECT_ROOT"),
         help="Project root holding .research-rag (default: the current directory).",
@@ -461,9 +447,9 @@ def _parser() -> argparse.ArgumentParser:
         ),
     )
     # A command name is a valid topic, so the choices are every registered
-    # command beside the subject pages. They are derived from the menu rather
-    # than typed out, so a command added to the parser and to the menu is one
-    # change and the drift test below is what notices one added to neither.
+    # command beside the subject pages. They come from the menu rather than
+    # being typed out, so a command added to the parser and the menu is one
+    # change, and the drift test below notices one added to neither.
     help_command = commands.add_parser(
         "help",
         help=(
@@ -794,9 +780,7 @@ def _project_path(args: argparse.Namespace) -> Path:
     """Return the project this call names, by registry selector or by path.
 
     `--project` and `--project-root` are two ways to say the same thing, so a
-    call that supplies both is refused rather than resolved by precedence: a
-    command that ran against the wrong project is worse than one that did not
-    run.
+    call that supplies both is refused rather than resolved by precedence.
     """
 
     selector = getattr(args, "project", None)
@@ -812,7 +796,6 @@ def _project_path(args: argparse.Namespace) -> Path:
 
 
 def _config_kwargs(args: argparse.Namespace) -> dict[str, Any]:
-    """The command-line settings layer, shared by every command."""
 
     return {
         "runtime_root": args.runtime_root,
@@ -840,10 +823,8 @@ def _resolve(args: argparse.Namespace) -> ResearchConfig:
 def _init(args: argparse.Namespace) -> dict[str, Any]:
     """Create a project, or attach the portable state to a directory that exists.
 
-    Both are the same act: a project *is* a directory with `.research-rag` beside
-    whatever is already there. Nothing this command does touches a file the user
-    wrote, so pointing it at a repository that already holds work adds only the
-    portable state, the source directory, and the browser launcher.
+    A project *is* a directory with `.research-rag` beside whatever is already
+    there, and nothing here touches a file the user wrote.
     """
 
     project = _project_path(args)
@@ -854,7 +835,7 @@ def _init(args: argparse.Namespace) -> dict[str, Any]:
         project.mkdir(parents=True)
         created.append("project_root")
     # An existing project records its own source directory, and a project that is
-    # not there yet has no descriptor to read, so both are settled before the
+    # not there yet has no descriptor to read, so both settle before the
     # descriptor is written.
     sources = args.sources or configured_source_directory(project)
     config = resolve_config(
@@ -898,7 +879,6 @@ def _init(args: argparse.Namespace) -> dict[str, Any]:
 
 
 def _project_argument(arguments: list[str]) -> str | None:
-    """Return the ``--project-root`` value in one command line, if it has one."""
 
     for index, argument in enumerate(arguments):
         if argument == "--project-root" and index + 1 < len(arguments):
@@ -914,19 +894,15 @@ def _service_processes(
 ) -> list[tuple[int, str]]:
     """Return the ``(pid, command)`` pairs serving this project.
 
-    A process qualifies when it invokes this app by name *and* names this
-    project as ``--project-root``. Both halves matter: the name keeps a shell or
-    an editor that merely mentions the path out of the sweep, and the path keeps
-    another project's process out of it. A relative ``--project-root`` is not
-    matched, because resolving it would use this process's directory rather than
-    the other one's; every launcher and every invocation passes an absolute path.
+    A process qualifies when it invokes this app by name *and* names this project
+    as ``--project-root``. A relative ``--project-root`` is not matched, because
+    resolving it would use this process's directory rather than the other one's.
 
-    The name has to be a whole argument, not a substring of one. This app's own
+    The name must be a whole argument, not a substring of one. This app's own
     projects all contain ``.research-rag`` in their paths, so a substring test
-    matches every process that touches a project — including the vanilla gateway
-    the other product in this collection starts, whose ``--workspace-root``
-    names the same directory. Sweeping that would kill a gateway serving a
-    server this app was told to leave alone.
+    matches every process that touches a project, including the vanilla gateway
+    the other product in this collection starts, whose ``--workspace-root`` names
+    the same directory.
     """
 
     try:
@@ -957,9 +933,8 @@ def _invokes_this_app(arguments: Sequence[str], project_root: Path) -> bool:
 
     A console script passes its own path, ``python -m research_rag`` passes the
     module, and either may be a relative name resolved against the other
-    process's working directory. Any other argument is a value, not a program:
-    a project path under ``.research-rag`` carries the product name in its
-    directory and must not be mistaken for one.
+    process's working directory. A project path under ``.research-rag`` carries
+    the product name in its directory and is a value, not a program.
     """
 
     inside = project_root.resolve()
@@ -983,7 +958,6 @@ def _invokes_this_app(arguments: Sequence[str], project_root: Path) -> bool:
 
 
 def _alive(pid: int) -> bool:
-    """Whether this process still exists and could be signalled."""
 
     try:
         os.kill(pid, 0)
@@ -1016,7 +990,7 @@ def _stop(args: argparse.Namespace, config: ResearchConfig) -> dict[str, Any]:
     """Stop this project's browser view, and with ``--servers`` every process serving it.
 
     The launcher's own message is captured rather than printed, so a caller gets
-    one JSON report on stdout and nothing else.
+    one JSON report on stdout.
     """
 
     script = launcher_path(config.portable_root)
@@ -1070,10 +1044,8 @@ def _metadata_body(args: argparse.Namespace) -> dict[str, Any]:
 class Local:
     """Corpus operations answered in this process, for a project with no app up.
 
-    A project nobody is serving has no gateway running for it, so a command that
-    arrives when the app is down is not racing anything: it opens the one
-    service it needs, answers, and closes it. When the app *is* up, the same
-    command goes to it, so there is never a second service holding the project.
+    When the app *is* up, the same command goes to it, so there is never a second
+    service holding the project.
     """
 
     def __init__(self, config: ResearchConfig) -> None:
@@ -1168,7 +1140,7 @@ class Remote:
     """The running app's operations, awaited.
 
     `Control` speaks HTTP and is synchronous, because two of the commands that
-    use it are synchronous. This is the same interface `Local` implements, so
+    use it are synchronous. It is the same interface `Local` implements, so
     `_operate` does not know which one answered.
     """
 
@@ -1244,7 +1216,7 @@ async def _operate(
     if command == "status":
         payload = await operations.status()
         # The terminal is an agent's second bounded reader: the same projection,
-        # so the two cannot answer differently, and `--verbose` is where a person
+        # so the two cannot answer differently. `--verbose` is where a person
         # goes for the complete payload the workspace reads.
         return dict(payload) if args.verbose else lean_status(payload)
     if command == "ingest":
@@ -1297,11 +1269,8 @@ async def _operate(
 async def _projects(args: argparse.Namespace) -> dict[str, Any]:
     """Report every registered project, and whether an app is serving it.
 
-    The record is the account's, so this command names no project and opens none:
-    each entry is read from the record, checked against the directory, and asked
-    over loopback only where an app is already up. A project whose app is not
-    running is reported as such rather than started, because a listing is a
-    question about what exists and nothing more.
+    A project whose app is not running is reported as such rather than started,
+    because a listing is a question about what exists.
     """
 
     entries: list[dict[str, Any]] = []
@@ -1336,7 +1305,6 @@ async def _projects(args: argparse.Namespace) -> dict[str, Any]:
 
 
 def _project_app_state(project_root: Path) -> dict[str, Any]:
-    """Ask one project's running app what it is serving, or say that nothing is."""
 
     config = resolve_config(project_root)
     url = running_url(config)
@@ -1369,8 +1337,6 @@ def _port_of(url: str | None) -> int | None:
 
 @dataclass(frozen=True, slots=True)
 class CommandResult:
-    """What one command printed, and the exit code that follows from it."""
-
     payload: dict[str, Any] | None = None
     exit_code: int = 0
     text: str | None = None
@@ -1382,8 +1348,7 @@ async def _serve(args: argparse.Namespace, config: ResearchConfig) -> CommandRes
     The generated launcher runs this, so it takes an explicit port and never
     chooses one: the launcher already made that choice while holding the lock
     that makes it exclusive. A caller running it by hand omits `--port` and gets
-    the first free port at or above the default, claimed by binding before
-    uvicorn starts so two apps cannot both believe they hold it.
+    the first free port at or above the default.
     """
 
     port = args.port or launcher_module.DEFAULT_UI_PORT
@@ -1417,12 +1382,11 @@ def _start(args: argparse.Namespace, config: ResearchConfig) -> dict[str, Any]:
 
 
 def _open_browser(url: str) -> None:
-    """Open a browser, and say so when this machine has none to open."""
 
     import webbrowser
 
     # A machine with no desktop session has no browser to open, and a browser
-    # that fails to start is not a reason to fail the command: the URL is the
+    # that fails to start is not a reason to fail the command. The URL is the
     # answer either way.
     with contextlib.suppress(Exception):
         if webbrowser.open(url):
@@ -1431,7 +1395,6 @@ def _open_browser(url: str) -> None:
 
 
 def _clients(config: ResearchConfig) -> dict[str, Any]:
-    """List the agents attached to the app, or say that there is no app."""
 
     with _control(config) as control:
         if control is None:
@@ -1450,7 +1413,6 @@ def _clients(config: ResearchConfig) -> dict[str, Any]:
 
 
 def _disconnect(args: argparse.Namespace, config: ResearchConfig) -> dict[str, Any]:
-    """Drop one attached agent, which ends its session."""
 
     with _control(config) as control:
         if control is None:
@@ -1464,13 +1426,12 @@ def _disconnect(args: argparse.Namespace, config: ResearchConfig) -> dict[str, A
 
 
 async def _doctor(args: argparse.Namespace, config: ResearchConfig) -> CommandResult:
-    """Report the installation, and run only the operation the flags name."""
 
     from ..doctor import mcp_entry_block, mcp_url_block, run_doctor
 
     if args.mcp_entry:
         # Two entries, because the app is reached two ways. The URL entry names
-        # the port the app claimed, which exists only once it is up; the stdio
+        # the port the app claimed, which exists only once it is up. The stdio
         # entry is complete either way, because the bridge starts the app itself.
         return CommandResult(
             text=mcp_url_block(config) + "\n" + mcp_entry_block(config)
@@ -1478,7 +1439,7 @@ async def _doctor(args: argparse.Namespace, config: ResearchConfig) -> CommandRe
     entry_check = args.check_entry
     # A whole report is built from the same service call the `status` command
     # makes, so the two surfaces cannot disagree about this project. A check of
-    # one entry file needs no project state, so it does not fetch any.
+    # one entry file needs no project state, so it fetches none.
     status: dict[str, Any] = {}
     if entry_check is None:
         async with _operations(config) as operations:
@@ -1508,17 +1469,15 @@ async def _operations(config: ResearchConfig) -> AsyncIterator[Local | Remote]:
 
 
 def _control(config: ResearchConfig) -> AbstractContextManager[Control | None]:
-    """A synchronous handle on the app, for the commands that only read."""
 
     return nullcontext(connect(config))
 
 
 def _help_menu() -> str:
-    """The whole menu: the order of the work, then the three facts a first call needs.
+    """The whole menu: the order of the work, then the fact a first call needs.
 
-    The descriptions are stored as one sentence and wrapped here, so a command's
-    wording is written without the indentation of the column it happens to land
-    in and stays readable when the column moves.
+    A description is stored as one sentence and wrapped here, so a wording stays
+    readable when the column moves.
     """
 
     width = max(len(name) for _, entries in HELP_GROUPS for name, _ in entries)
@@ -1551,8 +1510,7 @@ def _command_usage(parser: argparse.ArgumentParser, name: str) -> str:
     """The usage block one registered subcommand prints, reached by name.
 
     `help search` and `search --help` are the same document, so this returns the
-    subparser's own output rather than a second description of it that could
-    drift from the one the option list came from.
+    subparser's own output rather than a second description that could drift.
     """
 
     for action in parser._actions:
@@ -1562,7 +1520,6 @@ def _command_usage(parser: argparse.ArgumentParser, name: str) -> str:
 
 
 async def _run(args: argparse.Namespace) -> CommandResult:
-    """Resolve the project, run the named command, and return what to print."""
 
     if args.command == "projects":
         return CommandResult(payload=await _projects(args))
@@ -1600,7 +1557,7 @@ def main(argv: Sequence[str] | None = None) -> None:
     parser = _parser()
     args = parser.parse_args(argv)
     if args.command == "help":
-        # Before the project is resolved, because the menu is what a reader has
+        # Before the project is resolved: the menu is what a reader has
         # precisely when they have no project yet, and it must not fail on a
         # directory that holds one.
         if args.topic is None:
@@ -1612,7 +1569,7 @@ def main(argv: Sequence[str] | None = None) -> None:
         return
     if args.command == "mcp":
         # The bridge owns stdio and its own event loop, so it runs before this
-        # process starts one rather than inside it.
+        # process starts one.
         try:
             config = _resolve(args)
         except (

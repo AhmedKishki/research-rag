@@ -1,22 +1,13 @@
 """Projections from service payloads to MCP tool answers.
 
 Every tool answers with the lean projection, which `present_tool_response`
-applies. `--tool-detail full` is the developer detail mode: it returns the
-service payload unchanged, for debugging retrieval and ingestion.
+applies. `--tool-detail full` returns the service payload unchanged.
 
 One rule decides what a lean answer carries: a field is here when a caller can
 act on it or could not otherwise account for it. `stale`, a blocker, a filter
-that removed every source, and a reranker that did not run are all things a
-caller must know about; the query it sent, the timing, the scores that ordered
-the passages, and the counts it could make for itself are not. A field whose
-value is the ordinary case is left out, so the answer says what happened rather
-than what is usual.
-
-A status answer is the strictest case of that rule, because an agent reads it
-before anything else: it is a verdict and the work the verdict implies. `ready`
-and `stale` are stated as booleans rather than by their absence, `requires`
-names the calls that close the gap, and every other field the command line and
-the workspace need is not here.
+that removed every source, and a reranker that did not run all qualify. The
+query, the timing, the ranking scores, and the counts the caller could make for
+itself do not. A field whose value is the ordinary case is left out.
 """
 
 from __future__ import annotations
@@ -68,9 +59,8 @@ def _add(target: dict[str, Any], key: str, value: Any) -> None:
 def _lean_locator(locator: Mapping[str, Any]) -> dict[str, Any]:
     """Return where a passage sits: its page, or its section.
 
-    The page comes with the printed label only when that label differs from the
-    physical page, because that is when the label carries information; the
-    locator's kind is dropped, since the passage is not a citation.
+    The printed page label is carried only when it differs from the physical page.
+    The locator's kind is dropped, since the passage is not a citation.
     """
 
     page = locator.get("page")
@@ -90,11 +80,8 @@ def _lean_locator(locator: Mapping[str, Any]) -> dict[str, Any]:
 def lean_passage(passage: Mapping[str, Any]) -> dict[str, Any]:
     """Return one passage: its source, its authors, its position, and its text.
 
-    Nothing else is repeated per passage. The reference is deliberately not
-    citation-ready; the text is cleaned for retrieval and therefore never
-    quote-safe, which the tool description states once instead of every passage
-    repeating it; and the advisory script note belongs to the full-detail
-    payload.
+    The text is cleaned for retrieval and so never quote-safe, which the tool
+    description states once. The advisory script note belongs to the full payload.
     """
 
     result: dict[str, Any] = {}
@@ -110,13 +97,10 @@ def lean_passage(passage: Mapping[str, Any]) -> dict[str, Any]:
 def lean_search(payload: Mapping[str, Any]) -> dict[str, Any]:
     """Return a search answer: the passages, and anything the caller must know.
 
-    The passages and the generation they came from, plus the conditions that
-    change what the caller can conclude: `stale` when the corpus has moved on,
-    `reranked: false` when the cross-encoder did not run, an upgrade note when
-    this generation cannot serve, a filter that emptied the answer, and a source
-    id that resolved to nothing. Each of those is present only when it holds. The
-    query is not echoed, the ranking is not published, and no count appears that
-    the passages themselves do not already say.
+    Plus the conditions that change what the caller can conclude: `stale` when the
+    corpus has moved on, `reranked: false` when the cross-encoder did not run, an
+    upgrade note when this generation cannot serve, a filter that emptied the
+    answer, and a source id that resolved to nothing.
     """
 
     result: dict[str, Any] = {}
@@ -139,9 +123,9 @@ def lean_search(payload: Mapping[str, Any]) -> dict[str, Any]:
         filters.get("unknown_exclude_source_ids"),
     )
     # The bibliographic filters travel with the answer, not only in the developer
-    # payload: a filter that removed every source is the reason an answer is empty,
-    # and an agent reading the answer has otherwise no way to tell that apart from
-    # a corpus that holds nothing.
+    # payload: a filter that removed every source is why an answer is empty, and
+    # an agent reading the answer has otherwise no way to tell that apart from a
+    # corpus that holds nothing.
     _add(
         result,
         "applied_filters",
@@ -166,7 +150,7 @@ def lean_passage_context(payload: Mapping[str, Any]) -> dict[str, Any]:
 
 # The two calls a status verdict can ask for. Each name is the call it maps to:
 # `ingest` is a tool this surface serves, and `restart_app` is the client
-# restarting the process that is running it.
+# restarting the process running it.
 INGEST = "ingest"
 RESTART_APP = "restart_app"
 
@@ -178,8 +162,7 @@ def _required_actions(payload: Mapping[str, Any]) -> list[str]:
     that moved on, a generation built by an older policy, one that predates the
     dense index this tool searches, reviewed sources it has never indexed, an
     exclusion the indexes still hold, and a build that stopped part-way. The
-    answer names them once, so a caller never has to read four fields to learn
-    that it should ingest.
+    answer names them once.
     """
 
     changes = payload.get("changes") or {}
@@ -202,16 +185,15 @@ def _required_actions(payload: Mapping[str, Any]) -> list[str]:
 def lean_status(payload: Mapping[str, Any]) -> dict[str, Any]:
     """Return whether this project can be searched, and what must happen first.
 
-    The answer is a verdict and its consequence. `ready` says a generation
-    exists, `stale` says its sources still match the directory, and `requires`
-    names the calls that make it serve what the project holds; `message` says why
-    in one sentence. `changes`, `ingestion_progress`, `blocked_by`, and `degraded`
-    appear only while they hold, because each is something the caller acts on.
+    `ready` and `stale` are booleans rather than an absence, `requires` names the
+    calls that make this generation serve what the project holds, and `message`
+    says why in one sentence. `changes`, `ingestion_progress`, `blocked_by`, and
+    `degraded` appear only while they hold.
 
     The corpus counts, the retained generations, the retrieval policy, and the
-    per-check detail are the command line's and the workspace's answer, and the
-    reviewed-metadata overlay is not news: it is already applied at read time and
-    the message says so when reviewed sources are still waiting to be indexed.
+    per-check detail are the command line's and the workspace's answer. The
+    reviewed-metadata overlay is not news: it is applied at read time, and the
+    message says so when reviewed sources are still waiting to be indexed.
     """
 
     result: dict[str, Any] = {
@@ -234,7 +216,7 @@ def lean_status(payload: Mapping[str, Any]) -> dict[str, Any]:
                 lean_changes[key] = count
         # Available sources are counted, never listed. A source the generation
         # has and the directory does not is named, because that is what a
-        # researcher has to act on.
+        # researcher acts on.
         _add(lean_changes, "removed_sources", changes.get("removed"))
         _add(lean_changes, "metadata_changed", changes.get("metadata_changed"))
         if lean_changes:
@@ -253,13 +235,11 @@ def lean_status(payload: Mapping[str, Any]) -> dict[str, Any]:
 def lean_ingest(payload: Mapping[str, Any]) -> dict[str, Any]:
     """Return what ingestion did, what is left to do, and anything it dropped.
 
-    A build answers with its outcome and its size: whether the generation
-    changed, how many documents and chunks it holds, and the next action when
-    work is resumable. The counters that report discarded, withheld, or densely
-    truncated material appear only when they are not zero, because a caller has
-    to act on those and on nothing else. What the build reused, rebuilt, or
-    re-embedded is cost rather than outcome, and belongs to `--tool-detail full`
-    and to `MEASUREMENTS.md`.
+    A build answers with its outcome and its size: whether the generation changed,
+    how many documents and chunks it holds, and the next action when work is
+    resumable. The counters that report discarded, withheld, or densely truncated
+    material appear only when they are not zero. What the build reused, rebuilt, or
+    re-embedded is cost rather than outcome, and belongs to `--tool-detail full`.
     """
 
     result: dict[str, Any] = {}
@@ -289,9 +269,8 @@ def lean_source_match(record: Mapping[str, Any]) -> dict[str, Any]:
     """Return one source's handle, its bibliography, and whether it is searchable.
 
     `indexed_in_current_generation` always travels, because whether a source can
-    answer a search is the question the lookup was made to settle; `included` and
-    `exists` appear only when they withhold it, and a reviewed override only
-    when one exists.
+    answer a search is what the lookup was made to settle. `included` and `exists`
+    appear only when they withhold it.
     """
 
     result: dict[str, Any] = {}
@@ -312,9 +291,7 @@ def lean_source_match(record: Mapping[str, Any]) -> dict[str, Any]:
 def lean_find_source(payload: Mapping[str, Any]) -> dict[str, Any]:
     """Return the sources one name resolved to, and how many were withheld.
 
-    The lookup itself, its match count, and whether the cap hid matches, so an
-    empty answer says whether the name matched nothing or matched more than the
-    caller asked to see.
+    A match count above the returned rows means `limit` hid some.
     """
 
     result: dict[str, Any] = {}
@@ -339,8 +316,8 @@ def lean_source_inclusion(payload: Mapping[str, Any]) -> dict[str, Any]:
     for key in ("included", "reason"):
         if key in payload:
             result[key] = payload[key]
-    # An exclusion applies at once, which is the ordinary case and so unsaid; a
-    # decision that has to wait for a rebuild is news, because the caller has to
+    # An exclusion applies at once, which is the ordinary case and so unsaid. A
+    # decision that has to wait for a rebuild is news, because the caller must
     # rebuild before the corpus answers differently.
     if payload.get("effective_immediately") is False:
         result["effective_immediately"] = False
@@ -383,8 +360,6 @@ def present_tool_response(
     *,
     detail: str,
 ) -> dict[str, Any]:
-    """Return one tool answer in the configured detail mode."""
-
     if detail == FULL_TOOL_DETAIL:
         return dict(payload)
     projector = _PROJECTORS.get(operation)

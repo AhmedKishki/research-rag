@@ -13,8 +13,8 @@ from research_rag.rerankers import (
 
 
 def test_every_supported_reranker_is_pinned_to_a_revision() -> None:
-    # An unpinned reranker would change retrieval quality without changing any
-    # recorded input, so the name alone is never enough to identify the weights.
+    # An unpinned reranker would change retrieval quality with no change to any
+    # recorded input, so a name alone cannot identify the weights.
     assert RERANKER_MODELS
     for model, revision in RERANKER_MODELS.items():
         assert len(revision) == 40 and revision.isalnum(), model
@@ -33,7 +33,7 @@ def test_resolve_rejects_unknown_names_and_lists_what_is_supported() -> None:
     with pytest.raises(ValueError, match="Unsupported reranker model"):
         resolve_reranker_model("some-org/some-reranker")
 
-    # A name that differs only by whitespace is still not a supported model, and
-    # the refusal names the choices instead of guessing.
+    # A name differing only by whitespace is still unsupported, and the refusal
+    # names the choices instead of guessing.
     with pytest.raises(ValueError, match="jinaai/jina-reranker-v1-turbo-en"):
         resolve_reranker_model(f"{DEFAULT_RERANKER_MODEL} ")

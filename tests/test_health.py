@@ -1,9 +1,9 @@
 """The named dependency checks: what blocks, what degrades, and what is unchecked.
 
 Each test states the condition it sets up, the state the report gives it, and the
-remedy the report names. A healthy project is only a test when it is compared
-against a broken one, so the healthy case is asserted as "nothing blocked and
-nothing degraded" rather than as the absence of a symptom.
+remedy the report names. A healthy project is a test only against a broken one,
+so the healthy case is asserted as "nothing blocked and nothing degraded" rather
+than as the absence of a symptom.
 """
 
 from __future__ import annotations

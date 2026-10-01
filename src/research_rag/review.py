@@ -24,8 +24,8 @@ from .storage import (
 from .support import ResearchError, _effective_documents, _public_document, _utc_now
 
 # How many sources one lookup returns by default, and the ceiling a caller can ask
-# for. The answer is a lookup rather than an inventory, so it stays small whatever
-# the corpus holds.
+# for. The answer is a lookup, not an inventory, so it stays small whatever the
+# corpus holds.
 DEFAULT_FIND_SOURCE_LIMIT = 10
 FIND_SOURCE_MAX_MATCHES = 50
 
@@ -157,10 +157,9 @@ class ReviewWorkflow:
                 "exists": False,
                 "indexed_in_current_generation": relative in indexed_paths,
             }
-        # Keep persisted policy records addressable even after their files are
-        # removed and before they have ever appeared in a generation.  This
-        # makes every source_id returned by list_sources usable by the mutation
-        # tools, rather than exposing an ID that cannot restore its own record.
+        # A persisted policy record stays addressable after its file is removed
+        # and before it has ever appeared in a generation, so every source_id
+        # returned by list_sources is usable by the mutation tools.
         policy_paths = set(
             self._source_exclusions() if exclusions is None else exclusions
         ) | set(self._metadata() if metadata is None else metadata)
@@ -379,8 +378,8 @@ class ReviewWorkflow:
 
         The review is authoritative at read time, so a saved change applies to the
         current generation without re-ingesting, and the same JSON file can be
-        edited by hand between calls. Only the named source's entry is replaced, so
-        every other entry survives, and an empty review removes the entry so
+        edited by hand between calls. Only the named source's entry is replaced,
+        so every other entry survives. An empty review removes the entry, so
         automatic metadata applies again.
         """
 
@@ -450,16 +449,16 @@ class ReviewWorkflow:
     ) -> dict[str, Any]:
         """Return the sources one name resolves to, and whether each is searchable.
 
-        A lookup rather than an inventory: the caller asks about a filename, a
-        title, or an author, and the answer is the handful of sources that answer
-        it, each with the stable ID and the source-relative path the inclusion
-        and metadata operations take.
+        The caller asks about a filename, a title, or an author, and the answer is
+        the handful of sources that resolve it, each with the stable ID and the
+        source-relative path the inclusion and metadata operations take. Nothing
+        here lists the corpus.
 
         The lookup covers every source this project can name: the files in the
         source directory, the sources of the selected generation, and the sources
         a review record kept addressable after their file was removed. A source
-        that is absent from the corpus is exactly the one a reader asks about, so
-        it is answered rather than hidden.
+        absent from the corpus is the one a reader asks about, so it is answered
+        rather than hidden.
         """
 
         term = query.strip()

@@ -123,8 +123,8 @@ class FakeUltraRAG:
         *,
         language: str = "en",
     ) -> None:
-        # The language is recorded so a test can prove the setting reaches the
-        # gateway rather than being dropped in transit, on the load path too.
+        # The language is recorded so a test can prove the setting reaches
+        # the gateway rather than being dropped in transit, on the load path too.
         self.bm25_language = language
         index_file = index_path / "fake-index.json"
         if (
@@ -831,7 +831,7 @@ async def _assert_search_can_skip_the_staleness_walk(
     assert no_walk["hits"]
     assert no_walk["stale"] is None
 
-    # The policy fingerprint is an instance attribute now, computed from the
+    # The policy fingerprint is an instance attribute, computed from the
     # settings this service resolved; patching it stands in for a generation that
     # recorded a different policy.
     monkeypatch.setattr(
@@ -1959,10 +1959,10 @@ async def _assert_a_dense_band_below_the_floor_is_not_arbitrary(project: Path) -
     """A query whose whole candidate list sits under the floor still finds them.
 
     A one-word query's best passage can score below the cosine floor while its
-    neighbours sit a few hundredths behind it, and the floor then keeps a handful
-    of candidates and drops passages that match the query about as closely. The
-    margin admits that band, names what it still dropped, and never invents
-    support for a query nothing cleared the floor for.
+    neighbours sit a few hundredths behind it. The floor then keeps a handful and
+    drops passages that match about as closely. The margin admits that band, names
+    what it still dropped, and never invents support for a query nothing cleared
+    the floor for.
     """
 
     for name, text in (
@@ -2027,10 +2027,10 @@ async def _assert_a_short_fragment_is_not_evidence(project: Path) -> None:
     """An index line matches a query about its own words, so length decides.
 
     Chunks never span extraction units, so one short unit becomes one short chunk
-    that can outrank prose: a five-word index entry contains the query's words and
+    that can outrank prose: a five-word index entry holds the query's words and
     nothing to cite. The floor admits it, the diversity rule cannot see it, and
     the reranker scores it as relevant — only a length rule separates it from a
-    passage. The rule ships off, and this is what turning it on does.
+    passage. The rule ships off; this is what turning it on does.
     """
 
     write_pdf(project / "sources" / "fragment.pdf", ["Waste, 12-14"], title="Index")
@@ -2223,10 +2223,10 @@ async def _assert_selective_reuse_tracks_every_input_change(project: Path) -> No
     original_bytes = second_path.read_bytes()
     # Swap one same-length character inside the PDF's title entry so the bytes
     # change while the size and mtime stay identical — the case under test. The
-    # page text stream is deflated, but the Info dictionary is plain bytes, and
-    # regenerating the file instead would depend on pymupdf's varying embedded
-    # timestamp, which shifts the total by a few bytes and made this case
-    # intermittently untestable.
+    # page text stream is deflated but the Info dictionary is plain bytes.
+    # Regenerating the file would depend on pymupdf's varying embedded timestamp,
+    # which shifts the total by a few bytes and made this case intermittently
+    # untestable.
     assert b"/Title(Second)" in original_bytes
     second_path.write_bytes(
         original_bytes.replace(b"/Title(Second)", b"/Title(Secand)", 1)
@@ -3115,8 +3115,8 @@ def test_a_build_replaced_by_a_source_change_says_so(project: Path) -> None:
 
     A checkpoint cannot be resumed once the corpus changed, so the build behind it
     is discarded. Unreported, a caller looping on ingest reads that as its own
-    mistake and repeats the same call, which is exactly what an agent did for ten
-    hours while sources were being added.
+    mistake and repeats the same call, which is what an agent did for ten hours
+    while sources were being added.
     """
 
     async def exercise() -> None:
@@ -3779,9 +3779,9 @@ async def _assert_query_paths_use_generation_lookup(
     assert lookup_path.is_file()
 
     # Every later query seeks the records it returns instead of scanning the
-    # store again. The property is enforced where the scan actually happens: the
-    # query path reads byte ranges through the lookup, so a rescanned chunk store
-    # can only mean `build_artifact_lookup` ran for a current generation.
+    # store again. The property is enforced where the scan happens: the query
+    # path reads byte ranges through the lookup, so a rescanned chunk store can
+    # only mean `build_artifact_lookup` ran for a current generation.
     def refuse_rescan(*_: Any, **__: Any) -> Any:
         raise AssertionError("a query path rescanned the complete chunk store")
 
@@ -4108,7 +4108,7 @@ def test_dense_backends_embed_with_the_configured_model(tmp_path: Path) -> None:
     A generation records the dimension of the model it was built with, so a
     backend still embedding with the shipped default fills an index of the wrong
     width: the German model returns 768 values where the default returns 384, and
-    the width check is all that stands between that and a mismatched index.
+    the width check is all that stands between it and a mismatched index.
     """
     project = tmp_path / "project"
     overlay = project / ".research-rag"
@@ -4201,11 +4201,11 @@ def test_the_reranked_window_follows_its_settings(project: Path) -> None:
             )
             return result["rerank_window"]
 
-        # The corpus and the relevance gates cap the window, so the observed
-        # default is the budget these settings are tested against. Each one is
-        # exercised below that default, which is what proves it is read rather
-        # than assumed: with the setting ignored every value here would stay at
-        # the default.
+        # The corpus and relevance gates cap the window, so the observed default is
+        # the budget these settings are tested against. Each one is exercised
+        # below that default, which is what proves it is read rather than
+        # assumed: with the setting ignored every value here would stay at the
+        # default.
         default = await window([], top_k=1)
         assert default >= 3, default
         assert (
@@ -4440,8 +4440,8 @@ def test_an_unscored_ranking_keeps_its_own_order() -> None:
     """BM25 or dense without reranking has no relevance to charge a repeat against.
 
     Charging anyway would leave the penalty as the only signal in the pool and
-    replace that mode's ranking with a round-robin over sources, which is a
-    different search rather than a reordering of this one.
+    replace that mode's ranking with a round-robin over sources, a different
+    search rather than a reordering of this one.
     """
 
     selected = support_module._source_diverse_selection(
@@ -4752,8 +4752,8 @@ def test_a_busy_project_is_reported_rather_than_waited_for(
     """A caller must not sit in silence behind another process's build.
 
     The project lock serialises builds, which is right, but waiting one out
-    outlasts the client that asked: a long wait turns a busy project into a client
-    timeout while the work the caller was queued behind carries on unseen.
+    outlasts the client that asked: the wait becomes a client timeout while the
+    work the caller queued behind carries on unseen.
     """
 
     async def exercise() -> None:
@@ -4776,11 +4776,10 @@ def test_a_busy_project_is_reported_rather_than_waited_for(
 def _aliased_dense_backend() -> FakeDenseBackend:
     """A dense backend whose vectors follow the words, so tests can aim them.
 
-    The shared fake gives every passage the same vector, which is enough to say
-    "this matches" and not enough to say "these are nearly the same" — and a
-    near-duplicate threshold is about the second. This one hashes each word onto
-    an axis, so two passages of the same essay land close together and two
-    passages on one theme land further apart.
+    The shared fake gives every passage the same vector, which says "this matches"
+    but not "these are nearly the same", and a near-duplicate threshold is about
+    the second. This one hashes each word onto an axis, so two passages of the
+    same essay land close and two on one theme land further apart.
     """
 
     class AliasedDenseBackend(FakeDenseBackend):
@@ -4800,8 +4799,8 @@ def test_a_repeated_passage_is_collapsed_from_the_answer(project: Path) -> None:
     """Two copies of one passage in two files: the answer shows one, and says which.
 
     The corpus keeps both — a person who wants the essay from the second file can
-    still ask for it by name, and excluding a source is not what a repetition
-    deserves — so the overlap is settled where it is seen, which is the answer.
+    still ask for it by name, and a repetition does not deserve an exclusion —
+    so the overlap is settled in the answer, where it is seen.
     """
 
     from research_rag.config import resolve_config
@@ -4853,9 +4852,9 @@ def test_the_repetition_threshold_is_a_setting_and_the_words_are_not(
 
     Three pairs at three thresholds. Words that are the same words are one
     passage whatever the number, because no number is a claim about words; the
-    number decides the part cosine decides, and both directions of it are read
-    from the file. A number no cosine can reach decides that nothing is close
-    enough rather than switching the check off.
+    number decides the part cosine decides, and both directions are read from the
+    file. A number no cosine can reach decides that nothing is close enough
+    instead of switching the check off.
     """
 
     from research_rag.config import resolve_config

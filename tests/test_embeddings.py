@@ -14,8 +14,8 @@ from research_rag.embeddings import (
 
 
 def test_every_supported_model_is_pinned_and_described() -> None:
-    # A model that is not pinned would change what the index contains without
-    # changing anything a generation recorded.
+    # An unpinned model would change what the index contains with nothing in a
+    # generation recording the change.
     assert EMBEDDING_MODELS
     for model in EMBEDDING_MODELS:
         assert len(model.revision) == 40 and model.revision.isalnum(), model.name
@@ -31,8 +31,7 @@ def test_the_german_model_is_offered_with_its_own_dimension() -> None:
     assert model.dimension == 768
     assert model.maximum_tokens == 8192
     assert model.covers("de")
-    # A German model is not an English one, and saying so is the point of the
-    # coverage check.
+    # A German model is not an English one.
     assert not model.covers("en")
 
 
@@ -43,8 +42,8 @@ def test_a_language_less_entry_covers_every_language() -> None:
     assert multilingual.covers("de")
     assert multilingual.covers("en")
     assert multilingual.covers("ja")
-    # The E5 family loses quality without its prefixes, so they travel with the
-    # model rather than being a caller detail.
+    # The E5 family loses quality without its prefixes, so they ship with the model
+    # rather than being a caller's detail.
     assert multilingual.query_prefix == "query: "
     assert multilingual.passage_prefix == "passage: "
 

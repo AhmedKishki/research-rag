@@ -4,7 +4,7 @@ The package is a domain core with a `surfaces/` layer over it. The core — the
 service, the generation store, extraction, the dense stack, the settings — is
 reusable on its own: the harnesses in `scripts/` import it and call it in
 process, and the app that hosts the workspace and the agent surface is built on
-it. The surfaces are the three ways a person or an agent reaches that core: the
+it. The surfaces are the three ways a person or an agent reaches it: the
 workspace, the agent's tools and resources, and the command line.
 
 Nothing but this test keeps that arrow pointing one way, so it asserts all of it:
@@ -198,8 +198,8 @@ def test_the_answer_projection_is_shared_by_the_two_bounded_readers() -> None:
     """An agent and a terminal read one projection; the workspace reads the payload.
 
     A second reader of the lean answer must read this projection rather than
-    write its own, and the workspace, which has the whole screen, must not reach
-    for it at all.
+    write its own, and the workspace, with the whole screen, must not reach for
+    it.
     """
 
     callers = sorted(

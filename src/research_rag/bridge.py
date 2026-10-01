@@ -2,13 +2,13 @@
 
 An MCP client that speaks only stdio cannot open a socket, so this is the command
 that connects one: it makes sure the app is up, then proxies stdio to the app's
-agent endpoint on the app's own port. The proxy is a front end and nothing more —
-the tools, the answer projection, the project, and the UltraRAG gateway are the
-app's, so a stdio client and a browser cannot see two different states.
+agent endpoint on the app's own port. The proxy adds nothing — the tools, the
+answer projection, the project, and the UltraRAG gateway are the app's, so a
+stdio client and a browser cannot see two different states.
 
-The bridge also names itself, which is what makes a disconnect legible: the app
-lists clients by name, and dropping one ends its session, which ends the pipe and
-therefore the client.
+The bridge names itself, so a disconnect is legible: the app lists clients by
+name, and dropping one ends its session, which ends the pipe and therefore the
+client.
 """
 
 from __future__ import annotations
@@ -41,11 +41,11 @@ def client_name() -> str:
 def build_proxy(url: str, *, name: str) -> Any:
     """Return a stdio server that forwards everything to the app at `url`.
 
-    Proxying rather than re-declaring the tools is the point: a second copy of the
-    seven operations would be a second place for them to be wrong, and would give
-    the agent a different answer than the workspace for the same question. The
-    transport is built here rather than from a URL so the bridge can name itself,
-    which is what makes it identifiable in the app's client list.
+    The tools are proxied, not re-declared: a second copy of the seven operations
+    would be a second place for them to be wrong, and would give the agent a
+    different answer than the workspace for the same question. The transport is
+    built here rather than from a URL so the bridge can name itself, which makes
+    it identifiable in the app's client list.
     """
 
     return create_proxy(

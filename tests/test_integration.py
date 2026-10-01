@@ -130,7 +130,7 @@ def test_the_real_vanilla_research_flow(project: Path) -> None:
             # saying before a build.
             assert initial["ready"] is False
 
-            # Reviewed metadata is a hand-edited review-state file; it applies at
+            # Reviewed metadata is a hand-edited review-state file that applies at
             # read time, so it is written directly and checked through the service.
             review_state = project / ".research-rag" / "source-metadata.json"
             review_state.write_text(
@@ -382,8 +382,8 @@ def test_a_gateway_that_cannot_start_is_reported_by_the_operation_that_needed_it
 
     Nothing here opens a gateway until an operation needs one, so a status read
     succeeds against a gateway that cannot start, and the failure arrives with
-    the reason the gateway wrote to its own log plus the paths a reader has to
-    open to see the rest.
+    the reason the gateway wrote plus the paths a reader must open to see the
+    rest.
     """
 
     write_pdf(project / "sources" / "evidence.pdf", ["The cobalt heron is evidence."])

@@ -70,10 +70,10 @@ def test_a_query_time_ranking_knob_keeps_the_published_fingerprint(
 ) -> None:
     """A penalty over ranked candidates must not tell every project to rebuild.
 
-    The source-diversity reordering is applied to the candidates fusion and
+    The source-diversity reordering applies to the candidates fusion and
     reranking already returned, so it changes nothing a generation stores. In
-    the fingerprint it would flag every existing generation as needing an
-    upgrade that would reproduce the same index byte for byte.
+    the fingerprint it would flag every generation as needing an upgrade that
+    reproduces the same index byte for byte.
     """
 
     spread, _ = _resolve(
@@ -169,9 +169,9 @@ def test_the_ingest_budget_can_cover_a_whole_build(tmp_path: Path) -> None:
     """A caller that can wait has to be able to set a budget that finishes the work.
 
     With a cap of five minutes, a long build needs one call per slice, and a client
-    that stops repeating identical calls cannot finish it at all: an agent hit that
-    wall, its MCP request timed out after an hour, and the build was finished by
-    hand from the browser instead.
+    that stops repeating identical calls cannot finish it at all: an agent hit
+    that wall, its MCP request timed out after an hour, and the build was
+    finished by hand from the browser.
     """
 
     settings, _provenance = _resolve(
@@ -394,7 +394,7 @@ def test_the_bm25_language_is_what_the_policy_records(tmp_path: Path) -> None:
     )
 
     # BM25 filters one list, so a mixed corpus that points it at German ranks like
-    # a German corpus: a different stopword language is what makes it a different
+    # a German corpus: a different stopword language makes it a different
     # policy, and the order a corpus names its languages in writes that choice.
     assert retrieval_policy_fingerprint(german_first) == retrieval_policy_fingerprint(
         german

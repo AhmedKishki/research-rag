@@ -121,12 +121,10 @@ printf '\nA workspace already running still serves the version it started with. 
 printf 'and start it again, then check status.version.restart_required — it should read\n'
 printf 'false.\n'
 
-# A process started before this update keeps answering from the old code, and the
-# failure it produces reads like a data fault rather than a stale process: this
-# package once rejected reviewed metadata through a workspace running code that
-# could not have written it. `doctor` already knows which processes serve this
-# project and only reports them, so it is asked rather than matched again here.
-# `stop` is not used for this: it would end the processes it is meant to report on.
+# A process predating this update answers from the old code, and its failure reads
+# like a data fault rather than a stale process: a stale workspace once rejected
+# reviewed metadata. `doctor` names those processes without ending them, so it is
+# asked instead of being matched again here; `stop` would end what it reports on.
 if [ -n "$PROJECT_ROOT" ]; then
   running=$(cd "$REPO_ROOT" && uv run research-rag --project-root "$PROJECT_ROOT" doctor 2>/dev/null | grep 'process(es) are running' || true)
   if [ -n "$running" ]; then

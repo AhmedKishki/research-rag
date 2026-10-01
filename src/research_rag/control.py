@@ -1,20 +1,12 @@
 """The control API: how the command line reaches the one running app.
 
-The app process owns the project lock, the gateway, and the service, so a
-command that built its own service would be a second instance of the thing the
-app exists to be singular. Everything the command line does to the project
-therefore arrives here over loopback, on the same port and the same process the
-browser workspace and the agent surface are served by.
+A command that built its own service would be a second instance of the app, so
+every command-line operation arrives here over loopback, on the port and process
+that serves the workspace and the agent surface.
 
-This is a fourth surface, not a fifth argument to a third: it names the arguments
-the command line sends, and the command line names what it sends, so the two
-cannot drift without a test saying so. That is the same rule the workspace
-adapter and the agent tools follow.
-
-Loopback only, JSON only, and the same operations the service exposes. The
-service is the only writer: a control operation is a request the command line
-sends, not a second path to the state, so a project changed from a terminal and
-a project changed from a browser go through one implementation and one lock.
+It names what the command line sends and the command line names what it sends, so
+the two cannot drift without a test saying so. Loopback only, JSON only, and the
+service is the only writer.
 """
 
 from __future__ import annotations
@@ -47,8 +39,8 @@ def _json(payload: Any, status_code: int = 200) -> JSONResponse:
 async def _body(request: Request) -> dict[str, Any]:
     """Return the request's JSON object, or refuse the request as malformed.
 
-    A control request that is not a JSON object is a caller bug, and saying so is
-    more useful than letting the operation fail on a missing key later.
+    A body that is not a JSON object is named as such rather than failing on a
+    missing key later.
     """
 
     try:
@@ -177,7 +169,7 @@ async def _source_inclusion(app: App, request: Request) -> JSONResponse:
 
 
 async def _generations(app: App, _request: Request) -> JSONResponse:
-    """Every retained generation, which is the inventory the status payload carries."""
+    """Every retained generation, as the status payload reports it."""
 
     status = await app.service.status()
     generations = status.get("generations")
@@ -205,9 +197,9 @@ async def _use_generation(app: App, request: Request) -> JSONResponse:
 
 async def _remove_generation(app: App, request: Request) -> JSONResponse:
     # The confirmation is carried over the wire rather than inferred from the
-    # caller's intent: the command line already had to repeat the id, and a
-    # surface that dropped the repeat would be a surface that deletes a
-    # generation a person did not choose.
+    # caller's intent. The command line already had to repeat the id, and a
+    # surface that dropped the repeat would delete a generation a person did not
+    # choose.
     body = await _body(request)
     generation_id = body.get("generation_id")
     if not isinstance(generation_id, str) or not generation_id:
@@ -235,9 +227,8 @@ async def _source_metadata(app: App, request: Request) -> JSONResponse:
 async def _handle(app: App, endpoint: Any, request: Request) -> JSONResponse:
     """Turn a named failure into a named error, and leave the rest to the app.
 
-    A refusal the caller can act on and a fault the caller cannot are different
-    answers: the first is a 400 with the reason, the second is the app's own 500,
-    which names the log instead of pretending to explain a traceback.
+    A refusal the caller can act on is a 400 with the reason; a fault it cannot is
+    the app's own 500, which names the log.
     """
 
     try:
@@ -250,7 +241,7 @@ def control_routes(app: App) -> list[Route]:
     """The routes the command line talks to, on the app's own port.
 
     They are declared before the workspace mount, so a URL under `/control` is
-    answered here and every other URL falls through to the workspace.
+    answered here.
     """
 
     def route(path: str, endpoint: Any, methods: list[str]) -> Route:
@@ -281,9 +272,8 @@ class Control:
     """A command line's handle on the running app.
 
     Every method answers with the app's own payload, so a terminal answer and a
-    workspace answer are the same object. A refusal comes back as
-    `ControlError` carrying the app's message, which is the message a reader of
-    the workspace would have seen, not a transport failure.
+    workspace answer are the same object. A refusal comes back as `ControlError`
+    carrying the app's message.
     """
 
     def __init__(self, base_url: str, *, timeout: float = 3600.0) -> None:
@@ -398,9 +388,8 @@ class Control:
 def connect(config: ResearchConfig) -> Control | None:
     """Return a handle on the running app, or None when there is not one.
 
-    Reading local state through a daemon that is not up would mean opening a
-    second service for a project nobody is serving, so a command that only reads
-    answers in process and a command that touches the corpus asks here first.
+    Reading local state through a daemon that is not up would mean opening a second
+    service, so a command that only reads answers in process.
     """
 
     url = running_url(config)
@@ -410,10 +399,9 @@ def connect(config: ResearchConfig) -> Control | None:
 def ensure_running(config: ResearchConfig, *, timeout: float = 180.0) -> Control:
     """Return a handle on the app, starting it if the project has none.
 
-    The launcher does the starting, because it is what already owns the free-port
-    choice, the lock, the pid file, and the log. This waits for the port it
-    recorded rather than probing, so the app this handle reaches is the one the
-    launcher reported, not a stranger that answered the port first.
+    The launcher does the starting, because it owns the free-port choice, the lock,
+    the pid file, and the log. This waits for the port it recorded rather than
+    probing, so the app reached is the one the launcher reported.
     """
 
     import time

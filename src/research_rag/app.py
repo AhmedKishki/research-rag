@@ -1,20 +1,12 @@
 """The running app: one project, one port, one service, three front ends.
 
-`research-rag` is a server product that also has a browser. An agent, the browser
-workspace, and the command line are three front ends to the same running
-instance, not three processes that each build their own view of the project.
-That is why this module exists: one process owns the project lock, opens the
-UltraRAG gateway once, serves the workspace and the agent surface on one loopback
-port, and knows which agents are attached to it.
+One process owns the project lock, opens the UltraRAG gateway once, and serves the
+workspace and the agent surface on one loopback port, so a passage an agent
+retrieves and one the workspace renders are the same object.
 
-The app is up or it is down, and that is the one thing to check. When it is up
-there is exactly one service, so the passage an agent retrieves and the passage
-the workspace renders are the same object from the same call.
-
-**MCP clients attach and detach.** A streamable-HTTP session is recorded when its
-first request arrives, and a forced detach refuses the rest of that session,
-which is what ends it. The bridge in `bridge.py` names itself, so an agent is
-identifiable by more than a peer address.
+**MCP clients attach and detach.** A streamable-HTTP session is recorded on its
+first request, and a forced detach refuses the rest of it. The bridge in
+`bridge.py` names itself, so an agent is identifiable by more than a peer address.
 """
 
 from __future__ import annotations
@@ -71,8 +63,7 @@ class Client:
     """One MCP client this app has seen.
 
     `attached` is a property of recency and of an explicit drop, never a stored
-    flag: a client that stopped talking and a client this app disconnected are
-    different facts, and the reason is kept so the list can say which.
+    flag.
     """
 
     session_id: str
@@ -118,10 +109,9 @@ class Client:
 class ClientRegistry:
     """The clients attached to this app, and the authority to drop one.
 
-    Identity is the MCP session id once a request carries one, because that is
-    the handle every later request of the same client repeats. The initialize
-    request has no id yet, so it is counted against the peer address, which keeps
-    a client that never initializes visible instead of invisible.
+    Identity is the MCP session id once a request carries one. The initialize request
+    has no id yet, so it counts against the peer address, which keeps a client that
+    never initializes visible.
     """
 
     def __init__(self) -> None:
@@ -197,10 +187,10 @@ class ClientRegistry:
         client.detached_reason = reason
         # The MCP SDK opens a notification stream before the session exists, so
         # that stream carries no session id and cannot be matched by one. It is
-        # matched by the name the client gave itself, and dropping it is what
-        # makes the client end rather than sit on an open stream with a session
-        # the app has already refused. A client that named nothing cannot have
-        # its stream identified, and only its session is refused.
+        # matched by the name the client gave itself, and dropping it makes the
+        # client end rather than sit on an open stream with a session the app has
+        # already refused. A client that named nothing cannot have its stream
+        # identified, and only its session is refused.
         for other in self._clients.values():
             if other is not client and other.pending and other.name == client.name:
                 other.dropped = True
@@ -216,12 +206,11 @@ class ClientRegistry:
 
 
 class ClientGate:
-    """Count and refuse MCP requests, so the registry is the only authority.
+    """Refuse a dropped session before its requests reach the agent.
 
-    A forced detach has to end a live session, and the only place that can be
-    enforced is in front of the session: the id is refused here and never reaches
-    the agent, so a disconnected client sees its session fail rather than a tool
-    that silently does nothing.
+    The registry is the only authority, so a forced detach is enforced here rather
+    than at the tools: a disconnected client sees its session fail rather than a
+    silent no-op.
     """
 
     def __init__(self, app: Any, registry: ClientRegistry) -> None:
@@ -253,12 +242,11 @@ class ClientGate:
 
 
 class Surfaces:
-    """Route one port to the agent surface, the control API, or the workspace.
+    """Route one port to the agent surface or the workspace.
 
-    A prefix dispatcher rather than three mounts, because mounting the agent
-    surface under its own path would prefix its own routes twice, and a
-    catch-all mount does not fall through to the next mount on a 404. Dispatching
-    on the path is explicit, so what answers a given URL is stated in one place.
+    A prefix dispatcher rather than three mounts: mounting the agent surface under
+    its own path would prefix its routes twice, and a catch-all mount does not fall
+    through on a 404.
     """
 
     def __init__(
@@ -282,15 +270,12 @@ class Surfaces:
 
 
 def _claim_loopback_port(host: str, port: int) -> socket.socket:
-    """Bind and listen on the loopback port, and return the socket that holds it.
+    """Return the socket holding the claimed loopback port.
 
-    The claim is the bind and the listen, not a probe followed by a bind, so two
-    apps that start at the same time cannot both believe they hold the port: the
-    loser gets an `OSError` here, before any server exists, and reports it.
-    Listening is what makes the claim exclusive, because a socket that is bound
-    but not listening can still be bound again under `SO_REUSEADDR`, which Linux
-    allows for a socket that is not accepting. `SO_REUSEADDR` is set anyway,
-    matching uvicorn, so a port whose connections are still in `TIME_WAIT` after
+    A bound socket that is not listening can be bound again under `SO_REUSEADDR`,
+    which Linux allows, so the claim is the listen and not a probe followed by a
+    bind. The loser of a race gets an `OSError` here, before any server exists.
+    `SO_REUSEADDR` is set anyway, matching uvicorn, so a port in `TIME_WAIT` after
     a stop is not mistaken for one another process holds.
     """
 
@@ -320,9 +305,8 @@ def alive(pid: int) -> bool:
 class App:
     """The one running instance: a service, a port, and two HTTP surfaces.
 
-    The service is built on construction and opens nothing: the gateway opens on
-    the first operation that needs it, so an app that is only being asked whether
-    it is healthy never starts a process below it.
+    The service is built on construction; the gateway opens on the first operation
+    that needs it, so a health check starts no process.
     """
 
     def __init__(self, config: ResearchConfig, *, port: int) -> None:
@@ -354,9 +338,8 @@ class App:
     def ready(self) -> bool:
         """Whether the app is serving right now.
 
-        uvicorn sets `Server.started` once and never clears it, so the live task
-        is part of the test: after `stop` and after a failed claim the task is
-        finished and the app is not serving.
+        uvicorn sets `Server.started` once and never clears it, so the live task is
+        part of the test: after `stop` or a failed claim the task is finished.
         """
 
         return (
@@ -367,11 +350,7 @@ class App:
         )
 
     def state(self) -> dict[str, Any]:
-        """The app's own state, which the agent surface reports in `status`.
-
-        It is the app's state rather than the project's: where the workspace is,
-        whether it is up, and who is attached.
-        """
+        """The app's own state, which the agent surface reports in `status`."""
 
         return {
             "ui_url": self.url,
@@ -384,10 +363,8 @@ class App:
     def build(self) -> Starlette:
         """Compose the one application every front end is served by.
 
-        Each mounted application owns state its own handlers read back, and
-        Starlette does not run a mounted application's lifespan, so both are
-        entered here: the agent app's for its session machinery, which is what
-        makes the endpoint answer a session at all, and the workspace's to
+        Starlette does not run a mounted application's lifespan, so both are entered
+        here: the agent app's for its session machinery and the workspace's to
         install the adapter it was handed.
         """
 
@@ -467,8 +444,7 @@ class App:
         """Record an app that ended on its own, and release its claim.
 
         uvicorn can end the task by raising, which a probe-then-bind order hides
-        behind an empty `error`; the reason is kept here instead of showing a dead
-        app with no explanation.
+        behind an empty `error`.
         """
 
         if not task.cancelled():
@@ -499,10 +475,9 @@ class App:
     async def stop(self) -> None:
         """Ask the app to stop and wait for its task to finish.
 
-        A failure must not take this process down with it: whatever ended the
-        task is recorded by `_task_finished`, so it is not re-raised.
+        A failure must not take this process down: `_task_finished` records whatever
+        ended the task and does not re-raise it.
         """
-
         if self._server is not None:
             self._server.should_exit = True
         if self._task is not None:
@@ -528,9 +503,8 @@ async def running(config: ResearchConfig, port: int) -> AsyncIterator[App]:
 async def _security_headers(request: Any, call_next: Any) -> Any:
     """Apply one set of browser-facing headers to every route the app serves.
 
-    The shared workspace sets these for its own routes; setting them once here
-    means the control API and the agent surface are covered by the same rule
-    rather than by nobody's attention.
+    The shared workspace sets these for its own routes, so setting them here covers
+    the control API and the agent surface.
     """
 
     response = await call_next(request)
@@ -543,9 +517,7 @@ async def _unexpected_error(_: Any, exc: Exception) -> JSONResponse:
     """Report an unexpected failure without its detail, and keep the reason.
 
     The detail goes to the app's log, which the launcher records and `research-rag
-    doctor` names, because a message in an answer is read by a person or an agent
-    that cannot act on a traceback and will report it as the whole of what
-    happened.
+    doctor` names, because no reader can act on a traceback.
     """
 
     LOGGER.exception("research-rag request failed", exc_info=exc)
@@ -557,9 +529,8 @@ async def _unexpected_error(_: Any, exc: Exception) -> JSONResponse:
 def recorded_port(config: ResearchConfig) -> int | None:
     """Return the port a running app serves this project on, if there is one.
 
-    The generated launcher records the port it chose next to the pid it started,
-    so a command can find the app without being told. A recorded port whose app
-    has gone reads as no app rather than as a connection failure.
+    A recorded port whose app has gone reads as no app rather than as a connection
+    failure.
     """
 
     state = config.state_root

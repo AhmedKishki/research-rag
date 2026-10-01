@@ -2,7 +2,7 @@
 
 `Connection closed` is what a client sees when the vanilla gateway exits during
 its handshake. The reason is in the log the transport already writes, so these
-tests hold the transport down and read what a tool answer ends up carrying.
+tests hold the transport down and read what a tool answer carries.
 """
 
 from __future__ import annotations
@@ -148,10 +148,10 @@ def test_the_transport_writes_the_log_the_message_names(
 def test_the_handshake_is_bounded_by_its_own_timeout(config: ResearchConfig) -> None:
     """A gateway that cannot start must be reported, not waited out.
 
-    A gateway that exits mid-handshake can leave the client awaiting a response
+    A gateway that exits mid-handshake leaves the client awaiting a response
     that never arrives, so the handshake needs its own bound. Reusing the call
-    budget here made a failure the caller is told about in seconds take the
-    full 30 minutes, and the next step is the timeout on the test itself.
+    budget here made a failure the caller hears in seconds take the full 30
+    minutes, which is the test's own timeout.
     """
 
     assert GATEWAY_INIT_TIMEOUT_SECONDS < TRANSPORT_TIMEOUT_SECONDS
@@ -178,8 +178,8 @@ def test_a_gateway_that_never_starts_is_reported_within_the_handshake_bound(
             )
         )
 
-    # A timeout the client raises on its own is still the right answer; what is
-    # asserted is that the reason is named, and that it arrives long before the
-    # call budget the handshake no longer shares.
+    # A timeout the client raises itself is still the right answer. What is
+    # asserted is that the reason is named and arrives long before the call
+    # budget the handshake no longer shares.
     assert "The UltraRAG gateway could not start" in str(raised.value)
     assert time.monotonic() - started < TRANSPORT_TIMEOUT_SECONDS

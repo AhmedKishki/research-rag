@@ -20,11 +20,11 @@ together with the wider UltraRAG contributor community:
     https://github.com/AI9Stars
     https://github.com/OpenBMB/UltraRAG/graphs/contributors
 
-This server depends on UltraRAG's MCP architecture, corpus chunker, and BM25
-retriever. Its pinned dependency chain currently resolves to:
+This app depends on UltraRAG's MCP architecture, corpus chunker, and BM25
+retriever. Its pinned dependency chain resolves to:
 
     vanilla-ultra-rag-mcp-server commit
-    05ae4b155d38a294260a36017f6429ce73b1641b
+    fc339c259a672ca4dacb525840eba851d01c4b75
 
     UltraRAG version 0.3.0.2
     commit 3a709a2aea3fbe46acca59c422621c94b6e86857
@@ -100,7 +100,7 @@ The browser workspace uses the independently versioned shared UI package at this
 pinned revision:
 
     ui-ultra-rag-mcp
-    commit 6981ad0a15958d4ccb39e310593389f05622772b
+    commit 924a281
     https://github.com/AhmedKishki/ui-ultra-rag-mcp
 
 This app owns its adapter, its source authorization, and the process that hosts
@@ -110,19 +110,18 @@ HTTP boundary; it does not store or retrieve research data.
 PROVENANCE
 
 This repository was created from `research-ultra-rag-mcp-server`, an independent
-MCP server over the same engine. The app answers in process and exposes no MCP
-surface; the server still exists and still reads and writes the same projects.
-The on-disk state format is byte-compatible with the server's, so both products
-may serve one project while the migration runs.
+MCP server over the same engine. That server is frozen and still installed on the
+machines that carry it, and both read and write the same projects. The on-disk
+state format is byte-compatible, so both may serve one project.
 
     research-ultra-rag-mcp-server
     seed commit 0f5da3d611ae12b9807bae93c7f270b7d303b35f
     https://github.com/AhmedKishki/research-ultra-rag-mcp-server
 
-The retrieval, extraction, generation, and storage code is that project's, unchanged
-by this fork; the changes are the product surface, the command names, the launcher
-and settings names described in `AGENTS.md`, and the documents. The upstream
-project's own history remains there.
+The retrieval, extraction, generation, and storage code is that project's. The
+changes are the product surface, the command names, the launcher and settings
+names described in `AGENTS.md`, and the documents. The upstream project's own
+history remains there.
 
 SUGGESTED SOFTWARE CITATION
 

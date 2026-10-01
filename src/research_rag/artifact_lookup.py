@@ -1,8 +1,8 @@
 """Compact generation-local indexes for canonical JSONL artifacts.
 
 The SQLite sidecar stores identifiers, ordinals, content digests, and byte
-offsets only.  Passage and extraction text remain canonical in the JSONL files
-and are read on demand, so the index does not duplicate corpus text.
+offsets only. Passage and extraction text stay canonical in the JSONL files and
+are read on demand, so the index does not duplicate corpus text.
 """
 
 from __future__ import annotations
@@ -314,7 +314,7 @@ def _stored_health_flags(row: sqlite3.Row) -> int | None:
     """Return the stored rejection verdict for a chunk row, if it has one.
 
     A lookup built before the verdict was stored, or a unit row, has no such
-    column, and the caller then falls back to scanning the text at query time.
+    column, and the caller falls back to scanning the text at query time.
     """
 
     # `sqlite3.Row` iterates values, so membership has to be tested against its
@@ -643,7 +643,7 @@ def validate_artifact_lookup(
     expected_chunk_count: int,
     expected_unit_count: int,
 ) -> bool:
-    """Fully validate sidecar integrity and every referenced canonical record."""
+    """Validate sidecar integrity and every referenced canonical record."""
 
     if not _lookup_is_current(chunks_path, units_path, lookup_path):
         return False
