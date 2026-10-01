@@ -15,7 +15,7 @@ directory and refuses to accept one itself.
 
 A project that this machine has not initialised is answered, not refused: the
 connection is established, `status` reports that the name resolves to nothing
-here, and the answer carries the command that creates the project. The other six
+here, and the answer carries the command that creates the project. The other seven
 operations are absent, because there is no corpus behind them. An agent's entry
 therefore needs no editing after that command runs.
 
@@ -136,8 +136,6 @@ def resolve_project(
 
 
 def serve_uninitialised(project_name: str, reason: str) -> None:
-    """Answer an agent about a project this machine does not hold."""
-
     create_uninitialised_mcp(project_name, reason).run(
         transport="stdio", show_banner=False
     )

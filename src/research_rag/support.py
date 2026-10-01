@@ -1,4 +1,4 @@
-"""Pure helpers: values, identities, fingerprints, and the shared exceptions.
+"""Pure helpers shared by every layer.
 
 Imports nothing from the service, the MCP surface, or an entry point, so it stays
 a leaf.
@@ -403,8 +403,6 @@ def _normalized_filter(values: list[str] | None) -> set[str]:
 
 
 def _requested_ids(values: list[str] | None) -> list[str]:
-    """Return caller-supplied IDs in order, without blanks or repeats."""
-
     result: list[str] = []
     seen: set[str] = set()
     for value in values or []:
@@ -546,8 +544,6 @@ def _public_document(document: dict[str, Any]) -> dict[str, Any]:
 
 
 def _reranker_revision(model: str) -> str:
-    """Return the pinned revision of one supported reranker model."""
-
     return resolve_reranker_model(model)[1]
 
 
@@ -580,8 +576,6 @@ def _metadata_snapshot_changed(
     manifest: dict[str, Any],
     metadata: dict[str, dict[str, Any]],
 ) -> bool:
-    """Compare portable metadata with a generation's observational snapshot."""
-
     stored_revision = manifest.get("metadata_revision")
     if stored_revision is None:
         return bool(metadata)
@@ -673,8 +667,6 @@ def _effective_documents(
     manifest: dict[str, Any],
     metadata: dict[str, dict[str, Any]],
 ) -> dict[str, dict[str, Any]]:
-    """Return current read-time document metadata keyed by stable document ID."""
-
     legacy_snapshot_mismatch = manifest.get(
         "metadata_storage_policy"
     ) != METADATA_STORAGE_POLICY and _metadata_snapshot_changed(manifest, metadata)
@@ -780,8 +772,6 @@ def _public_passage(
     chunk: dict[str, Any],
     document: dict[str, Any],
 ) -> dict[str, Any]:
-    """Project one immutable chunk and current document metadata for clients."""
-
     public_document = _public_document(document)
     locator = dict(chunk.get("locator") or {})
     return {
@@ -919,8 +909,6 @@ def _record_withheld(
     *,
     limit: int,
 ) -> None:
-    """Record why a candidate was withheld so the response can disclose it."""
-
     for reason in reasons:
         entry = withheld.setdefault(reason, {"count": 0, "example_chunk_ids": []})
         entry["count"] = int(entry["count"]) + 1
@@ -971,8 +959,8 @@ CLEANING_POLICY_VERSION = 3
 
 ARTIFACT_POLICY_VERSION = 3
 
-# 3: the ranking policy left this identity. It never affected artifacts, and
-# keeping it made a ranking edit discard a build in progress.
+# The ranking policy is not part of this identity: it never affected artifacts,
+# and fingerprinting it made a ranking edit discard a build in progress.
 INGESTION_IDENTITY_POLICY_VERSION = 3
 
 METADATA_STORAGE_POLICY = "automatic_only_runtime_overlay_v1"

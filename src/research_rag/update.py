@@ -119,8 +119,6 @@ class LocalState:
 
 @dataclass(frozen=True, slots=True)
 class RemoteState:
-    """What the other end offers, or why it could not be asked."""
-
     reachable: bool
     detail: str = ""
     head: str | None = None
@@ -184,8 +182,6 @@ def _first_line(text: str) -> str:
 
 
 def _text(argv: Sequence[str], run: Runner) -> str | None:
-    """One command's trimmed output, or None when it failed or said nothing."""
-
     result = run(argv)
     if not result.ok:
         return None
@@ -402,8 +398,6 @@ def _pipx_available(result: CommandResult) -> str | None:
 def probe_remote(
     local: LocalState, run: Runner, *, offline: bool = False
 ) -> RemoteState:
-    """Ask the other end what it offers, or say why it could not be asked."""
-
     if local.is_checkout:
         return _checkout_remote(local, run, offline=offline)
     return _distribution_remote(local, run, offline=offline)
@@ -437,8 +431,6 @@ def _branch_sentence(local: LocalState, remote: RemoteState) -> str:
 
 
 def _return_command(root: Path, branch: str | None) -> str:
-    """The command that puts this checkout back on the branch it left."""
-
     if branch:
         return f"git -C {root} checkout {branch}"
     return f"git -C {root} branch"
@@ -457,8 +449,6 @@ def _release_order(release_version: str, declared: str) -> int | None:
 
 
 def _dirty_refusal(root: Path, dirty: Sequence[str]) -> str:
-    """The refusal a working tree with uncommitted work gets."""
-
     shown = list(dirty[:5])
     named = ", ".join(shown)
     if len(dirty) > len(shown):
@@ -475,8 +465,6 @@ def _dirty_refusal(root: Path, dirty: Sequence[str]) -> str:
 def _release_commands(
     local: LocalState, remote: RemoteState
 ) -> tuple[tuple[str, ...], ...]:
-    """Detach onto the release tag, then re-sync the environment it needs."""
-
     tag = remote.releases.tag or "HEAD"
     commands: list[tuple[str, ...]] = [("git", "checkout", "--detach", tag)]
     if remote.pins_moving:
@@ -726,8 +714,6 @@ def _upgrade_arguments(tool: str) -> tuple[str, ...]:
 
 
 def plan_update(local: LocalState, remote: RemoteState) -> UpdatePlan:
-    """What an update would do here, from the two states alone."""
-
     if local.is_checkout:
         return _checkout_plan(local, remote)
     return _distribution_plan(local, remote)
@@ -736,8 +722,6 @@ def plan_update(local: LocalState, remote: RemoteState) -> UpdatePlan:
 def apply_plan(
     plan: UpdatePlan, *, run: Runner, cwd: Path | None = None
 ) -> list[dict[str, Any]]:
-    """Run the plan's commands in order, stopping at the first that fails."""
-
     performed: list[dict[str, Any]] = []
     for command in plan.commands:
         label = " ".join(command)
@@ -761,8 +745,6 @@ def apply_plan(
 
 @dataclass(frozen=True, slots=True)
 class ProjectState:
-    """One project this installation can serve."""
-
     project_root: Path
     project_name: str
 
@@ -802,8 +784,6 @@ class ProjectState:
 
 @dataclass(frozen=True, slots=True)
 class HeldProject:
-    """A project whose lock another process is holding."""
-
     project: ProjectState
     pid: int
     phase: str | None = None
@@ -879,8 +859,6 @@ def resident_build(state_root: Path) -> tuple[str | None, str | None]:
 
 
 def held_projects(projects: Sequence[ProjectState]) -> tuple[HeldProject, ...]:
-    """Every project whose lock another live process is holding."""
-
     held: list[HeldProject] = []
     for project in projects:
         path = project.state_root / LOCK_FILE
@@ -900,8 +878,6 @@ def held_projects(projects: Sequence[ProjectState]) -> tuple[HeldProject, ...]:
 
 @dataclass(frozen=True, slots=True)
 class StoppedProject:
-    """One project's app, and whether it was running."""
-
     project: ProjectState
     stopped: bool
     detail: str
@@ -972,8 +948,6 @@ def state_changes(
     before: dict[str, dict[str, tuple[int, int]]],
     after: dict[str, dict[str, tuple[int, int]]],
 ) -> dict[str, list[str]]:
-    """The portable state files each project gained, lost, or rewrote."""
-
     changes: dict[str, list[str]] = {}
     for project_root, digests in before.items():
         other = after.get(project_root, {})

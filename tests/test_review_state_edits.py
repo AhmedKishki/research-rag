@@ -99,10 +99,9 @@ def test_hand_written_metadata_file_is_honoured(project: Path) -> None:
 def test_a_chunk_exclusion_written_by_hand_is_honoured_and_refused_loudly(
     project: Path,
 ) -> None:
-    """The same plain file and the same rules as the metadata overlay.
+    """A decision a reader makes without this app is the decision this app would have written.
 
-    A decision a reader makes without this app is the decision this app would
-    have written, and a mistake in it is named rather than read as intent.
+    A mistake in it is named rather than read as intent.
     """
 
     async def exercise() -> None:
@@ -127,8 +126,8 @@ def test_a_chunk_exclusion_written_by_hand_is_honoured_and_refused_loudly(
             encoding="utf-8",
         )
 
-        # No rebuild: the decision is enforced by the filter, so the passage is
-        # gone from the next search the moment the file says so.
+        # The filter enforces the decision, so the passage is gone from the next search the
+        # moment the file says so, with no rebuild.
         result = await service.search("cobalt evidence", top_k=10, rerank=False)
         assert result["hits"] == []
         assert result["excluded_chunk_count"] == 1
@@ -268,11 +267,9 @@ def test_an_unknown_metadata_field_is_refused(project: Path) -> None:
 
 
 def test_metadata_written_by_a_later_version_is_refused_by_cause(project: Path) -> None:
-    """The message must name the version gap, not each unknown field in turn.
-
-    A file whose writer understood a field this build does not is refused before
-    any entry is read, so the answer says which version is needed instead of
-    listing fields the caller never typed.
+    """A file whose writer understood a field this build does not is refused before any entry
+    is read, so the answer says which version is needed instead of listing fields the
+    caller never typed.
     """
 
     path = project / ".research-rag" / "source-metadata.json"
@@ -298,7 +295,7 @@ def test_metadata_written_by_a_later_version_is_refused_by_cause(project: Path) 
     message = str(raised.value)
     assert "subject" in message
     assert "Update the server" in message
-    # The known field must not be named: it is the unknown one that blocks.
+    # The known field must not be named.
     assert "title" not in message
 
 

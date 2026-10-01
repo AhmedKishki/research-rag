@@ -1,5 +1,3 @@
-"""High-level, project-scoped research knowledge-base workflow."""
-
 from __future__ import annotations
 
 import asyncio
@@ -266,8 +264,6 @@ class ResearchService(
         return QDRANT_BACKEND_NAME
 
     def _dense_for(self, manifest: dict[str, Any] | None) -> DenseBackend:
-        """Return the dense backend that owns a generation's index."""
-
         return self._dense_backends[self._dense_backend_name(manifest)]
 
     def _metadata(self) -> dict[str, dict[str, Any]]:

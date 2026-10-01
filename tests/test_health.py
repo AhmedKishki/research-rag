@@ -1,9 +1,7 @@
-"""The named dependency checks: what blocks, what degrades, and what is unchecked.
+"""A healthy project is a test only against a broken one.
 
-Each test states the condition it sets up, the state the report gives it, and the
-remedy the report names. A healthy project is a test only against a broken one,
-so the healthy case is asserted as "nothing blocked and nothing degraded" rather
-than as the absence of a symptom.
+The healthy case is asserted as "nothing blocked and nothing degraded" rather than as
+the absence of a symptom.
 """
 
 from __future__ import annotations
@@ -26,8 +24,7 @@ from research_rag.embeddings import resolve_embedding_model
 from research_rag.health import Check, HealthReport, health_report
 from research_rag.rerankers import resolve_reranker_model
 
-# Every check the report carries, in the order it reports them. A check that
-# disappears is as much a break as one that changes state.
+# A check that disappears is as much a break as one that changes state.
 EXPECTED_CHECKS = (
     "project_identity",
     "runtime_root",
@@ -70,8 +67,6 @@ def _cache_model(cache_root: Path, name: str, revision: str) -> Path:
 
 
 def _install_models(config: ResearchConfig) -> None:
-    """Put the pinned models in the cache, as a first online run would."""
-
     _cache_model(
         config.model_cache_root,
         "qdrant/bge-small-en-v1.5-onnx-q",
@@ -82,8 +77,6 @@ def _install_models(config: ResearchConfig) -> None:
 
 
 def _fake_runtime(root: Path) -> None:
-    """Write a tree the pinned runtime's own validation will accept or reject."""
-
     root.mkdir(parents=True, exist_ok=True)
 
 
@@ -135,7 +128,7 @@ def test_a_healthy_project_reports_nothing_to_act_on(healthy: ResearchConfig) ->
 def test_a_mismatched_runtime_is_blocked_and_names_the_file(
     healthy: ResearchConfig, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """The failure that cost half an hour: the file is named, not guessed."""
+    """The file is named, not guessed."""
 
     class ValidationError(vanilla_runtime.RuntimeErrorBase):
         difference = SimpleNamespace(
@@ -215,8 +208,8 @@ def test_a_vanilla_release_that_cannot_be_used_is_unknown(
     checked = report.named("vanilla_runtime")
     assert checked.state == "unknown"
     assert report.not_checked == ["vanilla_runtime"]
-    # Unchecked is neither blocked nor degraded: it is its own state, and it
-    # never appears among the conditions a caller may dismiss as fine.
+    # Unchecked is its own state, and never appears among the conditions a caller may
+    # dismiss as fine.
     disclosed = {entry["check"] for entry in report.blocked_by + report.degraded}
     assert "vanilla_runtime" not in disclosed
     assert checked.reason
@@ -258,7 +251,6 @@ def test_a_missing_embedding_model_blocks_and_a_missing_reranker_degrades(
     assert [entry["check"] for entry in report.degraded] == ["reranker_model"]
     blocked = {entry["check"] for entry in report.blocked_by}
     assert "embedding_model" in blocked
-    # The reranker is never one of them: it cannot stop a search.
     assert "reranker_model" not in blocked
     assert reranker.remedy_command is not None
     assert "--prefetch-models" in reranker.remedy_command
@@ -464,8 +456,7 @@ def test_the_tree_is_read_once_per_marker(
     assert reads == [root]
     assert first.named("vanilla_runtime") is second.named("vanilla_runtime")
 
-    # A reinstalled runtime is written with a new marker, and that re-reads the
-    # tree instead of answering from an answer that is no longer true.
+    # A reinstalled runtime is written with a new marker, and that re-reads the tree.
     (root / vanilla_runtime.MARKER_FILENAME).write_text(
         '{"repaired": true}\n', encoding="utf-8"
     )

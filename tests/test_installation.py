@@ -1,9 +1,8 @@
-"""Reaching the installation: the command on `PATH`, and the desktop menu entry.
+"""An installer that replaces a file it did not create is the fault this command must not
+have.
 
-Both write into the account's own directories, which the account fixture points
-at a throwaway tree, so nothing here touches the reader's real command path or
-their menu. Every refusal is tested as well as every write: an installer that
-replaces a file it did not create is the fault this command must not have.
+Both write into the account's own directories, which the account fixture points at a
+throwaway tree.
 """
 
 from __future__ import annotations
@@ -29,8 +28,6 @@ def _args(*arguments: str) -> Any:
 
 
 def _console_script(tmp_path: Path, name: str = "console") -> Path:
-    """An executable file that can stand for an interpreter's console script."""
-
     directory = tmp_path / name / "bin"
     directory.mkdir(parents=True, exist_ok=True)
     script = directory / "research-rag"
@@ -53,8 +50,8 @@ def _cli(*arguments: str) -> dict[str, Any]:
 def _desktop_cli(*arguments: str) -> dict[str, Any]:
     """Run a command with the account's command installed, as a reader would.
 
-    The menu entry runs the command `install` puts on the `PATH`, so writing one
-    without it would produce an entry pointing at nothing.
+    The menu entry runs the command `install` puts on the `PATH`, so writing one without
+    it would produce an entry pointing at nothing.
     """
 
     _cli("install")
@@ -62,12 +59,9 @@ def _desktop_cli(*arguments: str) -> dict[str, Any]:
 
 
 def test_the_command_runs_this_installation_from_anywhere(tmp_path: Path) -> None:
-    """One address for the shell, whatever directory you are in.
-
-    It is a wrapper naming the interpreter rather than a link to the console
-    script inside the virtual environment: `uv sync` recreates that file, and a
-    link to it answers "No such file or directory" for a command the reader
-    installed.
+    """It is a wrapper naming the interpreter rather than a link to the console script inside
+    the virtual environment: `uv sync` recreates that file, and a link to it answers "No
+    such file or directory" for a command the reader installed.
     """
 
     import sys
@@ -87,8 +81,6 @@ def test_the_command_runs_this_installation_from_anywhere(tmp_path: Path) -> Non
 
 
 def test_the_command_actually_runs(tmp_path: Path) -> None:
-    """A wrapper that does not run is worse than no command at all."""
-
     import sys
 
     _desktop_cli("install")
@@ -186,8 +178,6 @@ def test_an_entry_with_a_quoted_exec_is_read_back_as_one_path() -> None:
 
 
 def test_the_console_command_needs_no_project(tmp_path: Path) -> None:
-    """`install` answers for the installation, so it resolves no project."""
-
     payload = _desktop_cli("install")
 
     assert payload["console"]["state"] in {"created", "already_installed"}
@@ -197,12 +187,9 @@ def test_the_console_command_needs_no_project(tmp_path: Path) -> None:
 def test_the_menu_entry_serves_a_project_in_a_terminal_window(
     tmp_path: Path,
 ) -> None:
-    """A click must leave the reader something they can close.
-
-    A menu entry that serves the app in the background puts a process on the
-    machine that no window, no prompt, and no Ctrl-C reaches. Asking for a
-    terminal window and naming no project is what keeps the start visible: the
-    window says which project it is serving and the reader closes it.
+    """A menu entry that serves the app in the background puts a process on the machine that
+    no window, no prompt, and no Ctrl-C reaches, so asking for a terminal window and naming
+    no project keeps the start visible.
     """
 
     payload = _desktop_cli("install", "--desktop")
@@ -222,8 +209,7 @@ def test_the_menu_entry_serves_a_project_in_a_terminal_window(
     assert "Utility" in fields["Categories"]
     assert Path(fields["Icon"]).is_absolute()
     assert Path(fields["Icon"]).is_file()
-    # Nothing here sets these, and a value the desktop is never told about makes
-    # an entry it never resolves as started.
+    # A value the desktop is never told about makes an entry it never resolves as started.
     assert "StartupNotify" not in fields
     assert "StartupWMClass" not in fields
 
@@ -231,8 +217,6 @@ def test_the_menu_entry_serves_a_project_in_a_terminal_window(
 def test_one_entry_serves_every_project_this_installation_holds(
     tmp_path: Path,
 ) -> None:
-    """The projects live inside the app, so the menu lists the app once."""
-
     _initialised(tmp_path / "thesis")
     _initialised(tmp_path / "archive")
 
@@ -434,11 +418,9 @@ def test_the_doctor_reads_only_the_entries_this_app_wrote(tmp_path: Path) -> Non
 
 
 def test_an_entry_whose_command_is_missing_is_named(tmp_path: Path) -> None:
-    """A menu entry running a command this machine no longer has opens nothing.
-
-    The command is pointed at a path that was never there rather than removed
-    from the machine: the entry is a claim about this reader's account, and a test
-    has no business deleting a real file to find out whether a check works.
+    """The command is pointed at a path that was never there rather than removed from the
+    machine: the entry is a claim about this reader's account, and a test has no business
+    deleting a real file to find out whether a check works.
     """
 
     _desktop_cli("install", "--desktop")

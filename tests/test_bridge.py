@@ -1,9 +1,8 @@
-"""`research-rag mcp`: a project name in, and the same eight tools or one.
+"""A client entry is copied between machines, so nothing in it names a directory.
 
-A client entry is copied between machines, so the property under test is that
-nothing in it names a directory. The bridge resolves the name through the
-account's own record, and a machine holding no such project answers with a
-connection and a verdict rather than refusing the session.
+The bridge resolves a project name through the account's own record, and a machine
+holding no such project answers with a connection and a verdict rather than refusing
+the session.
 """
 
 from __future__ import annotations
@@ -43,7 +42,7 @@ def account(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
 
 
 def _initialised(root: Path, name: str) -> str:
-    """Register a project the way `init` does, and return its recorded name."""
+    """Register a project the way `init` does."""
 
     config = resolve_config(root, project_name=name)
     registry.register(config.project_id, config.project_name, root)

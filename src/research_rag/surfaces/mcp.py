@@ -1,10 +1,9 @@
-"""The agent surface: eight operations and one resource over one project.
+"""The agent surface: eight tools and one resource over one project.
 
-Its tools and resources reach the app's one `ResearchService` through a lean/full
-projection built for this reader and no other: an agent's answer is 10.8 kB lean
-against 19.8 kB full on the reference corpus, and the workspace and the command
-line both want the full one. Nothing here starts a process, resolves a project,
-or parses a command line.
+The tools reach the app's one `ResearchService` through a projection built for
+this reader: every answer is lean, and the workspace and the command line want
+the full one. Nothing here starts a process, resolves a project, or parses a
+command line.
 """
 
 from __future__ import annotations
@@ -49,7 +48,7 @@ SearchQuery: TypeAlias = Annotated[
 TopK: TypeAlias = Annotated[
     int,
     Field(
-        description=("Maximum number of ranked evidence passages to return (1-50)."),
+        description="Maximum number of ranked evidence passages to return (1-50).",
         ge=1,
         le=50,
     ),
@@ -88,12 +87,10 @@ CategoriesAnyFilter: TypeAlias = Annotated[
     list[str] | None,
     Field(
         description=(
-            "Case-insensitive 'any of' category filters; a result must contain at "
-            "least one supplied category. Use it to search a set of corpus "
-            "partitions in one call. Categories come from reviewed source "
-            "metadata, which a review sets with set_source_metadata, and a "
-            "category no source carries returns no passage. Omit or pass null "
-            "for no filter."
+            "Case-insensitive 'any of' category filters; a result must carry at "
+            "least one supplied category. Categories come from reviewed source "
+            "metadata, which set_source_metadata writes, and a category no source "
+            "carries returns no passage. Omit or pass null for no filter."
         )
     ),
 ]
@@ -113,8 +110,7 @@ LanguagesAnyFilter: TypeAlias = Annotated[
             "Case-insensitive 'any of' language filters; a result must be written "
             "in at least one supplied ISO 639 code. A source carries the language "
             "detected while extracting it and the language a review set instead. "
-            "Use it to search one language of a mixed corpus. Omit or pass null "
-            "for no filter."
+            "Omit or pass null for no filter."
         )
     ),
 ]
@@ -124,10 +120,10 @@ AuthorsAnyFilter: TypeAlias = Annotated[
         description=(
             "Case-insensitive 'any of' author filters; a result's source must have "
             "at least one supplied name inside one of its author strings, so a "
-            "surname finds its author without the bibliography's punctuation. Read "
-            "reviewed authors where a review exists and extracted ones otherwise; "
-            "`find_source` reports the authors each source carries. Combine with "
-            "`titles_any` to pin one work. Omit or pass null for no filter."
+            "surname finds its author. Reviewed authors win where a review exists "
+            "and extracted ones apply otherwise; find_source reports the authors "
+            "each source carries. Combine with `titles_any` to pin one work. Omit "
+            "or pass null for no filter."
         )
     ),
 ]
@@ -138,10 +134,10 @@ TitlesAnyFilter: TypeAlias = Annotated[
             "Case-insensitive 'any of' title filters; a result's source title must "
             "contain at least one supplied phrase, so a remembered fragment finds "
             "the work without reproducing its subtitle. Reviewed titles win over "
-            "extracted ones, and `find_source` reports the title each source "
-            "carries. A filter that matches no source returns no passages and says "
-            "so in `applied_filters` rather than searching everything. Omit or pass "
-            "null for no filter."
+            "extracted ones, and find_source reports the title each source carries. "
+            "A filter that matches no source returns no passages and says so in "
+            "`applied_filters` rather than searching everything. Omit or pass null "
+            "for no filter."
         )
     ),
 ]
@@ -236,15 +232,11 @@ def create_uninitialised_mcp(project_name: str, reason: str) -> FastMCP[Any]:
     """The agent surface for a project this machine has not initialised.
 
     An agent's client entry names a project, not a directory, so the same entry
-    can be written on one machine and used on another. That only works if a
-    project exists there first: where it does not, this server answers and stops.
+    can be written on one machine and used on another. That only works where a
+    project exists first: where it does not, this server answers and stops.
     `status` is declared here rather than by the bridge, so the tools an agent
-    can see are still declared in exactly one file, and the other seven operations
-    are absent because there is no corpus behind them to read, search, or review.
-
-    The instructions lead with the condition, because an agent that has just
-    listed its tools is deciding what to try next, and nothing else it can call
-    will succeed.
+    sees are declared in one file and the other seven operations are absent
+    because there is no corpus behind them.
     """
 
     payload = uninitialised_status(project_name, reason)
@@ -274,10 +266,8 @@ def create_uninitialised_mcp(project_name: str, reason: str) -> FastMCP[Any]:
         """Report that this project is not initialised on this machine, and the
         command that creates it.
 
-        This is the only tool this server has, and its answer is the whole
-        reason the server exists. `blocked_by` carries the reason and the exact
-        command; run it, and this entry serves the project it names with no
-        change to the entry.
+        `blocked_by` carries the reason and the exact command. Run it and this
+        entry serves the project it names, with no change to the entry.
         """
 
         return _present("status", payload)
@@ -367,7 +357,7 @@ def create_mcp(
     async def status() -> dict[str, Any]:
         """Report whether this project can be searched, and what must happen first.
 
-        Call this first, and before telling the user their corpus is up to date.
+        Call this before telling the user their corpus is up to date.
         `ready: false` or `stale: true` means the corpus is not what the user has.
         `requires` names the calls that close the gap: `ingest` rebuilds the
         generation, `restart_app` restarts this process so it runs the installed
@@ -375,9 +365,9 @@ def create_mcp(
 
         `blocked_by` and `degraded` name what stands between this project and a
         search that answers, each with the reason and the command that fixes it.
-        A tool error naming a gateway log holds the same information: read the log
-        before retrying. `ui_url` is where this project's browser workspace is
-        served. `mcp_clients` counts the agents attached to this app.
+        A tool error naming a gateway log holds the same information, and the log
+        is where to read the rest. `ui_url` is where this project's browser
+        workspace is served. `mcp_clients` counts the agents attached to this app.
         """
 
         return await _status_payload()
@@ -413,7 +403,7 @@ def create_mcp(
         needs repeated identical calls, and the project's own config is where the
         budget is raised. A rejected call means another process holds the project,
         and its message names that build. Progress that goes backwards is reported
-        as `superseded_build`, because a changed corpus cannot resume the old one.
+        as `superseded_build`: a changed corpus cannot resume the old one.
         """
 
         return _present(
@@ -498,7 +488,6 @@ def create_mcp(
         A source whose file is gone or whose metadata was reviewed is still
         answerable. A match count above the returned rows means `limit` hid some.
         """
-
         return _present(
             "find_source",
             await _service_call(
@@ -613,8 +602,7 @@ def create_mcp(
         project. `language` takes ISO 639 codes, one per language the source is
         written in, and a code BM25 has no stopword list for is accepted. An empty
         review clears the entry, so automatic metadata applies again. The review
-        is authoritative at read time, so it binds retrieval without re-ingesting.
-        The same JSON file may be edited by hand.
+        binds retrieval at read time, without re-ingesting.
         """
 
         return _present(

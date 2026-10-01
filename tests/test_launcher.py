@@ -1,5 +1,3 @@
-"""Project-root workspace launcher generation and its link."""
-
 from __future__ import annotations
 
 import http.client
@@ -31,8 +29,6 @@ def _project(tmp_path: Path) -> Path:
 
 
 def _alive(pid: int) -> bool:
-    """True while the process exists and is not a zombie."""
-
     try:
         stat = Path(f"/proc/{pid}/stat").read_text(encoding="utf-8")
     except OSError:
@@ -40,9 +36,8 @@ def _alive(pid: int) -> bool:
     return stat.rsplit(") ", 1)[1].split()[0] != "Z"
 
 
-# A stub UI that behaves like the real one where the launcher can see it: it
-# answers on the port it was given, which is what the launcher waits for before
-# it records a pid and a port.
+# A stub UI that answers on the port it was given, which is what the launcher waits for
+# before it records a pid and a port.
 _BINDING_STUB = (
     'PORT=""\n'
     'while [ "$#" -gt 0 ]; do\n'
@@ -74,8 +69,7 @@ def test_initialisation_creates_the_launcher_and_the_root_link(
     body = script.read_text(encoding="utf-8")
     assert str(project.resolve()) in body
     assert 'setsid "$UI_COMMAND"' in body
-    # The launcher passes explicit flags only: no top-level-only variable travels
-    # through it, and the server it starts reads none from the environment.
+    # No top-level-only variable travels through the launcher.
     assert "RESEARCH_ULTRARAG_UI_PORT" not in body
 
     state = ui_launcher_state(project, project / ".research-rag")
@@ -155,8 +149,7 @@ def test_launcher_script_renders_project_specific_values() -> None:
     assert "PORT=5099" in body
     assert 'RUNTIME_ROOT=""' in body
     assert 'PROJECT_ROOT="/tmp/example-project"' in body
-    # The console script lives beside the running interpreter, not on a user's
-    # PATH, so the launcher must embed an absolute command.
+    # The console script lives beside the running interpreter, not on a user's PATH.
     assert f'UI_COMMAND="{default_ui_command()}"' in body
     assert os.path.isabs(default_ui_command())
 
@@ -274,8 +267,6 @@ def _stub_launcher(
     stub_body: str,
     name: str = "research-project",
 ) -> tuple[Path, Path, dict[str, str]]:
-    """Generate a launcher whose UI command is a stub script."""
-
     project = tmp_path / name
     (project / "sources").mkdir(parents=True)
     portable = project / ".research-rag"
@@ -433,12 +424,10 @@ def test_stop_refuses_a_pid_that_is_not_this_projects_app(tmp_path: Path) -> Non
 def test_the_generated_launcher_starts_and_stops_the_real_workspace(
     project: Path,
 ) -> None:
-    """The generated script, run as written, must serve and stop this project.
-
-    Every other test here replaces the launcher's body with a stub, so none can
-    see that the command the script builds is one the installed parser accepts.
-    That gap let the options sit after the subcommand through: the script ran,
-    the port never opened, and every test passed.
+    """Every other test here replaces the launcher's body with a stub, so none can see that
+    the command the script builds is one the installed parser accepts. That gap let the
+    options sit after the subcommand through: the script ran, the port never opened, and
+    every test passed.
     """
 
     config = resolve_config(project, vanilla_executable=sys.executable)

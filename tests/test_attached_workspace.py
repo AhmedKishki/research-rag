@@ -1,9 +1,8 @@
-"""A bare `research-rag`: the workspace, in this terminal, until it closes.
+"""The terminal owns the app's lifetime.
 
-Three properties carry this. The app records the same running state a detached
-one does, so a second terminal can see it and stop it. The terminal owns its
-lifetime, so a closed window ends the app and the gateway with it. And a bare
-call never starts a second app for a project that already has one.
+A closed window ends the app and the gateway with it, the app records the same running
+state a detached one does, and a bare call never starts a second app for a project
+that already has one.
 """
 
 from __future__ import annotations
@@ -31,7 +30,7 @@ def anyio_backend() -> str:
 
 
 def _initialised(root: Path, name: str) -> Any:
-    """Register a project the way `init` does, and return its resolved config."""
+    """Register a project the way `init` does."""
 
     config = resolve_config(root, project_name=name)
     registry.register(config.project_id, config.project_name, root)
@@ -50,12 +49,7 @@ def _no_arguments(*arguments: str) -> Any:
     return cli._parser().parse_args(list(arguments))
 
 
-# --- the running state another terminal reads ---------------------------------
-
-
 async def test_an_app_records_the_port_and_pid_it_serves(project: Path) -> None:
-    """A foreground app is as findable as a detached one, or `stop` cannot reach it."""
-
     config = _initialised(project, "Attached")
     app = App(config, port=_a_free_port())
 
@@ -74,11 +68,9 @@ async def test_an_app_records_the_port_and_pid_it_serves(project: Path) -> None:
 async def test_an_app_that_stops_leaves_a_later_apps_record_alone(
     project: Path,
 ) -> None:
-    """A record belongs to the process that wrote it, not to whoever stops last.
-
-    An app is given the project only once the previous one has let it go, so a
-    record naming another pid means something took over in between, and deleting
-    it here would leave that process unreachable to `stop`.
+    """An app is given the project only once the previous one has let it go, so a record
+    naming another pid means something took over in between, and deleting it here would
+    leave that process unreachable to `stop`.
     """
 
     config = _initialised(project, "Attached")

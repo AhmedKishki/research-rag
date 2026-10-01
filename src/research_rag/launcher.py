@@ -389,14 +389,10 @@ start
 
 
 def launcher_path(portable_root: Path) -> Path:
-    """The generated launcher's location inside the project."""
-
     return portable_root / LAUNCHER_DIRECTORY / LAUNCHER_NAME
 
 
 def link_path(project_root: Path) -> Path:
-    """The project-root link to the generated launcher."""
-
     return project_root / LINK_NAME
 
 
@@ -409,8 +405,6 @@ def launcher_script(
     runtime_root: Path | None = None,
     ui_command: str | None = None,
 ) -> str:
-    """Render the launcher for one project."""
-
     return (
         _TEMPLATE.replace("@SERVE@", SERVE_COMMAND)
         .replace("@PROJECT_NAME@", project_name)
@@ -623,8 +617,6 @@ def stop_app(config: ResearchConfig) -> dict[str, Any]:
 
 
 def _recorded_port(config: ResearchConfig) -> int | None:
-    """The port the launcher recorded, or None when it recorded none."""
-
     try:
         return int(
             (config.state_root / "research-rag-ui.port")

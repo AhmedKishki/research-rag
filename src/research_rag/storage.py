@@ -1,5 +1,3 @@
-"""Durable, inspectable storage helpers for research generations."""
-
 from __future__ import annotations
 
 import errno
@@ -12,18 +10,17 @@ from typing import Any
 
 
 class StorageError(RuntimeError):
-    """Raised for missing or malformed research state."""
+    pass
 
 
 def fsync_directory(path: Path) -> None:
-    """Persist directory-entry updates when the host supports directory fsync."""
-
     flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0)
     try:
         descriptor = os.open(path, flags)
     except OSError as exc:
-        # Some supported platforms cannot open directories as file descriptors.
-        # Do not hide genuine storage failures such as EIO or a missing parent.
+        # These errnos mean the platform cannot open a directory as a file
+        # descriptor. Anything else is a genuine storage failure such as EIO or a
+        # missing parent.
         if exc.errno not in {
             errno.EACCES,
             errno.EINVAL,
@@ -53,9 +50,9 @@ def atomic_write_json(path: Path, value: Any, *, fsync_parent: bool = True) -> N
 
     Pass ``fsync_parent=False`` to defer the directory fsync when several files
     are committed together. A caller that defers must persist the parents with
-    :func:`fsync_directories` before committing state that depends on them.
-    On a spinning disk a directory fsync costs about 57 ms, so a group of
-    related writes is much cheaper than one per file.
+    :func:`fsync_directories` before committing state that depends on them. On a
+    spinning disk a directory fsync costs about 57 ms, so a group of related
+    writes costs far less than one per file.
     """
 
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -213,15 +210,14 @@ def load_metadata_overrides(path: Path) -> dict[str, dict[str, Any]]:
 def _reject_unknown_metadata_version(path: Path, value: dict[str, Any]) -> None:
     """Refuse metadata written for a later version of this package.
 
-    The file says `schema_version: 1`, which reads as "this shape is known". It
-    stopped meaning that once a field was added: `language` arrived, the
-    number stayed 1, and a server that predates the field rejected the whole
-    file with `Unsupported metadata fields: language`. Nothing in the file said
-    which version wrote it, so the error named a field rather than the cause.
+    `schema_version` alone cannot carry that: a field added to the shape left the
+    number at 1, so a server predating the field rejected the whole file with
+    `Unsupported metadata fields: language` and named a field rather than the
+    cause.
 
-    A writer now records the fields it understood. A file without the key was
-    written before this and is accepted: its contents are validated field by
-    field anyway, and refusing it would break every existing project.
+    A writer records the fields it understood, so a file without the key is
+    accepted: its contents are validated field by field anyway, and refusing it
+    would break every existing project.
     """
 
     written_with = value.get("written_with")
@@ -258,9 +254,6 @@ def write_metadata_overrides(
         path,
         {
             "schema_version": 1,
-            # The fields this writer understood. An older server that reads the
-            # file can refuse it as too new rather than reject each entry one
-            # unknown field at a time.
             "written_with": {
                 "metadata_fields": sorted(METADATA_FIELDS),
             },
@@ -270,8 +263,6 @@ def write_metadata_overrides(
 
 
 def load_source_catalog(path: Path, *, project_id: str) -> dict[str, str]:
-    """Load the durable reverse mapping for opaque project source IDs."""
-
     if not path.exists():
         return {}
     value = read_json(path)
@@ -415,9 +406,8 @@ def load_chunk_exclusions(path: Path) -> dict[str, dict[str, str]]:
 
     An entry names one `chunk_id`, so the file is keyed by an identifier the
     generation owns rather than by a path this project can normalize. The
-    recorded `generation_id` is what makes an entry this generation cannot match
-    identifiable by hand: a chunk id is derived from content, so the same text
-    keeps it across a rebuild and anything else changes it.
+    recorded `generation_id` makes an entry this generation cannot match
+    identifiable by hand.
     """
 
     if not path.exists():

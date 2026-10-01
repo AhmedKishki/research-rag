@@ -1,5 +1,3 @@
-"""Configuration and project-boundary validation."""
-
 from __future__ import annotations
 
 import contextlib
@@ -34,7 +32,7 @@ PLACEHOLDER_PROJECT_ROOT = "/path/to/project"
 
 
 class ConfigurationError(ValueError):
-    """Raised when the server cannot establish a safe project boundary."""
+    pass
 
 
 _RUNTIME_MARKER = ".research-ultra-rag-runtime.json"
@@ -69,8 +67,6 @@ def child_process_environment() -> dict[str, str]:
 
 
 def declared_owner_pid() -> int | None:
-    """The process that declared itself this one's owner, if any."""
-
     raw = os.environ.get(OWNER_PID_ENV)
     if raw is None or not raw.strip().isdigit():
         return None
@@ -206,8 +202,6 @@ class ResearchConfig:
 
 
 def configured_source_directory(project_root: str | Path) -> str:
-    """An initialized project's source setting, or the default."""
-
     descriptor_path = (
         Path(project_root).expanduser().resolve() / ".research-rag" / "project.json"
     )
@@ -688,8 +682,8 @@ def resolve_config(
     # behind and re-download both models on the first build, silently, because the
     # first build is the only thing that needs them. `USER_CONFIG_DIRECTORY` and
     # `SETTINGS_ENVIRONMENT_PREFIX` are inherited for the same reason and cost the
-    # user their settings rather than their models. Revisit all three after that
-    # server retires; `tests/test_data_roots.py` fails if any changes before then.
+    # user their settings; `settings.py` states that. `tests/test_data_roots.py`
+    # fails if any of the three changes.
     configured_model_cache = (
         settings.model_cache_root
         if settings.model_cache_root is not None

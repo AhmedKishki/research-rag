@@ -1,16 +1,12 @@
-"""Every tunable this server reads, as one registry over a shared layer stack.
+"""Every tunable this app reads, as one registry over a shared layer stack.
 
 `default.toml` in this package holds the defaults; each layer above names only what
 it changes, and later layers win **per key**:
 
     default.toml  <  user config  <  project config  <  environment  <  command line
 
-The layer machinery lives in the pinned `config-ultra-rag-mcp` library.
-
-A key absent from `SETTINGS` is an error in every layer. An ``identity`` setting
-changes what a generation *is*, so it enters the retrieval-policy fingerprint and
-changing it makes the next ingestion a new generation rather than a silent mix of
-two.
+The layer machinery lives in the pinned `config-ultra-rag-mcp` library. `AGENTS.md`
+states which tunables a generation records and which are runtime only.
 """
 
 from __future__ import annotations
@@ -47,9 +43,8 @@ Layer = Literal["identity", "engine", "runtime"]
 # `RESEARCH_ULTRARAG_`, so this app reads the same `~/.config` directory and the
 # same environment variables the MCP server wrote. Renaming either splits one
 # user's settings across two products: the MCP server's file is silently ignored,
-# and the environment a user exported for it stops reaching this app. Revisit both
-# only after that server retires; `tests/test_data_roots.py` fails if either
-# changes before then.
+# and the environment a user exported for it stops reaching this app.
+# `tests/test_data_roots.py` fails if either changes.
 USER_CONFIG_DIRECTORY = "research-ultra-rag-mcp"
 PROJECT_CONFIG_RELATIVE = Path(".research-rag") / "config.toml"
 SETTINGS_ENVIRONMENT_PREFIX = "RESEARCH_ULTRARAG_"
@@ -67,8 +62,8 @@ DEFAULT_LANGUAGE = "en"
 LANGUAGE_PATTERN = r"^[a-z]{2,3}$"
 # The longest one ingest call may be told to run. A caller driving a build in one
 # call sets the budget below its own client's request timeout; a caller that wraps
-# this server in another process has to allow longer, or the wrapper's timeout
-# fires first and the work continues unseen.
+# this app in another process has to allow longer, or the wrapper's timeout fires
+# first and the work continues unseen.
 MAXIMUM_WORK_BUDGET_SECONDS = 3600
 
 # bm25s ships a stopword list for exactly these languages and rejects every other
@@ -749,11 +744,6 @@ SETTINGS_SECTIONS = tuple(
 
 
 def sources_for(project_root: str | Path) -> SettingsSources:
-    """Where this server's file layers live for one project.
-
-    The three names are this server's own: the account directory applying to every
-    project, the project file inside `.research-rag`, and the packaged default.
-    """
     project = Path(project_root)
     return SettingsSources(
         default_file=default_config_path(__file__),
@@ -765,8 +755,6 @@ def sources_for(project_root: str | Path) -> SettingsSources:
 
 @dataclass(frozen=True, slots=True)
 class EffectiveSettings:
-    """Every tunable after the layers have been merged, typed and checked."""
-
     offline: bool
     log_level: str
     tool_detail: str
@@ -808,8 +796,6 @@ class EffectiveSettings:
 
     @classmethod
     def from_values(cls, values: Mapping[str, Any]) -> EffectiveSettings:
-        """Build the settings from a field-keyed mapping, checking every rule."""
-
         known = {item.name for item in fields(cls)}
         missing = sorted(known - set(values))
         if missing:
@@ -881,8 +867,6 @@ class EffectiveSettings:
 
     @property
     def corpus_languages(self) -> tuple[str, ...]:
-        """The languages this corpus is written in, as named."""
-
         return tuple(self.language_corpus.split(","))
 
     @property
@@ -909,8 +893,6 @@ class EffectiveSettings:
 
     @property
     def embedding_language_warning(self) -> str | None:
-        """Explain corpus languages the embedding model cannot serve."""
-
         facts = self.embedding_facts
         missing = [code for code in self.corpus_languages if not facts.covers(code)]
         if not missing:
@@ -939,12 +921,9 @@ class EffectiveSettings:
         )
 
     def as_values(self) -> dict[str, Any]:
-        """Return the effective values keyed by field, the shape the stack reads."""
         return {item.name: getattr(self, item.name) for item in fields(self)}
 
     def value(self, key: str) -> Any:
-        """Return one setting by its dotted key."""
-
         setting = SETTINGS_BY_KEY.get(key)
         if setting is None:
             raise SettingsError(f"Unknown setting: {key}")

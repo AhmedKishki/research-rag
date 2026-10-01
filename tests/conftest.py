@@ -68,13 +68,11 @@ def write_epub(path: Path, text: str, *, title: str = "Test EPUB") -> None:
 def _no_collapsed_repetitions_in_the_suite(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Declare that this suite's embedder cannot tell a repeat from a theme.
+    """This suite's embedder cannot tell a repeat from a theme.
 
-    Every build and search here runs on a hand-written embedder that cannot tell
-    a repeated passage from two passages about one subject: a corpus of two
-    related sentences is one a cosine would collapse. A number no cosine can
-    reach says nothing is close enough, and the tests about the rule pass their
-    own threshold, which is the stronger statement.
+    A corpus of two related sentences is one a cosine would collapse, so a number no
+    cosine can reach says nothing is close enough, and the tests about the rule pass
+    their own threshold, which is the stronger statement.
     """
 
     monkeypatch.setenv("RESEARCH_ULTRARAG_RETRIEVAL_DUPLICATE_COSINE", "2.0")
@@ -87,15 +85,12 @@ def _an_account_directory_of_this_run(
 ) -> None:
     """Point every account-scoped file at a throwaway directory.
 
-    The project record and the per-user settings file live in the account's
-    config directory, and the command, its menu entries, and its icon live in the
-    account's data and binary directories, so a test that runs `install` or reads
-    a desktop entry writes there unless it says otherwise. Those are the
-    reader's own files, and a test run must not add to them or read them.
+    The project record, the per-user settings file, the command, its menu entries, and its
+    icon live in the account's own directories, so a test that runs `install` or reads a
+    desktop entry would write there unless it says otherwise.
 
-    `XDG_CACHE_HOME` is pinned to the real cache instead of being redirected: it
-    holds only immutable model binaries, and the integration test needs the ones
-    that are already there rather than downloading them again.
+    `XDG_CACHE_HOME` stays the real cache: it holds only immutable model binaries, and the
+    integration test needs the ones already there rather than downloading them again.
     """
 
     account = tmp_path_factory.mktemp("account")

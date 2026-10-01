@@ -1,15 +1,6 @@
-"""Named dependency checks for one project, read by `status` and by the doctor.
+"""Named dependency checks for one project, read by `status` and by `doctor`.
 
-Every check reads: no process, no network, no write, so the report can be built
-before the gateway is opened.
-
-A check states one of four conditions:
-
-- `ok`: nothing to do.
-- `warn`: the app answers, but the answer is worse.
-- `blocked`: the app cannot work until this is acted on.
-- `unknown`: the check did not run. Never healthy, and the doctor names every one
-  that did not run, so "not checked" cannot read as "fine".
+`AGENTS.md` states the four states a check may report.
 """
 
 from __future__ import annotations
@@ -48,8 +39,6 @@ _VANILLA_CACHE: dict[tuple[Any, ...], Check] = {}
 
 @dataclass(frozen=True, slots=True)
 class Check:
-    """One named condition, its state, and the remedy."""
-
     name: str
     state: str
     reason: str
@@ -83,8 +72,6 @@ class Check:
 
 @dataclass(frozen=True, slots=True)
 class HealthReport:
-    """Every check for one project, and the two conditions a caller must act on."""
-
     checks: tuple[Check, ...]
 
     def named(self, name: str) -> Check:
@@ -118,8 +105,6 @@ class HealthReport:
         }
 
     def as_status_fields(self) -> dict[str, Any]:
-        """The status-payload fields this report owns."""
-
         return {
             "checks": [check.as_dict() for check in self.checks],
             "blocked_by": self.blocked_by,
@@ -140,8 +125,8 @@ def _marker_key(runtime: Any, root: Path, offline: bool) -> tuple[Any, ...]:
     """The cache key for one managed runtime: path, mode, and the marker's
     `(mtime, size)`.
 
-    An absent snapshot blocks offline and only warns online, so a cached answer for one
-    mode is not an answer for the other.
+    An absent snapshot blocks offline and only warns online, so a cached answer
+    for one mode is not an answer for the other.
     """
     name = getattr(runtime, "MARKER_FILENAME", ".vanilla-ultra-rag-runtime.json")
     try:
@@ -162,10 +147,11 @@ def _cached_snapshot(
 ) -> Path | None:
     """The cached snapshot of a pinned revision, or None when absent.
 
-    A reranker name is the repository it is fetched from, so its cache directory follows
-    from that name. The embedding model's repository is FastEmbed's own registry entry,
-    and reading that would import the whole embedding stack for one directory name, so a
-    pinned revision is looked up across the cached repositories.
+    A reranker name is the repository it is fetched from, so its cache directory
+    follows from that name. The embedding model's repository is FastEmbed's own
+    registry entry, and reading that would import the whole embedding stack for
+    one directory name, so a pinned revision is looked up across the cached
+    repositories.
     """
 
     if repository is not None:
@@ -189,9 +175,9 @@ def _model_check(
 ) -> Check:
     """One pinned model against the cache it must already be in.
 
-    `offline_state` is what an absent model takes with no download possible, and it
-    differs per model: no embedding model, no dense build; no reranker, an unranked
-    answer.
+    `offline_state` is what an absent model takes with no download possible, and
+    it differs per model: no embedding model, no dense build; no reranker, an
+    unranked answer.
     """
     snapshot = _cached_snapshot(config.model_cache_root, revision, repository)
     if snapshot is not None:
@@ -282,8 +268,8 @@ def _vanilla_runtime_check(config: ResearchConfig) -> Check:
 
         locator = getattr(vanilla, "managed_runtime_path", None)
     except Exception as exc:  # noqa: BLE001 - a broken install fails to import.
-        # A broken install fails on import in more than one way, and a health
-        # report names that rather than raising it.
+        # A broken install fails on import in more than one way, and the report
+        # names that rather than raising it.
         return Check(
             "vanilla_runtime",
             UNKNOWN,
@@ -410,17 +396,15 @@ def _capacity_check(config: ResearchConfig, status: Mapping[str, Any]) -> Check:
 
 
 def _code_currency_check() -> Check:
-    """Whether this process is older than the code installed beside it.
-
-    The versions are read through their module, so an answer follows the module it
-    patched.
+    """The versions are read through their module, so an answer follows the module
+    it patched.
     """
     running = version_module.APP_VERSION
     installed = version_module.installed_version()
     drift = version_module.checkout_drift()
     if drift is not None:
-        # Two checkouts of this package are the reported cause of a process that
-        # answers with metadata it could not have written, and a version
+        # Two checkouts of this package are the reported cause of a process
+        # that answers with metadata it could not have written, and a version
         # comparison cannot see it: both copies report the same version.
         return Check(
             "code_currency",
@@ -446,9 +430,7 @@ def health_report(
     config: ResearchConfig,
     status: Mapping[str, Any],
 ) -> HealthReport:
-    """Every named check for this project, from one implementation.
-
-    `status` is the payload the caller already produced, so the dependency and
+    """`status` is the payload the caller already produced, so the dependency and
     status answers describe one state.
     """
 

@@ -1,5 +1,3 @@
-"""Ranked retrieval: BM25, fusion, reranking, and evidence assembly."""
-
 from __future__ import annotations
 
 import asyncio

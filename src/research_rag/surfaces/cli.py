@@ -2,14 +2,15 @@
 
 `research-rag` resolves a project, constructs a `ResearchService`, and calls it in
 this process. `ui` hands the browser workspace to the project's own generated
-launcher, and `serve` is the foreground workspace host that launcher runs. There
-is no second console script and no MCP surface, so the terminal and the browser
-answer from the same call on the same payload.
+launcher, and `serve` is the foreground host that launcher runs. One console
+script reaches all of it, and the agent surface lives in `surfaces/mcp.py` rather
+than here, so the terminal and the browser answer from the same call on the same
+payload.
 
 Only a command that queries opens the vanilla gateway, and it opens on the first
-call rather than as a command-line choice: the BM25 index is initialized through
-that gateway when a generation loads for querying. Commands that only read local
-state never start one, so they work with no UltraRAG runtime installed.
+call rather than as a command-line choice: a generation initializes BM25 through
+that gateway as it loads for querying. A command that reads only local state never
+starts one, so it works with no UltraRAG runtime installed.
 """
 
 from __future__ import annotations
@@ -105,7 +106,7 @@ HELP_GROUPS: tuple[tuple[str, tuple[tuple[str, str], ...]], ...] = (
             (
                 "init",
                 (
-                    "Create the project identity and .research-rag, or attach to an "
+                    "Create the project record and .research-rag, or attach to an "
                     "existing directory."
                 ),
             ),
@@ -119,7 +120,7 @@ HELP_GROUPS: tuple[tuple[str, tuple[tuple[str, str], ...]], ...] = (
             ),
             (
                 "ui",
-                "Bring the app up and open the workspace. A first run ends here.",
+                "Bring the app up and open the workspace.",
             ),
         ),
     ),
@@ -130,8 +131,7 @@ HELP_GROUPS: tuple[tuple[str, tuple[tuple[str, str], ...]], ...] = (
                 "status",
                 (
                     "Whether the corpus is current, and what changed since the "
-                    "generation. A stale answer names the call that closes it. "
-                    "--verbose prints the whole payload."
+                    "generation. A stale answer names the call that closes it."
                 ),
             ),
             (
@@ -147,10 +147,7 @@ HELP_GROUPS: tuple[tuple[str, tuple[tuple[str, str], ...]], ...] = (
             ),
             (
                 "generations",
-                (
-                    "Every generation on disk with its size, and the one search reads. "
-                    "With --use, point the project at a retained one."
-                ),
+                "Every generation on disk with its size, and the one search reads.",
             ),
             (
                 "remove-generation",
@@ -174,10 +171,7 @@ HELP_GROUPS: tuple[tuple[str, tuple[tuple[str, str], ...]], ...] = (
             ),
             (
                 "passage",
-                (
-                    "One passage and its neighbours, for reading around a result. "
-                    "Takes the chunk id a search returned."
-                ),
+                "One passage and its neighbours, for reading around a result.",
             ),
         ),
     ),
@@ -190,10 +184,7 @@ HELP_GROUPS: tuple[tuple[str, tuple[tuple[str, str], ...]], ...] = (
             ),
             (
                 "exclude",
-                (
-                    "Take a source, or one passage with --chunk, out of retrieval. "
-                    "The file stays."
-                ),
+                "Take a source, or one passage with --chunk, out of retrieval. The file stays.",
             ),
             (
                 "include",
@@ -237,17 +228,15 @@ HELP_GROUPS: tuple[tuple[str, tuple[tuple[str, str], ...]], ...] = (
                 "mcp",
                 (
                     "The agent surface on stdio for one project, named with "
-                    "--project-name and proxied to that project's app. A client "
-                    "entry carries no path, so it works on every machine holding "
-                    "the project. `help agents` has the entry."
+                    "--project-name and proxied to that project's app. `help agents` "
+                    "has the client entry."
                 ),
             ),
             (
                 "config",
                 (
-                    "Every effective setting and the layer it came from. It prints and "
-                    "does not write. `help settings` names the layers and what a "
-                    "change costs."
+                    "Every effective setting and the layer it came from. It never "
+                    "writes. `help settings` names the layers and what a change costs."
                 ),
             ),
         ),
@@ -258,8 +247,9 @@ HELP_GROUPS: tuple[tuple[str, tuple[tuple[str, str], ...]], ...] = (
             (
                 "install",
                 (
-                    "Put this command on the account's PATH, and with --desktop give "
-                    "one project a menu entry. --uninstall removes what it wrote."
+                    "Put this command on the account's PATH, and with --desktop add "
+                    "one menu entry for the installation. --uninstall removes what it "
+                    "wrote."
                 ),
             ),
             (
@@ -280,113 +270,92 @@ HELP_GROUPS: tuple[tuple[str, tuple[tuple[str, str], ...]], ...] = (
 HELP_TOPICS: dict[str, str] = {
     "filters": """\
 search takes six filter layers, each an --option that may be repeated, and two
-switches that reach one source at a time. A filter given nothing is not applied.
+options that reach one source at a time. A filter given nothing is not applied.
+`search --help` names every option and what it keeps.
 
-  --category C        keep passages whose source carries any of these categories
-  --project P         keep passages whose source carries any of these project tags
-  --keyword K         keep passages carrying every one of these keywords
-  --language L        keep passages from a source in any of these ISO 639 codes
-  --author A          keep passages from a source with one of these names
-  --title T           keep passages whose source title contains one of these phrases
-  --source-id ID      search only these sources
-  --exclude-source-id ID
-                      search everything except these sources
+The six layers are --category, --project, --keyword, --language, --author, and
+--title, and they read the source's reviewed metadata rather than the extracted
+text, so a filter matching nothing reports nothing rather than a fallback. Set the
+metadata with `metadata` and the filters start working.
 
-The category, project, keyword, language, author, and title layers read the
-source's reviewed metadata, not the extracted text, so a filter matching nothing
-reports nothing rather than a fallback. Set the metadata with `metadata` and the
-filters start working.
-
-Two switches decide how retrieval runs. They are the app's settings, not
-a per-search choice:
-
-  --method M         bm25, dense, or hybrid; hybrid and reranking are the default
-  --no-rerank        skip the cross-encoder, which is on by default and is most of
-                     what a search costs
-
-The agent surface has no such switches, and no method, depth, or reranking
-argument at all: it is always hybrid, always reranked, and its depth is a
-setting. A method chosen per call is a number a reader cannot reproduce from the
-answer they were given.
+--method and --no-rerank decide how retrieval runs, and they are the app's
+settings rather than a per-search choice. The agent surface has neither, nor any
+method, depth, or reranking argument: it is always hybrid, always reranked, and
+its depth is a setting. A method chosen per call is a number a reader cannot
+reproduce from the answer they were given.
 """,
     "settings": """\
-A project's settings resolve in four layers, each overriding the one above it,
-and `config` prints every effective value with the layer it came from:
+A project's settings resolve in four layers, each overriding the one above it, and
+`config` prints every effective value with the layer it came from:
 
   1. the packaged defaults in default.toml
   2. the per-user file, ~/.config/research-ultra-rag-mcp/config.toml
   3. the project file, <project>/.research-rag/config.toml
   4. an extra file named by --config PATH
 
-`config` prints and does not write. The browser workspace writes the project file
-for you, refusing a change it cannot validate and naming what the change costs.
-The two global options below are per-call and are not recorded anywhere.
+`config` never writes. The browser workspace writes the project file, refusing a
+change it cannot validate and naming what the change costs. The two global options
+below are per-call and are recorded nowhere:
 
-  --set key=value    override one value for this command, repeatable, and
-                     forgotten when the command ends
+  --set key=value    override one value for this command, repeatable
   --config PATH      add one more layer for this command
 
 What a key does is written once, as `Setting.doc` in src/research_rag/settings.py.
 `config` prints that sentence beside each key and the workspace's Config tab shows
-the same one, so neither reader carries a description of its own.
+the same one.
 
-What a change costs is computed, not declared. `config` prints it: each key is
+What a change costs is computed, not declared, and `config` prints it: each key is
 costed by applying a change to it and recomputing what a build records, the
 retrieval-policy fingerprint, the recorded chunk settings, and the recorded
 models. A key that moves none of them costs nothing and the next search uses the
 new value at once, which is what `runtime.tool_detail` and the batch sizes do. A
 key that moves the fingerprint or the chunk settings makes search answer `stale`
-until `ingest` runs again, which changes the answer to a question already asked.
-A key that changes a model downloads it: a new embedding model recomputes every
-vector, and a new reranker is loaded by the next search.
+until `ingest` runs again. A key that changes a model downloads it: a new
+embedding model recomputes every vector, and a new reranker is loaded by the next
+search.
 
-`doctor` reports which layer a value came from when a setting does not do what
-the project expected, and the file path it would be changed in.
+`doctor` reports which layer a value came from, and the file path it would be
+changed in.
 """,
     "agents": """\
 The app serves MCP at /mcp on its own port, so a client that can open a socket
 needs only the URL. A client that speaks only stdio uses `research-rag mcp
---project-name NAME`, which makes sure that project's app is up and then proxies
-to it.
+--project-name NAME`, which brings that project's app up and proxies to it.
 
 The entry names a project, never a directory, so one entry written on one machine
-works on every machine where that project was initialised. The directory is a
-fact of each machine: the app resolves the name through this installation's own
-project record. `--project-root` and `--project` are refused here, and so is
-`RESEARCH_ULTRARAG_PROJECT_ROOT`, because an entry carrying a path in any form
-would break the moment it was copied anywhere.
+works on every machine where that project was initialised. The directory is a fact
+of each machine: the app resolves the name through this installation's own project
+record. `--project-root` and `--project` are refused here, and so is
+`RESEARCH_ULTRARAG_PROJECT_ROOT`.
 
-A name no project on this machine answers with a connection and one tool:
-`status` reports that the project is not initialised and gives the `init` command
-that creates it. Run that command and the same entry serves the project, with no
-edit to the entry.
+A name no project on this machine answers with a connection and one tool: `status`
+reports that the project is not initialised and gives the `init` command that
+creates it. Run that command and the same entry serves the project.
 
-Let the project print the entry for the machine it runs on: the port is chosen at
-start, and a hard-coded URL goes stale the first time it moves:
+Let the project print the entry for the machine it runs on, because the port is
+chosen at start and a hard-coded URL goes stale the first time it moves:
 
   research-rag --project-root DIR doctor --mcp-entry
   research-rag --project-root DIR doctor --check-entry <file>
 
-To check an entry already in place without editing it. Two ready-to-copy
-templates ship with the source: mcp_settings.example.json for a client using an
-mcpServers object, and kilo-mcp.example.jsonc for one using a Kilo-style mcp
-object. Replace the executable path and the project name in either and the entry
-is complete.
+Two ready-to-copy templates ship with the source: mcp_settings.example.json for a
+client using an mcpServers object, and kilo-mcp.example.jsonc for one using a
+Kilo-style mcp object. Replace the executable path and the project name in either.
 
-Set RESEARCH_ULTRARAG_CLIENT_NAME so the app's client list can tell agents
-apart, or RESEARCH_ULTRARAG_PROJECT_NAME when the client can pass an environment
-but not an argument. `clients` lists the agents and `disconnect` ends one; the
-workspace shows the same list, so an agent ended in the browser is gone from the
-terminal too.
+Set RESEARCH_ULTRARAG_CLIENT_NAME so the app's client list can tell agents apart,
+or RESEARCH_ULTRARAG_PROJECT_NAME when the client can pass an environment but not
+an argument. `clients` lists the agents and `disconnect` ends one; the workspace
+shows the same list, so an agent ended in the browser is gone from the terminal
+too.
 
 An agent gets eight tools and one resource, and every answer is the lean
 projection: a question at a time, no inventory, no scores. `status` is a verdict
-that names the call closing a gap rather than printing the whole corpus state.
-The full payload is `status --verbose` here and the workspace there.
+naming the call that closes a gap, not the whole corpus state. The full payload is
+`status --verbose` here and the workspace there.
 
 A generated sentence citing a passage is not for direct quotation. Take the
-quotation from the original file, which the workspace opens beside the passage
-and the agent reaches with get_passage.
+quotation from the original file, which the workspace opens beside the passage and
+the agent reaches with get_passage.
 """,
 }
 
@@ -426,9 +395,8 @@ def _parser() -> argparse.ArgumentParser:
         "--version",
         action="store_true",
         help=(
-            "Print this app's version, the version installed now, the shared "
-            "workspace's version, and whether a restart is required. Needs no "
-            "project."
+            "Print this app's version, the installed one, the shared workspace's, "
+            "and whether a restart is required. Needs no project."
         ),
     )
     parser.add_argument(
@@ -488,7 +456,7 @@ def _parser() -> argparse.ArgumentParser:
         metavar="KEY=VALUE",
         default=[],
         help=(
-            "Override one setting for this command; repeat for more. This reaches "
+            "Override one setting for this command; repeat for more. It reaches "
             "every operation, including ingest and search, because the command "
             "resolves settings in this process."
         ),
@@ -661,8 +629,7 @@ def _parser() -> argparse.ArgumentParser:
         metavar="GENERATION_ID",
         help=(
             "Repeat the id. Removal is permanent and the space comes back only "
-            "from a rebuild, so the second name is the check that this is the one "
-            "you meant."
+            "from a rebuild."
         ),
     )
 
@@ -696,10 +663,7 @@ def _parser() -> argparse.ArgumentParser:
         change.add_argument(
             "--chunk",
             metavar="CHUNK_ID",
-            help=(
-                "The chunk id of one passage, instead of a whole source. The id a "
-                "search returned."
-            ),
+            help="The chunk id of one passage, instead of a whole source.",
         )
         change.add_argument(
             "--reason",
@@ -824,8 +788,7 @@ def _parser() -> argparse.ArgumentParser:
         default=os.environ.get(PROJECT_NAME_ENV),
         help=(
             "Name this project was initialised under, which the app on this "
-            "machine resolves to a directory. A client entry carries this name "
-            "and no path, so it works on every machine holding the project."
+            "machine resolves to a directory. `help agents` has the client entry."
         ),
     )
     bridge_command.add_argument(
@@ -966,7 +929,7 @@ def _init(args: argparse.Namespace) -> dict[str, Any]:
     """Create a project, or attach the portable state to a directory that exists.
 
     A project *is* a directory with `.research-rag` beside whatever is already
-    there, and nothing here touches a file the user wrote.
+    there, and no file the user wrote is touched.
     """
 
     project = _project_path(args)
@@ -1154,7 +1117,7 @@ def _stop(args: argparse.Namespace, config: ResearchConfig) -> dict[str, Any]:
     report["servers"] = [{"pid": pid, "command": command} for pid, command in found]
     report["forced_pids"] = _terminate([pid for pid, _ in found])
     report["notes"] = [
-        "A workspace you started in another terminal belongs to that terminal: this command stops it, and nothing here starts it again.",
+        "A workspace you started in another terminal belongs to that terminal: this command stops it and does not start it again.",
         "A build interrupted this way resumes from its checkpoint on the next ingest call.",
     ]
     return report
@@ -1175,8 +1138,8 @@ def _metadata_body(args: argparse.Namespace) -> dict[str, Any]:
     }
     if args.clear and any(value is not None for value in supplied.values()):
         raise ResearchError(
-            "--clear removes the review so automatic metadata applies again, "
-            "so it cannot be combined with a field."
+            "--clear cannot be combined with a field: it removes the review so "
+            "automatic metadata applies again."
         )
     if args.clear:
         return {}
@@ -1555,8 +1518,7 @@ def _a_free_port() -> int:
         return candidate
     raise ResearchError(
         f"No free loopback port in the next {_PORT_ATTEMPTS} from {first}, so the "
-        f"app for a project on this machine was not started; pass --port to choose "
-        "one."
+        f"app for this project was not started; pass --port to choose one."
     )
 
 
@@ -1619,12 +1581,11 @@ def _closing_with_the_terminal() -> Iterator[_Closing]:
 def _only_project_or_ask() -> Path:
     """The project a bare call serves, chosen by the reader when there is a choice.
 
-    A bare call is the one command a reader types without thinking, so it needs
-    no project argument to be useful. One project on the machine is unambiguous.
-    Several is a decision only the reader can make, so it is asked for in the
-    terminal rather than guessed, and a terminal that cannot answer — a script, a
-    pipe — is given the list and the command to run rather than a prompt that
-    will never be read.
+    A bare call is the one command a reader types without thinking, so it needs no
+    project argument to be useful. Several projects are a decision only the reader
+    can make, so it is asked for in the terminal rather than guessed, and a
+    terminal that cannot answer — a script, a pipe — is given the list and the
+    command to run.
 
     The list is the one `projects` prints, so the two cannot disagree about what
     this installation holds.
@@ -1771,7 +1732,7 @@ def _install(args: argparse.Namespace) -> dict[str, Any]:
 
     One command with two selectors rather than two commands: an uninstall has to
     know which of the two the reader meant, and `--desktop` beside `--uninstall`
-    answers that without a second pair of flags to remember.
+    answers that.
     """
 
     from ..installation import (
@@ -1803,9 +1764,9 @@ async def _update(args: argparse.Namespace) -> dict[str, Any]:
     The check is the default and writes nothing. The comparison is against the
     latest published release, so the version in the answer and the version
     `research-rag --version` prints are the same number. Applying refuses while a
-    project lock is held, refuses a checkout with uncommitted work, stops every
-    app this installation serves through that project's own launcher, and prints
-    the command that starts each one again rather than starting it.
+    project lock is held, refuses a checkout with uncommitted work, stops every app
+    through that project's own launcher, and prints the command that starts each
+    one again.
     """
 
     from .. import release as release_module
@@ -1976,16 +1937,16 @@ def _help_menu() -> str:
             lines.extend(f"{' ' * label}{extra}" for extra in body[1:])
         lines.append("")
     lines.append(
-        f"Each command takes --project-root DIR or --project NAME, except `mcp`,\n"
-        f"which takes --project-name NAME so a client entry carries no path.\n"
-        f"`install`, `update`, `help`, and `--version` need no project at all.\n"
-        f"No command at all opens the workspace in a browser and serves it from\n"
-        f"this terminal, so Ctrl-C or closing the terminal stops it. It asks\n"
-        f"which project when this installation holds more than one.\n"
-        f"`{CLI_NAME} --version` prints this app's version, the installed one,\n"
-        f"the shared workspace's, and whether a restart is required.\n"
-        f"One command's own options: `{CLI_NAME} COMMAND --help`.\n"
-        f"A subject: `{CLI_NAME} help {', '.join(sorted(HELP_TOPICS))}`."
+        "Each command takes --project-root DIR or --project NAME, except `mcp`,\n"
+        "which takes --project-name NAME so a client entry carries no path.\n"
+        "`install`, `update`, `help`, and `--version` need no project at all.\n"
+        "No command at all opens the workspace in a browser and serves it from\n"
+        "this terminal, so Ctrl-C or closing the terminal stops it. It asks\n"
+        "which project when this installation holds more than one.\n"
+        "One command's own options: `{name} COMMAND --help`.\n"
+        "A subject: `{name} help {topics}`.".format(
+            name=CLI_NAME, topics=", ".join(sorted(HELP_TOPICS))
+        )
     )
     return "\n".join(lines) + "\n"
 
@@ -2018,9 +1979,8 @@ def _bridge_project_name(args: argparse.Namespace) -> str:
         if value:
             raise ConfigurationError(
                 f"The MCP entry names a project, not a directory: drop {option} "
-                "and pass --project-name NAME. The app on this machine resolves "
-                "the name to the directory the project was initialised at, which "
-                "is what lets one entry work on every machine holding it."
+                "and pass --project-name NAME, which this installation resolves to "
+                "the directory the project was initialised at."
             )
     name = getattr(args, "project_name", None)
     if not name or not name.strip():

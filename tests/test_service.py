@@ -52,11 +52,9 @@ from research_rag.service import (
 from research_rag.settings import resolve_gate_stopwords
 from research_rag.storage import atomic_write_json, read_json, read_jsonl, write_jsonl
 
-# The default model's own facts, resolved rather than hard-coded.
 DEFAULT_EMBEDDING_FACTS = resolve_embedding_model(DEFAULT_EMBEDDING_MODEL)
 
-# The function words the English lexical gate ignores, resolved the way a
-# search resolves them, so the helper tests exercise the real rule.
+# Resolved the way a search resolves them, so the helper tests exercise the real rule.
 ENGLISH_GATE_STOPWORDS = resolve_gate_stopwords(("en",))
 
 CORRUPT_TEXT = (
@@ -107,8 +105,6 @@ class FakeUltraRAG:
         *,
         language: str = "en",
     ) -> None:
-        # The language is recorded so a test can prove the setting reaches the
-        # gateway rather than being dropped in transit.
         self.bm25_language = language
         self.bm25_build_calls += 1
         index_path.mkdir(parents=True)
@@ -123,8 +119,6 @@ class FakeUltraRAG:
         *,
         language: str = "en",
     ) -> None:
-        # The language is recorded so a test can prove the setting reaches
-        # the gateway rather than being dropped in transit, on the load path too.
         self.bm25_language = language
         index_file = index_path / "fake-index.json"
         if (
@@ -149,7 +143,7 @@ class FakeUltraRAG:
 
 
 class SimulatedProcessExit(BaseException):
-    """Models a hard process exit that no handler in the service can catch."""
+    """Models a hard process exit no handler in the service can catch."""
 
 
 class CrashDuringChunkUltraRAG(FakeUltraRAG):
@@ -404,10 +398,8 @@ class ScoredDenseBackend(FakeDenseBackend):
 
 
 class BandedDenseBackend(FakeDenseBackend):
-    """Scores the first chunk above the floor and the rest inside a band below it.
-
-    A one-word query behaves this way: the whole candidate list sits a few
-    hundredths under the floor, so an absolute gate slices it arbitrarily.
+    """A one-word query scores this way: the whole candidate list sits a few hundredths
+    under the floor, so an absolute gate slices it arbitrarily.
     """
 
     def __init__(self, strong: float, band: float) -> None:
@@ -726,7 +718,6 @@ async def _assert_research_generation_and_structured_search(project: Path) -> No
     assert search["requested_top_k"] == 1
     assert search["relevance_limited"] is False
     assert search["relevance_policy"]["dense_minimum_cosine_similarity"] == 0.72
-    # No legacy "notes" field survives; text and script state use explicit names.
     assert "notes" not in search
     assert "notes" not in hit
     assert hit["text_notes"] == []
@@ -831,9 +822,7 @@ async def _assert_search_can_skip_the_staleness_walk(
     assert no_walk["hits"]
     assert no_walk["stale"] is None
 
-    # The policy fingerprint is an instance attribute, computed from the
-    # settings this service resolved; patching it stands in for a generation that
-    # recorded a different policy.
+    # Patching it stands in for a generation that recorded a different policy.
     monkeypatch.setattr(
         service,
         "retrieval_policy_fingerprint",
@@ -964,8 +953,7 @@ async def _assert_reviewed_metadata_is_a_runtime_overlay(project: Path) -> None:
     assert config.current_path.read_bytes() == current_before
     assert chunks_path.read_bytes() == chunks_before
 
-    # Explicit empty values authoritatively clear wrong automatic fields. An
-    # empty object removes the complete override and restores automatic values.
+    # An empty object removes the complete override and restores automatic values.
     write_reviewed_metadata(
         config,
         "article.pdf",
@@ -1085,8 +1073,7 @@ async def _assert_find_source_answers_for_one_source(project: Path) -> None:
         dense=FakeDenseBackend(),
     )
 
-    # Before an ingestion the files are known and neither is searchable, so the
-    # answer says the call that changes that.
+    # Before an ingestion the files are known and neither is searchable.
     before = await service.find_source("crawford")
     assert before["ready"] is False
     assert before["match_count"] == 2
@@ -1110,7 +1097,6 @@ async def _assert_find_source_answers_for_one_source(project: Path) -> None:
     assert by_path["matches"][0]["searchable"] is True
     assert by_path["matches"][0]["source_id"].startswith("src_")
 
-    # The title and the authors of a reviewed override are matchable names too.
     write_reviewed_metadata(
         config,
         "crawford-notes.pdf",
@@ -1122,8 +1108,7 @@ async def _assert_find_source_answers_for_one_source(project: Path) -> None:
     by_author = await service.find_source("RESEARCHER")
     assert by_author["match_count"] == 1
 
-    # A reviewed exclusion is reported as one, because it withholds retrieval
-    # even though the source is indexed.
+    # A reviewed exclusion withholds retrieval even though the source is indexed.
     await service.set_source_inclusion(
         source_path="crawford-atlas.pdf",
         included=False,
@@ -1157,8 +1142,6 @@ async def _assert_find_source_answers_for_one_source(project: Path) -> None:
     assert len(capped["matches"]) == 2
     assert capped["truncated"] is True
     assert capped["match_count"] == 6
-    # One indexed source is excluded and four are new files, so only the ingested,
-    # included one is searchable.
     assert capped["message"] == (
         "1 of the 6 sources matching 'crawford' are searchable now."
     )
@@ -3766,9 +3749,7 @@ async def _assert_query_paths_use_generation_lookup(
     assert lookup_path.is_file()
     assert chunks_path.is_file()
 
-    # A generation created before the sidecar existed is upgraded lazily: the
-    # first query after the sidecar is gone rescans the artifact files once and
-    # writes it.
+    # A generation created before the sidecar existed is upgraded lazily.
     lookup_path.unlink()
     search = await service.search(
         "cobalt",
@@ -3778,9 +3759,7 @@ async def _assert_query_paths_use_generation_lookup(
     assert search["hits"]
     assert lookup_path.is_file()
 
-    # Every later query seeks the records it returns instead of scanning the
-    # store again. The property is enforced where the scan happens: the query
-    # path reads byte ranges through the lookup, so a rescanned chunk store can
+    # The query path reads byte ranges through the lookup, so a rescanned chunk store can
     # only mean `build_artifact_lookup` ran for a current generation.
     def refuse_rescan(*_: Any, **__: Any) -> Any:
         raise AssertionError("a query path rescanned the complete chunk store")
@@ -3799,8 +3778,8 @@ async def _assert_query_paths_use_generation_lookup(
     )
     assert passage["context"]
 
-    # The guard proves itself: with the sidecar gone, the same patch has to fire,
-    # which is what makes the steady-state silence above mean anything.
+    # With the sidecar gone the same patch has to fire, which is what makes the
+    # steady-state silence above mean anything.
     lookup_path.unlink()
     with pytest.raises(AssertionError, match="rescanned the complete chunk store"):
         await service.search(
@@ -3904,8 +3883,7 @@ async def _assert_status_lists_retained_generations(project: Path) -> None:
     assert current[0]["generation_id"] == second["generation_id"]
     assert current[0]["schema_version"] is not None
 
-    # A damaged or orphaned directory is reported rather than breaking status:
-    # the point of the inventory is to show what occupies disk.
+    # The inventory is to show what occupies disk.
     damaged = config.generations_root / "20260101T000000Z-orphan"
     damaged.mkdir(parents=True)
     (damaged / "manifest.json").write_text("{ not json", encoding="utf-8")
@@ -3923,7 +3901,6 @@ async def _assert_status_lists_retained_generations(project: Path) -> None:
     assert after["retained_generation_bytes"] == sum(
         item["size_bytes"] for item in after["generations"]
     )
-    # The damaged directory must not make the selected generation unusable.
     assert after["ready"] is True
     assert after["generation_id"] == second["generation_id"]
 
@@ -3969,8 +3946,6 @@ async def _assert_search_falls_back_when_reranking_is_unavailable(
     unranked = await service.search("cobalt labour", top_k=3)
     fell_back = await service.search("cobalt labour", top_k=3, rerank=True)
 
-    # The requested reranking could not run, so the search still succeeds with
-    # the plain candidate order and says exactly why.
     assert fell_back["rerank_requested"] is True
     assert fell_back["reranked"] is False
     assert fell_back["rerank_fallback"]["reason"] == "reranker_model_unavailable"
@@ -3986,8 +3961,6 @@ async def _assert_search_falls_back_when_reranking_is_unavailable(
     ]
     assert all(hit["rerank_score"] is None for hit in fell_back["hits"])
 
-    # A search that does not ask for reranking neither loads the model nor
-    # reports a fallback.
     assert unranked["rerank_requested"] is False
     assert unranked["reranked"] is False
     assert unranked["rerank_fallback"] is None
@@ -4023,8 +3996,6 @@ async def _assert_search_reranks_with_a_named_model(project: Path) -> None:
         rerank_model="jinaai/jina-reranker-v1-turbo-en",
     )
 
-    # A tool call leaves the model to the engine, and the answer names the model
-    # and the revision that actually ran.
     assert default["reranker_model"] == DEFAULT_RERANKER_MODEL
     assert default["reranker_model_revision"] == RERANKER_MODELS[DEFAULT_RERANKER_MODEL]
     assert named["reranker_model"] == "jinaai/jina-reranker-v1-turbo-en"
@@ -4032,8 +4003,6 @@ async def _assert_search_reranks_with_a_named_model(project: Path) -> None:
         named["reranker_model_revision"]
         == RERANKER_MODELS["jinaai/jina-reranker-v1-turbo-en"]
     )
-    # Only the call that named a model switched it: a comparison run does not
-    # change what the next tool call uses.
     assert dense.rerank_models == [None, "jinaai/jina-reranker-v1-turbo-en"]
 
 
@@ -4093,7 +4062,6 @@ async def _assert_the_bm25_language_reaches_the_gateway(project: Path) -> None:
     )
     await service.ingest(chunk_size=50, chunk_overlap=10)
 
-    # The corpus language is not decoration: the lexical index is built with it.
     assert gateway.bm25_language == "de"
     assert config.settings.language_corpus == "de"
 
@@ -4103,12 +4071,8 @@ def test_the_bm25_language_reaches_the_gateway(project: Path) -> None:
 
 
 def test_dense_backends_embed_with_the_configured_model(tmp_path: Path) -> None:
-    """A non-default embedding model has to reach the backends, not just the record.
-
-    A generation records the dimension of the model it was built with, so a
-    backend still embedding with the shipped default fills an index of the wrong
-    width: the German model returns 768 values where the default returns 384, and
-    the width check is all that stands between it and a mismatched index.
+    """A generation records the dimension of the model it was built with, so a backend still
+    embedding with the shipped default fills an index of the wrong width.
     """
     project = tmp_path / "project"
     overlay = project / ".research-rag"
@@ -4129,8 +4093,6 @@ def test_dense_backends_embed_with_the_configured_model(tmp_path: Path) -> None:
 
 
 def test_the_reranked_window_follows_its_settings(project: Path) -> None:
-    """The window is a setting, which is what makes a deeper one measurable."""
-
     paragraphs = [
         (
             "Commodity fetishism describes how relations between people appear as "
@@ -4201,11 +4163,8 @@ def test_the_reranked_window_follows_its_settings(project: Path) -> None:
             )
             return result["rerank_window"]
 
-        # The corpus and relevance gates cap the window, so the observed default is
-        # the budget these settings are tested against. Each one is exercised
-        # below that default, which is what proves it is read rather than
-        # assumed: with the setting ignored every value here would stay at the
-        # default.
+        # Each setting is exercised below the observed default, which is what proves it is read
+        # rather than assumed.
         default = await window([], top_k=1)
         assert default >= 3, default
         assert (
@@ -4220,8 +4179,6 @@ def test_the_reranked_window_follows_its_settings(project: Path) -> None:
         )
         assert await window(["retrieval.rerank_window_floor=3"], top_k=1) == 3
         assert await window(["retrieval.rerank_max_candidates=2"], top_k=1) == 2
-        # top_k=3 with a multiple of 1 gives 3, where the shipped default gives
-        # the floor of 10 and would therefore be capped by the corpus instead.
         assert (
             await window(
                 [
@@ -4237,8 +4194,6 @@ def test_the_reranked_window_follows_its_settings(project: Path) -> None:
 
 
 def test_a_ranking_change_reuses_chunks_and_vectors(project: Path) -> None:
-    """A ranking value decides how a generation is searched, not what it holds."""
-
     async def exercise() -> None:
         source = project / "sources" / "article.pdf"
         write_pdf(
@@ -4264,8 +4219,6 @@ def test_a_ranking_change_reuses_chunks_and_vectors(project: Path) -> None:
         first = await service.ingest(chunk_size=50, chunk_overlap=10)
         assert first["chunk_count"] >= 2, first["chunk_count"]
 
-        # The same corpus under a different ranking policy: rrf_k is a ranking
-        # value, so it must not invalidate a single chunk or vector.
         changed_config = resolve_config(
             project,
             vanilla_executable=sys.executable,

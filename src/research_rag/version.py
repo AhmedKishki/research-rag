@@ -1,5 +1,3 @@
-"""Version reporting for the running app, its environment, and the shared UI."""
-
 from __future__ import annotations
 
 import json
@@ -14,8 +12,6 @@ UNKNOWN_VERSION = "0.0.0+unknown"
 
 
 def distribution_version(name: str) -> str | None:
-    """Return an installed distribution's version, or None when it is not installed."""
-
     try:
         return _distribution_version(name)
     except PackageNotFoundError:
@@ -23,8 +19,6 @@ def distribution_version(name: str) -> str | None:
 
 
 def distribution_files(name: str) -> Path:
-    """Return an installed distribution's metadata directory."""
-
     return Path(str(distribution(name)._path))
 
 
@@ -35,20 +29,14 @@ APP_VERSION = distribution_version(DISTRIBUTION_NAME) or UNKNOWN_VERSION
 
 
 def installed_version() -> str:
-    """Return the version installed in the environment right now."""
-
     return distribution_version(DISTRIBUTION_NAME) or UNKNOWN_VERSION
 
 
 def ui_version() -> str | None:
-    """Return the installed shared-UI version, or None when it is not installed."""
-
     return distribution_version(UI_DISTRIBUTION_NAME)
 
 
 def restart_required() -> bool:
-    """Whether this process started with a different version than is installed now."""
-
     return installed_version() != APP_VERSION
 
 
@@ -79,10 +67,10 @@ def checkout_revision() -> str | None:
 
 
 def working_tree_revision() -> str | None:
-    """Return the commit checked out beside this process, or None.
+    """The commit checked out beside this process, or None.
 
     The loaded package is one directory and the checkout is another, and the
-    difference between them is the fault this reports: a server answering from a
+    difference between them is the fault this reports: an app answering from a
     copy of the code that is no longer the one on disk.
     """
 
@@ -109,7 +97,7 @@ def working_tree_revision() -> str | None:
 def checkout_drift() -> str | None:
     """Return a description when the running code is not the checked-out code.
 
-    Two checkouts of this package are the reported cause of a server that
+    Two checkouts of this package are the reported cause of an app that
     answered with metadata it could not have written: the process was serving a
     copy of the code while the directory beside it had moved on. A version
     comparison cannot see that, because both copies report the same version.
@@ -131,8 +119,6 @@ def checkout_drift() -> str | None:
 
 
 def install_origin() -> Path | None:
-    """Return the directory this package was installed from, when it says."""
-
     try:
         recorded = distribution_files(DISTRIBUTION_NAME)
     except Exception:  # noqa: BLE001 - a broken environment must not raise here.
@@ -151,8 +137,6 @@ def install_origin() -> Path | None:
 
 
 def nearest_checkout() -> Path | None:
-    """Return the nearest git checkout at or above the running package."""
-
     package_root = Path(__file__).resolve().parents[2]
     for candidate in (package_root, *package_root.parents):
         if (candidate / ".git").exists():
@@ -161,8 +145,6 @@ def nearest_checkout() -> Path | None:
 
 
 def version_block() -> dict[str, object]:
-    """Describe the running, installed, and UI versions for `status`."""
-
     return {
         "app": APP_VERSION,
         "installed": installed_version(),
@@ -189,8 +171,6 @@ def version_lines() -> tuple[str, ...]:
 
 
 def version_label() -> str:
-    """Return the short header label the workspace shows under the project name."""
-
     parts = [f"{DISTRIBUTION_NAME} {APP_VERSION}"]
     ui = ui_version()
     if ui is not None:

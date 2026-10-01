@@ -7,20 +7,13 @@ another. What that arrangement lacks is the machine's memory: without a record a
 caller can only reach a project by repeating its absolute path, and nothing can
 report every project the installation serves at once.
 
-The record is a pointer. It holds each project's stable `project_id`, its
+The record is a pointer: it holds each project's stable `project_id`, its
 recorded name, and its root, and every byte of state stays in the project it
-belongs to, so registering a project is undone by deleting one file. The file
-sits beside the account settings this app already reads, so one user has one
-directory for both. It is written atomically because two commands may register
-two projects at the same moment.
+belongs to. It sits beside the account settings this app already reads, so one
+user has one directory for both. It is written atomically because two commands
+may register two projects at the same moment.
 
-A project's recorded name is the address an agent's client entry carries, so one
-entry names the same project on every machine where that project was
-initialised, and the directory stays a fact of each machine.
-
-The record also answers what is up: `account_projects` reads it and probes each
-project's own app, so the command line and the workspace report one list rather
-than two that can disagree.
+`AGENTS.md` states the rules about the recorded name and the pointer file.
 """
 
 from __future__ import annotations
@@ -37,15 +30,13 @@ from .settings import USER_CONFIG_DIRECTORY
 from .support import ResearchError, _utc_now
 
 # The account-wide record, beside the settings that already live there. The name
-# is this app's own: the MCP server shares the directory during the transition
-# but has no registry to read, and retiring it moves nothing.
+# is this app's own: the MCP server shares the directory but has no registry to
+# read.
 REGISTRY_FILE = "projects.json"
 SCHEMA_VERSION = 1
 
 
 def registry_path() -> Path:
-    """Return where the account's project record lives."""
-
     from platformdirs import user_config_path
 
     return user_config_path(USER_CONFIG_DIRECTORY) / REGISTRY_FILE
@@ -53,8 +44,6 @@ def registry_path() -> Path:
 
 @dataclass(frozen=True, slots=True)
 class RegisteredProject:
-    """One project this installation knows how to reach."""
-
     project_id: str
     project_name: str
     project_root: Path
@@ -70,8 +59,6 @@ class RegisteredProject:
 
     @property
     def descriptor_path(self) -> Path:
-        """Where the project this record points at keeps its identity."""
-
         return self.project_root / ".research-rag" / "project.json"
 
     def initialised(self) -> bool:
@@ -189,8 +176,6 @@ def register(
 
 
 def forget(project_id: str) -> bool:
-    """Remove one project's record and report whether there was one."""
-
     path = registry_path()
     document = _read(path)
     projects = document.get("projects") or []
@@ -210,10 +195,9 @@ def forget(project_id: str) -> bool:
 def matches(query: str) -> list[RegisteredProject]:
     """Return the registered projects a name or id resolves to.
 
-    A selector is matched against a project's id and name, case
-    insensitively, and exactly as the caller typed it. A substring is a guess
-    about a project's name, and the record has the name, so this is not the place
-    to be generous.
+    A selector is matched against a project's id and name, case insensitively, and
+    exactly as the caller typed it. A substring is a guess about a project's
+    name, and the record has the name, so this is not the place to be generous.
     """
 
     term = query.strip().casefold()
@@ -242,8 +226,6 @@ def named(query: str) -> list[RegisteredProject]:
 
 
 def resolve(query: str) -> RegisteredProject:
-    """Return the one project a name or id names, or refuse to guess."""
-
     found = matches(query)
     if not found:
         raise ResearchError(
@@ -262,8 +244,6 @@ def resolve(query: str) -> RegisteredProject:
 
 
 def registered_at_label(project: RegisteredProject) -> str:
-    """Return when a project was recorded, for an answer that prints one."""
-
     stamp = project.registered_at
     if not stamp:
         return "unknown"
@@ -277,8 +257,6 @@ def registered_at_label(project: RegisteredProject) -> str:
 
 
 def _attached_to(config: Any) -> str | None:
-    """The terminal a project's running app is attached to, if it is attached."""
-
     from .app import TTY_FILE
 
     try:
@@ -296,9 +274,9 @@ def project_app_state(project_root: Path) -> dict[str, Any]:
     and a project with no app up is reported as such rather than started: a
     listing is a question about what exists.
 
-    The imports are local because the record itself is a pointer file and the
-    modules that answer about a running app pull in the web stack. Nothing here
-    is cached: every call reads the record and asks again.
+    The imports are local because the record is a pointer file and the modules
+    that answer about a running app pull in the web stack. Nothing here is cached:
+    every call reads the record and asks again.
     """
 
     from .app import running_url
@@ -313,9 +291,9 @@ def project_app_state(project_root: Path) -> dict[str, Any]:
             "running": url is not None,
             "url": url,
             "port": _port_of(url),
-            # Which terminal the serving process is attached to, or None when it
-            # was started detached. A reader deciding whether Ctrl-C in this
-            # terminal would stop that app needs the difference.
+            # None when the serving process was started detached. A reader
+            # deciding whether Ctrl-C in this terminal would stop that app needs
+            # the difference.
             "attached_to": _attached_to(config),
         },
         "attached_clients": 0,

@@ -73,8 +73,6 @@ def child_log_path(config: ResearchConfig, namespace: str) -> Path:
 
 
 def _log_tail(path: Path, *, lines: int = GATEWAY_LOG_TAIL_LINES) -> list[str]:
-    """Return the last meaningful lines of one log, or nothing when unreadable."""
-
     try:
         content = path.read_text(encoding="utf-8", errors="replace")
     except OSError:
@@ -141,8 +139,6 @@ def _is_timeout(exc: BaseException) -> bool:
 
 @asynccontextmanager
 async def vanilla_client(config: ResearchConfig) -> AsyncIterator[Client[Any]]:
-    """Open the gateway, reporting a failure to start as the reason it failed."""
-
     client: Client[Any] = Client(
         create_vanilla_transport(config),
         timeout=TRANSPORT_TIMEOUT_SECONDS,
@@ -191,8 +187,6 @@ class LazyGateway:
 
 
 class VanillaUltraRAG:
-    """Small typed boundary around vanilla MCP tool calls."""
-
     def __init__(
         self, client: Client[Any], config: ResearchConfig | None = None
     ) -> None:

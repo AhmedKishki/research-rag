@@ -68,8 +68,6 @@ ICON_SVG = """<?xml version="1.0" encoding="UTF-8"?>
 
 @dataclass(frozen=True, slots=True)
 class WriteReport:
-    """What one account-level file holds now."""
-
     path: Path
     state: str
     message: str
@@ -84,8 +82,6 @@ class WriteReport:
 
 @dataclass(frozen=True, slots=True)
 class DesktopEntry:
-    """One menu entry this app wrote, and the command it runs."""
-
     path: Path
     executable: Path
     attached: bool
@@ -232,8 +228,6 @@ _RESERVED = re.compile(r"""[\s"'\\%<>|&;$()*,?#~`]""")
 
 
 def exec_argument(value: str) -> str:
-    """One Exec argument as a desktop entry reads it."""
-
     if not _RESERVED.search(value):
         return value
     escaped = value.replace("\\", "\\\\").replace('"', '\\"').replace("%", "%%")
@@ -333,8 +327,6 @@ def desktop_entry_document(*, command: Path, icon: Path) -> str:
 
 
 def entry_is_ours(text: str) -> bool:
-    """Whether one entry carries the marker this command writes."""
-
     return ENTRY_MARKER in text
 
 
@@ -360,8 +352,6 @@ def desktop_entry_from_text(path: Path, text: str) -> DesktopEntry | None:
 
 
 def desktop_entry_path(applications: Path | None = None) -> Path:
-    """Where the one entry this app writes lives."""
-
     return _absolute(applications, account_applications_directory()) / DESKTOP_FILENAME
 
 

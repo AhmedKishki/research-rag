@@ -1,5 +1,3 @@
-"""Search-level source selection and category partitions."""
-
 from __future__ import annotations
 
 import asyncio
@@ -201,7 +199,6 @@ def test_categories_partition_the_corpus_for_search_and_listing(project: Path) -
         )
         assert no_such_partition["hits"] == []
 
-        # The source inventory is the whole corpus; it takes no filters.
         listed = await service.list_sources()
         assert [item["source_path"] for item in listed["sources"]] == [
             "sources/cobalt.pdf",
@@ -269,8 +266,6 @@ def test_project_layer_selects_and_reports(project: Path) -> None:
         )
         assert {hit["source_path"] for hit in mine["hits"]} == {"sources/cobalt.pdf"}
         assert mine["filters"]["projects_any"] == ["ai-and-fetishism"]
-        # The layer is returned with every hit and reference group, so a caller
-        # can see why a passage was selected without a second lookup.
         assert [hit["project"] for hit in mine["hits"]] == [["ai-and-fetishism"]]
 
         union = await service.search(
@@ -331,7 +326,6 @@ def test_three_metadata_layers_combine(project: Path) -> None:
         assert filters["categories_any"] == ["marxism"]
         assert filters["keywords_all"] == ["fetishism"]
 
-        # A branch filter from the other layer still resolves independently.
         other = await service.search(
             "labour evidence",
             top_k=10,
@@ -346,20 +340,15 @@ def test_three_metadata_layers_combine(project: Path) -> None:
 
 
 def test_authors_and_titles_filter_the_corpus_by_name(project: Path) -> None:
-    """An author and a title narrow a corpus by the names they are, not as tags.
-
-    Both are phrases, so they match as case-insensitive substrings of the values
-    the query path already holds: a surname finds its author without the
-    bibliography's punctuation, and a remembered title fragment finds the work
-    without its subtitle. Reviewed values win over extracted ones, which makes
-    the filter useful on a corpus whose extraction is wrong.
+    """Both are phrases, so they match as case-insensitive substrings of the values the query
+    path already holds: a surname finds its author without the bibliography's punctuation,
+    and a remembered title fragment finds the work without its subtitle.
     """
 
     async def exercise() -> None:
         service, _source_ids = await _build_project(project)
 
-        # Both test sources extract the same title and author, so an extracted
-        # name cannot separate them and this passes on both.
+        # Both test sources extract the same title and author.
         both = await service.search(
             "labour evidence",
             top_k=10,
@@ -379,7 +368,6 @@ def test_authors_and_titles_filter_the_corpus_by_name(project: Path) -> None:
             {"title": "Cobalt extraction labour review", "authors": ["Dana Cobalt"]},
         )
 
-        # A reviewed author replaces the extracted one rather than joining it.
         reviewed_author = await service.search(
             "labour evidence",
             top_k=10,
@@ -391,8 +379,6 @@ def test_authors_and_titles_filter_the_corpus_by_name(project: Path) -> None:
         }
         assert reviewed_author["filters"]["active_document_count"] == 1
 
-        # A name no source carries is a filter that matched nothing, not a corpus
-        # that holds nothing.
         no_such_author = await service.search(
             "labour evidence",
             top_k=10,
@@ -403,7 +389,6 @@ def test_authors_and_titles_filter_the_corpus_by_name(project: Path) -> None:
         assert no_such_author["filters"]["active_document_count"] == 0
         assert no_such_author["filters"]["authors_any"] == ["nobody at all"]
 
-        # A title fragment is enough, and it is matched case-insensitively.
         fragment = await service.search(
             "labour evidence",
             top_k=10,
@@ -415,7 +400,6 @@ def test_authors_and_titles_filter_the_corpus_by_name(project: Path) -> None:
         }
         assert fragment["filters"]["titles_any"] == ["extraction labour"]
 
-        # The extracted title is still what the other source carries.
         extracted_title = await service.search(
             "labour evidence",
             top_k=10,
@@ -467,8 +451,6 @@ def test_author_and_title_filters_combine_with_each_other(project: Path) -> None
         assert one_work["filters"]["authors_any"] == ["cobalt", "waste"]
         assert one_work["filters"]["titles_any"] == ["frontiers"]
 
-        # An author that excludes the only title match returns nothing, which is
-        # the two layers disagreeing rather than either one failing.
         disagreeing = await service.search(
             "labour evidence",
             top_k=10,
@@ -489,11 +471,10 @@ def test_a_filter_never_widens_past_the_candidate_ceiling(project: Path) -> None
 async def _assert_a_filter_never_widens_past_the_candidate_ceiling(
     project: Path,
 ) -> None:
-    """A narrow filter must not cost a full ranking per doubling of the window.
+    """Filters drop passages after the corpus is ranked, so a filter naming one source cannot
+    fill a top_k of five and the widening loop keeps doubling.
 
-    Filters drop passages after the corpus is ranked, so a filter naming one source
-    cannot fill a top_k of five and the widening loop keeps doubling. Without a
-    ceiling it walks the whole corpus, which is where a one-author query spent a
+    Without a ceiling it walks the whole corpus, which is where a one-author query spent a
     minute before it could answer at all.
     """
 
@@ -540,11 +521,9 @@ def test_an_empty_answer_names_the_window_it_reached(project: Path) -> None:
 
 
 async def _assert_an_empty_answer_names_the_window_it_reached(project: Path) -> None:
-    """An empty result must not read as an empty corpus when the window was bounded.
-
-    The answer says how much of the corpus the ranking reached, and that filters
-    drop after ranking rather than before it, because both are what a reader needs
-    to tell a filter that matches nothing from a filter the window never reached.
+    """Filters drop after ranking rather than before it, because both the window the ranking
+    reached and the filters that dropped are what tell a filter matching nothing from one
+    the window never reached.
     """
 
     config = resolve_config(project, vanilla_executable=sys.executable)

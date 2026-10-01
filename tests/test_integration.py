@@ -1,9 +1,9 @@
-"""End-to-end coverage against the real vanilla UltraRAG gateway.
+"""The app answers in process, so there is no handshake, no tool schema, and no resource
+to read.
 
-The app answers in process, so there is no handshake, no tool schema, and no
-resource to read: what this file proves is that the workspace reaches the same
-generations, indexes, review state, and gateway as the terminal does, and that a
-gateway that cannot start is reported by the operation that needed it.
+What this file proves is that the workspace reaches the same generations, indexes,
+review state, and gateway as the terminal does, and that a gateway which cannot start
+is reported by the operation that needed it.
 """
 
 from __future__ import annotations
@@ -57,11 +57,8 @@ FULL_HIT_KEYS = (
 
 
 class Research:
-    """One `ResearchService` over a lazily opened gateway, closed with the test.
-
-    The gateway opens on the first call that needs it, which is how the terminal
-    and the workspace both work, so a test can prove that a project reads fine
-    against a gateway that could never start.
+    """The gateway opens on the first call that needs it, so a test can prove a project reads
+    fine against a gateway that could never start.
     """
 
     def __init__(self, config: Any) -> None:
@@ -79,8 +76,7 @@ class Research:
         await self.gateway.aclose()
 
 
-# The gateway is a separate product with its own console script, so the app
-# resolves it beside the running interpreter rather than assuming the module.
+# The gateway is a separate product with its own console script.
 VANILLA_EXECUTABLE = Path(sys.executable).parent / "vanilla-ultra-rag-mcp"
 
 
@@ -126,12 +122,10 @@ def test_the_real_vanilla_research_flow(project: Path) -> None:
     async def scenario() -> None:
         async with Research(_config(project)) as service:
             initial = await service.status()
-            # Nothing can be served yet, and that is the one readiness fact worth
-            # saying before a build.
             assert initial["ready"] is False
 
-            # Reviewed metadata is a hand-edited review-state file that applies at
-            # read time, so it is written directly and checked through the service.
+            # Reviewed metadata applies at read time, so it is written directly
+            # and checked through the service.
             review_state = project / ".research-rag" / "source-metadata.json"
             review_state.write_text(
                 json.dumps(
@@ -172,8 +166,6 @@ def test_the_real_vanilla_research_flow(project: Path) -> None:
                 (generation_root / "manifest.json").read_text(encoding="utf-8")
             )
             assert manifest["retrieval"]["dense"]["point_count"] == 1
-            # The default `auto` backend is the exact scan below the corpus
-            # threshold, and the manifest records which backend owns the index.
             assert (
                 manifest["retrieval"]["dense"]["dense_backend"]
                 == "portable-exact-vectors"
@@ -190,8 +182,6 @@ def test_the_real_vanilla_research_flow(project: Path) -> None:
             for key in FULL_ANSWER_KEYS:
                 assert key in ready, key
 
-            # A stale status counts what the corpus gained and names the sources
-            # that went missing.
             added_source = project / "sources" / "added-later.pdf"
             write_pdf(added_source, ["Amber marsh evidence added after the build."])
             added_status = await service.status()
@@ -296,8 +286,6 @@ def test_the_real_vanilla_research_flow(project: Path) -> None:
             )
             assert filtered_out["hits"] == []
 
-            # A reviewed author and title are what a name filter matches, and a
-            # substring is enough for either.
             by_name = await service.search(
                 "cobalt heron amber marsh",
                 top_k=1,
@@ -308,8 +296,6 @@ def test_the_real_vanilla_research_flow(project: Path) -> None:
             )
             assert by_name["hits"][0]["chunk_id"] == hit["chunk_id"]
 
-            # A name no source carries is a filtered answer rather than a silent
-            # corpus, so the answer names the filter it applied.
             unmatched_name = await service.search(
                 "cobalt heron amber marsh",
                 top_k=1,
@@ -349,7 +335,6 @@ def test_the_real_vanilla_research_flow(project: Path) -> None:
 
     asyncio.run(scenario())
 
-    # A second process starts from the same caches with nothing to download.
     async def offline_scenario() -> None:
         async with Research(_config(project, offline=True)) as service:
             result = await service.search(
@@ -378,12 +363,8 @@ def test_the_real_vanilla_research_flow(project: Path) -> None:
 def test_a_gateway_that_cannot_start_is_reported_by_the_operation_that_needed_it(
     project: Path,
 ) -> None:
-    """The reason is the gateway's own log tail, not a connection that closed.
-
-    Nothing here opens a gateway until an operation needs one, so a status read
-    succeeds against a gateway that cannot start, and the failure arrives with
-    the reason the gateway wrote plus the paths a reader must open to see the
-    rest.
+    """Nothing here opens a gateway until an operation needs one, so a status read succeeds
+    against a gateway that cannot start.
     """
 
     write_pdf(project / "sources" / "evidence.pdf", ["The cobalt heron is evidence."])
@@ -404,8 +385,6 @@ def test_a_gateway_that_cannot_start_is_reported_by_the_operation_that_needed_it
 
         message = str(failure.value)
         assert "The UltraRAG gateway could not start" in message
-        # The reason is the line the gateway itself printed, not the symptom a
-        # caller would otherwise be left with.
         assert "no runtime at /nowhere" in message
         runtime_root = project / ".research-rag" / "runtime"
         assert str(runtime_root / "logs" / "vanilla-gateway-stderr.log") in message
@@ -416,8 +395,6 @@ def test_a_gateway_that_cannot_start_is_reported_by_the_operation_that_needed_it
 
 @pytest.mark.integration
 def test_the_terminal_and_the_workspace_answer_the_same_payload(project: Path) -> None:
-    """One engine, one payload: a CLI-shaped call and a workspace call agree."""
-
     write_pdf(project / "sources" / "evidence.pdf", ["The cobalt heron is evidence."])
 
     async def scenario() -> None:

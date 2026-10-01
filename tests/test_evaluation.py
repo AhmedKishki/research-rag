@@ -1,9 +1,4 @@
-"""Unit coverage for the retrieval-evaluation harness.
-
-The harness is a measurement script, not a shipped module, so it is loaded by
-path. These tests cover the judgment resolution and the ranking metrics without
-touching a project, a model, or the network.
-"""
+"""The harness is a measurement script, not a shipped module, so it is loaded by path."""
 
 from __future__ import annotations
 
@@ -48,7 +43,6 @@ def test_ndcg_at_rewards_higher_ranks(evaluation) -> None:
         1 / 1.584962500721156
     )
     assert evaluation.ndcg_at(["c2"], {"c1"}, 10) == 0.0
-    # A relevant item outside the window contributes nothing.
     assert evaluation.ndcg_at(["c2", "c3"], {"c1"}, 1) == 0.0
 
 
@@ -60,7 +54,7 @@ def test_lexical_overlap_ignores_stopwords_and_short_tokens(evaluation) -> None:
     assert evaluation.lexical_overlap("cobalt lithium Congo", passage) == pytest.approx(
         2 / 3
     )
-    # Only stopwords and short words: nothing to match, so no signal.
+    # Nothing to match, so no signal.
     assert evaluation.lexical_overlap("what is the of it", passage) == 0.0
     assert evaluation.content_tokens("the and it of") == set()
 
@@ -247,8 +241,8 @@ def test_summarize_reports_modes_and_classes_separately(evaluation) -> None:
     assert summary["bm25"]["overall"]["query_count"] == 2
     assert summary["bm25"]["overall"]["success_at_1"] == pytest.approx(0.5)
     assert summary["bm25"]["overall"]["mrr"] == pytest.approx(0.5)
-    # Source spread is reported beside the quality columns, because a reordering
-    # change that holds success flat matters only if it moves this one.
+    # A reordering change that holds success flat matters only if it moves source
+    # spread, so it is reported beside the quality columns.
     assert summary["bm25"]["overall"]["mean_distinct_sources"] == pytest.approx(4.0)
     assert summary["bm25"]["per_class"]["quote"]["query_count"] == 1
     assert summary["bm25"]["per_class"]["quote"]["success_at_1"] == pytest.approx(1.0)
@@ -278,8 +272,8 @@ def test_mode_variants_expand_the_reranked_mode_per_model(evaluation) -> None:
     )
 
     labels = [label for label, _ in variants]
-    # The default model keeps the plain label its published numbers use, and a
-    # second model is a second row over the same queries rather than a new mode.
+    # The default model keeps the plain label its published numbers use, and a second
+    # model is a second row over the same queries, not a new mode.
     assert labels == [
         "bm25",
         "dense",
@@ -293,6 +287,5 @@ def test_mode_variants_expand_the_reranked_mode_per_model(evaluation) -> None:
         "rerank_model": evaluation.DEFAULT_RERANKER_MODEL,
     }
     assert variants[4][1]["rerank_model"] == "jinaai/jina-reranker-v1-turbo-en"
-    # Only the reranked rows carry a model, and each names its own.
     assert all("rerank_model" not in settings for _, settings in variants[:3])
     assert all(settings["rerank"] is False for _, settings in variants[:3])

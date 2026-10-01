@@ -1,5 +1,3 @@
-"""Unit coverage for the pinned embedding-model registry."""
-
 from __future__ import annotations
 
 import pytest
@@ -31,7 +29,6 @@ def test_the_german_model_is_offered_with_its_own_dimension() -> None:
     assert model.dimension == 768
     assert model.maximum_tokens == 8192
     assert model.covers("de")
-    # A German model is not an English one.
     assert not model.covers("en")
 
 

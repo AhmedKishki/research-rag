@@ -1,11 +1,9 @@
 """The one way this app runs an external command.
 
-`git`, `uv`, and `pipx` are not children of this app: they hold no project and
-serve no UI, so they inherit the environment unchanged rather than the
-managed-child environment a server of this app would be handed. Every call
-arrives through an injected runner, so a test can put any tool anywhere it
-likes, including out of reach, and the decision it checks is the one the
-command makes in production.
+`git`, `uv`, and `pipx` hold no project and serve no UI, so they inherit the
+environment unchanged rather than the managed-child environment a server of this
+app is handed. Every call arrives through an injected runner, so a test can put
+any tool out of reach and check the decision the command makes in production.
 """
 
 from __future__ import annotations
@@ -15,14 +13,12 @@ from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
-# How long an external command may take before it is a failure worth reporting.
+# How long an external command may run before it is reported as a failure.
 COMMAND_TIMEOUT_SECONDS = 300.0
 
 
 @dataclass(frozen=True, slots=True)
 class CommandResult:
-    """One completed subprocess call."""
-
     returncode: int
     stdout: str = ""
     stderr: str = ""
@@ -36,8 +32,6 @@ Runner = Callable[..., CommandResult]
 
 
 def subprocess_runner(argv: Sequence[str], *, cwd: Path | None = None) -> CommandResult:
-    """Run one external command and report what it said."""
-
     try:
         completed = subprocess.run(
             [str(part) for part in argv],

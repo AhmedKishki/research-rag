@@ -1,5 +1,3 @@
-"""Resumable ingestion: staging, checkpoints, activation, and recovery."""
-
 from __future__ import annotations
 
 import asyncio
@@ -92,7 +90,7 @@ PENDING_ACTIVATION_VERSION = 1
 
 
 class _SourceChangedDuringIngest(RuntimeError):
-    """Internal signal that a staged input snapshot is no longer current."""
+    pass
 
 
 class IngestionWorkflow:
@@ -794,7 +792,7 @@ class IngestionWorkflow:
         timings = checkpoint.setdefault("phase_timings_seconds", {})
         timings[phase] = float(timings.get(phase) or 0.0) + elapsed
 
-    async def _advance_ingestion(  # noqa: C901 — split is tracked in TODO.md:45
+    async def _advance_ingestion(  # noqa: C901 — split is tracked in TODO.md
         self,
         *,
         staging_root: Path,

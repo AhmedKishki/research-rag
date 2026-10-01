@@ -8,12 +8,10 @@ only the keys being changed are set, and every sibling key is written back as it
 was, so a hand edit this writer does not understand survives a write made in a
 browser.
 
-The cost of a change is computed and never declared. `Setting.layer` is the
-registry's own classification, and it is wrong often enough to be useless here:
-seven keys labelled `identity` appear in neither the retrieval-policy fingerprint
-nor the recorded chunk settings, so a warning built from that label would demand a
-regeneration the code does not require. The cost comes from applying a value and
-recomputing what a build records, which is the code the build itself runs.
+The cost of a change is computed and never declared: `Setting.layer` is the
+registry's own classification and mislabels keys no generation reads, so the cost
+comes from applying a value and recomputing what a build records, which is the
+code the build itself runs. `AGENTS.md` states the rule.
 
 A write adopts the settled values in this process rather than resolving every
 layer again, because the layers this app was started with are not recoverable
@@ -140,8 +138,6 @@ def _toml_string(value: str) -> str:
 
 
 def _toml_value(value: Any, key: str) -> str:
-    """Return one scalar as TOML, refusing anything `SETTINGS` does not declare."""
-
     if isinstance(value, bool):
         return "true" if value else "false"
     if isinstance(value, int):
@@ -238,8 +234,6 @@ def merged_document(
     document: Mapping[str, Any],
     values: Mapping[str, Any],
 ) -> dict[str, Any]:
-    """Return the document with only these keys set and every other key kept."""
-
     merged: dict[str, Any] = {
         key: dict(value) if isinstance(value, Mapping) else value
         for key, value in document.items()
@@ -263,8 +257,6 @@ def layer_of(origin: str) -> str:
 
 
 def is_writable(origin: str) -> bool:
-    """Whether a project file can change a value this layer supplied."""
-
     return layer_of(origin) not in ABOVE_PROJECT_LAYERS
 
 
@@ -291,8 +283,6 @@ def settings_revision(
 
 
 def _recorded_identity(settings: EffectiveSettings) -> dict[str, Any]:
-    """What a generation records about the settings that built it."""
-
     facts = settings.embedding_facts
     return {
         "retrieval_policy": retrieval_policy_fingerprint(settings),
@@ -307,8 +297,6 @@ def _recorded_identity(settings: EffectiveSettings) -> dict[str, Any]:
 
 
 def change_cost(before: EffectiveSettings, after: EffectiveSettings) -> dict[str, Any]:
-    """Return what moving from one set of values to another costs a generation."""
-
     recorded_before = _recorded_identity(before)
     recorded_after = _recorded_identity(after)
     moved = [
@@ -392,8 +380,6 @@ def _none_cost() -> dict[str, Any]:
 
 
 def setting_costs(settings: EffectiveSettings) -> dict[str, dict[str, Any]]:
-    """Return the cost of changing each key, keyed by that key."""
-
     return {setting.key: setting_cost(settings, setting) for setting in SETTINGS}
 
 
@@ -533,8 +519,6 @@ def _refusal_for_layer(key: str, origin: str, path: Path) -> str:
 
 
 def _consequences(costs: Mapping[str, dict[str, Any]]) -> list[tuple[str, list[str]]]:
-    """The consequences a set of key costs implies, each with the keys causing it."""
-
     causes: list[tuple[str, list[str]]] = []
     for cause, clause in _CAUSE_CLAUSES:
         keys = sorted(key for key, cost in costs.items() if cause in cost["moved"])
@@ -728,8 +712,6 @@ def _cost_warning(
     keys: Iterable[str],
     project_root: Path,
 ) -> str:
-    """The warning a costly change raises before anything is written."""
-
     consequences = _consequences({key: costs[key] for key in keys})
     if not consequences:
         return ""
@@ -748,8 +730,6 @@ def _saved_message(
     changed: Iterable[str],
     costs: Mapping[str, dict[str, Any]],
 ) -> str:
-    """What the caller is told after a write."""
-
     count = len(costs)
     parts = [f"Saved {count} {'value' if count == 1 else 'values'} to {path}."]
     parts.extend(

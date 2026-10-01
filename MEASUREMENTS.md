@@ -7,11 +7,9 @@ uv run python scripts/benchmark_write_pattern.py --root /path/on/target/disk
 uv run python scripts/evaluate_retrieval.py --project /path/to/project --offline
 ```
 
-The retrieval numbers were measured against the pinned engine this app runs, and the service layer is that project's unchanged code. The engine and its payloads are the previous ones: the same seven operations behind the same lean/full projection, so every payload figure below is that project's.
+## Workload and design envelope
 
-## 1. Workload and design envelope
-
-Built and measured for 25–250 English-primary born-digital PDF/EPUB sources, 5,000–50,000 chunks, on CPU only, with humanities and social-science prose that carries footnotes, reference lists, tables, and short quotations in other scripts. Out of scope, and not claimed: non-English-primary corpora, multilingual retrieval, OCR or scanned material, handwriting, and formula-heavy corpora.
+Built and measured for 25–250 English-primary born-digital PDF/EPUB sources, 5,000–50,000 chunks, on CPU only. Out of scope, and not claimed: non-English-primary corpora, multilingual retrieval, OCR or scanned material, handwriting, and formula-heavy corpora.
 
 ### Reference corpus
 
@@ -28,7 +26,7 @@ Built and measured for 25–250 English-primary born-digital PDF/EPUB sources, 5
 | Dense index | portable float32 vectors, exact cosine scan |
 | Character | English humanities and social-science prose with footnotes, reference lists, tables, and short quotations in other scripts |
 
-## 2. Ingestion cost
+## Ingestion cost
 
 ### Full rebuild of the reference corpus on NVMe storage, CPU only
 
@@ -43,7 +41,7 @@ Built and measured for 25–250 English-primary born-digital PDF/EPUB sources, 5
 | assembly | 1.3 s |
 | **total** | **about 1,007 s (17 minutes)** |
 
-Embedding dominates, and it is CPU-bound: phase timings are only weakly device-dependent. The same build reports 8 of 13,158 chunks above the embedding model's 512-token input limit, the largest at 3,417 of that tokenizer's tokens because the chunker counts GPT-2 tokens and the embedding model counts its own. They are counted and flagged per chunk rather than split, because splitting would change chunk identities and reuse without a long-input strategy. The build discarded 1 corrupt chunk and excluded 16 corrupt extraction units, each disclosed with its locator and reason.
+Embedding dominates, and it is CPU-bound: phase timings are only weakly device-dependent. The same build reports 8 of 13,158 chunks above the embedding model's 512-token input limit, the largest at 3,417 of that tokenizer's tokens because the chunker counts GPT-2 tokens and the embedding model counts its own. The build discarded 1 corrupt chunk and excluded 16 corrupt extraction units, each disclosed with its locator and reason.
 
 ### What durability costs, and why writes are grouped
 
@@ -56,7 +54,7 @@ One atomic write, 17–35 KB payload, measured on both devices:
 | + directory fsync | 91.25 ms | 2.67 ms |
 | 8 artifact files sharing one directory fsync | 803 ms/batch | 14.5 ms/batch |
 
-Payload size is irrelevant on the HDD: a 17 KB checkpoint costs the same as a 35 KB one. Cost follows the number of durability operations, so a unit's artifacts are written together and committed with one directory fsync before the checkpoint that claims the unit complete. Grouping cut chunking by 17–37 s on a 64-unit HDD corpus. `assembly` stayed under 1.7 s in every run, inside the machine's noise, so it is not claimed as an improvement.
+Payload size is irrelevant on the HDD: a 17 KB checkpoint costs the same as a 35 KB one. Cost follows the number of durability operations, so a unit's artifacts are written together and committed with one directory fsync before the checkpoint that claims the unit complete. Grouping cut chunking by 17–37 s on a 64-unit HDD corpus.
 
 ### Chunking in batches of 16 extraction units
 
@@ -74,7 +72,7 @@ Chunk identities are identical either way. A crash redoes at most one batch of 1
 | embedded ANN index (Qdrant local mode) | 3,040.73 s and a 105 MB generation, measured on the project's HDD |
 | exact scan of the generation's portable vectors | 0.07 s of index work and a 68 MB generation, on NVMe |
 
-Three things decide this. The embedded build is dominated by per-point device cost: 75.5× slower on that HDD than the same build on NVMe. It returns neither chunk identity nor scores through the upstream API, which the research contract needs. The exact scan reads the portable float32 vectors the generation already stores, so it needs no separate index and returns the same top 20 as a brute-force ranking. Above 200,000 chunks the exact scan stops being the right default and the embedded backend is chosen instead; that threshold is arithmetic from measured exact-scan cost, not a measurement at that size.
+Three things decide this. The embedded build is dominated by per-point device cost: 75.5× slower on that HDD than the same build on NVMe. It returns neither chunk identity nor scores through the upstream API, which the research contract needs. The exact scan reads the portable float32 vectors the generation already stores, so it needs no separate index and returns the same top 20 as a brute-force ranking. Above 200,000 chunks the exact scan stops being the right default and the embedded backend is chosen instead.
 
 ### Embedding: the inference batch is a padding decision
 
@@ -93,9 +91,9 @@ FastEmbed pads every sequence to the longest member of its batch, and ONNX Runti
 
 The token model predicts every row: a batch of one costs `sum(lengths) ≈ 9,728` tokens (2.6 s predicted, 2.70 s measured) while a batch of 64 costs `64 × 846 = 54,144` (14.6 s predicted, 14.27 s measured). Sorting narrows each group and still cannot beat a batch of one, which pads nothing. `EMBEDDING_INFERENCE_BATCH_SIZE` is therefore 1, and the vectors are identical either way: batch 1 and batch 64 returned bit-identical floats (`max |delta| = 0.0`) on two independent 64-text slices.
 
-Threads (ONNX intra-op and inter-op) at batch 1 on the same texts: runtime default 23.65 chunks/s, 1 → 9.31, 4 → 23.97, 8 → **31.66**, 16 → 20.03. The optimum was the physical core count, which is machine-specific, so `--embedding-threads` is unset by default: setting it to 16 measured *worse* than leaving it alone, and nothing is auto-detected.
+Threads (ONNX intra-op and inter-op) at batch 1 on the same texts: runtime default 23.65 chunks/s, 1 → 9.31, 4 → 23.97, 8 → **31.66**, 16 → 20.03.
 
-## 3. Candidate gating and per-query overhead
+## Candidate gating and per-query overhead
 
 ### The candidate gate
 
@@ -110,11 +108,11 @@ A chunk's usability verdict is a property of the chunk, not of the query, so it 
 | content-token extraction (query-dependent) | 2.18 ms | 8.37 ms |
 | **gate total** | **8.96 ms** | **92.06 ms** |
 
-That is 10.3× cheaper at the 200 candidates a reference-view query can reach, and about 1.4 ms instead of 15 ms at the default depth of 32. One shared function computes the bitmask for both the build and the query-time fallback, so a rejection decision and the counter that reports it cannot drift. Reason codes are recomputed only for a chunk the verdict flags as corrupt, because the response discloses them, and a generation whose lookup predates the column recomputes the verdict from text.
+That is 10.3× cheaper at the 200 candidates a reference-view query can reach, and about 1.4 ms instead of 15 ms at the default depth of 32. One shared function computes the bitmask for both the build and the query-time fallback, so a rejection decision and the counter that reports it cannot drift. Reason codes are recomputed only for a chunk the verdict flags as corrupt, because the response discloses them.
 
 ### What a reader waits for
 
-One app process serves the workspace, the agent, and the command line, and it resolves settings and starts answering before the retrieval stack is imported and the gateway is opened, so a project reads fine on a machine where the UltraRAG runtime is not installed yet. Measured on the reference project, from spawning `research-rag` to the first answer:
+One app process serves the workspace, the agent, and the command line. Measured on the reference project, from spawning `research-rag` to the first answer:
 
 | What | Cost |
 |---|---|
@@ -125,7 +123,7 @@ One app process serves the workspace, the agent, and the command line, and it re
 | every later `search` | 1.06 s |
 | `sources` | 0.08 s |
 
-A gateway that cannot start is reported by the operation that needed it, never by a surface that never appeared, and the answer carries the tail of the logs the transport wrote plus the path of each one. The first search pays the cold cost of the engines this app runs: a query embedding model and a cross-encoder load from disk on first use, and nothing downloads because the models are cached.
+The answer to a gateway that cannot start carries the tail of the logs the transport wrote plus the path of each one. The first search pays the cold cost of the engines this app runs: a query embedding model and a cross-encoder load from disk on first use, and nothing downloads because the models are cached.
 
 ### Fixed overhead per query
 
@@ -142,11 +140,11 @@ Measured on the reference project, medians:
 | dependency report, first call in a process (one read of the 11 MB runtime tree) | **46.6 ms** |
 | dependency report, every later call (one marker stat) | 2.41 ms |
 
-The dependency report is the one term that reads outside this project: it validates the managed UltraRAG runtime, which hashes 11 MB, so it costs 46.6 ms the first time a process asks and 2.41 ms after that, against a `status` that measures 127 ms on its first call and a 76 ms median after it. It is cached per process and re-read only when the marker identifying the installed runtime changes, which is what a reinstall or a repair rewrites, so the cost is paid once per process rather than once per call. `search` never pays it.
+The dependency report is the one term that reads outside this project: it validates the managed UltraRAG runtime, which hashes 11 MB, against a `status` that measures 127 ms on its first call and a 76 ms median after it. It is cached per process and re-read only when the marker identifying the installed runtime changes, which is what a reinstall or a repair rewrites, so the cost is paid once per process rather than once per call. `search` never pays it.
 
-The staleness walk is an order of magnitude larger than everything else and the only term that grows with the number of source files: about 0.18 ms per source, so roughly 176 ms at 1,000 sources. That is why the engine takes a staleness switch at all, and only the measurement harness sets it: no reader-facing operation can skip it, because a search that cannot say whether its corpus moved is answering about something unknown. Nothing else here is cached, deliberately: caching the document map saves about 0.6 ms per query while adding cross-request state that must be invalidated correctly, and reusing SQLite connections saves about 0.09 ms while requiring one connection to be reachable from whichever thread serves the next call. At the scale where either would matter, parsing the manifest dominates both, so the right answer there is a persistent document-metadata index rather than a per-process cache. A staleness verdict cached behind a directory signature was rejected because it would be wrong: a directory's own modification time does not change when a file inside it is replaced in place, so such a cache would report a changed corpus as fresh. At this corpus size the switch does not change how fast a search feels — a warm hybrid query measured 567 ms with the check and 583 ms without it, inside the machine's run-to-run variance — and it is not claimed to.
+The staleness walk is an order of magnitude larger than everything else and the only term that grows with the number of source files: about 0.18 ms per source, so roughly 176 ms at 1,000 sources. That is why the engine takes a staleness switch at all, and only the measurement harness sets it: no reader-facing operation can skip it, because a search that cannot say whether its corpus moved is answering about something unknown. Nothing else here is cached, deliberately: caching the document map saves about 0.6 ms per query while adding cross-request state that must be invalidated correctly, and reusing SQLite connections saves about 0.09 ms while requiring one connection to be reachable from whichever thread serves the next call. At the scale where either would matter, parsing the manifest dominates both, so the right answer there is a persistent document-metadata index rather than a per-process cache. At this corpus size the switch does not change how fast a search feels — a warm hybrid query measured 567 ms with the check and 583 ms without it, inside the machine's run-to-run variance — and it is not claimed to.
 
-## 4. Retrieval quality and query latency
+## Retrieval quality and query latency
 
 Measured through `ResearchService.search`, the engine the workspace and the command line both call, on the current generation (13,158 chunks, 55 documents): 32 judged queries over 19 target passages, `include_staleness=false`, 160 searches in 107 s (mean 0.604 s), after a discarded 10.44 s warm-up. `scripts/evaluate_retrieval.py` produces these tables and a per-query JSON report; `evaluation/README.md` documents the judged set and its protocol.
 
@@ -215,7 +213,7 @@ A number here is comparable only with another measured by the same engine, becau
 
 `update` reads the remote's release tags with `git ls-remote --tags`, so a check needs no token and no API key. `DIST_TAG` is the tag name that names the current release rather than a version of its own (`latest`); a remote that publishes it wins over the highest version tag, because a maintainer moves it when a release is superseded. A tag carrying a pre-release or build-metadata suffix is not a release, and two tags claiming one version is a refusal rather than a coin toss. A checkout's position against that release is one of `at_release`, `behind_release`, `ahead_of_release`, `no_release`, and `unreadable_release`, and only `behind_release` is an update to apply: `ahead_of_release` is unreleased work, which is a fact to report and never a reason to change anything.
 
-`research-rag` and the frozen `research-ultra-rag-mcp` read and write the same project, which adds one limit this file does not resolve on its own: a figure measured by one and a figure measured by the other are the same measurement, because both call one unchanged engine, but a figure measured by a third checkout is not comparable until `doctor` reports the two trees as the same. Only `research-rag` changes, so a figure here is measured against an engine the frozen product still matches.
+`research-rag` and the frozen `research-ultra-rag-mcp` read and write the same project, which adds one limit this file does not resolve on its own: a figure measured by one and a figure measured by the other are the same measurement, because both call one unchanged engine and every payload figure here is that project's, but a figure measured by a third checkout is not comparable until `doctor` reports the two trees as the same. Only `research-rag` changes, so a figure here is measured against an engine the frozen product still matches.
 
 ### The reranker model: the default against `jinaai/jina-reranker-v1-turbo-en`
 
@@ -228,7 +226,7 @@ uv run python scripts/evaluate_retrieval.py --project /mnt/data/my-project \
     --reranker-model jinaai/jina-reranker-v1-turbo-en
 ```
 
-Measured on the current generation (14,072 chunks, 59 documents) with 30 of the 32 judged queries at `top_k=10` and no deep pass: 90 searches in 191 s. Two queries are missing because they judge target `t12`, whose source the reviewer excluded on 2026-09-20 as superseded by the Duke reprint in "STUART HALL, SELECTED WRITINGS ON RACE AND DIFFERENCE.pdf"; the current generation no longer holds it, so the run names it (`--skip-targets t12`) and reports 30 evaluated queries rather than quietly resolving fewer targets.
+Measured on the current generation (14,072 chunks, 59 documents) with 30 of the 32 judged queries at `top_k=10` and no deep pass: 90 searches in 191 s. Two queries are missing because they judge target `t12`, whose source the reviewer excluded as superseded by the Duke reprint in "STUART HALL, SELECTED WRITINGS ON RACE AND DIFFERENCE.pdf"; the current generation no longer holds it, so the run names it (`--skip-targets t12`) and reports 30 evaluated queries rather than quietly resolving fewer targets.
 
 | Reranker | succ@1 | succ@3 | succ@10 | MRR | nDCG@10 | doc@10 | mean s | p50 s | max s |
 |---|---|---|---|---|---|---|---|---|---|
@@ -267,20 +265,17 @@ Measured on the current generation with reranked hybrid, 30 of the 32 judged que
 
 - **The plateau starts at ten, and eight is the only depth measured below it.** One query out of thirty separates 8 from the rest, so the difference is directional rather than decisive on this set; it is consistent across every metric, and the mechanism is visible in the window arithmetic above: 8 reranks sixteen candidates, 10 reranks twenty.
 - **The default is 10**, the smallest depth that keeps the measured quality, and the depth every published number was taken at. Asking for 15 buys reach (`doc@k` 93.3% to 96.7%), which is worth it when a first answer is thin.
-- **The payload grows by roughly 1.6 kB per passage.** Depth is cheap, and a workspace renders it either way.
+- **The payload grows by roughly 1.6 kB per passage.**
 - **`rerank_max_candidates` and the minimum candidate count are not levers at this corpus size.** Raising the cap to 100 or 150, and the minimum to 50, changed no ranking decision, because the window formula never reaches them. They stay settings because a larger corpus could reach them, not because they moved anything here.
 - **`maximum_candidates` bounds the widening a filter triggers, and that is where it acts.** A filter drops passages after the corpus is ranked, so a narrow one cannot fill `top_k` and the lexical window doubles until it can; without a bound that doubling walks the whole corpus, a full ranking per step, and a single-author query over 23,272 chunks spent 59.8 s to answer. The window stops at `maximum_candidates` (200), which answers the same query in 0.3 s, and the response reports the window it reached so a filter that matched nothing inside it cannot read as an empty corpus. The bound costs reach: a document whose passages all rank below the ceiling is not found by a filter that names it, which the earlier full-corpus walk did reach.
 
-## 5. Current limits
+## Current limits
 
-- **Retrieval quality is measured, not settled.** The numbers above describe findability of one designated passage per query on one corpus; pooled judgments, a second annotator, and a second corpus are open work in `TODO.md`.
-- **Dense cost above this corpus size is extrapolated.** The 200,000-chunk switch to the embedded backend is arithmetic from the measured exact-scan cost, not a measurement at that size.
-- **Over-limit chunks are flagged, not split.** Splitting would change chunk identities and reuse behaviour, so the build counts and flags them.
+- **Retrieval quality is measured, not settled**, and pooled judgments, a second annotator, and a second corpus are open work in `TODO.md`.
+- **Cost above this corpus size is arithmetic, not a measurement.** The 200,000-chunk switch to the embedded backend comes from the measured exact-scan cost rather than from a run at that size, and that backend is unoptimised for it: one connection per phase and time-boxed upload batches are unbuilt.
+- **Over-limit chunks are flagged, not split.** Splitting would change chunk identities and reuse behaviour without a long-input strategy, so the build counts and flags them.
 - **Older generations are read as they are.** A schema-1 generation stays BM25-only until it is re-ingested, and a lookup written before the retrieval-verdict column is recomputed on first use rather than regenerated silently.
-- **Generation retention is unbounded.** Nothing prunes generations; `status` reports what each occupies and removal is manual.
-- **The embedding thread count is left to the runtime.** The measured optimum is machine-specific, and forcing the value measured worse than the default on the reference machine.
-- **The embedded backend is unoptimised for corpora far above this one.** One connection per phase and time-boxed upload batches are unbuilt, and both matter only above the 200,000-chunk threshold where that backend is selected at all; nothing here measures that size, so the cost above it is arithmetic rather than a reading.
-- **Extraction is English-oriented.** The embedding model, the text-health policy, and the chunker target English-primary prose; other scripts appear as quotations inside it and are marked advisory rather than withheld.
+- **The embedding thread count is left to the runtime.** The measured optimum is the physical core count, which is machine-specific; setting `--embedding-threads` to 16 measured *worse* than leaving it alone, and nothing is auto-detected.
 - **`assembly` cost sits inside the machine's noise.** It stayed under 1.7 s in every measured run, so no claim is made about it.
 
 ## What a ranking change costs the corpus
@@ -312,7 +307,7 @@ The staging checkpoint identity does not include the retrieval-policy fingerprin
 
 Below 0.72 the gate does almost nothing: 0.6 is indistinguishable from off on every metric and removes 2.6 of 70 candidates a query. At 0.72 it removes 23 candidates a query from the fused pool and the shipped path is unchanged — succ@1 is identical, and it trades one top-3 hit for one document. At 0.8 it stops removing noise and starts removing relevant passages: the paraphrases lose a query, `doc@k` falls from 93.3% to 90.0%, and a dense-only ranking returns 0.77 results a query, so the fused answer has nothing left but its lexical half.
 
-So 0.72 it is: the shipped path cannot tell the values below it apart, and the value above it is where the gate starts costing answers. The default stays, and the measurement bounds the knob rather than crowning a value.
+So 0.72 it is: the shipped path cannot tell the values below it apart, and the value above it is where the gate starts costing answers.
 
 The gate is calibrated for a fused ranking, and a dense-only one wants a much lower value — at 0.72 it returns 5.2 results where 10 were asked for. The agent-facing search tool is hybrid-only, so nothing shipped is in that position, and a dense-only method exposed later would have to not apply this gate. The relative rescue measured below narrows that gap without moving the floor.
 
@@ -409,9 +404,9 @@ What the rule does to the two queries that exposed the problem:
 
 The one-word query is the case the word floor was already handling; the fraction reaches the same passages through the corpus's own unit, and `waste` — whose shortest returned passage is 115 tokens — is untouched, as a length rule should leave a query that never had the problem.
 
-Cost and reversibility. The tokenizer loads once per process (0.22 s) and counting costs about 0.05 ms a passage, under the noise of these runs' per-search means (0.49–0.79 s across the six runs here, ordered by machine load rather than by setting). The fraction is runtime like the word floor: it enters neither the retrieval-policy fingerprint nor the generation manifest, and the runs report `generation_upgrade_required: false`, so a project can set it, measure it, and drop it without rebuilding.
+Cost and reversibility. The tokenizer loads once per process (0.22 s) and counting costs about 0.05 ms a passage, under the noise of these runs' per-search means (0.49–0.79 s across the six runs here, ordered by machine load rather than by setting). The fraction is runtime like the word floor: it enters neither the retrieval-policy fingerprint nor the generation manifest, so a project can set it, measure it, and drop it without rebuilding.
 
-What these numbers do not establish. The judged set's shortest target is 168 tokens, so these rows bound the harm to long designated passages and say nothing about a corpus whose evidence is legitimately short. The 38-token floor is not a back-matter filter: it takes 23.4% of the corpus's *prose* chunks (4,057 of 17,325), 56.1% of its lists (423 of 754) and 70.7% of its tables (29 of 41), because a short unit is short whatever it holds. On this corpus that is the intended trade — a five-word index line is exactly as short as a one-line paragraph, and only the query can tell them apart — but a corpus whose answers are table rows, catalogue entries, or bibliography lines would lose evidence the judged set here could never detect. That is why the packaged default is 0 and the value belongs in a project's own configuration.
+What these numbers do not establish. The 38-token floor is not a back-matter filter: it takes 23.4% of the corpus's *prose* chunks (4,057 of 17,325), 56.1% of its lists (423 of 754) and 70.7% of its tables (29 of 41), because a short unit is short whatever it holds. On this corpus that is the intended trade — a five-word index line is exactly as short as a one-line paragraph, and only the query can tell them apart — but a corpus whose answers are table rows, catalogue entries, or bibliography lines would lose evidence the judged set here could never detect. That is why the packaged default is 0 and the value belongs in a project's own configuration.
 
 ## The lexical abstention gate, measured
 
@@ -466,7 +461,7 @@ So neither alternative is taken:
 - **A wider overlap costs the shipped path** the same target at `succ@k` plus 0.009 MRR and 0.018 nDCG, and costs BM25 `succ@3` (76.2% to 66.7%) while adding 786 chunks for the same text. It is the smaller loss of the two and buys nothing.
 - **The shipped 384/64 wins every column the tool's own path reads**, so the default stays and the sweep's finding is that the knob is already at its best measured setting rather than merely at its ceiling.
 
-What this does not establish. The comparison is small: 21 queries over 13 targets, where one target's rank is worth about four points of `succ@k`, so it bounds a decision rather than crowning a configuration. The entity-and-quote pattern is the explanation to test first on a corpus that disagrees. The three generations are within 27% of each other in size, so nothing here says what happens to a much larger corpus, where the chunk count is also what decides the dense backend.
+What this does not establish. The comparison is small: 21 queries over 13 targets, where one target's rank is worth about four points of `succ@k`, so it bounds a decision. The entity-and-quote pattern is the explanation to test first on a corpus that disagrees. The three generations are within 27% of each other in size, so nothing here says what happens to a much larger corpus, where the chunk count is also what decides the dense backend.
 
 ## The reranked window, calibrated
 
@@ -483,7 +478,7 @@ Ten and fifteen are the same run: both give up one query, and the same one. It i
 
 The cost is linear and easy to carry: 1.14, 1.34, 1.70 and 2.55 seconds per reranked query for windows of 10, 15, 20 and 30, which is about 0.07 s for each candidate the cross-encoder reorders plus about 0.44 s fixed. Ten more candidates cost about 0.7 s.
 
-So the default window stays at 20: it is the shallowest window that reaches the measured plateau, and 15 trades one top-1 hit for 0.36 s. Absolute latency is comparable only within one sweep, and this one is the sweep to read: the same configuration measured 1.70 s per reranked query here against 2.3 s in section 4, and the difference is the machine's state rather than the setting.
+So the default window stays at 20: it is the shallowest window that reaches the measured plateau, and 15 trades one top-1 hit for 0.36 s. Absolute latency is comparable only within one sweep, and this one is the sweep to read: the same configuration measured 1.70 s per reranked query here against 2.3 s in "Per-mode latency", and the difference is the machine's state rather than the setting.
 
 ## Pseudo-relevance feedback, measured
 
@@ -500,7 +495,7 @@ No quality metric moves, and the mean is run order rather than the feature: the 
 
 The terms are the ones the feature was designed to add. A direct search with `RESEARCH_ULTRARAG_RETRIEVAL_PRF=true` returned `prf_terms: [verleugnung, cyberculture, hybridization, object, freud, according, virtual, worlds]`: content words, one of them the corpus's own critical vocabulary. Ranking by leader support alone mines the words every passage shares instead, which is why the rarity weight exists.
 
-So the selection rule is doing its job and the judged set cannot see the difference. A known-item set — one designated passage per query, judged by one annotator — scores a passage that makes the same point as a miss, so it registers a change only when the change moves that exact passage. Widening the judgments is what would measure this feature; the default stays off until then.
+So the selection rule is doing its job and the judged set cannot see the difference: a known-item set registers a change only when the exact designated passage moves. Widening the judgments is what would measure this feature; the default stays off until then.
 
 ## Contextual chunk headers, measured
 
@@ -513,7 +508,7 @@ So the selection rule is doing its job and the judged set cannot see the differe
 
 Both generations hold 14,410 chunks, so they differ in the headers and nothing else. Every metric is identical, and so is every query class: quotes 10 of 10, paraphrases 7 of 10, entities 8 of 10 either way.
 
-Part of the reason is visible in the chunks themselves. This corpus is mostly PDFs, and a PDF locator carries a page rather than a section, so a PDF chunk is headed by its title alone — and the first chunk of a paper usually repeats that title in its own first line, which the header then duplicates. For the rest of a paper the header adds the work's name where the passage had none, which is the case the feature exists for, and the judged set cannot see it: it is known-item, so it registers a change only when the exact designated passage moves, the same limit that made the pseudo-relevance expansion measure neutral.
+Part of the reason is visible in the chunks themselves. This corpus is mostly PDFs, and a PDF locator carries a page rather than a section, so a PDF chunk is headed by its title alone — and the first chunk of a paper usually repeats that title in its own first line, which the header then duplicates. For the rest of a paper the header adds the work's name where the passage had none, which is the case the feature exists for, and the judged set cannot see it, for the limit stated under "What these numbers do not establish".
 
 Latency is not comparable across sessions, and this run had no same-session control: 1.40 s per reranked query here against 1.70 s for the same window in the sweep above, with a different machine state behind both.
 
@@ -541,7 +536,7 @@ The shipped default is 0.25 because 0.15, 0.25 and 0.4 are indistinguishable on 
 
 The reordering costs no measurable time: the greedy pass runs over candidates that were already scored and returns `top_k` of them, so the per-search means of these runs (1.6–2.1 s) track machine state rather than the value, as in the sweeps above.
 
-Section 4's tables were taken without this setting, which is the 0.0 row: the same engine with the reordering off. Absolute numbers are comparable only within one sweep, and these rows are the sweep to read.
+The retrieval-quality tables under "Retrieval quality and query latency" were taken without this setting, which is the 0.0 row: the same engine with the reordering off.
 
 ## What a running project costs the machine
 

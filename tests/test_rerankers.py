@@ -1,5 +1,3 @@
-"""Unit coverage for the pinned reranker registry."""
-
 from __future__ import annotations
 
 import pytest
@@ -34,6 +32,6 @@ def test_resolve_rejects_unknown_names_and_lists_what_is_supported() -> None:
         resolve_reranker_model("some-org/some-reranker")
 
     # A name differing only by whitespace is still unsupported, and the refusal
-    # names the choices instead of guessing.
+    # names the choices.
     with pytest.raises(ValueError, match="jinaai/jina-reranker-v1-turbo-en"):
         resolve_reranker_model(f"{DEFAULT_RERANKER_MODEL} ")

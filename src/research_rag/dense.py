@@ -1,5 +1,3 @@
-"""Project-local dense retrieval and optional CPU reranking."""
-
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -42,7 +40,7 @@ DENSE_INDEX_PATHS = {
 
 
 class DenseTokenAuditUnavailable(RuntimeError):
-    """Raised when the embedding tokenizer cannot be inspected safely."""
+    pass
 
 
 class RerankerUnavailable(RuntimeError):
@@ -55,8 +53,6 @@ class RerankerUnavailable(RuntimeError):
 
 @dataclass(frozen=True, slots=True)
 class DenseSearchHit:
-    """One scored Qdrant result, identified by the canonical chunk ID."""
-
     chunk_id: str
     score: float
 
@@ -200,8 +196,6 @@ def _load_audit_tokenizer(embedder: TextEmbedding) -> Tokenizer:
 
 
 class LocalQdrantDenseBackend:
-    """FastEmbed CPU vectors stored in an embedded, project-local Qdrant DB."""
-
     def __init__(
         self,
         model_cache_root: Path,
@@ -559,8 +553,6 @@ class LocalQdrantDenseBackend:
 
 @dataclass(frozen=True, slots=True)
 class _ExactIndex:
-    """A loaded exact index: memory-mapped vectors plus per-row identity."""
-
     vectors: np.ndarray[Any, np.dtype[np.float32]]
     chunk_ids: tuple[str, ...]
     document_ids: tuple[str, ...]

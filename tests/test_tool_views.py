@@ -1,5 +1,3 @@
-"""The agent-facing lean tool responses, and the full-detail debug path."""
-
 from __future__ import annotations
 
 import json
@@ -19,8 +17,7 @@ from research_rag.settings import (
 )
 from research_rag.tool_views import present_tool_response
 
-# Keys the service builds for ranking, extraction, and storage diagnostics. A
-# lean answer must not carry one.
+# Keys the service builds for ranking, extraction, and storage diagnostics.
 DIAGNOSTIC_KEYS = {
     "annotations",
     "available_retrieval_methods",
@@ -76,8 +73,7 @@ DIAGNOSTIC_KEYS = {
 def test_lean_passage_shape() -> None:
     lean = present_tool_response("search", _search_payload(), detail=LEAN_TOOL_DETAIL)
 
-    # The passages and the generation they came from. Nothing else: the query is
-    # the caller's own, the ranking is not published, and neither `stale` nor
+    # The query is the caller's own, the ranking is not published, and neither `stale` nor
     # `reranked` is news when both are what every answer is.
     assert set(lean) == {"generation_id", "hits"}
     assert lean["hits"] == [
@@ -96,11 +92,8 @@ def test_lean_passage_shape() -> None:
         },
     ]
 
-    # A passage is its source, its authors, where it sits, and its text. The
-    # reference is deliberately not citation-ready, an identifier the filename
-    # already gives is not repeated, a page label that repeats the physical page
-    # is not a second way of saying the same thing, and neither the quote-safety
-    # rule nor the advisory script note is repeated on every passage.
+    # The reference is deliberately not citation-ready, and neither the quote-safety rule nor
+    # the advisory script note is repeated on every passage.
     for key in (
         "citation",
         "direct_quote_safe",
@@ -158,7 +151,6 @@ def test_search_reports_an_applied_bibliographic_filter() -> None:
         "authors_any": ["Crawford"],
         "titles_any": ["Atlas of AI"],
     }
-    # The rest of the filter block stays a full-detail reader.
     assert "categories_any" not in filtered
 
 
@@ -250,8 +242,6 @@ def test_status_discloses_nothing_the_payload_did_not_say() -> None:
         assert set(entry) == {"check", "reason", "remedy"}
         assert entry["check"] in payload["blocked_by"][0]["check"]
         assert entry["reason"] in values
-    # A condition is reported, not invented, and not padded with a check the
-    # report never made.
     assert "degraded" not in lean
     assert json.loads(json.dumps(lean)) == lean
 
@@ -268,20 +258,14 @@ def test_status_lean_states_the_verdict_and_nothing_else() -> None:
     payload = _status_payload()
     lean = present_tool_response("status", payload, detail=LEAN_TOOL_DETAIL)
 
-    # A verdict and the work it implies: two booleans the caller can act on, the
-    # generation they describe, and the sentence that explains them. Nothing else
-    # — the corpus inventory is `find_source` one source at a time, and the
-    # retrieval policy, and the per-check detail are the command line's answer.
+    # Two booleans the caller can act on, the generation they describe, and the sentence
+    # that explains them.
     assert set(lean) == {"ready", "stale", "generation_id", "message"}
     assert lean["ready"] is True
     assert lean["stale"] is False
     assert lean["generation_id"] == "20260101T000000Z-abcdef"
-    # A generation that serves the corpus needs nothing from the caller.
     assert "requires" not in lean
 
-    # A generation that predates dense support is one call away from serving this
-    # tool, and the answer says which call rather than listing retrieval methods
-    # as if they were a choice.
     legacy = present_tool_response(
         "status",
         _status_payload(
@@ -301,10 +285,8 @@ def test_status_lean_states_the_verdict_and_nothing_else() -> None:
     assert "upgrade_reasons" not in legacy
     assert "available_retrieval_methods" not in legacy
 
-    # The retained generations, the categories, and the projects are inventories:
-    # they answer a question of their own and belong to the full-detail payload,
-    # so a status answer stays a statement about the selected generation. The
-    # counts are the same kind of thing, and the whole corpus inventory with them.
+    # Inventories answer a question of their own and belong to the full-detail
+    # payload, so a status answer stays a statement about the selected generation.
     serialized = json.dumps(lean)
     assert "generations" not in serialized
     for key in (
@@ -324,9 +306,8 @@ def test_status_lean_states_the_verdict_and_nothing_else() -> None:
     ):
         assert key not in serialized
         assert key in present_tool_response("status", payload, detail=FULL_TOOL_DETAIL)
-    # A field whose value is the harmless default is left out entirely.
-    # A dependency that is fine and one that is only listed are both absent: a
-    # lean answer discloses a condition, not an inventory of checks.
+    # A dependency that is fine and one that is only listed are both absent: a lean
+    # answer discloses a condition, not an inventory of checks.
     assert "blocked_by" not in lean
     assert "degraded" not in lean
     assert "checks" not in lean
@@ -334,9 +315,7 @@ def test_status_lean_states_the_verdict_and_nothing_else() -> None:
     assert "excluded_sources" not in lean
     assert "generation_upgrade_required" not in lean
     assert "upgrade_reasons" not in lean
-    # The overlay is applied at read time, so it is not a condition the caller
-    # acts on; reviewed sources the generation has not indexed are a call, and
-    # `requires` says so.
+    # The overlay applies at read time, so it is not a condition the caller acts on.
     assert "metadata_overlay_active" not in lean
     assert "metadata_pending_source_paths" not in lean
     assert "metadata_pending_source_count" not in lean
@@ -347,8 +326,6 @@ def test_status_lean_states_the_verdict_and_nothing_else() -> None:
 
 
 def test_status_names_every_call_the_verdict_requires() -> None:
-    # Every condition that a rebuild closes names that one call, so a caller
-    # never reads four fields to learn that it should ingest.
     for overrides in (
         {"stale": True},
         {"generation_upgrade_required": True, "upgrade_reasons": ["retrieval_policy"]},
@@ -362,8 +339,6 @@ def test_status_names_every_call_the_verdict_requires() -> None:
         )
         assert lean["requires"] == ["ingest"], overrides
 
-    # Reviewed metadata for sources outside the generation is a rebuild, and the
-    # count of those sources is not news beside the call it implies.
     pending = present_tool_response(
         "status",
         _status_payload(metadata_pending_source_paths=["a.pdf", "b.pdf"]),
@@ -374,8 +349,6 @@ def test_status_names_every_call_the_verdict_requires() -> None:
     assert pending["requires"] == ["ingest"]
     assert "metadata_pending_source_count" not in pending
 
-    # A running app older than the installed code needs the client to restart it,
-    # and the version block itself is a full-detail reader.
     restarting = present_tool_response(
         "status",
         _status_payload(
@@ -391,7 +364,6 @@ def test_status_names_every_call_the_verdict_requires() -> None:
     assert restarting["requires"] == ["restart_app"]
     assert "version" not in restarting
 
-    # Both at once is both calls, not the first one found.
     both = present_tool_response(
         "status",
         _status_payload(
@@ -437,7 +409,6 @@ def test_status_counts_available_source_changes_and_names_missing_ones() -> None
         "removed_sources": ["gone.pdf"],
         "metadata_changed": True,
     }
-    # No available source is ever named in a status answer.
     assert "new.pdf" not in json.dumps(stale)
     assert "edited.pdf" not in json.dumps(stale)
 
@@ -460,10 +431,8 @@ def test_status_before_the_first_ingestion_states_what_is_missing() -> None:
     }
     lean = present_tool_response("status", payload, detail=LEAN_TOOL_DETAIL)
 
-    # The verdict is stated, not inferred from an absence: no generation is
-    # `ready: false`, the corpus it would hold is `stale: true`, and the call
-    # that fixes both is named. The counts of what was discovered are the
-    # inventory `find_source` looks one source up in.
+    # No generation is `ready: false`, the corpus it would hold is `stale: true`, and the
+    # call that fixes both is named.
     assert set(lean) == {"ready", "stale", "requires", "message"}
     assert lean["ready"] is False
     assert lean["stale"] is True
@@ -483,8 +452,7 @@ def test_find_source_lean_keeps_handles_and_availability() -> None:
         "find_source", _find_source_payload(), detail=LEAN_TOOL_DETAIL
     )
 
-    # One lookup, and each match answers whether a search can reach the source.
-    # `included` and `exists` appear only where they withhold it.
+    # `included` and `exists` appear only where they withhold the source.
     assert lean["query"] == "crawford"
     assert lean["generation_id"] == "20260101T000000Z-abcdef"
     assert lean["match_count"] == 2
@@ -509,8 +477,6 @@ def test_find_source_lean_keeps_handles_and_availability() -> None:
         },
     ]
 
-    # A cap that hid matches is stated, so an empty remainder is not read as the
-    # whole answer.
     capped = present_tool_response(
         "find_source",
         _find_source_payload(match_count=12, truncated=True),
@@ -548,9 +514,8 @@ def test_ingest_lean_discloses_anomalies_only_when_they_happened() -> None:
     assert lean["generation_changed"] is True
     assert lean["document_count"] == 59
     assert lean["chunk_count"] == 14072
-    # What the build reused and rebuilt is cost rather than outcome: a caller
-    # cannot act on it, and it stays in the developer payload and the
-    # measurements that use it.
+    # What the build reused and rebuilt is cost rather than outcome: a caller cannot
+    # act on it.
     for key in (
         "reused_document_count",
         "rebuilt_document_count",
@@ -596,8 +561,6 @@ def test_ingest_in_progress_keeps_resume_state() -> None:
     lean = present_tool_response("ingest", payload, detail=LEAN_TOOL_DETAIL)
 
     assert lean["status"] == "in_progress"
-    # The generation did not change, which is the ordinary case and unsaid: a
-    # caller reading `status` already knows, and `next_action` says what to do.
     assert "generation_changed" not in lean
     assert lean["build_id"] == "20260101T000000Z-abcdef"
     assert lean["phase"] == "embedding"
@@ -641,20 +604,15 @@ def test_inclusion_response_is_lean() -> None:
     }
     assert inclusion["included"] is False
     assert inclusion["reason"] == "Reviewed duplicate."
-    # An exclusion that applies at once is the ordinary case; a decision waiting
-    # on a rebuild is the one a caller has to act on.
     assert "effective_immediately" not in inclusion
     assert "source_file_changed" not in inclusion
     assert "source_path" not in inclusion
 
 
 def test_a_chunk_decision_is_lean_and_says_whether_it_withholds_anything() -> None:
-    """The passage decision, its reason, and whether this generation holds it.
-
-    The same shape as a source decision with the chunk's own identifier, and the
-    one field the source answer has no use for: a decision about a chunk the
-    current generation does not hold is withholding nothing now, and a caller that
-    could not tell that apart would report a removal that removed nothing.
+    """A decision about a chunk the current generation does not hold is withholding nothing
+    now, and a caller that could not tell that apart would report a removal that removed
+    nothing.
     """
 
     withheld = present_tool_response(
@@ -685,8 +643,7 @@ def test_a_chunk_decision_is_lean_and_says_whether_it_withholds_anything() -> No
     }
     assert withheld["in_current_generation"] is False
     assert withheld["effective_immediately"] is False
-    # The locator and the source path are what the caller's own chunk id already
-    # says, and no rebuild is ever recommended for a decision the filter applies.
+    # The locator and the source path are what the caller's own chunk id already says.
     assert "locator" not in withheld
     assert "source_relative_path" not in withheld
     assert "generation_rebuild_recommended" not in withheld
@@ -744,8 +701,6 @@ def test_tool_detail_defaults_to_lean_and_rejects_unknown_modes(project: Path) -
 
 
 def _keys(value: object) -> set[str]:
-    """Collect every mapping key in a nested payload."""
-
     if isinstance(value, dict):
         found = set(value)
         for item in value.values():
@@ -760,8 +715,6 @@ def _keys(value: object) -> set[str]:
 
 
 def _hit() -> dict[str, object]:
-    """One full service passage, with every diagnostic field the service builds."""
-
     return {
         "rank": 1,
         "retrieval_rank": 1,
@@ -800,8 +753,6 @@ def _hit() -> dict[str, object]:
 
 
 def _anonymous_hit() -> dict[str, object]:
-    """A second passage from a source with no author, year, or DOI."""
-
     return {
         **_hit(),
         "rank": 2,

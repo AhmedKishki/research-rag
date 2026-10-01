@@ -32,8 +32,6 @@ def test_version_label_names_the_app_and_the_shared_ui() -> None:
 
 
 def test_version_lines_are_the_flag_s_answer_and_the_block_is_its_one_source() -> None:
-    """`--version` prints what `version_block` assembles, so the two cannot differ."""
-
     lines = version_lines()
 
     assert lines[0] == f"research-rag {APP_VERSION}"

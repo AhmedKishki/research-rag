@@ -47,8 +47,6 @@ DIST_TAG = "latest"
 
 @dataclass(frozen=True, slots=True)
 class Release:
-    """One published release: the version, the tag that names it, and its commit."""
-
     version: str
     tag: str
     commit: str | None = None
@@ -63,8 +61,6 @@ class Release:
 
 @dataclass(frozen=True, slots=True)
 class ReleaseSet:
-    """What a remote's tags publish, or why that cannot be read."""
-
     state: str = ""
     release: Release | None = None
     detail: str = ""
@@ -94,15 +90,11 @@ class ReleaseSet:
 
 
 def parse_release_tag(tag: str) -> str | None:
-    """Return the version a tag names, or None when it does not name a release."""
-
     found = RELEASE_TAG.match(tag.strip())
     return found.group("version") if found is not None else None
 
 
 def is_release_version(version: str) -> bool:
-    """Whether a version string is one a release tag may carry."""
-
     return parse_release_tag(version) == version.strip()
 
 
@@ -255,8 +247,6 @@ def declared_version(checkout: Path | None) -> str | None:
 
 
 def local_release_commit(root: Path, tag: str, run: Runner) -> str | None:
-    """Return the commit a fetched tag points at."""
-
     result = run(["git", "-C", str(root), "rev-parse", f"{tag}^{{commit}}"])
     if not result.ok:
         return None
@@ -265,8 +255,6 @@ def local_release_commit(root: Path, tag: str, run: Runner) -> str | None:
 
 
 def local_release_tags(root: Path, run: Runner) -> tuple[tuple[str, str], ...]:
-    """Return every local tag and the commit it points at."""
-
     listed = run(["git", "-C", str(root), "tag", "--list"])
     if not listed.ok:
         return ()
