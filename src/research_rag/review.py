@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import asyncio
+from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
 
@@ -17,11 +19,19 @@ from .sources import (
 from .storage import (
     StorageError,
     load_metadata_overrides,
+    write_chunk_exclusions,
     write_metadata_overrides,
     write_source_catalog,
     write_source_exclusions,
 )
-from .support import ResearchError, _effective_documents, _public_document, _utc_now
+from .support import (
+    ResearchError,
+    _document_for_chunk,
+    _effective_documents,
+    _locator_place,
+    _public_document,
+    _utc_now,
+)
 
 # How many sources one lookup returns by default, and the ceiling a caller can ask
 # for. The answer is a lookup, not an inventory, so it stays small whatever the
@@ -366,6 +376,208 @@ class ReviewWorkflow:
                 "generation_rebuild_recommended": changed,
                 "message": message,
             }
+
+    async def _chunk_placements(
+        self,
+        chunk_ids: Sequence[str],
+        current: tuple[Path, dict[str, Any]] | None,
+    ) -> dict[str, dict[str, str]]:
+        """Where each named chunk sits in the selected generation.
+
+        A chunk the generation does not hold is absent from the answer rather
+        than refused, because the decision is the reader's and stays on file
+        either way, and because a caller has to be able to tell a decision that
+        withholds nothing now from one that withholds a passage.
+        """
+
+        if current is None or not chunk_ids:
+            return {}
+        generation_root, manifest = current
+        lookup = await self._ensure_artifact_lookup(generation_root, manifest)
+        chunks = await asyncio.to_thread(lookup.chunks_by_ids, sorted(chunk_ids))
+        documents_by_id = _effective_documents(manifest, self._metadata())
+        return {
+            str(chunk_id): {
+                "source_relative_path": str(
+                    _public_document(_document_for_chunk(chunk, documents_by_id)).get(
+                        "source_relative_path"
+                    )
+                    or ""
+                ),
+                "locator": _locator_place(dict(chunk.get("locator") or {})),
+            }
+            for chunk_id, chunk in chunks.items()
+        }
+
+    async def set_chunk_inclusion(
+        self,
+        chunk_id: str,
+        *,
+        included: bool,
+        reason: str | None = None,
+    ) -> dict[str, Any]:
+        """Exclude one passage from retrieval, or restore it, without touching the file.
+
+        A decision about a passage is a decision about evidence rather than about
+        a document, so it is enforced by the retrieval filter at query time and
+        never by a generation: a rebuild keeps the chunk in the indexes and the
+        exclusion over it, which is why no call is recommended to close the gap.
+
+        A `chunk_id` is derived from content, so unchanged text keeps it across a
+        rebuild and anything else changes it. The generation a decision was
+        recorded in travels with it, and a chunk this generation does not hold is
+        reported as such rather than silently kept: an ingestion cannot bring a
+        removed chunk back, so the answer says which kind of entry this is.
+        """
+
+        normalized_id = (chunk_id or "").strip()
+        if not normalized_id:
+            raise ResearchError("A chunk decision needs a chunk_id")
+        async with self._operation():
+            try:
+                current = self._load_current_optional()
+                if current is None:
+                    raise SourcePolicyError(
+                        "No knowledge base exists, so no chunk can be named; "
+                        "call ingest first"
+                    )
+                generation_id = str(current[1]["generation_id"])
+                exclusions = self._chunk_exclusions()
+                previous = exclusions.get(normalized_id)
+                if included:
+                    changed = previous is not None
+                    exclusions.pop(normalized_id, None)
+                else:
+                    normalized_reason = (reason or "").strip()
+                    if not normalized_reason:
+                        raise SourcePolicyError(
+                            "A non-empty reason is required when excluding a chunk"
+                        )
+                    changed = (
+                        previous is None
+                        or previous.get("reason") != normalized_reason
+                        or previous.get("generation_id") != generation_id
+                    )
+                    if changed:
+                        exclusions[normalized_id] = {
+                            "reason": normalized_reason,
+                            "excluded_at": _utc_now(),
+                            "generation_id": generation_id,
+                        }
+                if changed:
+                    write_chunk_exclusions(
+                        self.config.chunk_exclusions_path,
+                        exclusions,
+                    )
+                saved_reason = None if included else exclusions[normalized_id]["reason"]
+                placement = (
+                    await self._chunk_placements([normalized_id], current)
+                ).get(normalized_id)
+            except (StorageError, SourcePolicyError, ValueError) as exc:
+                raise ResearchError(str(exc)) from exc
+
+            in_current_generation = placement is not None
+            if not changed:
+                message = (
+                    "Chunk is already included."
+                    if included
+                    else "Chunk is already excluded with this reason."
+                )
+            elif included:
+                message = (
+                    "Chunk inclusion saved. The passage answers a search again at "
+                    "once, and no ingestion is needed for that."
+                )
+            elif not in_current_generation:
+                message = (
+                    "Chunk exclusion saved, but this generation does not hold the "
+                    "chunk, so nothing is withheld from the passages you can reach "
+                    "now. The decision binds any later generation that holds it, and "
+                    "no ingestion can bring the chunk back."
+                )
+            else:
+                message = (
+                    "Chunk exclusion saved and enforced for current retrieval. "
+                    "The original file was not changed, and no ingestion is needed "
+                    "to keep enforcing it."
+                )
+            return {
+                "status": "changed" if changed else "unchanged",
+                "chunk_id": normalized_id,
+                "source_relative_path": (
+                    placement["source_relative_path"] if placement else None
+                ),
+                "locator": placement["locator"] if placement else None,
+                "included": included,
+                "reason": saved_reason,
+                "source_file_changed": False,
+                # An exclusion is applied by the filter rather than by the
+                # indexes, so it holds for the generation on screen and for every
+                # one built after it without a rebuild.
+                "effective_immediately": not included or in_current_generation,
+                "generation_rebuild_recommended": False,
+                "in_current_generation": in_current_generation,
+                "message": message,
+            }
+
+    async def list_chunk_exclusions(self) -> dict[str, Any]:
+        """The passages this project has taken out of retrieval, and why.
+
+        It reviews decisions rather than the corpus: one row per recorded
+        decision, each naming where its passage sat when the decision was made.
+        A row the selected generation does not hold is reported as such, because
+        that is the row a reader has to remove by hand and a rebuild will not
+        remove for them.
+        """
+
+        async with self._operation():
+            current = self._load_current_optional()
+            exclusions = self._chunk_exclusions()
+            placements = await self._chunk_placements(list(exclusions), current)
+            generation_id = (
+                str(current[1]["generation_id"]) if current is not None else None
+            )
+
+        records = [
+            {
+                "chunk_id": chunk_id,
+                "source_relative_path": placements.get(chunk_id, {}).get(
+                    "source_relative_path", ""
+                ),
+                "locator": placements.get(chunk_id, {}).get("locator", ""),
+                "reason": record["reason"],
+                "excluded_at": record["excluded_at"],
+                "in_current_generation": chunk_id in placements,
+            }
+            for chunk_id, record in exclusions.items()
+        ]
+        withheld = sum(1 for entry in records if entry["in_current_generation"])
+        if not records:
+            message = "No chunk is excluded from retrieval."
+        elif withheld == 0:
+            message = (
+                f"None of the {len(records)} excluded chunks is withheld from "
+                "current retrieval: each names a chunk this generation does not "
+                "hold, and no ingestion restores a removed chunk."
+            )
+        elif withheld == len(records):
+            message = (
+                f"Every one of the {withheld} excluded chunks is withheld from "
+                "current retrieval, and no original file was changed."
+            )
+        else:
+            message = (
+                f"{withheld} of the {len(records)} excluded chunks are withheld "
+                f"from current retrieval; the other {len(records) - withheld} name "
+                "a chunk this generation does not hold, and no ingestion restores "
+                "a removed chunk."
+            )
+        return {
+            "generation_id": generation_id,
+            "excluded_chunk_count": len(records),
+            "exclusions": records,
+            "message": message,
+        }
 
     async def set_source_metadata(
         self,

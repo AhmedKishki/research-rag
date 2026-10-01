@@ -96,6 +96,60 @@ def test_hand_written_metadata_file_is_honoured(project: Path) -> None:
     asyncio.run(exercise())
 
 
+def test_a_chunk_exclusion_written_by_hand_is_honoured_and_refused_loudly(
+    project: Path,
+) -> None:
+    """The same plain file and the same rules as the metadata overlay.
+
+    A decision a reader makes without this app is the decision this app would
+    have written, and a mistake in it is named rather than read as intent.
+    """
+
+    async def exercise() -> None:
+        service, _name = await _service(project)
+        found = await service.search("cobalt evidence", top_k=10, rerank=False)
+        target = found["hits"][0]["chunk_id"]
+        generation_id = json.loads(
+            (project / ".research-rag" / "runtime" / "current.json").read_text(
+                encoding="utf-8"
+            )
+        )["generation_id"]
+        path = project / ".research-rag" / "chunk-exclusions.json"
+
+        entry = {
+            "reason": "Table header, not a passage.",
+            "excluded_at": "2026-09-30T19:12:35.104Z",
+            "generation_id": generation_id,
+        }
+        path.write_text(
+            json.dumps({"schema_version": 1, "chunks": {target: entry}}, indent=2)
+            + "\n",
+            encoding="utf-8",
+        )
+
+        # No rebuild: the decision is enforced by the filter, so the passage is
+        # gone from the next search the moment the file says so.
+        result = await service.search("cobalt evidence", top_k=10, rerank=False)
+        assert result["hits"] == []
+        assert result["excluded_chunk_count"] == 1
+
+        path.write_text(
+            json.dumps(
+                {
+                    "schema_version": 1,
+                    "chunks": {target: {**entry, "included": False}},
+                },
+                indent=2,
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        with pytest.raises(ResearchError, match="Unsupported chunk exclusion fields"):
+            await service.status()
+
+    asyncio.run(exercise())
+
+
 def test_hand_written_metadata_typo_fails_loudly(project: Path) -> None:
     async def exercise() -> None:
         service, relative = await _service(project)

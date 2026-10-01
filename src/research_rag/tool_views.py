@@ -22,6 +22,7 @@ __all__ = [
     "FULL_TOOL_DETAIL",
     "LEAN_TOOL_DETAIL",
     "TOOL_DETAIL_MODES",
+    "lean_chunk_inclusion",
     "lean_find_source",
     "lean_ingest",
     "lean_passage",
@@ -318,11 +319,20 @@ def lean_find_source(payload: Mapping[str, Any]) -> dict[str, Any]:
     return result
 
 
-def lean_source_inclusion(payload: Mapping[str, Any]) -> dict[str, Any]:
-    """Return the inclusion decision, its reason, and whether it applies now."""
+def _lean_inclusion_decision(
+    payload: Mapping[str, Any],
+    *,
+    identity: tuple[str, ...],
+) -> dict[str, Any]:
+    """Return an inclusion decision: the subject, the flag, the reason, and the gap.
+
+    One shape serves a source and a chunk, because the decision is the same: a
+    reader either has something back in retrieval or has taken it out, and the
+    only difference is the identifier that names it.
+    """
 
     result: dict[str, Any] = {}
-    for key in ("status", "source_id", "source_relative_path"):
+    for key in ("status", *identity):
         _add(result, key, payload.get(key))
     for key in ("included", "reason"):
         if key in payload:
@@ -335,6 +345,28 @@ def lean_source_inclusion(payload: Mapping[str, Any]) -> dict[str, Any]:
     if payload.get("generation_rebuild_recommended"):
         result["generation_rebuild_recommended"] = True
     result["message"] = payload.get("message")
+    return result
+
+
+def lean_source_inclusion(payload: Mapping[str, Any]) -> dict[str, Any]:
+    """Return the inclusion decision, its reason, and whether it applies now."""
+
+    return _lean_inclusion_decision(
+        payload, identity=("source_id", "source_relative_path")
+    )
+
+
+def lean_chunk_inclusion(payload: Mapping[str, Any]) -> dict[str, Any]:
+    """Return the passage decision, its reason, and whether it withholds anything now.
+
+    A decision about a chunk the current generation does not hold says so, because
+    a caller that cannot tell the two apart would report a decision as withholding
+    a passage it never removed from anything.
+    """
+
+    result = _lean_inclusion_decision(payload, identity=("chunk_id",))
+    if payload.get("in_current_generation") is False:
+        result["in_current_generation"] = False
     return result
 
 
@@ -361,6 +393,7 @@ _PROJECTORS: dict[str, Callable[[Mapping[str, Any]], dict[str, Any]]] = {
     "find_source": lean_find_source,
     "get_passage": lean_passage_context,
     "set_source_inclusion": lean_source_inclusion,
+    "set_chunk_inclusion": lean_chunk_inclusion,
     "set_source_metadata": lean_source_metadata,
 }
 

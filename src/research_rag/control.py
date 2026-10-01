@@ -225,6 +225,26 @@ async def _source_inclusion(app: App, request: Request) -> JSONResponse:
     )
 
 
+async def _chunk_inclusion(app: App, request: Request) -> JSONResponse:
+    body = await _body(request)
+    included = body.get("included")
+    if not isinstance(included, bool):
+        raise ResearchError("a chunk decision needs a boolean included")
+    chunk_id = body.get("chunk_id")
+    if not isinstance(chunk_id, str) or not chunk_id.strip():
+        raise ResearchError("a chunk decision needs a chunk_id string")
+    reason = body.get("reason")
+    if reason is not None and not isinstance(reason, str):
+        raise ResearchError("a chunk exclusion reason must be a string")
+    return _json(
+        await app.service.set_chunk_inclusion(
+            chunk_id=chunk_id,
+            included=included,
+            reason=reason,
+        )
+    )
+
+
 async def _generations(app: App, _request: Request) -> JSONResponse:
     """Every retained generation, as the status payload reports it."""
 
@@ -356,6 +376,7 @@ def control_routes(app: App) -> list[Route]:
         route("/sources", _sources, ["GET"]),
         route("/passages/{chunk_id}", _passage, ["GET"]),
         route("/source-inclusion", _source_inclusion, ["POST"]),
+        route("/chunk-inclusion", _chunk_inclusion, ["POST"]),
         route("/source-metadata", _source_metadata, ["POST"]),
         route("/generations", _generations, ["GET"]),
         route("/generations/use", _use_generation, ["POST"]),
@@ -444,6 +465,23 @@ class Control:
             json={
                 "source_path": source_path,
                 "source_id": source_id,
+                "included": included,
+                "reason": reason,
+            },
+        )
+
+    def set_chunk_inclusion(
+        self,
+        *,
+        chunk_id: str,
+        included: bool,
+        reason: str | None = None,
+    ) -> dict[str, Any]:
+        return self._call(
+            "POST",
+            "/chunk-inclusion",
+            json={
+                "chunk_id": chunk_id,
                 "included": included,
                 "reason": reason,
             },

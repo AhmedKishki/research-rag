@@ -182,11 +182,14 @@ HELP_GROUPS: tuple[tuple[str, tuple[tuple[str, str], ...]], ...] = (
             ),
             (
                 "exclude",
-                "Take a source out of retrieval, recording why. The file stays.",
+                (
+                    "Take a source, or one passage with --chunk, out of retrieval. "
+                    "The file stays."
+                ),
             ),
             (
                 "include",
-                "Put an excluded source back into retrieval.",
+                "Put an excluded source or passage back into retrieval.",
             ),
         ),
     ),
@@ -237,6 +240,26 @@ HELP_GROUPS: tuple[tuple[str, tuple[tuple[str, str], ...]], ...] = (
                     "Every effective setting and the layer it came from. It prints and "
                     "does not write. `help settings` names the layers and what a "
                     "change costs."
+                ),
+            ),
+        ),
+    ),
+    (
+        "This installation",
+        (
+            (
+                "install",
+                (
+                    "Put this command on the account's PATH, and with --desktop give "
+                    "one project a menu entry. --uninstall removes what it wrote."
+                ),
+            ),
+            (
+                "update",
+                (
+                    "What a newer version would change, and with --apply the update "
+                    "itself: stop every app, pull or upgrade, and print the command "
+                    "that starts each one again."
                 ),
             ),
         ),
@@ -343,7 +366,7 @@ but not an argument. `clients` lists the agents and `disconnect` ends one; the
 workspace shows the same list, so an agent ended in the browser is gone from the
 terminal too.
 
-An agent gets seven tools and one resource, and every answer is the lean
+An agent gets eight tools and one resource, and every answer is the lean
 projection: a question at a time, no inventory, no scores. `status` is a verdict
 that names the call closing a gap rather than printing the whole corpus state.
 The full payload is `status --verbose` here and the workspace there.
@@ -633,7 +656,10 @@ def _parser() -> argparse.ArgumentParser:
     for verb, reason_required in (("include", False), ("exclude", True)):
         change = commands.add_parser(
             verb,
-            help=f"{verb.capitalize()} one source in retrieval without touching the file.",
+            help=(
+                f"{verb.capitalize()} one source or one passage in retrieval "
+                "without touching the file."
+            ),
         )
         change.add_argument(
             "source",
@@ -642,6 +668,14 @@ def _parser() -> argparse.ArgumentParser:
         )
         change.add_argument(
             "--source-id", help="The stable source id, instead of a path."
+        )
+        change.add_argument(
+            "--chunk",
+            metavar="CHUNK_ID",
+            help=(
+                "The chunk id of one passage, instead of a whole source. The id a "
+                "search returned."
+            ),
         )
         change.add_argument(
             "--reason",
@@ -809,6 +843,48 @@ def _parser() -> argparse.ArgumentParser:
         help=(
             "Also stop every process of this app serving this project, including "
             "a build that is still running."
+        ),
+    )
+
+    setup = commands.add_parser(
+        "install",
+        help=(
+            "Put this command on the account's PATH, and --desktop give one "
+            "project a desktop menu entry."
+        ),
+    )
+    setup.add_argument(
+        "--uninstall",
+        action="store_true",
+        help="Remove what `install` wrote for the same selector, and nothing else.",
+    )
+    setup.add_argument(
+        "--desktop",
+        action="store_true",
+        help=(
+            "Write one freedesktop entry for the named project instead of the "
+            "command on PATH. Takes --project-root or --project."
+        ),
+    )
+    setup.add_argument(
+        "--force",
+        action="store_true",
+        help=(
+            "Replace a file this app did not write. Without it such a file is "
+            "reported and left alone."
+        ),
+    )
+
+    refresh_install = commands.add_parser(
+        "update",
+        help="Report what a newer version would change, and --apply put it in place.",
+    )
+    refresh_install.add_argument(
+        "--apply",
+        action="store_true",
+        help=(
+            "Perform the update. Without it nothing is written and the command "
+            "only reports."
         ),
     )
     return parser
@@ -1138,6 +1214,17 @@ class Local:
             reason=reason,
         )
 
+    async def set_chunk_inclusion(
+        self,
+        *,
+        chunk_id: str,
+        included: bool,
+        reason: str | None,
+    ) -> dict[str, Any]:
+        return await self._require().set_chunk_inclusion(
+            chunk_id, included=included, reason=reason
+        )
+
     async def set_source_metadata(
         self,
         *,
@@ -1221,6 +1308,17 @@ class Remote:
             reason=reason,
         )
 
+    async def set_chunk_inclusion(
+        self,
+        *,
+        chunk_id: str,
+        included: bool,
+        reason: str | None,
+    ) -> dict[str, Any]:
+        return self.control.set_chunk_inclusion(
+            chunk_id=chunk_id, included=included, reason=reason
+        )
+
     async def set_source_metadata(
         self,
         *,
@@ -1281,6 +1379,26 @@ async def _operate(
             args.chunk_id, context_chunks=args.context_chunks
         )
     if command in {"include", "exclude"}:
+        # One decision about retrievable evidence, two subjects. Each refusal
+        # names the subject it is missing or the pair that contradict each other,
+        # because a command that silently ignored one of them would record a
+        # decision the reader did not make.
+        if args.chunk and (args.source or args.source_id):
+            raise ResearchError(
+                "--chunk decides about one passage and a path or --source-id "
+                "about a whole source; name one of them."
+            )
+        if args.chunk:
+            return await operations.set_chunk_inclusion(
+                chunk_id=args.chunk,
+                included=command == "include",
+                reason=args.reason,
+            )
+        if not args.source and not args.source_id:
+            raise ResearchError(
+                "Name the passage with --chunk CHUNK_ID, or the source with a "
+                "path or --source-id."
+            )
         return await operations.set_source_inclusion(
             source_path=args.source,
             source_id=args.source_id,
@@ -1463,6 +1581,125 @@ def _disconnect(args: argparse.Namespace, config: ResearchConfig) -> dict[str, A
         )
 
 
+def _install(args: argparse.Namespace) -> dict[str, Any]:
+    """Make this installation reachable, or take back what it made reachable.
+
+    One command with two selectors rather than two commands: an uninstall has to
+    know which of the two the reader meant, and `--desktop` beside `--uninstall`
+    answers that without a second pair of flags to remember.
+    """
+
+    from ..installation import (
+        install_console_entry,
+        install_desktop_entry,
+        uninstall_console_entry,
+        uninstall_desktop_entry,
+    )
+
+    if args.desktop:
+        # Read through the project directory rather than a resolved
+        # configuration: resolving one writes the project's portable state, and
+        # installing a menu entry must touch nothing the project owns.
+        project_root = _project_path(args)
+        if args.uninstall:
+            report = uninstall_desktop_entry(project_root=project_root)
+        else:
+            report = install_desktop_entry(project_root=project_root, force=args.force)
+        return {"command": "install", "desktop": report}
+    if args.uninstall:
+        report = uninstall_console_entry()
+    else:
+        report = install_console_entry(force=args.force)
+    return {"command": "install", "console": report.as_dict()}
+
+
+async def _update(args: argparse.Namespace) -> dict[str, Any]:
+    """Report what a newer version means, and with ``--apply`` put it in place.
+
+    The check is the default and writes nothing. Applying refuses while a
+    project lock is held, stops every app this installation serves through that
+    project's own launcher, and prints the command that starts each one again
+    rather than starting it.
+    """
+
+    from .. import update as update_module
+    from ..registry import load as load_registered
+
+    offline = bool(args.offline)
+    runner = update_module.subprocess_runner
+    local = update_module.probe_local(run=runner)
+    remote = update_module.probe_remote(local, runner, offline=offline)
+    plan = update_module.plan_update(local, remote)
+    payload: dict[str, Any] = {
+        "command": "update",
+        "applied": False,
+        "install": local.as_dict(),
+        "remote": remote.as_dict(),
+        "plan": plan.as_dict(),
+    }
+    if plan.blocked:
+        raise ResearchError(plan.blocked)
+    if not args.apply:
+        return payload
+    if offline:
+        raise ResearchError(
+            "--offline cannot update: nothing on the remote was asked. Nothing "
+            "was changed. Run this again without --offline."
+        )
+    projects = [
+        update_module.ProjectState(entry.project_root, entry.project_name)
+        for entry in load_registered()
+        if (entry.project_root / ".research-rag").is_dir()
+    ]
+    held = update_module.held_projects(projects)
+    if held:
+        raise ResearchError(
+            "Nothing was changed. " + " ".join(one.refusal() for one in held)
+        )
+    payload["projects"] = [project.as_dict() for project in projects]
+    before = {
+        str(project.project_root): update_module.portable_state_digest(
+            project.project_root
+        )
+        for project in projects
+    }
+    stopped = [update_module.stop_app(project, runner) for project in projects]
+    payload["stopped"] = [one.as_dict() for one in stopped]
+    try:
+        payload["steps"] = update_module.apply_plan(
+            plan, run=runner, cwd=local.checkout
+        )
+    except ResearchError as exc:
+        payload["steps"] = plan.labels()
+        payload["failed"] = str(exc)
+        after = {
+            str(project.project_root): update_module.portable_state_digest(
+                project.project_root
+            )
+            for project in projects
+        }
+        payload["project_state_changes"] = update_module.state_changes(before, after)
+        raise ResearchError(str(exc)) from exc
+    applied = update_module.probe_local(run=runner)
+    payload["applied"] = True
+    payload["install_after"] = applied.as_dict()
+    after = {
+        str(project.project_root): update_module.portable_state_digest(
+            project.project_root
+        )
+        for project in projects
+    }
+    changes = update_module.state_changes(before, after)
+    payload["project_state_changes"] = changes
+    payload["project_state_untouched"] = not changes
+    payload["start_again"] = [
+        project_command(one.project.project_root, "ui")
+        for one in stopped
+        if one.stopped
+    ]
+    return payload
+
+
 async def _doctor(args: argparse.Namespace, config: ResearchConfig) -> CommandResult:
 
     from ..doctor import mcp_entry_block, mcp_url_block, run_doctor
@@ -1537,8 +1774,10 @@ def _help_menu() -> str:
             lines.extend(f"{' ' * label}{extra}" for extra in body[1:])
         lines.append("")
     lines.append(
-        f"Each command takes --project-root DIR or --project NAME, except `mcp`,\n"
-        f"which takes --project-name NAME so a client entry carries no path.\n"
+        f"Each command takes --project-root DIR or --project NAME, except "
+        f"`install --desktop`,\n"
+        f"`update`, `help`, and `mcp`. `mcp` takes --project-name NAME so a client\n"
+        f"entry carries no path.\n"
         f"One command's own options: `{CLI_NAME} COMMAND --help`.\n"
         f"A subject: `{CLI_NAME} help {', '.join(sorted(HELP_TOPICS))}`."
     )
@@ -1593,6 +1832,13 @@ async def _run(args: argparse.Namespace) -> CommandResult:
         return CommandResult(payload=await _projects(args))
     if args.command == "init":
         return CommandResult(payload=_init(args))
+    # Both of these are about the installation rather than a project, so they run
+    # before one is resolved: resolving writes the project's portable state, and
+    # a reader asking what is installed has no project yet.
+    if args.command == "install":
+        return CommandResult(payload=_install(args))
+    if args.command == "update":
+        return CommandResult(payload=await _update(args))
     config = _resolve(args)
     apply_process_priority(config.nice)
     if args.command == "config":

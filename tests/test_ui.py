@@ -146,6 +146,35 @@ class FakeResearchService:
             "message": "Inclusion saved.",
         }
 
+    async def set_chunk_inclusion(
+        self, chunk_id: str, **arguments: Any
+    ) -> dict[str, Any]:
+        self._record("set_chunk_inclusion", {"chunk_id": chunk_id, **arguments})
+        return {
+            "chunk_id": chunk_id,
+            "included": arguments.get("included"),
+            "reason": arguments.get("reason"),
+            "message": "Chunk exclusion saved.",
+        }
+
+    async def list_chunk_exclusions(self) -> dict[str, Any]:
+        self._record("list_chunk_exclusions", {})
+        return {
+            "generation_id": "generation-1",
+            "excluded_chunk_count": 1,
+            "exclusions": [
+                {
+                    "chunk_id": "chunk-1",
+                    "source_relative_path": "evidence.pdf",
+                    "locator": "p. 1",
+                    "reason": "Reviewed fragment",
+                    "excluded_at": "2026-09-30T19:12:35.104Z",
+                    "in_current_generation": True,
+                }
+            ],
+            "message": "Every one of the 1 excluded chunks is withheld.",
+        }
+
     async def set_source_metadata(self, **arguments: Any) -> dict[str, Any]:
         self._record("set_source_metadata", arguments)
         return {
@@ -367,6 +396,81 @@ def test_the_workspace_forwards_search_and_the_surviving_mutations(
     assert ("ingest", {"force_recompute": True}) in fake.calls
 
 
+def test_the_workspace_carries_a_chunk_decision_and_lists_the_ones_on_file(
+    project: Path,
+) -> None:
+    """The panel beside a search result reaches the same decision the terminal makes.
+
+    A decision about one passage has to be reachable where a reader sees the
+    passage, or it is a decision only a person with a shell can make. The listing
+    is what makes the decision reversible: without it a reader can add exclusions
+    and never see them again.
+    """
+
+    from research_rag.surfaces.ui import RESEARCH_UI_PROFILE
+
+    client, fake = _client(project)
+    with client:
+        excluded = client.post(
+            "/api/chunk-inclusion",
+            json={
+                "chunk_id": "chunk-1",
+                "included": False,
+                "reason": "Reviewed fragment",
+            },
+        )
+        restored = client.post(
+            "/api/chunk-inclusion",
+            json={"chunk_id": "chunk-1", "included": True},
+        )
+        listed = client.get("/api/chunk-exclusions")
+
+    assert excluded.status_code == 200
+    assert excluded.json()["included"] is False
+    assert restored.json()["included"] is True
+    assert listed.status_code == 200
+    assert listed.json()["exclusions"][0]["chunk_id"] == "chunk-1"
+    assert (
+        "set_chunk_inclusion",
+        {
+            "chunk_id": "chunk-1",
+            "included": False,
+            "reason": "Reviewed fragment",
+        },
+    ) in fake.calls
+    # A restore carries no reason: the exclusion is gone, so there is nothing left
+    # to explain, and the file rejects an entry without one.
+    assert (
+        "set_chunk_inclusion",
+        {"chunk_id": "chunk-1", "included": True, "reason": None},
+    ) in fake.calls
+    assert ("list_chunk_exclusions", {}) in fake.calls
+    assert RESEARCH_UI_PROFILE.capabilities.chunk_exclusion is True
+
+
+def test_the_workspace_refuses_a_chunk_decision_it_cannot_act_on(
+    project: Path,
+) -> None:
+    """A missing id, a missing flag, and a reason that is not text are refusals.
+
+    Each names the field it is about, because the panel that sent the request is
+    the only place the reader can fix it.
+    """
+
+    client, fake = _client(project)
+    with client:
+        for body, expected in (
+            ({"included": False, "reason": "x"}, "needs a chunk_id"),
+            ({"chunk_id": "chunk-1", "reason": "x"}, "needs a boolean included"),
+            ({"chunk_id": "chunk-1", "included": False, "reason": 7}, "must be"),
+        ):
+            answer = client.post("/api/chunk-inclusion", json=body)
+            assert answer.status_code == 400, body
+            assert expected in answer.json()["error"], answer.text
+
+    assert not [call for call in fake.calls if call[0] == "set_chunk_inclusion"]
+
+
 def test_a_search_is_always_hybrid_and_always_reranked(project: Path) -> None:
     """The profile hides both switches, so the workspace fixes them itself."""
 
@@ -445,6 +549,8 @@ def test_an_unserved_search_argument_never_reaches_the_service(
         "list_sources",
         "get_passage",
         "set_source_inclusion",
+        "set_chunk_inclusion",
+        "list_chunk_exclusions",
         "set_source_metadata",
         "remove_generation",
         "settings_read",

@@ -1,4 +1,4 @@
-"""The agent surface: seven operations and one resource over one project.
+"""The agent surface: eight operations and one resource over one project.
 
 Its tools and resources reach the app's one `ResearchService` through a lean/full
 projection built for this reader and no other: an agent's answer is 10.8 kB lean
@@ -200,13 +200,22 @@ InclusionFlag: TypeAlias = Annotated[
         )
     ),
 ]
+ChunkInclusionFlag: TypeAlias = Annotated[
+    bool,
+    Field(
+        description=(
+            "Set false to exclude this passage from retrieval and every later one; "
+            "set true to restore it. The original file is never changed."
+        )
+    ),
+]
 ExclusionReason: TypeAlias = Annotated[
     str | None,
     Field(
         description=(
             "Human-readable reason for the decision, such as identifying another "
             "file as the preferred copy. Required when included is false; omit or "
-            "pass null when restoring a source."
+            "pass null when restoring."
         )
     ),
 ]
@@ -230,7 +239,7 @@ def create_uninitialised_mcp(project_name: str, reason: str) -> FastMCP[Any]:
     can be written on one machine and used on another. That only works if a
     project exists there first: where it does not, this server answers and stops.
     `status` is declared here rather than by the bridge, so the tools an agent
-    can see are still declared in exactly one file, and the other six operations
+    can see are still declared in exactly one file, and the other seven operations
     are absent because there is no corpus behind them to read, search, or review.
 
     The instructions lead with the condition, because an agent that has just
@@ -511,7 +520,9 @@ def create_mcp(
         """Return one passage with its immediate neighbors on each side.
 
         Use it to read around a hit. The text is still cleaned for retrieval, so
-        quote from the original at the passage's locator.
+        quote from the original at the passage's locator. A passage a reader has
+        excluded is refused here and still returned as a neighbour, because
+        context is not evidence.
         """
 
         return _present(
@@ -544,6 +555,40 @@ def create_mcp(
             await _service_call(
                 lambda instance: instance.set_source_inclusion(
                     source_path=source_path,
+                    included=included,
+                    reason=reason,
+                )
+            ),
+        )
+
+    @app.tool(
+        annotations={
+            "readOnlyHint": False,
+            "destructiveHint": True,
+            "idempotentHint": True,
+            "openWorldHint": False,
+        }
+    )
+    async def set_chunk_inclusion(
+        included: ChunkInclusionFlag,
+        chunk_id: ChunkId,
+        reason: ExclusionReason = None,
+    ) -> dict[str, Any]:
+        """Exclude one passage from retrieval, or restore it, without touching the file.
+
+        Act only after the agent or user has reviewed the passage, and give an
+        exclusion its reason. The decision is enforced by the retrieval filter at
+        once and in every later generation, so no ingestion is needed to keep it
+        and a rebuild leaves the passage in the index. A `chunk_id` is derived
+        from content rather than permanent, so the answer reports whether this
+        generation still holds the passage the decision was made about.
+        """
+
+        return _present(
+            "set_chunk_inclusion",
+            await _service_call(
+                lambda instance: instance.set_chunk_inclusion(
+                    chunk_id=chunk_id,
                     included=included,
                     reason=reason,
                 )

@@ -107,6 +107,18 @@ class RecordingService:
             },
         )
 
+    async def set_chunk_inclusion(
+        self,
+        chunk_id: str,
+        *,
+        included: bool,
+        reason: str | None = None,
+    ) -> dict[str, Any]:
+        return self._record(
+            "set_chunk_inclusion",
+            {"chunk_id": chunk_id, "included": included, "reason": reason},
+        )
+
     async def set_source_metadata(
         self,
         metadata: dict[str, Any],
@@ -156,6 +168,17 @@ class Operations:
     ) -> dict[str, Any]:
         return await self.service.set_source_inclusion(
             source_path, source_id=source_id, included=included, reason=reason
+        )
+
+    async def set_chunk_inclusion(
+        self,
+        *,
+        chunk_id: str,
+        included: bool,
+        reason: str | None,
+    ) -> dict[str, Any]:
+        return await self.service.set_chunk_inclusion(
+            chunk_id, included=included, reason=reason
         )
 
     async def set_source_metadata(
@@ -474,6 +497,77 @@ def test_excluding_a_source_records_the_reason_it_was_given() -> None:
         "included": False,
         "reason": "superseded by the reprint",
     }
+
+
+def test_excluding_a_passage_names_the_chunk_it_decides_about() -> None:
+    """One command, two subjects: --chunk decides about a passage, a path about a file."""
+
+    service = RecordingService()
+
+    payload = asyncio.run(
+        _operate(
+            _args("exclude", "--chunk", "chk_1a2b", "--reason", "header repeated"),
+            service,
+        )
+    )
+    assert payload["arguments"] == {
+        "chunk_id": "chk_1a2b",
+        "included": False,
+        "reason": "header repeated",
+    }
+
+    restored = asyncio.run(_operate(_args("include", "--chunk", "chk_1a2b"), service))
+    assert restored["arguments"] == {
+        "chunk_id": "chk_1a2b",
+        "included": True,
+        "reason": None,
+    }
+    assert not [call for call in service.calls if call[0] == "set_source_inclusion"]
+
+
+def test_a_decision_that_names_two_subjects_or_none_is_refused() -> None:
+    """Both refusals name the subject, because a silent choice is not the reader's.
+
+    A command that dropped one of the two would record a decision about a file
+    when the reader asked about a passage, or the other way round, and neither
+    reader would learn about it from the answer.
+    """
+
+    service = RecordingService()
+
+    with pytest.raises(ResearchError, match="Name the passage with --chunk"):
+        asyncio.run(_operate(_args("exclude", "--reason", "nothing named"), service))
+
+    with pytest.raises(ResearchError, match="about one passage"):
+        asyncio.run(
+            _operate(
+                _args(
+                    "exclude",
+                    "a.pdf",
+                    "--chunk",
+                    "chk_1a2b",
+                    "--reason",
+                    "two subjects",
+                ),
+                service,
+            )
+        )
+
+    with pytest.raises(ResearchError, match="about one passage"):
+        asyncio.run(
+            _operate(
+                _args(
+                    "include",
+                    "--source-id",
+                    "src_one",
+                    "--chunk",
+                    "chk_1a2b",
+                ),
+                service,
+            )
+        )
+
+    assert service.calls == []
 
 
 def test_metadata_clear_cannot_be_combined_with_a_field() -> None:

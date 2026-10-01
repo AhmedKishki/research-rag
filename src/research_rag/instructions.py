@@ -33,7 +33,11 @@ Order of work:
    holds nothing.
 4. get_passage to read around a hit, find_source to look up one work by filename,
    title, or author and learn whether it is searchable, set_source_inclusion to
-   record a reviewed exclusion or restore it.
+   record a reviewed exclusion of a whole source or restore it, set_chunk_inclusion
+   to record the same decision about one passage. A passage is excluded by a
+   chunk_id, which is derived from content rather than permanent, so read the
+   answer's in_current_generation before reporting the decision as withholding
+   something now.
 
 What the user is owed:
 - Evidence, never invention. No invented source, title, author, year, DOI, page,

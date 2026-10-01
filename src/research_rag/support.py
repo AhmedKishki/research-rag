@@ -276,6 +276,26 @@ def _checkpoint_identity(
     )
 
 
+def _locator_place(locator: Mapping[str, Any]) -> str:
+    """Where a passage sits in the original, as the fragment a citation ends with.
+
+    A reader who is told only this is reading a position, not a claim about the
+    work, so the printed page label is carried only where it differs from the
+    physical page and a section is named rather than numbered when it has a name.
+    """
+
+    if locator.get("type") == "pdf_page":
+        return f"p. {locator.get('page_label') or locator.get('page')}"
+    section = (
+        locator.get("href_with_fragment")
+        or locator.get("section_title")
+        or locator.get("href")
+    )
+    if section:
+        return f"section {section}"
+    return f"EPUB section {locator.get('section_index')}"
+
+
 def _citation(document: dict[str, Any], locator: dict[str, Any]) -> str:
     authors = document.get("authors") or []
     creator = "; ".join(str(item) for item in authors) if authors else ""
@@ -290,20 +310,7 @@ def _citation(document: dict[str, Any], locator: dict[str, Any]) -> str:
     if doi:
         lead = f"{lead}, doi:{doi.removeprefix('doi:')}"
 
-    if locator.get("type") == "pdf_page":
-        location = f"p. {locator.get('page_label') or locator.get('page')}"
-    else:
-        section = (
-            locator.get("href_with_fragment")
-            or locator.get("section_title")
-            or locator.get("href")
-        )
-        location = (
-            f"section {section}"
-            if section
-            else f"EPUB section {locator.get('section_index')}"
-        )
-    return f"{lead}, {location}"
+    return f"{lead}, {_locator_place(locator)}"
 
 
 def _content_tokens(value: str, stopwords: frozenset[str]) -> set[str]:

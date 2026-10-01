@@ -91,6 +91,10 @@ RESEARCH_UI_PROFILE = UIProfile(
         # named before anything is written, because a generation records most of
         # these keys and a search would otherwise answer stale with no reason.
         settings=True,
+        # A reader who objects to one passage rather than to a whole file records
+        # that beside the source decision it is an alternative to, and the panel
+        # lists what has been decided so the decision can be reversed.
+        chunk_exclusion=True,
     ),
 )
 
@@ -123,6 +127,8 @@ _OPERATION_ARGUMENTS: Mapping[str, frozenset[str]] = {
     "list_sources": frozenset(),
     "get_passage": frozenset({"chunk_id", "context_chunks"}),
     "set_source_inclusion": frozenset({"source_path", "included", "reason"}),
+    "set_chunk_inclusion": frozenset({"chunk_id", "included", "reason"}),
+    "list_chunk_exclusions": frozenset(),
     "set_source_metadata": frozenset({"source_path", "metadata"}),
     "remove_generation": frozenset({"generation_id", "confirm"}),
     "settings_read": frozenset(),
@@ -302,6 +308,10 @@ class ResearchUIAdapter:
                 included=included,
                 reason=reason,
             )
+        if operation == "set_chunk_inclusion":
+            return await self._set_chunk_inclusion(arguments)
+        if operation == "list_chunk_exclusions":
+            return await self.service.list_chunk_exclusions()
         if operation == "set_source_metadata":
             metadata = arguments.get("metadata")
             if not isinstance(metadata, Mapping):
@@ -349,6 +359,32 @@ class ResearchUIAdapter:
         raise UIRequestError(
             f"Research operation {operation!r} is not available",
             status_code=404,
+        )
+
+    async def _set_chunk_inclusion(
+        self, arguments: Mapping[str, Any]
+    ) -> Mapping[str, Any]:
+        """Carry one passage decision to the service, with its three arguments checked.
+
+        The reasons are validated here rather than in the service because the
+        workspace is a second reader of the same request: a browser that sent a
+        reason which was not text has sent a request the app cannot act on, and
+        the refusal belongs beside the field it is about.
+        """
+
+        included = arguments.get("included")
+        if not isinstance(included, bool):
+            raise UIRequestError("A chunk decision needs a boolean included")
+        chunk_id = arguments.get("chunk_id")
+        if not isinstance(chunk_id, str) or not chunk_id.strip():
+            raise UIRequestError("A chunk decision needs a chunk_id")
+        reason = arguments.get("reason")
+        if reason is not None and not isinstance(reason, str):
+            raise UIRequestError("A chunk exclusion reason must be a string")
+        return await self.service.set_chunk_inclusion(
+            chunk_id,
+            included=included,
+            reason=reason,
         )
 
     async def source_file(self, source_path: str) -> SourceFile:

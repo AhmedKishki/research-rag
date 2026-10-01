@@ -191,6 +191,7 @@ class StatusWorkflow:
             raise ResearchError(str(exc)) from exc
         exclusions = self._source_exclusions()
         exclusion_revision = value_fingerprint(exclusions)
+        chunk_exclusions = self._chunk_exclusions()
         metadata = self._metadata()
         metadata_revision = value_fingerprint(metadata)
         selected = tuple(
@@ -242,6 +243,7 @@ class StatusWorkflow:
                 "discovered_source_count": len(scan.selected),
                 "selected_source_count": len(selected),
                 "excluded_source_count": len(exclusions),
+                "excluded_chunk_count": len(chunk_exclusions),
                 "categories": [],
                 "projects": [],
                 "excluded_sources": self._exclusion_records(scan, exclusions),
@@ -309,6 +311,17 @@ class StatusWorkflow:
         metadata_pending_source_paths = sorted(set(metadata) - indexed_source_paths)
         excluded_document_ids = self._excluded_document_ids(manifest, exclusions)
         exclusion_records = self._exclusion_records(scan, exclusions, manifest)
+        # A chunk id is derived from content, so the same passage keeps it across
+        # a rebuild of unchanged bytes and anything else changes it. An entry
+        # recorded against another generation is therefore not yet a decision
+        # about this corpus, and it is counted here rather than folded into
+        # `stale`: an ingestion cannot restore a chunk it no longer holds, and
+        # `stale` names `ingest` as the call that closes the gap.
+        absent_chunk_exclusions = sum(
+            1
+            for record in chunk_exclusions.values()
+            if record["generation_id"] != str(manifest["generation_id"])
+        )
         if ingestion_progress is not None:
             status_message = (
                 "A new generation is in progress; the selected generation remains "
@@ -347,6 +360,13 @@ class StatusWorkflow:
                 "Current generation is BM25-only; run ingest to build its "
                 "project-local dense index."
             )
+        if absent_chunk_exclusions:
+            status_message += (
+                f" {absent_chunk_exclusions} of {len(chunk_exclusions)} chunk "
+                "exclusions were recorded against another generation: a chunk id is "
+                "derived from content, so read each one against the current search "
+                "before relying on it, and no ingestion restores a removed chunk."
+            )
         effective_documents = _effective_documents(manifest, metadata)
         return {
             "ready": True,
@@ -379,6 +399,8 @@ class StatusWorkflow:
             ),
             "excluded_source_count": len(exclusions),
             "excluded_sources": exclusion_records,
+            "excluded_chunk_count": len(chunk_exclusions),
+            "chunk_exclusion_other_generation_count": absent_chunk_exclusions,
             "chunk_count": manifest["chunk_count"],
             "categories": _metadata_inventory(
                 effective_documents,

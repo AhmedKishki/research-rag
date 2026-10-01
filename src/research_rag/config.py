@@ -189,6 +189,10 @@ class ResearchConfig:
         return self.portable_root / "source-exclusions.json"
 
     @property
+    def chunk_exclusions_path(self) -> Path:
+        return self.portable_root / "chunk-exclusions.json"
+
+    @property
     def source_catalog_path(self) -> Path:
         return self.portable_root / "source-catalog.json"
 

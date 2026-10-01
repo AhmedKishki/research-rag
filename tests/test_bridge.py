@@ -1,4 +1,4 @@
-"""`research-rag mcp`: a project name in, and the same seven tools or one.
+"""`research-rag mcp`: a project name in, and the same eight tools or one.
 
 A client entry is copied between machines, so the property under test is that
 nothing in it names a directory. The bridge resolves the name through the
