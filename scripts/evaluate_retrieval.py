@@ -1,9 +1,10 @@
 """Measure retrieval quality against a judged query set.
 
-Harness behind the numbers in ``MEASUREMENTS.md``. It runs a judged query set
-(``evaluation/ai-and-fetishism-queries.json`` by default) through the service
-method behind the public ``search`` tool and reports success@k, MRR, nDCG@10,
-document success, and the mean number of distinct sources a result spans. Every
+Harness behind the retrieval findings in ``MEASUREMENTS.md``. It runs a judged
+query set (``evaluation/ai-and-fetishism-queries.json`` by default) through the
+service method behind the public ``search`` tool and reports success@k, MRR,
+nDCG@10, document success, and the mean number of distinct sources a result
+spans. Every
 mode passes ``rerank`` explicitly, so no number depends on the tool default; the
 ``hybrid+rerank`` row is what a default search now does.
 

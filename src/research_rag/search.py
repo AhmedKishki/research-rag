@@ -359,7 +359,7 @@ class SearchWorkflow:
         # The window widens past candidates the filters will drop, so an exclusion
         # does not shrink top_k. It stops at the candidate ceiling the settings
         # already declare, which is the same bound the dense depth takes: past it
-        # no measurement has found a ranking decision, and reaching for it costs a
+        # no ranking decision has been found, and reaching for it costs a
         # second full scan of the corpus per doubling. Filters narrow what a
         # ranking returns rather than what it ranks, so a narrow filter can still
         # find nothing inside the ceiling; the response says so rather than
@@ -560,8 +560,8 @@ class SearchWorkflow:
     ) -> dict[str, Any]:
         """Retrieve evidence.
 
-        The public MCP tool defaults ``rerank`` to true, the largest measured quality
-        gain (``MEASUREMENTS.md``); this API keeps the neutral default. An unloadable
+        The public MCP tool defaults ``rerank`` to true, the largest quality gain the judged
+        set showed (``MEASUREMENTS.md``); this API keeps the neutral default. An unloadable
         reranker model still returns a search, in unranked candidate order with
         ``rerank_fallback``.
 
@@ -939,12 +939,10 @@ class SearchWorkflow:
                 eligible_dense_hits.append((dense_hit, chunk))
             # The floor is absolute, and a query whose best passage still scores
             # below it can have its whole candidate list packed into a band under
-            # it: on the reference corpus a one-word query spanned 0.681 to 0.742
-            # across fifty candidates, so a 0.72 floor kept six of them even though
-            # the rest matched it about as closely. The margin admits that band, but
-            # only once something has cleared the floor, so a query the corpus
-            # cannot support still abstains rather than returning its least-bad
-            # passage.
+            # it, so the floor drops candidates that matched it about as closely.
+            # The margin admits that band, but only once something has cleared the
+            # floor, so a query the corpus cannot support still abstains rather
+            # than returning its least-bad passage.
             best_dense_score: float | None = None
             for dense_hit, _chunk in eligible_dense_hits:
                 if best_dense_score is None or dense_hit.score > best_dense_score:

@@ -1,13 +1,13 @@
 # TODO
 
-- Open work, grouped by the problem each item solves. Behaviour is in `README.md`, capabilities in `FEATURES.md`, numbers and limits in `MEASUREMENTS.md`, deferred ideas in `ROADMAP.md`, the state format in `STORAGE.md`.
+- Open work, grouped by the problem each item solves. Behaviour is in `README.md`, capabilities in `FEATURES.md`, the measurement protocol and the decisions it justified in `MEASUREMENTS.md`, deferred ideas in `ROADMAP.md`, the state format in `STORAGE.md`.
 
 ## The app and its front ends
 
 - [ ] **Let a command start the app when the corpus is not ready.** Decision. A command that touches the corpus goes to the running app, and a project with no app up is answered in process, which opens a second service for a project nobody is serving. Starting the app instead makes `status` leave a process behind. The answer may be a flag, or a short-lived app for read-only commands.
 - [ ] **A session an unnamed client opened cannot have its stream dropped.** Limit. A disconnect folds the client's sightings onto the session by the name the client declared, and a client that declared nothing has only its session refused. `RESEARCH_ULTRARAG_CLIENT_NAME` is the fix, and the stdio bridge always sets it, so this only reaches a hand-written HTTP client.
-- [ ] **Measure the payload difference the app makes.** Missing number. `MEASUREMENTS.md` carries the lean and full search sizes from before the repackaging. Re-measure them against the running app, and add the workspace, agent, and control surfaces' own overhead, because one process now serves all three and the claim that they cannot disagree is only as good as the evidence that they are one service.
-- [ ] **Record the skew between this app and the frozen MCP server.** Gap. `code_currency` catches two checkouts of one product, not this app answering a project the frozen product also serves. The on-disk contract is frozen and stated in this app's `AGENTS.md`, but nothing reports the two disagreeing about a field set. A number in `MEASUREMENTS.md` measured by one and read in the other is not comparable until something says they are the same tree.
+- [ ] **Measure the payload difference the app makes.** Missing number. Nothing states the lean and full search sizes since the repackaging retired them. Measure them against the running app, and add the workspace, agent, and control surfaces' own overhead, because one process now serves all three and the claim that they cannot disagree is only as good as the evidence that they are one service.
+- [ ] **Record the skew between this app and the frozen MCP server.** Gap. `code_currency` catches two checkouts of one product, not this app answering a project the frozen product also serves. The on-disk contract is frozen and stated in this app's `AGENTS.md`, but nothing reports the two disagreeing about a field set. A number measured by one and read in the other is not comparable until something says they are the same tree.
 
 ## A report that is true
 
@@ -26,13 +26,13 @@
   - [ ] **Refuse to start a build that cannot fit.** Feature. `status` and `doctor` report free space against the size of the generations already on disk, and `ingest` does not read that verdict: a build that runs out of room partway leaves a staging directory and no generation, on the machine least able to afford the retry.
   - [ ] **An `ingest` dry run** that reports what would change and what would be reused, and writes nothing. Feature.
   - [ ] **A CPU reserve, so a build leaves cores free.** Feature.
-    - `runtime.embedding_threads` is a thread count, not a promise about the machine, and cutting threads costs build throughput — `MEASUREMENTS.md` holds the measured rates — where `runtime.nice` costs none.
+    - `runtime.embedding_threads` is a thread count, not a promise about the machine, and cutting threads costs build throughput, where `runtime.nice` costs none.
     - A reserve expresses the intent directly, as physical cores minus the reserve, and needs a measurement to price it.
   - [ ] **Reuse vectors across a contextual-header change.** Feature. Vector reuse is keyed on canonical passage text, because the same hash is what resolves a BM25 passage back to its chunk, so turning `chunking.headers` on recomputes every vector. The fix is two hash columns — one canonical, one embedded — and a lookup-schema bump, which rebuilds the sidecar from canonical artifacts rather than the corpus. Check the ordering too: `generation_is_reusable` validates the sidecar before anything ensures it, so a version bump denies reuse to the first ingest that follows it.
 
 ## Closing the paraphrase gap
 
-- Judged paraphrase queries miss the designated passage within the top ten while nothing is withheld: the passages are there and the ranking cannot find them. `MEASUREMENTS.md` holds the current figures. These are the levers.
+- Judged paraphrase queries miss the designated passage within the top ten while nothing is withheld: the passages are there and the ranking cannot find them. `MEASUREMENTS.md` records what the judged set showed. These are the levers.
   - [ ] **Pooled relevance judgments.** Test. The set is known-item — one designated passage per query, one annotator — so a passage that makes the same point scores as a miss, and a change that ranks an equally good passage above the designated one reads as a regression. Collect every candidate from every mode and judge the pool. This is also what would let the pseudo-relevance expansion be measured: with rarity-weighted terms it mines the corpus's own vocabulary, and a known-item set cannot see that.
   - [ ] **Grow the judged set from real questions**, if the privacy of a query log can be settled. Test.
   - [ ] **Measure the headers on a corpus with sections.** Test. A PDF locator carries a page rather than a section, so the header is the title alone and the first chunk of a paper already repeats it; an EPUB corpus is where the locator carries a section and where the header says something the passage does not.
@@ -45,4 +45,4 @@
 
 - [ ] **Split the resumable ingestion loop into per-phase handlers, then enable `C901`.** Feature. `_advance_ingestion` is 1,341 lines at complexity 107 against 35 for the next worst function in the package; three of its phase blocks call closures defined inside it and eight read loop-local state, so the split is an ingestion state object that handlers take and return. Accept on a green suite and a re-ingest that reuses every chunk and vector.
 
-- An item is done when its measurement is in `MEASUREMENTS.md` if it moved a number, and the validation in `AGENTS.md` is clean.
+- An item is done when the harness has produced its measurement, and the validation in `AGENTS.md` is clean.

@@ -19,10 +19,9 @@ from .rerankers import DEFAULT_RERANKER_MODEL, resolve_reranker_model
 from .storage import StorageError, atomic_write_json, read_json
 
 # Sequences are padded to the longest member of their inference batch, so a
-# large batch spends most of its compute on padding: on the reference corpus
-# (mean 152 tokens, max 846) one sequence per inference measured 23.7
-# chunks/s against 6.2 at a batch of 64, and a batch of 1 returns exactly
-# the same floats as a batch of 64. See MEASUREMENTS.md.
+# large batch spends most of its compute on padding, while one sequence per
+# inference returns exactly the same floats as a large batch does.
+# MEASUREMENTS.md states why that is a throughput setting only.
 COLLECTION_NAME = "research_chunks"
 QDRANT_BACKEND_NAME = "embedded-qdrant"
 EXACT_BACKEND_NAME = "portable-exact-vectors"
@@ -129,7 +128,7 @@ def _load_embedder(
     """The pinned CPU embedding model from the shared model cache.
 
     `threads` sets the ONNX Runtime thread count, left to the runtime by default;
-    MEASUREMENTS.md records the measured effect.
+    nothing is auto-detected, because the measured optimum is machine-specific.
     """
 
     facts = resolve_embedding_model(model)
@@ -213,8 +212,8 @@ class LocalQdrantDenseBackend:
         # The model's facts — name, revision, dimension, token limit, and any
         # required prefix — come from the pinned table rather than the caller.
         self.embedding_facts: EmbeddingModel = resolve_embedding_model(embedding_model)
-        # Throughput only: a batch of 1 returns exactly the same floats as a
-        # batch of 64 (MEASUREMENTS.md).
+        # Throughput only: one sequence per inference returns exactly the same
+        # floats as a large batch does (MEASUREMENTS.md).
         self.embedding_inference_batch_size = embedding_inference_batch_size
         self._embedding_model: TextEmbedding | None = None
         self._rerankers: dict[str, TextCrossEncoder] = {}
@@ -599,8 +598,8 @@ class LocalVectorDenseBackend:
         # The model's facts — name, revision, dimension, token limit, and any
         # required prefix — come from the pinned table rather than the caller.
         self.embedding_facts: EmbeddingModel = resolve_embedding_model(embedding_model)
-        # Throughput only: a batch of 1 returns exactly the same floats as a
-        # batch of 64 (MEASUREMENTS.md).
+        # Throughput only: one sequence per inference returns exactly the same
+        # floats as a large batch does (MEASUREMENTS.md).
         self.embedding_inference_batch_size = embedding_inference_batch_size
         self._embedding_model: TextEmbedding | None = None
         self._rerankers: dict[str, TextCrossEncoder] = {}

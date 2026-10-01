@@ -677,7 +677,7 @@ def resolve_config(
         else None
     )
     # `research-ultra-rag-mcp` is the MCP server's directory name, kept so this
-    # app reads the same ~150 MB of embedding and reranker binaries that server
+    # app reads the same embedding and reranker binaries that server
     # downloaded. A name matching this product would leave every existing cache
     # behind and re-download both models on the first build, silently, because the
     # first build is the only thing that needs them. `USER_CONFIG_DIRECTORY` and

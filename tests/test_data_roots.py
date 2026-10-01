@@ -1,7 +1,7 @@
 """Three locations keep the frozen MCP server's name; the rest are this app's own.
 
 The frozen product still reads those three: a renamed user settings directory is read
-by neither product, a renamed model cache re-downloads about 150 MB on the first
+by neither product, a renamed model cache re-downloads both models on the first
 build, and a renamed launcher state file leaves the frozen product's pid file with
 nothing to stop it. Nothing fails until then, so a rename must delete the assertion
 that forbids it and state the migration.

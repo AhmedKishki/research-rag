@@ -22,8 +22,8 @@ RERANKER_MODELS: dict[str, str] = {
     "BAAI/bge-reranker-base": "2cfc18c9415c912f9d8155881c133215df768a70",
     "jinaai/jina-reranker-v2-base-multilingual": "9cfeff2df7d40d1b78e75e5e9cebec92a99813c9",
 }
-# The model every published number was taken with, and the faster of the two
-# measured so far.
+# The model every published decision rests on, and the cheaper of the two the
+# judged set compared.
 DEFAULT_RERANKER_MODEL = "Xenova/ms-marco-MiniLM-L-6-v2"
 RERANKER_MODEL_CHOICES = tuple(RERANKER_MODELS)
 

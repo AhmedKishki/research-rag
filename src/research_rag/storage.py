@@ -50,9 +50,9 @@ def atomic_write_json(path: Path, value: Any, *, fsync_parent: bool = True) -> N
 
     Pass ``fsync_parent=False`` to defer the directory fsync when several files
     are committed together. A caller that defers must persist the parents with
-    :func:`fsync_directories` before committing state that depends on them. On a
-    spinning disk a directory fsync costs about 57 ms, so a group of related
-    writes costs far less than one per file.
+    :func:`fsync_directories` before committing state that depends on them: cost
+    follows the number of durability operations rather than the size of a
+    payload, so a group of related writes costs far less than one per file.
     """
 
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -122,8 +122,7 @@ def directory_statistics(path: Path) -> tuple[int, int]:
     """Return ``(file_count, total_bytes)`` for the regular files under a directory.
 
     Symlinks and unreadable entries are skipped rather than failing the caller.
-    This describes retained state; it does not validate it. On the reference
-    project a 105 MB generation measures in about 2 ms from a warm cache, so it
+    This describes retained state; it does not validate it. A directory walk
     is cheap enough to report alongside every retained generation.
     """
 

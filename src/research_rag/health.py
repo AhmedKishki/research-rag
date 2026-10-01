@@ -31,9 +31,10 @@ UNKNOWN = "unknown"
 CAPACITY_APPROACHING_FACTOR = 2
 
 _VANILLA_CACHE_LOCK = threading.Lock()
-# The managed runtime is validated by hashing its whole tree, which reads 11 MB.
-# One process keeps the answer and re-reads only when the marker identifying the
-# installed snapshot changes, so a repeated status costs one marker stat.
+# The managed runtime is validated by hashing its whole tree, which reads every
+# byte of it. One process keeps the answer and re-reads only when the marker
+# identifying the installed snapshot changes, so a repeated status costs one
+# marker stat.
 _VANILLA_CACHE: dict[tuple[Any, ...], Check] = {}
 
 
