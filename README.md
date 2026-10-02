@@ -313,6 +313,10 @@ research-rag --project-root /path/to/project stop                # stop it, from
 - **The app is a process, not a daemon.**
   - The app does not survive an update: stop it and start it again.
   - An agent attached to a stopped app has no session, and `clients` says so rather than listing a stale one.
+- **An app serving with no terminal attached is refused, not adopted.**
+  - Every command asks the serving process whether it has a controlling terminal, so the answer is a fact about the process rather than a file left behind.
+  - `start` and a bare call name the condition and `research-rag stop`, and neither starts a second app.
+  - Only `stop` ends it, because closing a terminal ends an app and this state is the one case where it would not.
 - **Updates compare against a published release.**
   - `update` reads the remote's release tags, so the number it compares is the version a release carries rather than the branch head's latest commit.
   - A checkout ahead of the latest release reports unreleased work and changes nothing.

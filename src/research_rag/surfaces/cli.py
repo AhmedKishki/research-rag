@@ -59,7 +59,12 @@ from ..config import (
     resolve_config,
 )
 from ..control import Control, ControlError, connect
-from ..registry import account_projects, project_app_state, registry_path
+from ..registry import (
+    account_projects,
+    detached_from_terminal,
+    project_app_state,
+    registry_path,
+)
 from ..registry import register as register_project
 from ..registry import resolve as resolve_registered
 from ..rerankers import RERANKER_MODEL_CHOICES
@@ -1068,6 +1073,30 @@ def _ask_to_stop(pid: int) -> OSError | None:
     return None
 
 
+def _stop_notes(detached: bool) -> list[str]:
+    """The sentences `stop` returns, leading with the condition it found.
+
+    A detached app is named first because it is the one that does not end with
+    its terminal, so a reader who started one and walked away needs to know that
+    the terminal they left is not what is holding the project.
+    """
+
+    notes = [
+        (
+            "An app belongs to the terminal that started it: it ends there, "
+            "and this command does not start it again."
+        )
+    ]
+    if detached:
+        notes.insert(
+            0,
+            "This app is serving with no terminal attached, so no terminal holds "
+            "it and closing one does not end it. Start it again from a terminal "
+            "once this one is stopped.",
+        )
+    return notes
+
+
 def _stop(args: argparse.Namespace, config: ResearchConfig) -> dict[str, Any]:
     """Stop this project's app, and with ``--servers`` every process serving it.
 
@@ -1082,6 +1111,7 @@ def _stop(args: argparse.Namespace, config: ResearchConfig) -> dict[str, Any]:
         "project_root": str(config.project_root),
         "running": bool(app_state.get("running")),
         "attached_to": app_state.get("attached_to"),
+        "detached": app_state.get("detached"),
         "url": app_state.get("url"),
     }
     # The app is asked to stop, never killed: it closes its own gateway and releases
@@ -1092,12 +1122,7 @@ def _stop(args: argparse.Namespace, config: ResearchConfig) -> dict[str, Any]:
         report["stopped"] = _ask_to_stop(pid) is None
         report["pid"] = pid
     if not args.servers:
-        report["notes"] = [
-            (
-                "An app belongs to the terminal that started it: it ends there, "
-                "and this command does not start it again."
-            )
-        ]
+        report["notes"] = _stop_notes(bool(app_state.get("detached")))
         return report
     found = _service_processes(config.project_root)
     report["servers"] = [{"pid": pid, "command": command} for pid, command in found]
@@ -1598,6 +1623,8 @@ def _only_project_or_ask() -> Path:
     sys.stdout.write("Which project\n")
     for index, entry in enumerate(registered, start=1):
         running = " — already served" if entry["app"]["running"] else ""
+        if entry["app"].get("detached"):
+            running = " — served detached, which is a state this app does not serve"
         sys.stdout.write(f"  [{index}] {entry['project_name']}{running}\n")
     sys.stdout.write("  [0] none of these\n")
     sys.stdout.flush()
@@ -1605,6 +1632,19 @@ def _only_project_or_ask() -> Path:
     if not answer.isdigit() or not 1 <= int(answer) <= len(registered):
         raise ConfigurationError("No project chosen, so nothing was started.")
     return Path(str(registered[int(answer) - 1]["project_root"]))
+
+
+def _is_detached(config: ResearchConfig) -> bool:
+    """Whether this project's app is serving with no terminal attached.
+
+    The app holds itself to being served from the terminal that started it, so a
+    serving process that has none is a state a reader is told about rather than
+    one that is served around. The answer comes from the live process, so a
+    terminal file that was never written cannot make an attached app read as
+    detached.
+    """
+
+    return detached_from_terminal(config, running_url(config) is not None) is True
 
 
 def _bare_workspace(args: argparse.Namespace) -> CommandResult:
@@ -1629,6 +1669,14 @@ def _bare_workspace(args: argparse.Namespace) -> CommandResult:
     if url is not None:
         if getattr(args, "start_ui", False):
             _open_browser(url)
+        if _is_detached(config):
+            sys.stdout.write(
+                f"{config.project_name} is served at {url} by a process with no "
+                f"terminal attached, which is a state this app does not serve. "
+                f"Ctrl-C here would not stop it. '{CLI_NAME} stop' ends it, and a "
+                f"bare call then serves the project from this terminal.\n"
+            )
+            return CommandResult()
         sys.stdout.write(
             f"{config.project_name} is already served at {url} by a process this "
             f"terminal does not own; Ctrl-C here would not stop it. "
@@ -1663,6 +1711,14 @@ async def _start(args: argparse.Namespace, config: ResearchConfig) -> CommandRes
     if url is not None:
         if args.start_ui:
             _open_browser(url)
+        if _is_detached(config):
+            sys.stdout.write(
+                f"{config.project_name} is served at {url} by a process with no "
+                f"terminal attached, which is a state this app does not serve. "
+                f"Ctrl-C here would not stop it. '{CLI_NAME} stop' ends it, and "
+                f"this command then serves the project here.\n"
+            )
+            return CommandResult()
         sys.stdout.write(
             f"{config.project_name} is already served at {url} by a process this "
             f"terminal does not own; Ctrl-C here would not stop it. "

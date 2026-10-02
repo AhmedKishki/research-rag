@@ -20,6 +20,7 @@ import time
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 
 import uvicorn
@@ -58,6 +59,43 @@ def _own_tty() -> str | None:
     try:
         return os.ttyname(0)
     except OSError:
+        return None
+
+
+def has_terminal(pid: int, proc_root: Path = Path("/proc")) -> bool | None:
+    """Whether ``pid`` still has a controlling terminal, or None when unasked.
+
+    An app is attached to the terminal that started it, so a serving process with
+    no controlling terminal is serving outside the rule this app holds itself to.
+    It is a fact about the live process rather than about ``TTY_FILE``, because a
+    file is deleted when an app that recorded it stops, and a missing file would
+    then read as a detached app that is not there.
+
+    ``/proc/<pid>/stat`` is read rather than ``ps`` because this app runs where
+    procfs is and no process tree is inspected: field 7 is the controlling
+    terminal's device number, and 0 is the kernel's own answer for "none". The
+    second field is in parentheses and may itself contain a space or one, so the
+    fields are counted from after its final ``)`` rather than by splitting the
+    whole line.
+    """
+
+    try:
+        raw = (proc_root / str(pid) / "stat").read_text(
+            encoding="utf-8", errors="replace"
+        )
+    except OSError:
+        return None
+    try:
+        fields = raw[raw.rindex(")") + 1 :].split()
+    except ValueError:
+        return None
+    # fields[0] is the state, which is field 3 of the line, so the controlling
+    # terminal's device number is field 7.
+    if len(fields) < 5:
+        return None
+    try:
+        return int(fields[4]) != 0
+    except ValueError:
         return None
 
 
@@ -625,6 +663,7 @@ __all__ = [
     "ClientRegistry",
     "Surfaces",
     "alive",
+    "has_terminal",
     "recorded_port",
     "running",
     "running_url",
