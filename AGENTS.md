@@ -98,7 +98,7 @@
 | Component | Pin |
 |---|---|
 | vanilla gateway | `fc339c259a672ca4dacb525840eba851d01c4b75` |
-| shared UI | `1db180e` |
+| shared UI | `f6b74b4` |
 | shared settings-core | `cbd47bb46efe85340de34f8f8f13fc6516e7fecb` |
 | UltraRAG | `0.3.0.2` at `3a709a2aea3fbe46acca59c422621c94b6e86857` |
 | `bm25s` fork | `20f6c02` |
