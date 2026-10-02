@@ -65,8 +65,8 @@ Four findings hold as decisions:
 - **Hybrid orders better than BM25 alone at the same reach**, so choosing BM25 for its speed gives up ordering quality rather than coverage.
 - **Dense alone is the weakest mode**, and returns fewer passages because the cosine gate rejects most of its candidates. Its worst class is entity queries: a proper noun needs its words matched, which is what BM25 is for.
 - **Paraphrase is the hardest class for every mode.** The gap is part depth and part ordering, not the relevance gates.
-- **No returned passage duplicated another**, at any gate or diversity setting measured: `mean_exact_duplicate_slots` and `mean_near_duplicate_slots` were `0.0` throughout. The corpus holds reprinted material in its chunks; a result list does not.
-- **No passage dominated the results.** `repeated_slot_rate` was 0.119 on the held-out half, meaning one passage in eight occupied a slot it also held for another query, and the most frequent passage appeared in three of sixteen queries.
+- **No returned passage duplicated another**, at any gate or diversity setting measured: `mean_distinct_evidence_spans` was 10.0 with `mean_exact_duplicate_slots` and `mean_near_duplicate_slots` at `0.0`. The corpus holds reprinted material in its chunks; a result list does not.
+- **The source-diversity penalty is what keeps one passage from answering every query.** `repeated_slot_rate` fell from 22.9% at no charge to 7.1% at the strongest, on the development half, and from 13.1% to 9.4% on the held-out half. No quality column moves with it, so this is the setting's measured effect and the reason it earns its place.
 
 ## What a judged set cannot establish
 
@@ -182,7 +182,7 @@ It only reorders candidates that were already ranked, so it adds and removes not
 
 Measured across `source_diversity_penalty` 0.0, 0.25, 0.5, and 1.0 at a fixed candidate window and rerank budget, on a development and a held-out half of the judged set split by target: mean distinct sources per query rose from 3.9 to 9.1 on the development half and 4.6 to 9.5 on the held-out half, and held-out success at depth was unchanged at every value. On the development half success at depth held through 0.25 and fell one query in fourteen at 0.5. The shipped 0.25 is therefore the largest charge the judged set scores as free, not a midpoint.
 
-That reading rests on a set of thirty queries and the free claim rests on one query of movement in the other direction, so it bounds the setting rather than establishing an optimum. The redundancy measures are what a change in this setting should be read against: at every value tested, `mean_exact_duplicate_slots` and `mean_near_duplicate_slots` were `0.0`, so the charge was reordering sources and never suppressing reprinted text.
+That reading rests on a set of thirty queries and the free claim rests on one query of movement in the other direction, so it bounds the setting rather than establishing an optimum. The result-list measures say what the charge actually does: `mean_distinct_evidence_spans` was 10.0 and both duplicate counts `0.0` at every value, so the charge was never suppressing reprinted text, and `repeated_slot_rate` fell as it rose. A duplicate-suppression policy is therefore not what this setting is for, and a known-item score is not what would detect one.
 
 ## What a running project costs the machine
 
