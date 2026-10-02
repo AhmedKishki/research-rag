@@ -41,6 +41,76 @@ from ..storage.records import iter_jsonl
 from .artifact_lookup import ArtifactLookup, VectorByContentsMapping
 from .dense import DenseSearchHit, RerankerUnavailable
 
+#: The most candidate identifiers one stage of an evaluation trace may carry. The
+#: trace is a bounded read of a pipeline, not the pipeline's own state, so a stage
+#: deeper than this says it was cut rather than growing the answer without limit.
+EVALUATION_TRACE_CANDIDATE_BUDGET = 256
+
+
+def _trace_stage(chunk_ids: Sequence[str]) -> dict[str, Any]:
+    """One pipeline stage: how many identifiers it held, and a bounded list of them.
+
+    The count is the stage's own size, so a measurement reads what the pipeline
+    held even where the list was cut. ``truncated`` is what keeps the two apart:
+    an identifier absent from a truncated list was not necessarily absent from
+    the stage, and a measurement that cannot tell has not measured it.
+    """
+
+    listed = [
+        str(chunk_id) for chunk_id in chunk_ids[:EVALUATION_TRACE_CANDIDATE_BUDGET]
+    ]
+    return {
+        "count": len(chunk_ids),
+        "chunk_ids": listed,
+        "truncated": len(listed) < len(chunk_ids),
+    }
+
+
+def _collapsed_by_reason(collapsed: Sequence[Mapping[str, Any]]) -> dict[str, int]:
+    counts: dict[str, int] = {}
+    for entry in collapsed:
+        reason = str(entry.get("collapsed_by") or "unknown")
+        counts[reason] = counts.get(reason, 0) + 1
+    return dict(sorted(counts.items()))
+
+
+def _evaluation_trace(
+    *,
+    retrieval_method: str,
+    candidate_depth: int,
+    bm25: dict[str, Any] | None,
+    dense: dict[str, Any] | None,
+    rerank: dict[str, Any],
+    stages: dict[str, dict[str, Any] | None],
+    collapsed: Sequence[Mapping[str, Any]],
+) -> dict[str, Any]:
+    """The pipeline's own account of one search: identifiers, counts, no text.
+
+    A judged passage can be dropped by the cosine gate, the fusion, the reranked
+    window, or the repetition collapse, and the answer reports only what survived
+    all four. A measurement cannot see the drop from outside, so each stage names
+    the identifiers it held and how many, and where a stage did not run the entry
+    is ``None`` rather than an empty stage: a branch that never ran the gate has
+    not admitted zero candidates through it.
+    """
+
+    listed = list(collapsed[:EVALUATION_TRACE_CANDIDATE_BUDGET])
+    return {
+        "retrieval_method": retrieval_method,
+        "candidate_depth": candidate_depth,
+        "candidate_budget": EVALUATION_TRACE_CANDIDATE_BUDGET,
+        "stages": stages,
+        "bm25": bm25,
+        "dense": dense,
+        "rerank": rerank,
+        "collapsed": {
+            "count": len(collapsed),
+            "by_reason": _collapsed_by_reason(collapsed),
+            "discarded": listed,
+            "truncated": len(listed) < len(collapsed),
+        },
+    }
+
 
 def _collapse_repetitions(
     ordered_ids: Sequence[str],
@@ -327,6 +397,7 @@ class SearchWorkflow:
         dict[str, dict[str, Any]],
         dict[str, list[dict[str, Any]]],
         int,
+        int,
     ]:
         if limit <= 0:
             return (
@@ -339,6 +410,7 @@ class SearchWorkflow:
                 },
                 {},
                 {},
+                0,
                 0,
             )
         # An exclusion is a candidate this window can no longer use, so the
@@ -480,7 +552,17 @@ class SearchWorkflow:
                 or requested >= ceiling
                 or len(passages) < requested
             ):
-                return ranking, rejected, resolved, rejected_examples, requested
+                return (
+                    ranking,
+                    rejected,
+                    resolved,
+                    rejected_examples,
+                    requested,
+                    # A window wider than the corpus is answered with everything
+                    # the corpus holds, so what the index returned is not the
+                    # window it was asked for.
+                    len(passages),
+                )
             requested = min(ceiling, requested * 2)
 
     @staticmethod
@@ -540,7 +622,7 @@ class SearchWorkflow:
         self._document_frequencies = (generation_id, stopwords, frequencies)
         return frequencies
 
-    async def search(  # noqa: C901 — complexity 42; the threshold is not a refactor schedule
+    async def search(  # noqa: C901 — one function owns the whole retrieval branch; splitting it scatters the rules it keeps together
         self,
         query: str,
         *,
@@ -557,6 +639,7 @@ class SearchWorkflow:
         rerank: bool = False,
         rerank_model: str | None = None,
         include_staleness: bool = True,
+        evaluation_trace: bool = False,
     ) -> dict[str, Any]:
         """Retrieve evidence.
 
@@ -567,6 +650,12 @@ class SearchWorkflow:
 
         ``rerank_model`` names a reranker for this call alone, so one process can
         compare models against the same generation.
+
+        ``evaluation_trace`` adds ``evaluation_trace`` to the answer: the bounded
+        identifier sets of each ranking stage, the gate's own conservation
+        arithmetic, and what the repetition collapse discarded. It is what a
+        measurement reads to see where a passage went, no surface asks for it,
+        and no surface projects it into an agent's answer.
         """
         query = query.strip()
         if not query:
@@ -733,6 +822,7 @@ class SearchWorkflow:
 
             bm25_ranking: list[str] = []
             bm25_window = 0
+            bm25_returned = 0
             dense_hits: list[DenseSearchHit] = []
             withheld: dict[str, dict[str, Any]] = {}
             bm25_examples: dict[str, list[dict[str, Any]]] = {}
@@ -787,6 +877,7 @@ class SearchWorkflow:
                     bm25_chunks,
                     bm25_examples,
                     bm25_window,
+                    bm25_returned,
                 ) = bm25_result
                 chunks_by_id.update(bm25_chunks)
             elif use_bm25:
@@ -796,6 +887,7 @@ class SearchWorkflow:
                     bm25_chunks,
                     bm25_examples,
                     bm25_window,
+                    bm25_returned,
                 ) = await self._bm25_ranking(
                     query,
                     lookup,
@@ -852,6 +944,7 @@ class SearchWorkflow:
                         bm25_chunks,
                         bm25_examples,
                         prf_window,
+                        prf_returned,
                     ) = await self._bm25_ranking(
                         f"{query} {' '.join(prf_terms)}",
                         lookup,
@@ -875,6 +968,7 @@ class SearchWorkflow:
                     # The feedback pass searched a second window, so the answer
                     # reports the wider of the two rather than the first.
                     bm25_window = max(bm25_window, prf_window)
+                    bm25_returned = prf_returned
 
             dense_chunks = await asyncio.to_thread(
                 lookup.chunks_by_ids,
@@ -886,13 +980,17 @@ class SearchWorkflow:
             dense_floor = self.config.settings.dense_minimum_cosine_similarity
             dense_below_threshold = 0
             dense_below_threshold_rescued = 0
+            dense_admitted_above_floor = 0
             dense_quality_rejected = 0
             dense_corrupt_text_rejected = 0
             dense_too_short = 0
+            dense_filtered_out = 0
             dense_rejected_examples: dict[str, list[dict[str, Any]]] = {}
             # Every non-score filter runs first, so the score decision below sees
             # only candidates the corpus can actually offer.
             eligible_dense_hits: list[tuple[DenseSearchHit, dict[str, Any]]] = []
+            dense_returned_ids = [hit.chunk_id for hit in dense_hits]
+            dense_returned_by_index = len(dense_hits)
             for dense_hit in dense_hits:
                 chunk = chunks_by_id.get(dense_hit.chunk_id)
                 if chunk is None:
@@ -926,6 +1024,7 @@ class SearchWorkflow:
                     excluded_document_ids=excluded_document_ids,
                     excluded_chunk_ids=excluded_chunk_ids,
                 ):
+                    dense_filtered_out += 1
                     continue
                 if self._passage_too_short(chunk, token_policy=passage_token_policy):
                     dense_too_short += 1
@@ -969,6 +1068,26 @@ class SearchWorkflow:
                     cosine_similarity=round(dense_hit.score, 4),
                 )
             dense_hits = accepted_dense_hits
+            dense_eligible_total = len(eligible_dense_hits)
+            dense_eligible_ids = [hit.chunk_id for hit, _chunk in eligible_dense_hits]
+            dense_admitted_above_floor = len(dense_hits) - dense_below_threshold_rescued
+            # Every eligible candidate was admitted above the floor, admitted
+            # below it by the margin, or rejected below it, and nothing else
+            # happened to it. The three counts are what makes the gate's share
+            # computable, so an arithmetic slip is a wrong count rather than a
+            # plausible one.
+            if dense_eligible_total != (
+                dense_admitted_above_floor
+                + dense_below_threshold_rescued
+                + dense_below_threshold
+            ):
+                raise ResearchError(
+                    "The cosine gate's counts do not add up: "
+                    f"{dense_eligible_total} eligible candidates, "
+                    f"{dense_admitted_above_floor} admitted above the floor, "
+                    f"{dense_below_threshold_rescued} admitted below it, and "
+                    f"{dense_below_threshold} rejected."
+                )
             dense_ranking = [hit.chunk_id for hit in dense_hits]
             dense_scores = {hit.chunk_id: hit.score for hit in dense_hits}
             bm25_ranks = {
@@ -1006,6 +1125,8 @@ class SearchWorkflow:
             rerank_scores: dict[str, float] = {}
             rerank_fallback: dict[str, Any] | None = None
             rerank_count = 0
+            fused_pre_rerank_ids = list(ordered_ids)
+            reranked_window_ids: list[str] = []
             if rerank and ordered_ids:
                 rerank_count = min(
                     len(ordered_ids),
@@ -1036,6 +1157,7 @@ class SearchWorkflow:
                         "message": str(exc),
                         "effect": "unranked_candidate_order_returned",
                     }
+                    reranked_window_ids = list(rerank_ids)
                 else:
                     rerank_scores = dict(zip(rerank_ids, scores, strict=True))
                     ordered_ids = (
@@ -1049,6 +1171,7 @@ class SearchWorkflow:
                         )
                         + rerank_tail
                     )
+                    reranked_window_ids = list(ordered_ids[:rerank_count])
             reranked_applied = bool(rerank_scores)
 
             # A repeated passage is settled here, on the candidates this search
@@ -1064,6 +1187,7 @@ class SearchWorkflow:
                 documents_by_id=documents_by_id,
             )
             candidate_count = len(ordered_ids)
+            post_collapse_ids = list(ordered_ids)
             source_id_by_chunk = {
                 item: str(
                     _document_for_chunk(chunks_by_id[item], documents_by_id)[
@@ -1148,7 +1272,7 @@ class SearchWorkflow:
             else:
                 stale = None
                 upgrade_reasons = self._generation_upgrade_reasons(manifest)
-            return {
+            payload = {
                 "query": query,
                 "generation_id": manifest["generation_id"],
                 "stale": stale,
@@ -1230,8 +1354,40 @@ class SearchWorkflow:
                     "best_cosine_similarity": (
                         None if best_dense_score is None else round(best_dense_score, 4)
                     ),
-                    "admitted_below_floor": dense_below_threshold_rescued,
-                    "rejected_below_floor": dense_below_threshold,
+                    # The denominator, so the share the gate removed is a
+                    # division rather than an estimate: every candidate the
+                    # index returned that survived the quality filters and the
+                    # length floor was admitted above the floor, admitted below
+                    # it by the margin, or rejected below it.
+                    "eligible_total": dense_eligible_total if use_dense else None,
+                    "admitted_above_floor": (
+                        dense_admitted_above_floor if use_dense else None
+                    ),
+                    "admitted_below_floor": (
+                        dense_below_threshold_rescued if use_dense else None
+                    ),
+                    "rejected_below_floor": dense_below_threshold
+                    if use_dense
+                    else None,
+                    "conserved": dense_eligible_total
+                    == (
+                        dense_admitted_above_floor
+                        + dense_below_threshold_rescued
+                        + dense_below_threshold
+                    )
+                    if use_dense
+                    else None,
+                    "excluded_before_gate": (
+                        {
+                            "returned_by_index": dense_returned_by_index,
+                            "extraction_artifact": dense_quality_rejected,
+                            "corrupt_text": dense_corrupt_text_rejected,
+                            "too_short": dense_too_short,
+                            "filtered_out": dense_filtered_out,
+                        }
+                        if use_dense
+                        else None
+                    ),
                     "note": (
                         "Dense candidates are admitted by score. A candidate below "
                         "the floor is admitted when the query's best candidate "
@@ -1239,7 +1395,14 @@ class SearchWorkflow:
                         "when nothing clears the floor the query is left with "
                         "nothing rather than its least-bad passage. A query whose "
                         "whole candidate list sits in a narrow band under the floor "
-                        "is why the margin exists."
+                        "is why the margin exists. The three counts above account "
+                        "for every eligible candidate between them; excluded_before_gate "
+                        "counts the ones dropped before the score decision for a "
+                        "reason that is not the score, and those are also counted "
+                        "per reason in rejected_candidates. A method that never runs "
+                        "the dense half reports null here rather than a zero, because "
+                        "zero candidates through a gate that did not open is not a "
+                        "measurement."
                     ),
                 },
                 "passage_length_policy": {
@@ -1347,6 +1510,73 @@ class SearchWorkflow:
                 "relevance_limited": relevance_limited,
                 "hits": hits,
             }
+            if evaluation_trace:
+                payload["evaluation_trace"] = _evaluation_trace(
+                    retrieval_method=retrieval_method,
+                    candidate_depth=candidate_depth,
+                    bm25=(
+                        {
+                            "index_window": bm25_window,
+                            "returned_by_index": bm25_returned,
+                            "after_gates": len(bm25_ranking),
+                            "rejected": dict(sorted(bm25_rejected.items())),
+                        }
+                        if use_bm25
+                        else None
+                    ),
+                    dense=(
+                        {
+                            "returned_by_index": dense_returned_by_index,
+                            "eligible_total": dense_eligible_total,
+                            "admitted_above_floor": dense_admitted_above_floor,
+                            "admitted_below_floor": dense_below_threshold_rescued,
+                            "rejected_below_floor": dense_below_threshold,
+                            "conserved": dense_eligible_total
+                            == (
+                                dense_admitted_above_floor
+                                + dense_below_threshold_rescued
+                                + dense_below_threshold
+                            ),
+                            "excluded_before_gate": {
+                                "returned_by_index": dense_returned_by_index,
+                                "extraction_artifact": dense_quality_rejected,
+                                "corrupt_text": dense_corrupt_text_rejected,
+                                "too_short": dense_too_short,
+                                "filtered_out": dense_filtered_out,
+                            },
+                        }
+                        if use_dense
+                        else None
+                    ),
+                    rerank={
+                        "requested": bool(rerank),
+                        "applied": reranked_applied,
+                        "fallback": rerank_fallback,
+                        "window": rerank_count,
+                    },
+                    stages={
+                        "dense_before_filters": (
+                            _trace_stage(dense_returned_ids) if use_dense else None
+                        ),
+                        "dense_eligible": (
+                            _trace_stage(dense_eligible_ids) if use_dense else None
+                        ),
+                        "dense_admitted": (
+                            _trace_stage(dense_ranking) if use_dense else None
+                        ),
+                        "bm25_after_gates": (
+                            _trace_stage(bm25_ranking) if use_bm25 else None
+                        ),
+                        "fused_pre_rerank": _trace_stage(fused_pre_rerank_ids),
+                        "reranked": (
+                            _trace_stage(reranked_window_ids) if rerank_count else None
+                        ),
+                        "post_collapse": _trace_stage(post_collapse_ids),
+                        "final": _trace_stage(selected_ids),
+                    },
+                    collapsed=collapsed,
+                )
+            return payload
 
     async def get_passage(
         self,

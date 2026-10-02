@@ -1,8 +1,10 @@
 # Measurements
 
-The protocol a measurement is taken by, and the decisions measurements once justified.
+The measurement protocols, workload envelope, and limits on interpreting retrieval experiments.
 
-This file states no figure. A retrieval default changes only on a fresh run of a harness below, and the run's own output is the record.
+- A retrieval default changes only after a reviewed evaluation.
+- Retained run records own the exact engine revision, settings, inputs, outputs, and timings.
+- Lexical diagnostics do not establish semantic relevance, usability, independence, or contradiction.
 
 Two harnesses produce everything these decisions rest on, each driving the real gateway, the real models, and the real service:
 
@@ -59,22 +61,26 @@ The dependency report is the one term that reads outside this project, because i
 
 The judged set and its protocol are in `evaluation/`; `scripts/evaluate_retrieval.py` runs it through `ResearchService.search`, the engine the workspace and the command line both call. The harness measures every mode explicitly, so its rows do not depend on the app's default.
 
-Four findings hold as decisions:
-
-- **Reranking is the largest single quality gain**, so it is on by default. It is also the only configuration that returns the judged passage first for every quote query.
-- **Hybrid orders better than BM25 alone at the same reach**, so choosing BM25 for its speed gives up ordering quality rather than coverage.
-- **Dense alone is the weakest mode**, and returns fewer passages because the cosine gate rejects most of its candidates. Its worst class is entity queries: a proper noun needs its words matched, which is what BM25 is for.
-- **Paraphrase is the hardest class for every mode.** The gap is part depth and part ordering, not the relevance gates.
-- **No returned passage duplicated another**, at any gate or diversity setting measured: `mean_distinct_evidence_spans` was 10.0 with `mean_exact_duplicate_slots` and `mean_near_duplicate_slots` at `0.0`. The corpus holds reprinted material in its chunks; a result list does not.
-- **The source-diversity penalty is what keeps one passage from answering every query.** `repeated_slot_rate` fell from 22.9% at no charge to 7.1% at the strongest, on the development half, and from 13.1% to 9.4% on the held-out half. No quality column moves with it, so this is the setting's measured effect and the reason it earns its place.
+- Known-item success, reciprocal rank, and nDCG measure where one designated passage appears.
+- A relevant alternative passage receives no relevance credit without a pooled judgment.
+- Final-list duplication is measured after the engine's repetition collapse.
+- Low final duplication does not establish that the reranker scored no copies or that collapse preserved all distinct claims.
+- Repetition across quote and paraphrase queries for one target is expected; it is not evidence of a generic leader.
+- Requested candidate caps and rerank caps are not observed depths or windows.
+- A reranked row requires evidence that the reranker ran; an unavailable-model fallback is a degraded result, not a successful reranking experiment.
+- Current shipped retrieval settings remain unchanged; these diagnostics do not establish an optimum.
 
 ## What a judged set cannot establish
 
 - The judgments are known-item and single-annotator. A mode that returns a different passage making the same point is scored as a miss, and no pooled judgment exists, so no true recall figure is claimed.
 - They come from one English-primary corpus and one generation, not from a benchmark suite.
-- Fusion weights are deliberately untouched: a judged set this size cannot separate a real weight effect from noise.
-- Thirty queries over nineteen passages register a ranking change only when the designated passage crosses the depth. On a sweep of the source-diversity penalty, which reordered every query's results and cut same-source pairs from 86 slots to 12, the quality columns moved by one query in fourteen. A metric that moves at that scale cannot score a change that improves evidence coverage without moving the designated passage, so a result-list change is read against the redundancy counts beside it rather than against `succ@k`.
-- No held-out split is recorded here. A development and a held-out half split by target, so that a quote and its own paraphrase cannot appear on both sides, is produced by a script outside this repository and belongs with the judged set rather than in a measured figure.
+- The shipped set has 32 queries over 19 targets.
+- Excluding an unavailable target with an explicit reason leaves 30 queries over 18 targets.
+- Multiple queries about one target are correlated; query counts, result-slot counts, and repeated runs are not independent sample sizes.
+- Partitions of an inspected benchmark are exploratory even when target families are disjoint.
+- One-query changes do not establish a policy improvement or statistical equivalence.
+- Pooled graded relevance, usable-passage precision, counterevidence, boundary correctness, and no-answer behavior need author judgments.
+- An untouched confirmation set and paired target-family uncertainty are required before changing defaults.
 
 ## Which product produced a figure
 
@@ -97,8 +103,8 @@ uv run python scripts/evaluate_retrieval.py --project /mnt/data/my-project \
     --reranker-model jinaai/jina-reranker-v1-turbo-en
 ```
 
-- **The shipped default stays.** The comparison reached the same depth as the alternative and ordered quote queries slightly better, at a lower cost per query, so it is neither the better nor the cheaper model here.
-- **A set this size cannot rank two models.** Treat a comparison this narrow as directional, and re-measure before trusting either on a different corpus.
+- **The shipped model stays.** A model decision requires comparable observed windows, applied-reranking checks, repeated timings, and adjudicated relevance.
+- **The current benchmark is exploratory.** Model superiority is not established by this known-item set alone.
 - **Changing the model is an operator decision, not a per-search one.** `--reranker-model` (or `RESEARCH_RAG_RERANKER_MODEL`) changes every search this app answers, and `search(rerank_model=...)` changes it for one engine call.
 - **Which model is smaller is not a parameter to tune.** Both run through the same FastEmbed cross-encoder class with the runtime's default thread count, so the difference is an ONNX-export property.
 
@@ -106,13 +112,15 @@ uv run python scripts/evaluate_retrieval.py --project /mnt/data/my-project \
 
 The reranker reorders a window of `max(top_k * retrieval.rerank_window_multiple, retrieval.rerank_window_floor)` passages, capped by `retrieval.rerank_max_candidates` and the fused candidate count. The depth a reader asks for is therefore the depth the ranking reaches, which makes `top_k` the cheapest quality lever this app has.
 
-`rerank_max_candidates` and the window floor are not levers at a normal corpus size: the window formula never reaches them. They stay settings because a larger corpus could reach them.
-
-`maximum_candidates` bounds the widening a filter triggers, and that is where it acts. A filter drops passages after the corpus is ranked, so a narrow one cannot fill `top_k` and the lexical window doubles until it can; without a bound that doubling walks the whole corpus, ranking it at every step. The response reports the window it reached, so a filter that matched nothing inside it cannot read as an empty corpus. The bound costs reach: a document whose passages all rank below the ceiling is not found by a filter that names it.
+- The requested branch depth is `min(active_chunk_count, maximum_candidates, max(minimum_candidates, top_k * 4))`.
+- Pin both candidate settings to the desired depth to distinguish a branch-depth sweep from a cap-only sweep.
+- Filtering can widen the lexical index window; record that window separately from the requested branch depth.
+- Rerank caps bind only when the candidate pool and window multiple/floor permit them to bind.
+- Record observed windows and candidate shortfalls for every query.
 
 ## What a ranking change costs the corpus
 
-Nothing, for the artifacts. `generation_is_reusable` compares the schema, extraction, cleaning and artifact policy versions, the project id, the chunk size and overlap, the chunk-headers switch, and the embedding model — and nothing else — so weights, gates, caps and the reranked window cannot affect what a corpus holds. A retrieval experiment that reaches a new baseline costs a re-ingest and no re-extraction.
+Query-time ranking changes do not rewrite generation artifacts. `generation_is_reusable` compares processing and artifact identity rather than query-time weights, gates, caps, or rerank windows. Record the generation's policy and the experiment's effective policy separately.
 
 The staging checkpoint identity does not include the retrieval-policy fingerprint, so editing a ranking value resumes an interrupted build rather than discarding it, and a build in progress survives the edit. Only disposable staging is identified this way: a published generation records its policy in its manifest, and a test pins that a ranking change reuses every chunk and vector.
 
@@ -120,17 +128,19 @@ The staging checkpoint identity does not include the retrieval-policy fingerprin
 
 `retrieval.dense_minimum_cosine_similarity` withholds a dense candidate that scores below it, before the fusion sees it, so a search can legitimately return fewer results than `top_k` and an empty answer is a real answer rather than a failure.
 
-The gate is calibrated for a fused ranking. A dense-only one wants a much lower value, because the gate is what thins its candidate list; the agent-facing search tool is hybrid-only, and a dense-only method exposed later would have to not apply it.
-
-Measured across `retrieval.dense_minimum_cosine_similarity` 0.0, 0.60, 0.66, the shipped 0.72, 0.78, and 0.85 at a fixed candidate window and rerank budget, success at each depth, MRR, and nDCG were identical from 0.0 through 0.72 on both halves of the judged set, and document success fell one query in fourteen at 0.78 and again at 0.85.
-
-The gate is not inert at the shipped value. At 0.72 it rejected 10.7 dense candidates per query on the development half and 13.3 on the held-out half out of the candidates it considered, acting on six of fourteen and seven of sixteen queries, and the relative margin rescued 14.7 and 12.9 per query in return — more than it rejected, and on most of the queries it touched. At 0.85 every query lost candidates and the rescue stopped firing, because the margin only applies when the query's best candidate cleared the floor.
-
-That makes the gate load-bearing and invisible at once: it discards and restores candidates in near-equal measure on two thirds of queries, and no quality column moves for any of it. `withheld_candidates` cannot see it either, because that count is about the answer rather than about the gate — a search rejecting thirteen candidates per query reports zero withheld. The floor is therefore neither justified nor refuted by this measurement, and the shipped value is unchanged on grounds of a fused ranking rather than of a measured effect. The engine does not report the count it admitted above the floor, so the share of candidates the gate removed cannot be computed from a run and is not claimed.
+- Gate counts establish activity, not whether rejected candidates were relevant or irrelevant.
+- Count dense quality exclusions separately from score rejections.
+- Eligible candidates equal admitted-above-floor candidates plus margin rescues plus score rejections.
+- A BM25-only query does not run the dense gate; report its dense diagnostics as not applicable.
+- `withheld_candidates` and dense score rejection are different counters.
+- Target presence before and after admission identifies designated-target losses; it does not measure exhaustive candidate recall.
+- An unchanged known-item score does not establish that a gate is harmless, necessary, or calibrated.
+- Final admission and abstention calibration require relevant, hard-negative, and no-answer judgments.
 
 ## The dense floor's relative rescue
 
-`retrieval.dense_relative_similarity_margin` answers the case the floor alone gets wrong: a query whose whole candidate list sits in a band just under it. A floor decides on score alone, so a one-word query — whose best passage can score below the floor while its neighbours sit a few hundredths behind — loses most of its semantic candidates before fusion sees them. The margin admits a below-floor candidate when the query's best candidate cleared the floor and this one is within the margin of it, and admits nothing when nothing cleared the floor, which keeps abstention intact.
+- The relative margin admits a below-floor candidate only when the query's best eligible candidate clears the floor and the candidate lies within the margin.
+- This score rule alone does not establish valid abstention for no-answer questions.
 
 The margin is a runtime setting, like the source-diversity penalty: it enters neither the retrieval-policy fingerprint nor the generation manifest, so generations built before it keep validating and a project can set it, try it, and drop it without rebuilding.
 
@@ -160,9 +170,11 @@ The judged set holds no contentless query, so it cannot measure this behaviour; 
 
 ## The reranked window
 
-The window is shallow enough that a target the fusion ranks outside it is never seen by the cross-encoder, so a shallower window does not merely lose precision: it loses that band entirely. The shipped window is the shallowest one that reaches the quality plateau, and its cost per query grows linearly with the candidates it holds.
-
-The window is `min(candidates ranked, retrieval.rerank_max_candidates, max(top_k * retrieval.rerank_window_multiple, retrieval.rerank_window_floor))`, so `rerank_max_candidates` binds only below `top_k * multiple`. At the shipped `top_k` of 10 and multiple of 2 that floor is 20, and budgets of 20, 30, and 50 produced identical rerank windows and byte-identical rankings across 96 of 96 queries. A budget sweep is therefore a measurement of the window multiple or of `top_k` until the budget is set below that floor, and a run reporting an unchanged window across different budgets measured one configuration.
+- Only candidates inside the observed rerank window receive cross-encoder scores.
+- The window is `min(candidates ranked, retrieval.rerank_max_candidates, max(top_k * retrieval.rerank_window_multiple, retrieval.rerank_window_floor))`.
+- Raising a cap above a lower multiple/floor bound does not widen the window.
+- Equal observed windows under different caps do not establish that wider reranking is ineffective.
+- A quality plateau requires a correctly configured sweep and relevance judgments, not unchanged cap labels.
 
 ## Pseudo-relevance feedback
 
@@ -184,9 +196,11 @@ The default stays off, and it ships off for a second reason beyond the measureme
 
 It only reorders candidates that were already ranked, so it adds and removes nothing, and a ranking with no score to charge against keeps its own order. Its cost is measured in rank, not in evidence: a stronger charge displaces more of a source's own relevant passages, which a known-item judged set cannot score, because it registers that the designated passage moved and never that a run of adjacent passages became less useful.
 
-Measured across `source_diversity_penalty` 0.0, 0.25, 0.5, and 1.0 at a fixed candidate window and rerank budget, on a development and a held-out half of the judged set split by target: mean distinct sources per query rose from 3.9 to 9.1 on the development half and 4.6 to 9.5 on the held-out half, and held-out success at depth was unchanged at every value. On the development half success at depth held through 0.25 and fell one query in fourteen at 0.5. The shipped 0.25 is therefore the largest charge the judged set scores as free, not a midpoint.
-
-That reading rests on a set of thirty queries and the free claim rests on one query of movement in the other direction, so it bounds the setting rather than establishing an optimum. The result-list measures say what the charge actually does: `mean_distinct_evidence_spans` was 10.0 and both duplicate counts `0.0` at every value, so the charge was never suppressing reprinted text, and `repeated_slot_rate` fell as it rose. A duplicate-suppression policy is therefore not what this setting is for, and a known-item score is not what would detect one.
+- More sources, fewer same-source selections, and lower repetition are structural changes, not relevance judgments.
+- Preserving success at one depth does not establish that a penalty is free; reciprocal rank and nDCG may still change.
+- A discrete sweep cannot establish an optimum or the largest safe penalty between tested values.
+- Separate within-target-family repetition from repetition across distinct target families.
+- Retain distinct authorship, conflicting claims, and provenance when assessing any source-diversity replacement.
 
 ## What a running project costs the machine
 
