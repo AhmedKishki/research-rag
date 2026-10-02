@@ -51,6 +51,7 @@ from research_rag.service import (
 )
 from research_rag.settings import resolve_gate_stopwords
 from research_rag.storage import atomic_write_json, read_json, read_jsonl, write_jsonl
+from research_rag.support import DEFAULT_RETRIEVAL_METHOD
 
 DEFAULT_EMBEDDING_FACTS = resolve_embedding_model(DEFAULT_EMBEDDING_MODEL)
 
@@ -1449,6 +1450,226 @@ def test_status_reports_the_relocated_runtime_root(project: Path) -> None:
             dense=FakeDenseBackend(),
         )
         assert (await default_service.status())["runtime_root"] is None
+
+    asyncio.run(exercise())
+
+
+def test_status_payload_is_one_vocabulary_with_or_without_a_generation(
+    project: Path,
+) -> None:
+    """The two answers share their keys, and each states them in its own order.
+
+    A project with no generation and a project that has one answer the same
+    question, so the keys both emit are one vocabulary rather than two literals
+    that can drift. The order is part of what a payload serialises to, so it is
+    pinned here rather than left to the reader of the module.
+    """
+
+    without_generation = (
+        "ready",
+        "stale",
+        "project_root",
+        "project_id",
+        "project_name",
+        "source_root",
+        "state_root",
+        "runtime_root",
+        "portable_root",
+        "model_cache_root",
+        "version",
+        "discovered_source_count",
+        "selected_source_count",
+        "excluded_source_count",
+        "excluded_chunk_count",
+        "categories",
+        "projects",
+        "excluded_sources",
+        "allowed_formats",
+        "ignored_extensions",
+        "language",
+        "source_exclusion_revision",
+        "metadata_revision",
+        "generation_metadata_revision",
+        "metadata_overlay_active",
+        "metadata_pending_source_paths",
+        "generation_metadata_snapshot_outdated",
+        "default_retrieval_method",
+        "available_retrieval_methods",
+        "generation_upgrade_required",
+        "upgrade_reasons",
+        "last_build_metrics",
+        "ingestion_progress",
+        "message",
+    )
+    with_generation = (
+        "ready",
+        "stale",
+        "project_root",
+        "project_id",
+        "project_name",
+        "source_root",
+        "state_root",
+        "runtime_root",
+        "portable_root",
+        "model_cache_root",
+        "version",
+        "generation_id",
+        "created_at",
+        "discovered_source_count",
+        "selected_source_count",
+        "indexed_source_count",
+        "searchable_source_count",
+        "excluded_source_count",
+        "excluded_sources",
+        "excluded_chunk_count",
+        "chunk_exclusion_other_generation_count",
+        "chunk_count",
+        "categories",
+        "projects",
+        "languages",
+        "allowed_formats",
+        "ignored_extensions",
+        "language",
+        "default_retrieval_method",
+        "available_retrieval_methods",
+        "hybrid_ready",
+        "hybrid_upgrade_required",
+        "generation_upgrade_required",
+        "upgrade_reasons",
+        "retrieval",
+        "last_build_metrics",
+        "ingestion_progress",
+        "source_exclusion_revision",
+        "metadata_revision",
+        "generation_metadata_revision",
+        "metadata_overlay_active",
+        "metadata_pending_source_paths",
+        "generation_metadata_snapshot_outdated",
+        "changes",
+        "generation_root",
+        "message",
+    )
+    generation_only = {
+        "generation_id",
+        "created_at",
+        "indexed_source_count",
+        "searchable_source_count",
+        "chunk_exclusion_other_generation_count",
+        "chunk_count",
+        "languages",
+        "hybrid_ready",
+        "hybrid_upgrade_required",
+        "retrieval",
+        "changes",
+        "generation_root",
+    }
+
+    async def exercise() -> None:
+        write_pdf(
+            project / "sources" / "article.pdf",
+            ["Cobalt evidence about labour and artificial intelligence."],
+            title="Research Article",
+        )
+        config = resolve_config(project, vanilla_executable=sys.executable)
+        service = ResearchService(  # type: ignore[arg-type]
+            config,
+            FakeUltraRAG(),
+            dense=FakeDenseBackend(),
+        )
+
+        empty = service._status()
+        assert tuple(empty) == without_generation
+        assert empty["ready"] is False
+        assert empty["available_retrieval_methods"] == []
+        assert empty["default_retrieval_method"] == DEFAULT_RETRIEVAL_METHOD
+        assert empty["generation_upgrade_required"] is False
+        assert empty["upgrade_reasons"] == []
+        assert empty["categories"] == []
+        assert empty["projects"] == []
+        assert empty["last_build_metrics"] is None
+        assert empty["generation_metadata_revision"] is None
+        assert empty["metadata_overlay_active"] is False
+        assert empty["metadata_pending_source_paths"] == []
+        assert empty["generation_metadata_snapshot_outdated"] is False
+        assert empty["excluded_sources"] == []
+
+        ingested = await service.ingest(chunk_size=100, chunk_overlap=10)
+
+        answered = service._status()
+        assert tuple(answered) == with_generation
+        assert answered["ready"] is True
+        # Every key the empty answer emits, the answered one emits too, and the
+        # twelve that name a generation are the only ones it adds.
+        assert not [key for key in without_generation if key not in answered]
+        assert set(with_generation) - set(without_generation) == generation_only
+        assert not [key for key in without_generation if key in generation_only]
+
+        # The keys both emit answer the same question the same way.
+        for key in ("allowed_formats", "ignored_extensions", "language"):
+            assert answered[key] == empty[key]
+        for key in (
+            "project_root",
+            "project_id",
+            "project_name",
+            "source_root",
+            "state_root",
+            "runtime_root",
+            "portable_root",
+            "model_cache_root",
+            "discovered_source_count",
+            "selected_source_count",
+            "excluded_source_count",
+            "excluded_chunk_count",
+            "ingestion_progress",
+        ):
+            assert answered[key] == empty[key]
+        # `message` is the one shared key both branches word for themselves.
+        assert empty["message"] == "No knowledge-base generation exists; call ingest."
+        assert answered["message"] == "Current generation supports hybrid retrieval."
+        assert answered["generation_id"] == ingested["generation_id"]
+        assert answered["chunk_count"] == ingested["chunk_count"]
+        assert answered["hybrid_ready"] is True
+        assert answered["hybrid_upgrade_required"] is False
+        assert answered["available_retrieval_methods"] == ["bm25", "dense", "hybrid"]
+        assert answered["default_retrieval_method"] == "hybrid"
+        assert answered["changes"] == {
+            "added": [],
+            "removed": [],
+            "modified": [],
+            "metadata_changed": False,
+            "source_exclusions_changed": False,
+        }
+        assert answered["generation_root"] == str(Path(ingested["generation_root"]))
+        assert answered["excluded_sources"] == []
+
+        source_id = (await service.list_sources())["discovered_sources"][0]["source_id"]
+        excluded = await service.set_source_inclusion(
+            source_id=source_id, included=False, reason="off the question"
+        )
+        assert excluded["status"] == "changed"
+        withdrawn = service._status()
+        # `status` builds these rows from `source_inventory` rather than by
+        # reaching into the review workflow, so this is where that one lives.
+        row = withdrawn["excluded_sources"][0]
+        assert withdrawn["excluded_sources"] != [] and len(row) == 7
+        assert list(row) == [
+            "source_id",
+            "source_relative_path",
+            "source_path",
+            "reason",
+            "excluded_at",
+            "exists",
+            "indexed_in_current_generation",
+        ]
+        assert row["source_id"] == source_id
+        assert row["source_relative_path"] == "article.pdf"
+        assert row["source_path"] == "sources/article.pdf"
+        assert row["reason"] == "off the question"
+        assert row["exists"] is True
+        assert row["indexed_in_current_generation"] is True
+        assert withdrawn["excluded_source_count"] == 1
+        assert withdrawn["searchable_source_count"] == 0
+        assert withdrawn["ready"] is True
 
     asyncio.run(exercise())
 

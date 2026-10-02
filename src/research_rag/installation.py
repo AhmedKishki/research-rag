@@ -1,42 +1,48 @@
-"""Reach this installation from a shell and from a desktop menu.
+"""The one freedesktop entry that puts this installation in the desktop menu.
 
-Two artifacts live outside any project, and both are the account's own: a link to
-the console script in the account's binary directory, and one freedesktop entry
-per project in the account's applications directory. Neither is project state, so
-nothing here reads or writes `<project>/.research-rag`, and neither needs a
-project to exist.
+The entry is the account's own rather than any project's: it names no project, so
+a click opens the workspace and asks which one when this installation holds
+several. Nothing here reads or writes `<project>/.research-rag`, and nothing needs
+a project to exist.
 
-Every file written here carries the marker naming the command that wrote it, and
-a file without that marker is reported and left alone. A person may replace the
-command on `PATH` or hand-edit a menu entry, and an installer that overwrites
-either without being told is the fault the rule prevents. `--uninstall` removes
-exactly what `install` wrote and refuses the rest.
+Every file written here carries the marker naming the command that wrote it, and a
+file without that marker is reported and left alone. A person may hand-edit a menu
+entry or replace the icon it names, and an installer that overwrites either without
+being told is the fault the rule prevents. `--uninstall` removes exactly what
+`install` wrote and refuses the rest, which is why these refusals raise
+`ConfigurationError` from `config.py`: `install` resolves no project, so a foreign
+file here is the account's own configuration, and that is what the class names.
 
-The console script is linked rather than copied so the checkout's `uv sync` and
-an installed copy both keep working: a link resolves to whatever the interpreter
-that wrote it provides, and a copy would go stale at the first sync.
+The console script moved to `install_entry.py`, which owns the wrapper, where it
+lands on the `PATH`, and the report both halves return. The `ALTERNATIVES` copy
+that stood here was never read here; `tool_ownership.py` owns those commands.
 """
 
 from __future__ import annotations
 
 import contextlib
-import json
 import re
-import sys
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from platformdirs import user_applications_dir, user_bin_dir, user_data_dir
+from platformdirs import user_applications_dir, user_data_dir
 
 from .config import CLI_COMMAND, ConfigurationError
 
-CONSOLE_COMMAND = CLI_COMMAND
-# The line every command this installation writes carries, so an uninstall can
-# tell its own file from a script that happened to take the name.
-WRAPPER_MARKER = "# Written by research-rag install."
-PORTABLE_DIRECTORY = ".research-rag"
-DESCRIPTOR_NAME = "project.json"
+# The command line imports these from this module, so they stay bound here, and
+# `tests/test_installation.py` reads two of them as its attributes.
+from .install_entry import (  # noqa: F401
+    WRAPPER_MARKER,
+    WriteReport,
+    _absolute,
+    _read_text,
+    account_bin_directory,
+    account_command_path,
+    install_console_entry,
+    uninstall_console_entry,
+)
+
 # One entry for the application, not one per project: the projects are inside it,
 # and a menu listing four copies of the same name would be the same problem the
 # per-project entries had.
@@ -45,12 +51,6 @@ ENTRY_MARKER = "# Written by research-rag install --desktop"
 ENTRY_GROUP = "[Desktop Entry]"
 ICON_RELATIVE = "icons/hicolor/scalable/apps/research-rag.svg"
 CATEGORIES = "Utility;"
-# The two commands that put this app on a machine's PATH in the first place.
-# Neither is guessed at runtime: a refusal names them so a reader can run one.
-ALTERNATIVES = (
-    "uv tool install git+https://github.com/AhmedKishki/research-rag.git",
-    "pipx install git+https://github.com/AhmedKishki/research-rag.git",
-)
 
 # The icon is a constant rather than a packaged asset: one file this command
 # writes is one fewer thing to declare, install, and keep in step.
@@ -64,20 +64,6 @@ ICON_SVG = """<?xml version="1.0" encoding="UTF-8"?>
   <path d="M37.5 37.5 43 43" stroke="#33454f" stroke-width="3" stroke-linecap="round"/>
 </svg>
 """
-
-
-@dataclass(frozen=True, slots=True)
-class WriteReport:
-    path: Path
-    state: str
-    message: str
-
-    def as_dict(self) -> dict[str, Any]:
-        return {
-            "path": str(self.path),
-            "state": self.state,
-            "message": self.message,
-        }
 
 
 @dataclass(frozen=True, slots=True)
@@ -96,12 +82,6 @@ class DesktopEntry:
         }
 
 
-def account_bin_directory() -> Path:
-    """The account directory a shell already searches for a command."""
-
-    return Path(user_bin_dir())
-
-
 def account_applications_directory() -> Path:
     """Where the desktop looks for application entries."""
 
@@ -112,116 +92,6 @@ def account_icon_path() -> Path:
     """The one icon every entry this app writes points at."""
 
     return Path(user_data_dir()) / ICON_RELATIVE
-
-
-def console_script_path() -> Path:
-    """The console script this interpreter provided."""
-
-    return Path(sys.executable).expanduser().absolute().parent / CONSOLE_COMMAND
-
-
-def _absolute(directory: Path | None, fallback: Path) -> Path:
-    return Path(directory if directory is not None else fallback).expanduser()
-
-
-def _read_text(path: Path) -> str | None:
-    try:
-        return path.read_text(encoding="utf-8")
-    except OSError:
-        return None
-
-
-def wrapper_document(interpreter: Path) -> str:
-    """The one command that puts this installation on the account's `PATH`.
-
-    A shell script rather than a link to the interpreter's console script, because
-    that script is one file among thousands inside a virtual environment a
-    `uv sync` will happily recreate: a link to it breaks the moment the
-    environment is rebuilt, and the reader is left with "No such file or
-    directory" for a command they installed. This names the interpreter, which
-    survives, and asks it for the module, which is where the command lives.
-    """
-
-    return (
-        "#!/bin/sh\n"
-        "# Written by research-rag install. Runs this installation from wherever\n"
-        "# you are; `research-rag install --uninstall` removes this file.\n"
-        f'exec "{interpreter}" -m research_rag "$@"\n'
-    )
-
-
-def install_console_entry(
-    *,
-    bin_directory: Path | None = None,
-    interpreter: Path | None = None,
-    force: bool = False,
-) -> WriteReport:
-    """Put this installation on the account's `PATH`.
-
-    A second run changes nothing and says the command is already installed.
-    """
-
-    destination = _absolute(bin_directory, account_bin_directory()) / CONSOLE_COMMAND
-    running = (
-        Path(interpreter).expanduser().absolute()
-        if interpreter
-        else Path(sys.executable).expanduser().absolute()
-    )
-    document = wrapper_document(running)
-    existing = _read_text(destination)
-    state = "created"
-    if existing is not None:
-        if existing != document:
-            if not force:
-                raise ConfigurationError(
-                    f"{destination} exists and is not the command this "
-                    "installation writes, so it was left alone. Read it, and pass "
-                    f"--force to replace it with one that runs {running}."
-                )
-            state = "replaced"
-        else:
-            state = "already_installed"
-    if state != "already_installed":
-        if destination.is_dir():
-            raise ConfigurationError(
-                f"{destination} is a directory, so it was left alone. Remove it, "
-                "and run this again."
-            )
-        destination.parent.mkdir(parents=True, exist_ok=True)
-        destination.write_text(document, encoding="utf-8", newline="\n")
-        destination.chmod(0o755)
-    return WriteReport(
-        destination,
-        state,
-        f"{destination} runs this installation through {running}.",
-    )
-
-
-def uninstall_console_entry(
-    *,
-    bin_directory: Path | None = None,
-) -> WriteReport:
-    """Remove the command this installation wrote, and nothing else.
-
-    Only a file carrying this command's own marker is removed: a script someone
-    else placed on the `PATH` is theirs, and a name collision here would make a
-    working command disappear.
-    """
-
-    destination = _absolute(bin_directory, account_bin_directory()) / CONSOLE_COMMAND
-    existing = _read_text(destination)
-    if existing is None:
-        return WriteReport(
-            destination, "absent", f"There is nothing at {destination} to remove."
-        )
-    if WRAPPER_MARKER not in existing:
-        raise ConfigurationError(
-            f"{destination} is not the command this installation writes, so this "
-            "command did not create it and will not delete it. Remove it yourself "
-            "if it is stale."
-        )
-    destination.unlink()
-    return WriteReport(destination, "removed", f"Removed the command {destination}.")
 
 
 _RESERVED = re.compile(r"""[\s"'\\%<>|&;$()*,?#~`]""")
@@ -265,30 +135,6 @@ def exec_tokens(value: str) -> list[str]:
     if current:
         tokens.append("".join(current))
     return [token.replace("%%", "%") for token in tokens]
-
-
-def recorded_project_name(project_root: Path) -> str:
-    """The name a project directory recorded, or its directory name."""
-
-    descriptor = project_root.expanduser().resolve() / ".research-rag" / "project.json"
-    try:
-        document = json.loads(descriptor.read_text(encoding="utf-8"))
-    except (OSError, ValueError):
-        return project_root.expanduser().resolve().name
-    name = document.get("name")
-    if isinstance(name, str) and name.strip():
-        return name.strip()
-    return project_root.expanduser().resolve().name
-
-
-def account_command_path() -> Path:
-    """Where `research-rag install` puts the command a shell already looks for.
-
-    The menu entry runs this rather than the interpreter's console script, so one
-    address serves both the shell and the menu, and re-running `install` moves it.
-    """
-
-    return account_bin_directory() / CONSOLE_COMMAND
 
 
 def desktop_entry_document(*, command: Path, icon: Path) -> str:

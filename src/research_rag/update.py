@@ -20,21 +20,32 @@ the two states it is handed, and every subprocess call arrives through an
 injected runner, so the behaviour is testable with no remote and no network. An
 unreachable remote is a normal answer rather than an error: the report says so,
 changes nothing, and names what to try.
+
+What left this module, and why. `tool_ownership.py` took the `uv` and `pipx`
+vocabulary: the detection that asks each tool whether it claims this
+distribution, the commands each takes to report and to perform an upgrade, the
+install commands a refusal names, and that refusal's prose. `state_files.py` took
+the on-disk names, `ProjectState`, and `resident_build`, so the two questions
+this module asked about a project it has not resolved are answered beside the
+paths they walk. What remains is the decision and the two states it is made from.
+
+It imports no retrieval module, and must not begin to: `research-rag update` is
+one of the commands that has to answer on a machine where the retrieval stack is
+not importable. `ResearchError` still has no leaf home, so the failure path below
+pays for the import that one exception needs and the reporting path does not.
 """
 
 from __future__ import annotations
 
-import json
 import os
-import re
 import signal
 from collections.abc import Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from .config import project_command, recorded_runtime_root
-from .process import COMMAND_TIMEOUT_SECONDS, CommandResult, Runner, subprocess_runner
+from .config import project_command
+from .process import Runner
 from .release import (
     NONE,
     ReleaseSet,
@@ -43,14 +54,26 @@ from .release import (
     is_release_version,
     remote_release,
 )
-from .storage import read_json
-from .support import ResearchError
+from .state_files import (
+    LOCK_FILE,
+    PORTABLE_DIRECTORY,
+    RUNTIME_DIRECTORY,
+    ProjectState,
+    process_alive,
+    recorded_pid,
+    resident_build,
+)
+from .tool_ownership import (
+    available_version,
+    outdated_command,
+    owning_tool,
+    unowned_refusal,
+    upgrade_arguments,
+)
 from .version import DISTRIBUTION_NAME, installed_version, nearest_checkout
 
 CHECKOUT = "checkout"
 DISTRIBUTION = "distribution"
-UV = "uv"
-PIPX = "pipx"
 # Where a checkout stands against the release a remote publishes. `no_release` is
 # its own answer: the repository has published nothing to compare against, which
 # is a different finding from being at the latest release.
@@ -62,23 +85,6 @@ UNREADABLE_RELEASE = "unreadable_release"
 # The two files that decide what the environment installs. A commit that touches
 # neither cannot move a pin, so `uv lock` has nothing to resolve and is skipped.
 PIN_FILES = ("pyproject.toml", "uv.lock")
-PORTABLE_DIRECTORY = ".research-rag"
-RUNTIME_DIRECTORY = "runtime"
-PID_FILE = "research-rag-ui.pid"
-LOCK_FILE = "project.lock"
-# The two commands that put this app on a machine in the first place. A refusal
-# names them so a reader can run one instead of being told a guess is wrong.
-ALTERNATIVES = (
-    "uv tool install git+https://github.com/AhmedKishki/research-rag.git",
-    "pipx install git+https://github.com/AhmedKishki/research-rag.git",
-)
-
-__all__ = [
-    "COMMAND_TIMEOUT_SECONDS",
-    "CommandResult",
-    "Runner",
-    "subprocess_runner",
-]
 
 
 @dataclass(frozen=True, slots=True)
@@ -178,61 +184,24 @@ def _first_line(text: str) -> str:
     return ""
 
 
+def _failure(message: str) -> Exception:
+    """The one error this command raises, reached without a module-level import.
+
+    `support` imports the retrieval stack, and this command has to answer on a
+    machine where that stack is absent. Until `ResearchError` has a leaf home the
+    failure path pays for the import and every other path does not.
+    """
+
+    from .support import ResearchError
+
+    return ResearchError(message)
+
+
 def _text(argv: Sequence[str], run: Runner) -> str | None:
     result = run(argv)
     if not result.ok:
         return None
     return result.stdout.strip() or None
-
-
-def _owns_tool(tool: str, run: Runner) -> tuple[str, str] | None:
-    """What one tool says it installed from, or None when it claims nothing.
-
-    The second element is the specifier `uv` records for the install and an
-    empty string for `pipx`, which records none. It is empty rather than guessed
-    because a reader is told what the tool said, not what it might have meant.
-    """
-
-    if tool == UV:
-        result = run(["uv", "tool", "list", "--show-version-specifiers"])
-        if not result.ok:
-            return None
-        for line in result.stdout.splitlines():
-            if not line.startswith(f"{DISTRIBUTION_NAME} "):
-                continue
-            specifier = re.search(r"\(from (.+)\)\s*$", line)
-            return (
-                DISTRIBUTION_NAME,
-                specifier.group(1) if specifier else line.split(maxsplit=1)[1],
-            )
-        return None
-    result = run(["pipx", "list", "--json"])
-    if not result.ok:
-        return None
-    try:
-        document = json.loads(result.stdout or "{}")
-    except ValueError:
-        return None
-    venvs = document.get("venvs") if isinstance(document, dict) else None
-    if not isinstance(venvs, dict):
-        return None
-    for venv in venvs.values():
-        metadata = venv.get("metadata") if isinstance(venv, dict) else None
-        main = metadata.get("main_package") if isinstance(metadata, dict) else None
-        packages = main.get("package") if isinstance(main, dict) else None
-        if packages and DISTRIBUTION_NAME in packages:
-            return DISTRIBUTION_NAME, ""
-    return None
-
-
-def owning_tool(run: Runner) -> tuple[str | None, str | None]:
-    """The tool that installed this distribution, found by asking each one."""
-
-    for tool in (UV, PIPX):
-        claimed = _owns_tool(tool, run)
-        if claimed is not None:
-            return tool, claimed[1]
-    return None, None
 
 
 def dirty_files(root: Path, run: Runner) -> tuple[str, ...]:
@@ -351,21 +320,8 @@ def _distribution_remote(
         )
     if local.tool is None:
         return RemoteState(reachable=True, detail="no tool claims this installation")
-    if local.tool == UV:
-        result = run(["uv", "tool", "list", "--outdated"])
-        available = _uv_available(result)
-    else:
-        result = run(
-            [
-                "pipx",
-                "runpip",
-                DISTRIBUTION_NAME,
-                "index",
-                "versions",
-                DISTRIBUTION_NAME,
-            ]
-        )
-        available = _pipx_available(result)
+    result = run(outdated_command(local.tool))
+    available = available_version(local.tool, result)
     if not result.ok:
         return RemoteState(
             reachable=False,
@@ -380,16 +336,6 @@ def _distribution_remote(
             detail=f"`{local.tool}` named no available version",
         )
     return RemoteState(reachable=True, available_version=available)
-
-
-def _uv_available(result: CommandResult) -> str | None:
-    found = re.search(r"upgrade available to:\s*v?([0-9][^\s`]*)", result.stdout)
-    return found.group(1) if found else None
-
-
-def _pipx_available(result: CommandResult) -> str | None:
-    found = re.search(r"Available versions:\s*([0-9][^,\s]*)", result.stdout)
-    return found.group(1) if found else None
 
 
 def probe_remote(
@@ -630,19 +576,15 @@ def _distribution_plan(local: LocalState, remote: RemoteState) -> UpdatePlan:
             available=False,
             notes=(
                 (
-                    f"research-rag {local.version} is installed as a distribution "
-                    "with no git metadata at or above it."
+                    f"{DISTRIBUTION_NAME} {local.version} is installed as a "
+                    "distribution with no git metadata at or above it."
                 ),
                 (
                     "Neither `uv` nor `pipx` claims this installation, so no tool "
                     "owns it and this command will not guess which one to run."
                 ),
             ),
-            blocked=(
-                "This installation belongs to no tool uv or pipx recognises. "
-                f"Install it with `{ALTERNATIVES[0]}` or `{ALTERNATIVES[1]}`, or "
-                "update the checkout it came from by hand."
-            ),
+            blocked=unowned_refusal(),
         )
     if not remote.reachable:
         return UpdatePlan(
@@ -650,7 +592,7 @@ def _distribution_plan(local: LocalState, remote: RemoteState) -> UpdatePlan:
             available=False,
             notes=(
                 (
-                    f"research-rag {local.version} was installed by "
+                    f"{DISTRIBUTION_NAME} {local.version} was installed by "
                     f"`{local.tool}"
                     + (
                         f" from {local.tool_specifier}`."
@@ -668,7 +610,7 @@ def _distribution_plan(local: LocalState, remote: RemoteState) -> UpdatePlan:
             shape=DISTRIBUTION,
             available=False,
             notes=(
-                f"research-rag {local.version} was installed by `{local.tool}`.",
+                f"{DISTRIBUTION_NAME} {local.version} was installed by `{local.tool}`.",
                 f"What is available could not be read: {remote.detail}.",
                 "Nothing was changed.",
             ),
@@ -680,8 +622,8 @@ def _distribution_plan(local: LocalState, remote: RemoteState) -> UpdatePlan:
             available=False,
             notes=(
                 (
-                    f"research-rag {local.version} is the version `{local.tool}` "
-                    "offers, so there is nothing to update."
+                    f"{DISTRIBUTION_NAME} {local.version} is the version "
+                    f"`{local.tool}` offers, so there is nothing to update."
                 ),
             ),
             local_revision=local.version,
@@ -692,21 +634,13 @@ def _distribution_plan(local: LocalState, remote: RemoteState) -> UpdatePlan:
         available=True,
         notes=(
             (
-                f"research-rag {local.version} was installed by `{local.tool}`; "
-                f"{remote.available_version} is available."
+                f"{DISTRIBUTION_NAME} {local.version} was installed by "
+                f"`{local.tool}`; {remote.available_version} is available."
             ),
         ),
-        commands=((local.tool, *_upgrade_arguments(local.tool)),),
+        commands=((local.tool, *upgrade_arguments(local.tool)),),
         local_revision=local.version,
         remote_revision=remote.available_version,
-    )
-
-
-def _upgrade_arguments(tool: str) -> tuple[str, ...]:
-    return (
-        ("tool", "upgrade", DISTRIBUTION_NAME)
-        if tool == UV
-        else ("upgrade", DISTRIBUTION_NAME)
     )
 
 
@@ -731,45 +665,13 @@ def apply_plan(
             }
         )
         if not result.ok:
-            raise ResearchError(
+            raise _failure(
                 f"`{label}` failed: "
                 f"{_first_line(result.stderr or result.stdout) or 'no output'}. "
                 "Nothing after it was attempted, and the working tree is where "
                 "that command left it."
             )
     return performed
-
-
-@dataclass(frozen=True, slots=True)
-class ProjectState:
-    project_root: Path
-    project_name: str
-
-    @property
-    def portable_root(self) -> Path:
-        return self.project_root / PORTABLE_DIRECTORY
-
-    @property
-    def default_state_root(self) -> Path:
-        return self.portable_root / RUNTIME_DIRECTORY
-
-    @property
-    def state_root(self) -> Path:
-        """Where this project keeps its pid, its lock, and its staging.
-
-        A relocated runtime root is recorded by the project itself when its
-        configuration is resolved, so the answer is read from that record rather
-        than from a second rule about where a project keeps its derived state.
-        """
-
-        relocated = recorded_runtime_root(self.portable_root)
-        return relocated if relocated is not None else self.default_state_root
-
-    def as_dict(self) -> dict[str, Any]:
-        return {
-            "project_root": str(self.project_root),
-            "project_name": self.project_name,
-        }
 
 
 @dataclass(frozen=True, slots=True)
@@ -804,50 +706,6 @@ class HeldProject:
         )
 
 
-def _process_alive(pid: int) -> bool:
-    try:
-        os.kill(pid, 0)
-    except ProcessLookupError:
-        return False
-    except OSError:
-        return True
-    return True
-
-
-def resident_build(state_root: Path) -> tuple[str | None, str | None]:
-    """The phase and build id a project's newest checkpoint records, if any.
-
-    The same two fields a service names when it refuses a second build. This
-    command reads them from the files themselves because it must answer before
-    any project is resolved, and it will not build a service to ask.
-    """
-
-    staging = state_root / "staging"
-    try:
-        roots = sorted(
-            staging.iterdir(), key=lambda item: item.stat().st_mtime, reverse=True
-        )
-    except OSError:
-        return None, None
-    for root in roots:
-        checkpoint = root / "checkpoint.json"
-        if not checkpoint.is_file():
-            continue
-        try:
-            document = read_json(checkpoint)
-        except (OSError, ValueError):
-            continue
-        if not isinstance(document, dict):
-            continue
-        phase = document.get("phase")
-        build_id = document.get("build_id")
-        return (
-            str(phase) if isinstance(phase, str) and phase else None,
-            str(build_id) if isinstance(build_id, str) and build_id else None,
-        )
-    return None, None
-
-
 def held_projects(projects: Sequence[ProjectState]) -> tuple[HeldProject, ...]:
     held: list[HeldProject] = []
     for project in projects:
@@ -859,7 +717,7 @@ def held_projects(projects: Sequence[ProjectState]) -> tuple[HeldProject, ...]:
         if not recorded.isdigit():
             continue
         pid = int(recorded)
-        if pid == os.getpid() or not _process_alive(pid):
+        if pid == os.getpid() or not process_alive(pid):
             continue
         phase, build_id = resident_build(project.state_root)
         held.append(HeldProject(project, pid, phase, build_id))
@@ -878,19 +736,6 @@ class StoppedProject:
         return report
 
 
-def recorded_pid(project: ProjectState) -> int | None:
-    """The pid a project's app recorded, when that process is still alive."""
-
-    try:
-        recorded = (project.state_root / PID_FILE).read_text(encoding="utf-8").strip()
-    except OSError:
-        return None
-    if not recorded.isdigit():
-        return None
-    pid = int(recorded)
-    return pid if _process_alive(pid) else None
-
-
 def stop_app(project: ProjectState, run: Runner) -> StoppedProject:
     """Ask one project's app to stop, the way its own terminal would.
 
@@ -898,7 +743,7 @@ def stop_app(project: ProjectState, run: Runner) -> StoppedProject:
     else. A project with no live app is left alone.
     """
 
-    pid = recorded_pid(project)
+    pid = recorded_pid(project.state_root)
     if pid is None:
         return StoppedProject(project, False, "no app was running for this project")
     # The app belongs to the terminal that started it, so it is asked to stop the
@@ -957,3 +802,30 @@ def state_changes(
         if touched:
             changes[project_root] = touched
     return changes
+
+
+__all__ = [
+    "AHEAD_OF_RELEASE",
+    "AT_RELEASE",
+    "BEHIND_RELEASE",
+    "CHECKOUT",
+    "DISTRIBUTION",
+    "NO_RELEASE",
+    "PIN_FILES",
+    "UNREADABLE_RELEASE",
+    "HeldProject",
+    "LocalState",
+    "ProjectState",
+    "RemoteState",
+    "StoppedProject",
+    "UpdatePlan",
+    "apply_plan",
+    "dirty_files",
+    "held_projects",
+    "plan_update",
+    "portable_state_digest",
+    "probe_local",
+    "probe_remote",
+    "state_changes",
+    "stop_app",
+]

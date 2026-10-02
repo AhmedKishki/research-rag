@@ -28,8 +28,6 @@ from .extraction import (
     prepare_epub_extraction,
     prepare_scanned_pdf,
     scan_pdf_pages,
-    text_corruption_reasons,
-    text_health_reasons,
 )
 from .generation import (
     generation_artifacts_are_valid,
@@ -83,6 +81,10 @@ from .support import (
     _source_stat_identity,
     _source_work_key,
     _utc_now,
+)
+from .text_quality import (
+    text_corruption_reasons,
+    text_health_reasons,
 )
 
 INGESTION_CHECKPOINT_VERSION = 1

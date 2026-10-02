@@ -17,8 +17,8 @@ from fastmcp import Client
 
 import research_rag.bridge as bridge_module
 from research_rag import bridge, registry
+from research_rag.blocked_answers import not_served_status, uninitialised_status
 from research_rag.config import resolve_config
-from research_rag.status import not_served_status
 from research_rag.support import ResearchError
 from research_rag.surfaces.cli import main
 from research_rag.surfaces.mcp import create_blocked_mcp
@@ -287,8 +287,6 @@ def test_a_client_that_can_only_set_an_environment_still_names_a_project(
 
 def test_the_status_answer_names_the_command_that_creates_the_project() -> None:
     """The verdict and the remedy are built once, where a status answer is built."""
-
-    from research_rag.status import uninitialised_status
 
     answer = uninitialised_status("ai-and-fetishism", "Nothing here yet.")
 

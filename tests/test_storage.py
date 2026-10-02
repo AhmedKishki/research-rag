@@ -6,11 +6,10 @@ from pathlib import Path
 
 import pytest
 
-import research_rag.storage as storage_module
+import research_rag.durable_io as durable_io_module
+from research_rag.durable_io import atomic_write_json, atomic_write_jsonl
 from research_rag.storage import (
     StorageError,
-    atomic_write_json,
-    atomic_write_jsonl,
     iter_jsonl,
     load_source_catalog,
     read_json,
@@ -96,7 +95,7 @@ def test_atomic_writers_fsync_file_and_parent_directory(
         calls.append("directory" if stat.S_ISDIR(mode) else "file")
         real_fsync(descriptor)
 
-    monkeypatch.setattr(storage_module.os, "fsync", tracking_fsync)
+    monkeypatch.setattr(durable_io_module.os, "fsync", tracking_fsync)
     path = tmp_path / "state" / "record.json"
     if writer is atomic_write_json:
         atomic_write_json(path, {"id": 1})

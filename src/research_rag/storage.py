@@ -1,180 +1,64 @@
+"""The portable records a project carries, and the pointer to its generation.
+
+Five hand-editable files live under `<project>/.research-rag`: the reviewed
+metadata overlay, the source catalog, the source exclusions, and the passage
+exclusions, each read and written here, plus `current.json`, the pointer to the
+generation in use. Every reader refuses a file written for a later version of this
+package and names the field it could not read, and every writer replaces its file
+atomically through `durable_io`.
+
+This module holds schemas and validation, not I/O. The durable-write primitives
+live in `durable_io`, and the rule every stored path must satisfy lives in
+`normalized_paths`. The primitives are re-exported here for now: a module that
+imports `storage` for one of them works, and that re-export is transitional rather
+than a second home.
+
+Nothing here writes outside the path it is given, and nothing here reads a setting.
+"""
+
 from __future__ import annotations
 
-import errno
-import json
-import os
-import uuid
-from collections.abc import Iterable, Iterator
-from pathlib import Path, PurePosixPath
+from pathlib import Path
 from typing import Any
 
+from .durable_io import (
+    StorageError,
+    atomic_write_json,
+    atomic_write_jsonl,
+    directory_statistics,
+    fsync_directories,
+    fsync_directory,
+    iter_jsonl,
+    read_json,
+    read_jsonl,
+    write_handoff_jsonl,
+    write_jsonl,
+)
+from .normalized_paths import normalized_relative_path
+from .sources import ALLOWED_SOURCE_EXTENSIONS, METADATA_FIELDS, stable_source_id
 
-class StorageError(RuntimeError):
-    pass
-
-
-def fsync_directory(path: Path) -> None:
-    flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0)
-    try:
-        descriptor = os.open(path, flags)
-    except OSError as exc:
-        # These errnos mean the platform cannot open a directory as a file
-        # descriptor. Anything else is a genuine storage failure such as EIO or a
-        # missing parent.
-        if exc.errno not in {
-            errno.EACCES,
-            errno.EINVAL,
-            errno.EISDIR,
-            errno.ENOTSUP,
-            errno.EPERM,
-        }:
-            raise
-        return
-    try:
-        try:
-            os.fsync(descriptor)
-        except OSError as exc:
-            if exc.errno not in {
-                errno.EACCES,
-                errno.EBADF,
-                errno.EINVAL,
-                errno.ENOTSUP,
-            }:
-                raise
-    finally:
-        os.close(descriptor)
-
-
-def atomic_write_json(path: Path, value: Any, *, fsync_parent: bool = True) -> None:
-    """Write JSON atomically.
-
-    Pass ``fsync_parent=False`` to defer the directory fsync when several files
-    are committed together. A caller that defers must persist the parents with
-    :func:`fsync_directories` before committing state that depends on them: cost
-    follows the number of durability operations rather than the size of a
-    payload, so a group of related writes costs far less than one per file.
-    """
-
-    path.parent.mkdir(parents=True, exist_ok=True)
-    temporary = path.with_name(f".{path.name}.{uuid.uuid4().hex}.tmp")
-    try:
-        with temporary.open("w", encoding="utf-8", newline="\n") as handle:
-            handle.write(
-                json.dumps(value, ensure_ascii=False, indent=2, sort_keys=True) + "\n"
-            )
-            handle.flush()
-            os.fsync(handle.fileno())
-        os.replace(temporary, path)
-        if fsync_parent:
-            fsync_directory(path.parent)
-    finally:
-        temporary.unlink(missing_ok=True)
-
-
-def write_jsonl(path: Path, records: Iterable[dict[str, Any]]) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open("w", encoding="utf-8", newline="\n") as handle:
-        for record in records:
-            handle.write(json.dumps(record, ensure_ascii=False, sort_keys=True) + "\n")
-        handle.flush()
-        os.fsync(handle.fileno())
-
-
-def write_handoff_jsonl(path: Path, records: Iterable[dict[str, Any]]) -> None:
-    """Write a file that only a peer process reads and no resume path trusts.
-
-    It must be *visible* to another process on this machine, which closing the
-    file guarantees. It is rewritten before every use and deleted afterwards,
-    so durability would only slow the caller down.
-    """
-
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open("w", encoding="utf-8", newline="\n") as handle:
-        for record in records:
-            handle.write(json.dumps(record, ensure_ascii=False, sort_keys=True) + "\n")
-
-
-def atomic_write_jsonl(
-    path: Path,
-    records: Iterable[dict[str, Any]],
-    *,
-    fsync_parent: bool = True,
-) -> None:
-    temporary = path.with_name(f".{path.name}.{uuid.uuid4().hex}.tmp")
-    try:
-        write_jsonl(temporary, records)
-        os.replace(temporary, path)
-        if fsync_parent:
-            fsync_directory(path.parent)
-    finally:
-        temporary.unlink(missing_ok=True)
-
-
-def fsync_directories(paths: Iterable[Path]) -> None:
-    """Persist directory entries for writes that deferred their own fsync."""
-
-    for path in dict.fromkeys(paths):
-        if path.is_dir():
-            fsync_directory(path)
-
-
-def directory_statistics(path: Path) -> tuple[int, int]:
-    """Return ``(file_count, total_bytes)`` for the regular files under a directory.
-
-    Symlinks and unreadable entries are skipped rather than failing the caller.
-    This describes retained state; it does not validate it. A directory walk
-    is cheap enough to report alongside every retained generation.
-    """
-
-    files = 0
-    total = 0
-    for entry in path.rglob("*"):
-        try:
-            if entry.is_symlink() or not entry.is_file():
-                continue
-            total += entry.stat().st_size
-        except OSError:
-            continue
-        files += 1
-    return files, total
-
-
-def read_json(path: Path) -> Any:
-    try:
-        return json.loads(path.read_text(encoding="utf-8"))
-    except FileNotFoundError as exc:
-        raise StorageError(f"Required state file does not exist: {path}") from exc
-    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
-        raise StorageError(f"Invalid JSON state file: {path}") from exc
-
-
-def iter_jsonl(path: Path) -> Iterator[dict[str, Any]]:
-    """Yield validated JSON objects without materializing the complete file."""
-
-    try:
-        with path.open(encoding="utf-8") as handle:
-            for line_number, line in enumerate(handle, 1):
-                if not line.strip():
-                    continue
-                try:
-                    value = json.loads(line)
-                except json.JSONDecodeError as exc:
-                    raise StorageError(
-                        f"Invalid JSON in {path} at line {line_number}"
-                    ) from exc
-                if not isinstance(value, dict):
-                    raise StorageError(
-                        f"Expected an object in {path} at line {line_number}"
-                    )
-                yield value
-    except FileNotFoundError as exc:
-        raise StorageError(f"Required state file does not exist: {path}") from exc
-    except UnicodeDecodeError as exc:
-        raise StorageError(f"Invalid UTF-8 in JSONL state file: {path}") from exc
-
-
-def read_jsonl(path: Path) -> list[dict[str, Any]]:
-    return list(iter_jsonl(path))
+__all__ = [
+    "StorageError",
+    "atomic_write_json",
+    "atomic_write_jsonl",
+    "directory_statistics",
+    "fsync_directories",
+    "fsync_directory",
+    "iter_jsonl",
+    "load_chunk_exclusions",
+    "load_current_generation",
+    "load_metadata_overrides",
+    "load_source_catalog",
+    "load_source_exclusions",
+    "read_json",
+    "read_jsonl",
+    "write_chunk_exclusions",
+    "write_handoff_jsonl",
+    "write_jsonl",
+    "write_metadata_overrides",
+    "write_source_catalog",
+    "write_source_exclusions",
+]
 
 
 def load_metadata_overrides(path: Path) -> dict[str, dict[str, Any]]:
@@ -191,14 +75,7 @@ def load_metadata_overrides(path: Path) -> dict[str, dict[str, Any]]:
     ):
         raise StorageError(f"Invalid source metadata mapping: {path}")
     for source_path in sources:
-        relative = PurePosixPath(source_path)
-        if (
-            source_path in {"", "."}
-            or "\\" in source_path
-            or relative.is_absolute()
-            or ".." in relative.parts
-            or relative.as_posix() != source_path
-        ):
+        if normalized_relative_path(source_path) is None:
             raise StorageError(
                 "Metadata source paths must be normalized and relative: "
                 f"{source_path!r}"
@@ -231,9 +108,6 @@ def _reject_unknown_metadata_version(path: Path, value: dict[str, Any]) -> None:
         not isinstance(item, str) for item in fields
     ):
         raise StorageError(f"Invalid metadata writer field list: {path}")
-    # Import here because `sources` imports this module.
-    from .sources import METADATA_FIELDS
-
     unknown = sorted(set(fields) - set(METADATA_FIELDS))
     if unknown:
         raise StorageError(
@@ -247,8 +121,6 @@ def write_metadata_overrides(
     path: Path,
     overrides: dict[str, dict[str, Any]],
 ) -> None:
-    from .sources import METADATA_FIELDS
-
     atomic_write_json(
         path,
         {
@@ -277,7 +149,6 @@ def load_source_catalog(path: Path, *, project_id: str) -> dict[str, str]:
 
     # Import lazily to keep these JSON helpers independent of `sources`, while
     # still validating project-derived identity at this trust boundary.
-    from .sources import ALLOWED_SOURCE_EXTENSIONS, stable_source_id
 
     result: dict[str, str] = {}
     seen_paths: set[str] = set()
@@ -289,13 +160,9 @@ def load_source_catalog(path: Path, *, project_id: str) -> dict[str, str]:
         source_path = record.get("source_relative_path")
         if not isinstance(source_path, str):
             raise StorageError(f"Invalid source path for {source_id!r}: {path}")
-        relative = PurePosixPath(source_path)
+        relative = normalized_relative_path(source_path)
         if (
-            source_path in {"", "."}
-            or "\\" in source_path
-            or relative.is_absolute()
-            or ".." in relative.parts
-            or relative.as_posix() != source_path
+            relative is None
             or source_path in seen_paths
             or relative.suffix.casefold() not in ALLOWED_SOURCE_EXTENSIONS
         ):
@@ -351,14 +218,7 @@ def load_source_exclusions(path: Path) -> dict[str, dict[str, str]]:
     for source_path, record in sources.items():
         if not isinstance(source_path, str) or not source_path.strip():
             raise StorageError(f"Invalid excluded source path: {path}")
-        relative = PurePosixPath(source_path)
-        if (
-            source_path == "."
-            or "\\" in source_path
-            or relative.is_absolute()
-            or ".." in relative.parts
-            or relative.as_posix() != source_path
-        ):
+        if normalized_relative_path(source_path) is None:
             raise StorageError(
                 f"Excluded source path must be normalized and relative: {source_path!r}"
             )

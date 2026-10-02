@@ -34,6 +34,7 @@ from .sources import (
     scan_sources,  # noqa: F401
     stable_source_id,
 )
+from .state_files import LOCK_FILE
 from .status import StatusWorkflow
 from .storage import (  # noqa: F401
     StorageError,
@@ -167,7 +168,7 @@ class ResearchService(
         )
         self._lock = asyncio.Lock()
         self._project_lock = AsyncFileLock(
-            config.state_root / "project.lock",
+            config.state_root / LOCK_FILE,
             # A caller must not sit in silence behind another build. A long build is
             # driven by repeated short calls, so one caller never blocks another
             # for minutes, and waiting here turns a busy project into a client

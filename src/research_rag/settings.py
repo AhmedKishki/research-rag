@@ -15,7 +15,7 @@ import re
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, fields
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any
 
 from .embeddings import (
     EMBEDDING_MODEL_CHOICES,
@@ -32,8 +32,6 @@ from .settings_layers import (
     project_config_path,
     user_config_path,
 )
-
-Layer = Literal["identity", "engine", "runtime"]
 
 # The names this app resolves its own settings layers by. `PROJECT_CONFIG_RELATIVE`
 # is name-free because it lives inside the project. The other two are the MCP

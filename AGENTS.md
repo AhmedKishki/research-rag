@@ -256,8 +256,9 @@
   - A repair that discards evidence moves it aside.
 - No process-tree inspection is done, because the vanilla tool name says which component was busy and that component writes its own log.
 - A gateway that cannot start is reported by the operation that needed it, never by a surface that never appeared.
-- The app resolves its settings and starts serving before it imports the retrieval stack or opens the gateway, so a project reads fine where the runtime is not installed.
-  - `tests/test_integration.py` pins that order.
+- The app resolves its settings and starts serving before it opens the gateway, so a project reads fine where the managed runtime is not installed.
+  - `research-rag config`, `research-rag doctor`, and `install` import no retrieval module today, which is what lets them answer on a machine where the runtime is absent.
+  - `update` is the exception: it imports `support` for `ResearchError`, and `support` imports `dense`. Until `ResearchError` and the policy constants have a leaf home, `update` needs the retrieval stack importable, and the rule is not true of it.
 - Blocking extraction and filesystem scans stay outside the event loop.
 - Every project operation is serialized with both the in-process lock and the cross-process `project.lock`.
 
@@ -294,6 +295,37 @@ Terminal ── control ───┘      ├── the workspace and its adapte
 - The vanilla gateway is an implementation dependency below the app, not a second surface.
 - The workspace owns no research state.
 - The stdio bridge is a transport, not a second copy of the tools.
+
+### What each layer owns
+
+One concern is one module, and a module that holds two is where a fix goes to be lost.
+The engine is grouped this way:
+
+| Concern | Module |
+|---|---|
+| the durable-write primitives, and nothing about this app | `durable_io.py` |
+| the rule a path stored in a file must satisfy | `normalized_paths.py` |
+| the portable record schemas and the generation pointer | `storage.py` |
+| the reviewed files, and what the inventory knows | `review_state.py`, `source_inventory.py` |
+| the answers a blocked surface gives | `blocked_answers.py` |
+| what a status verdict asks for, and what an agent is told | `tool_views.py` |
+| text normalization and text quality, neither of which opens a document | `text_normalization.py`, `text_quality.py` |
+| model loading, and the two dense backends behind one protocol | `model_runtime.py`, `dense_backends/` |
+| the on-disk names every module agrees on | `state_files.py` |
+| how this app was installed and how it is upgraded | `tool_ownership.py` |
+
+Two rules follow from that table and are not negotiable:
+
+- A module that needs only an error type, a schema version, or a name reads them from a
+  module that imports nothing from the retrieval stack. `research_rag.update` must stay
+  importable on a machine where fastembed is absent.
+- A concern that two front ends both need is written once. The search argument contract,
+  the loopback write gate, the generation-removal confirmation, and the generations
+  listing each exist once, in the engine, rather than per surface.
+
+`support.py` is the remaining exception and is recorded in `TODO.md`: it still holds
+sixteen concerns, and it imports `dense`, so a module that wants `ResearchError` still
+drags the retrieval stack in behind it.
 
 ## Working rule
 

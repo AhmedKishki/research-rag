@@ -1,23 +1,38 @@
+"""The one status answer the command line, the workspace, and an agent share.
+
+`StatusWorkflow` decides whether a project can be served and what its answer is.
+The answers a blocked project gets live in `blocked_answers`, the walk over
+retained generations lives in `generation_inventory`, and the records a status
+answer lists for excluded sources are built by `source_inventory.exclusion_records`
+rather than by reaching into `ReviewWorkflow`. What moved out of this module is
+named in each of those.
+
+The payload is built from the groups below rather than from two literals: the
+project identity, the source counts, the corpus vocabulary, the retrieval
+methods, and the review state are each written once, and each branch states the
+order it emits those groups in. Three keys cannot be grouped because the two
+branches interleave them differently: `excluded_source_count`,
+`excluded_chunk_count`, and `excluded_sources`.
+"""
+
 from __future__ import annotations
 
 import asyncio
 from pathlib import Path
 from typing import Any
 
-from .config import (
-    ResearchConfig,
-    initialise_command,
-    project_selection_command,
-)
+from .config import ResearchConfig
 from .generation import value_fingerprint
+from .generation_inventory import generation_inventory
 from .health import health_report
+from .source_inventory import exclusion_records
 from .sources import (
     ALLOWED_SOURCE_EXTENSIONS,
     SourcePolicyError,
+    SourceScan,
     scan_sources,
     sha256_file,
 )
-from .storage import StorageError, directory_statistics, read_json
 from .support import (
     ARTIFACT_POLICY_VERSION,
     CLEANING_POLICY_VERSION,
@@ -85,119 +100,119 @@ def generation_upgrade_reasons(
     return reasons
 
 
-def blocked_status(
-    reason: str, *, check: str, remedy: str, initialised: bool
+# Each builder below is one group of the payload, held together because both
+# branches emit it in one piece. A branch composes them in the order it emits the
+# keys; the values are the branch's own.
+
+
+def _base_payload(
+    config: ResearchConfig, *, ready: bool, stale: bool
 ) -> dict[str, Any]:
-    """The status answer for a project this machine cannot serve right now.
-
-    One shape for every condition that stops a corpus being answered: `blocked_by`
-    names the check that failed, the sentence that explains it, and the command
-    that closes it, so an agent reads the same object whether the project was never
-    created or the app that serves it is not running.
-
-    The reason names the project, because nothing else in this answer does: an
-    agent's answer carries no corpus inventory, and a client that may be
-    configured against several projects has to learn which one is missing.
-    """
+    """Which project this is, and what this machine makes of it."""
 
     return {
-        "ready": False,
-        "stale": False,
-        "project_initialised": initialised,
-        "blocked_by": [
-            {
-                "check": check,
-                "reason": reason,
-                "remedy": remedy,
-            }
-        ],
-        "message": reason,
+        "ready": ready,
+        "stale": stale,
+        "project_root": str(config.project_root),
+        "project_id": config.project_id,
+        "project_name": config.project_name,
+        "source_root": str(config.source_root),
+        "state_root": str(config.state_root),
+        "runtime_root": (
+            str(config.runtime_root) if config.runtime_root is not None else None
+        ),
+        "portable_root": str(config.portable_root),
+        "model_cache_root": str(config.model_cache_root),
+        "version": version_block(),
     }
 
 
-def uninitialised_status(project_name: str, reason: str) -> dict[str, Any]:
-    """The status answer for a project this installation has not initialised.
+def _selection_payload(scan: SourceScan, selected_count: int) -> dict[str, Any]:
+    """How many sources the walk found, and how many survive the exclusions."""
 
-    An agent's client entry names a project, and the machine it runs on decides
-    which directory that name reaches. Where the machine holds no such project,
-    this is the whole answer, and it is `blocked_status` with this project's own
-    condition and remedy.
-    """
-
-    return blocked_status(
-        reason,
-        check="project.initialised",
-        remedy=initialise_command(project_name),
-        initialised=False,
-    )
-
-
-def not_served_status(config: ResearchConfig, reason: str) -> dict[str, Any]:
-    """The status answer for a project that exists but has no app serving it.
-
-    The project is there and its corpus is readable from disk, so the condition is
-    the app rather than the project, and the remedy is the command that starts one
-    in a terminal.
-    """
-
-    return blocked_status(
-        reason,
-        check="app.serving",
-        remedy=project_selection_command(config.project_name, "start"),
-        initialised=True,
-    )
-
-
-def generation_inventory(
-    config: ResearchConfig,
-    current_generation_id: str | None,
-) -> dict[str, Any]:
-    """Describe every retained generation on disk without validating it.
-
-    These are exactly the directories a prune would consider, so `status`
-    reports them with their size and file count. A generation whose manifest is
-    missing, unreadable, or not JSON is reported with a ``manifest_error``
-    instead of raising: the report must answer when one retained generation is
-    damaged. This runs only on the read-only ``status`` surface, never on the
-    search path, because it walks each generation's files.
-    """
-
-    root = config.generations_root
-    records: list[dict[str, Any]] = []
-    if root.is_dir():
-        for entry in root.iterdir():
-            if entry.is_symlink() or not entry.is_dir():
-                continue
-            record: dict[str, Any] = {
-                "generation_id": entry.name,
-                "is_current": entry.name == current_generation_id,
-            }
-            try:
-                manifest = read_json(entry / "manifest.json")
-            except StorageError as exc:
-                record["manifest_error"] = str(exc)
-            else:
-                if isinstance(manifest, dict):
-                    record.update(
-                        created_at=manifest.get("created_at"),
-                        chunk_count=manifest.get("chunk_count"),
-                        document_count=manifest.get("document_count"),
-                        schema_version=manifest.get("schema_version"),
-                    )
-                else:
-                    record["manifest_error"] = "manifest.json is not a JSON object"
-            file_count, size_bytes = directory_statistics(entry)
-            record["file_count"] = file_count
-            record["size_bytes"] = size_bytes
-            records.append(record)
-    records.sort(
-        key=lambda item: (str(item.get("created_at") or ""), item["generation_id"]),
-        reverse=True,
-    )
     return {
-        "generations": records,
-        "retained_generation_count": len(records),
-        "retained_generation_bytes": sum(int(item["size_bytes"]) for item in records),
+        "discovered_source_count": len(scan.selected),
+        "selected_source_count": selected_count,
+    }
+
+
+def _vocabulary_payload(config: ResearchConfig, scan: SourceScan) -> dict[str, Any]:
+    """The corpus vocabulary a reader sets, and the formats the walk accepts."""
+
+    return {
+        "allowed_formats": sorted(ALLOWED_SOURCE_EXTENSIONS),
+        "ignored_extensions": scan.ignored_extensions,
+        "language": {
+            "corpus": config.settings.language_corpus,
+            "languages": list(config.settings.corpus_languages),
+            "bm25_stopwords": config.settings.bm25_stopwords_language,
+            "warning": config.settings.embedding_language_warning,
+        },
+    }
+
+
+def _available_methods_payload(
+    *,
+    default_method: str,
+    available_methods: list[str],
+) -> dict[str, Any]:
+    """The retrieval methods this answer will serve, and the one it defaults to."""
+
+    return {
+        "default_retrieval_method": default_method,
+        "available_retrieval_methods": available_methods,
+    }
+
+
+def _upgrade_payload(
+    *,
+    upgrade_required: bool,
+    upgrade_reasons: list[str],
+) -> dict[str, Any]:
+    """Whether the policy moved under this generation, and which policies moved."""
+
+    return {
+        "generation_upgrade_required": upgrade_required,
+        "upgrade_reasons": upgrade_reasons,
+    }
+
+
+def _build_payload(
+    *,
+    last_build_metrics: Any,
+    ingestion_progress: Any,
+) -> dict[str, Any]:
+    """What the last build measured, and how far a build still running has come."""
+
+    return {
+        "last_build_metrics": last_build_metrics,
+        "ingestion_progress": ingestion_progress,
+    }
+
+
+def _review_state_payload(
+    *,
+    exclusion_revision: str,
+    metadata_revision: str,
+    generation_metadata_revision: Any,
+    overlay_active: bool,
+    pending_source_paths: list[str],
+    snapshot_outdated: bool,
+) -> dict[str, Any]:
+    """The review state a reader decided, and how much of it this generation holds.
+
+    Reviewed metadata is a read-time overlay, so it never makes a generation
+    stale and never names `ingest`; `snapshot_outdated` says the recorded
+    snapshot differs from what is being applied, and nothing else.
+    """
+
+    return {
+        "source_exclusion_revision": exclusion_revision,
+        "metadata_revision": metadata_revision,
+        "generation_metadata_revision": generation_metadata_revision,
+        "metadata_overlay_active": overlay_active,
+        "metadata_pending_source_paths": pending_source_paths,
+        "generation_metadata_snapshot_outdated": snapshot_outdated,
     }
 
 
@@ -255,48 +270,31 @@ class StatusWorkflow:
             else:
                 message = "No knowledge-base generation exists; call ingest."
             return {
-                "ready": False,
-                "stale": bool(selected),
-                "project_root": str(self.config.project_root),
-                "project_id": self.config.project_id,
-                "project_name": self.config.project_name,
-                "source_root": str(self.config.source_root),
-                "state_root": str(self.config.state_root),
-                "runtime_root": (
-                    str(self.config.runtime_root)
-                    if self.config.runtime_root is not None
-                    else None
-                ),
-                "portable_root": str(self.config.portable_root),
-                "model_cache_root": str(self.config.model_cache_root),
-                "version": version_block(),
-                "discovered_source_count": len(scan.selected),
-                "selected_source_count": len(selected),
+                **_base_payload(self.config, ready=False, stale=bool(selected)),
+                **_selection_payload(scan, len(selected)),
                 "excluded_source_count": len(exclusions),
                 "excluded_chunk_count": len(chunk_exclusions),
                 "categories": [],
                 "projects": [],
-                "excluded_sources": self._exclusion_records(scan, exclusions),
-                "allowed_formats": sorted(ALLOWED_SOURCE_EXTENSIONS),
-                "ignored_extensions": scan.ignored_extensions,
-                "language": {
-                    "corpus": self.config.settings.language_corpus,
-                    "languages": list(self.config.settings.corpus_languages),
-                    "bm25_stopwords": self.config.settings.bm25_stopwords_language,
-                    "warning": self.config.settings.embedding_language_warning,
-                },
-                "source_exclusion_revision": exclusion_revision,
-                "metadata_revision": metadata_revision,
-                "generation_metadata_revision": None,
-                "metadata_overlay_active": False,
-                "metadata_pending_source_paths": sorted(metadata),
-                "generation_metadata_snapshot_outdated": False,
-                "default_retrieval_method": DEFAULT_RETRIEVAL_METHOD,
-                "available_retrieval_methods": [],
-                "generation_upgrade_required": False,
-                "upgrade_reasons": [],
-                "last_build_metrics": None,
-                "ingestion_progress": ingestion_progress,
+                "excluded_sources": exclusion_records(self.config, scan, exclusions),
+                **_vocabulary_payload(self.config, scan),
+                **_review_state_payload(
+                    exclusion_revision=exclusion_revision,
+                    metadata_revision=metadata_revision,
+                    generation_metadata_revision=None,
+                    overlay_active=False,
+                    pending_source_paths=sorted(metadata),
+                    snapshot_outdated=False,
+                ),
+                **_available_methods_payload(
+                    default_method=DEFAULT_RETRIEVAL_METHOD,
+                    available_methods=[],
+                ),
+                **_upgrade_payload(upgrade_required=False, upgrade_reasons=[]),
+                **_build_payload(
+                    last_build_metrics=None,
+                    ingestion_progress=ingestion_progress,
+                ),
                 "message": message,
             }
 
@@ -340,7 +338,7 @@ class StatusWorkflow:
         metadata_overlay_active = bool(set(metadata) & indexed_source_paths)
         metadata_pending_source_paths = sorted(set(metadata) - indexed_source_paths)
         excluded_document_ids = self._excluded_document_ids(manifest, exclusions)
-        exclusion_records = self._exclusion_records(scan, exclusions, manifest)
+        records = exclusion_records(self.config, scan, exclusions, manifest)
         # A chunk id is derived from content, so an entry recorded against
         # another generation is not yet a decision about this corpus. It is
         # counted here rather than folded into `stale`, which names `ingest` as
@@ -397,32 +395,17 @@ class StatusWorkflow:
             )
         effective_documents = _effective_documents(manifest, metadata)
         return {
-            "ready": True,
-            "stale": stale,
-            "project_root": str(self.config.project_root),
-            "project_id": self.config.project_id,
-            "project_name": self.config.project_name,
-            "source_root": str(self.config.source_root),
-            "state_root": str(self.config.state_root),
-            "runtime_root": (
-                str(self.config.runtime_root)
-                if self.config.runtime_root is not None
-                else None
-            ),
-            "portable_root": str(self.config.portable_root),
-            "model_cache_root": str(self.config.model_cache_root),
-            "version": version_block(),
+            **_base_payload(self.config, ready=True, stale=stale),
             "generation_id": manifest["generation_id"],
             "created_at": manifest["created_at"],
-            "discovered_source_count": len(scan.selected),
-            "selected_source_count": len(selected),
+            **_selection_payload(scan, len(selected)),
             "indexed_source_count": manifest["document_count"],
             "searchable_source_count": sum(
                 str(document["document_id"]) not in excluded_document_ids
                 for document in manifest.get("documents", [])
             ),
             "excluded_source_count": len(exclusions),
-            "excluded_sources": exclusion_records,
+            "excluded_sources": records,
             "excluded_chunk_count": len(chunk_exclusions),
             "chunk_exclusion_other_generation_count": absent_chunk_exclusions,
             "chunk_count": manifest["chunk_count"],
@@ -444,31 +427,32 @@ class StatusWorkflow:
                 field="language",
                 label="language",
             ),
-            "allowed_formats": sorted(ALLOWED_SOURCE_EXTENSIONS),
-            "ignored_extensions": scan.ignored_extensions,
-            "language": {
-                "corpus": self.config.settings.language_corpus,
-                "languages": list(self.config.settings.corpus_languages),
-                "bm25_stopwords": self.config.settings.bm25_stopwords_language,
-                "warning": self.config.settings.embedding_language_warning,
-            },
-            "default_retrieval_method": (
-                retrieval.get("default_method", "bm25") if hybrid_ready else "bm25"
+            **_vocabulary_payload(self.config, scan),
+            **_available_methods_payload(
+                default_method=(
+                    retrieval.get("default_method", "bm25") if hybrid_ready else "bm25"
+                ),
+                available_methods=available_methods,
             ),
-            "available_retrieval_methods": available_methods,
             "hybrid_ready": hybrid_ready,
             "hybrid_upgrade_required": not hybrid_ready,
-            "generation_upgrade_required": bool(upgrade_reasons),
-            "upgrade_reasons": upgrade_reasons,
+            **_upgrade_payload(
+                upgrade_required=bool(upgrade_reasons),
+                upgrade_reasons=upgrade_reasons,
+            ),
             "retrieval": retrieval,
-            "last_build_metrics": manifest.get("build_metrics"),
-            "ingestion_progress": ingestion_progress,
-            "source_exclusion_revision": exclusion_revision,
-            "metadata_revision": metadata_revision,
-            "generation_metadata_revision": manifest.get("metadata_revision"),
-            "metadata_overlay_active": metadata_overlay_active,
-            "metadata_pending_source_paths": metadata_pending_source_paths,
-            "generation_metadata_snapshot_outdated": metadata_changed,
+            **_build_payload(
+                last_build_metrics=manifest.get("build_metrics"),
+                ingestion_progress=ingestion_progress,
+            ),
+            **_review_state_payload(
+                exclusion_revision=exclusion_revision,
+                metadata_revision=metadata_revision,
+                generation_metadata_revision=manifest.get("metadata_revision"),
+                overlay_active=metadata_overlay_active,
+                pending_source_paths=metadata_pending_source_paths,
+                snapshot_outdated=metadata_changed,
+            ),
             "changes": {
                 "added": added,
                 "removed": removed,

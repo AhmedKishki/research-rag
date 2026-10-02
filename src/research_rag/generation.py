@@ -4,7 +4,7 @@ import hashlib
 import json
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
-from pathlib import Path, PurePosixPath
+from pathlib import Path
 from typing import Any
 
 import numpy as np
@@ -18,6 +18,7 @@ from .artifact_lookup import (
     validate_artifact_lookup,
 )
 from .embeddings import EmbeddingModel
+from .normalized_paths import normalized_relative_path
 from .storage import StorageError, iter_jsonl
 
 
@@ -306,15 +307,8 @@ def generation_artifacts_are_valid(
             document_sources[document_id] = source_id
 
         def artifact_path(field: str) -> Path:
-            value = str(files[field])
-            relative = PurePosixPath(value)
-            if (
-                value in {"", "."}
-                or "\\" in value
-                or relative.is_absolute()
-                or ".." in relative.parts
-                or relative.as_posix() != value
-            ):
+            relative = normalized_relative_path(str(files[field]))
+            if relative is None:
                 raise ValueError("Invalid generation artifact path")
             return root.joinpath(*relative.parts)
 

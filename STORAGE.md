@@ -79,7 +79,7 @@ my-research-project/
 ### config.toml
 
 - `config.toml` is the project's own settings layer, and it is written by hand or by the workspace in the browser.
-- Every key is a `SETTING` in `src/research_rag/default.toml` under a table named by its section, so `[retrieval]` holds `retrieval.rrf_k`.
+- Every key is a `Setting` declared in the registry in `src/research_rag/settings.py`, with its default written in `src/research_rag/default.toml` under a table named by its section, so `[retrieval]` holds `retrieval.rrf_k`.
 - The browser rewrites the whole file from the values it read.
 - A key the browser does not know about is preserved by that rewrite.
 - A comment in `config.toml` is not preserved by that rewrite.

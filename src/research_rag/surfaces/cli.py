@@ -38,6 +38,7 @@ from pathlib import Path
 from typing import Any, Self
 
 from .. import bridge
+from .. import process as process_module
 from ..app import (
     UI_HOST,
     App,
@@ -70,6 +71,7 @@ from ..service import ResearchService
 from ..settings import SETTINGS
 from ..settings_document import describe_costs, describe_docs
 from ..settings_layers import describe_settings
+from ..state_files import process_alive as alive
 from ..support import DEFAULT_RETRIEVAL_METHOD, RETRIEVAL_METHODS, ResearchError
 from ..tool_views import lean_status
 from ..ultrarag import LazyGateway, VanillaUltraRAG
@@ -1033,15 +1035,6 @@ def _invokes_this_app(arguments: Sequence[str], project_root: Path) -> bool:
     return False
 
 
-def _alive(pid: int) -> bool:
-
-    try:
-        os.kill(pid, 0)
-    except OSError:
-        return False
-    return True
-
-
 def _terminate(pids: list[int]) -> list[int]:
     """Ask these processes to stop and then insist; return the ones killed outright."""
 
@@ -1051,9 +1044,9 @@ def _terminate(pids: list[int]) -> list[int]:
         except OSError:
             continue
     deadline = time.monotonic() + STOP_GRACE_SECONDS
-    while time.monotonic() < deadline and any(_alive(pid) for pid in pids):
+    while time.monotonic() < deadline and any(alive(pid) for pid in pids):
         time.sleep(0.1)
-    forced = [pid for pid in pids if _alive(pid)]
+    forced = [pid for pid in pids if alive(pid)]
     for pid in forced:
         try:
             os.kill(pid, signal.SIGKILL)
@@ -1819,7 +1812,7 @@ async def _update(args: argparse.Namespace) -> dict[str, Any]:
     from ..version import version_block
 
     offline = bool(args.offline)
-    runner = update_module.subprocess_runner
+    runner = process_module.subprocess_runner
     local = update_module.probe_local(run=runner)
     remote = update_module.probe_remote(local, runner, offline=offline)
     plan = update_module.plan_update(local, remote)

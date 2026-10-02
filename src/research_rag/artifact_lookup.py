@@ -17,8 +17,8 @@ from collections.abc import Iterator, Mapping, Sequence
 from pathlib import Path
 from typing import Any
 
-from .extraction import chunk_health_flags
 from .storage import fsync_directory
+from .text_quality import chunk_health_flags
 
 # Key under which a loaded chunk record carries its stored rejection verdict.
 LOOKUP_HEALTH_FLAGS_KEY = "_lookup_health_flags"

@@ -6,7 +6,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-import research_rag.dense as dense_module
+import research_rag.model_runtime as model_runtime_module
 from research_rag.dense import (
     DenseTokenAuditUnavailable,
     LocalQdrantDenseBackend,
@@ -16,6 +16,7 @@ from research_rag.embeddings import (
     DEFAULT_EMBEDDING_MODEL,
     resolve_embedding_model,
 )
+from research_rag.model_runtime import DEFAULT_RERANKER_MODEL
 
 EMBEDDING_DIMENSION = resolve_embedding_model(DEFAULT_EMBEDDING_MODEL).dimension
 
@@ -42,7 +43,7 @@ def test_embed_texts_uses_the_measured_inference_batch_size(tmp_path: Path) -> N
             return [np.zeros(EMBEDDING_DIMENSION, dtype=np.float32) for _ in texts]
 
     backend = LocalVectorDenseBackend(tmp_path / "models", offline=True)
-    backend._embedding_model = StubEmbedder()  # type: ignore[assignment]
+    backend.runtime._embedding_model = StubEmbedder()  # type: ignore[assignment]
 
     vectors = backend.embed_texts(["alpha", "beta"])
 
@@ -56,7 +57,7 @@ def test_embed_texts_uses_the_measured_inference_batch_size(tmp_path: Path) -> N
         offline=True,
         embedding_inference_batch_size=4,
     )
-    configured._embedding_model = StubEmbedder()  # type: ignore[assignment]
+    configured.runtime._embedding_model = StubEmbedder()  # type: ignore[assignment]
     configured.embed_texts(["alpha", "beta"])
     assert recorded == [1, 4]
 
@@ -80,18 +81,20 @@ def test_embedding_threads_reach_the_model_loader(
         seen["threads"] = threads
         return object()
 
-    monkeypatch.setattr(dense_module, "_load_embedder", fake_loader)
+    # The loaders moved to `model_runtime`, and a backend reaches them through the
+    # runtime it holds rather than through module-level names of its own.
+    monkeypatch.setattr(model_runtime_module, "_load_embedder", fake_loader)
 
     configured = LocalVectorDenseBackend(
         tmp_path / "models",
         offline=True,
         embedding_threads=8,
     )
-    configured._embedder()
+    configured.runtime._embedder()
     assert seen["threads"] == 8
 
     default = LocalVectorDenseBackend(tmp_path / "models", offline=True)
-    default._embedder()
+    default.runtime._embedder()
     assert seen["threads"] is None
 
 
@@ -168,7 +171,7 @@ def test_exact_backend_builds_and_searches_by_cosine(tmp_path: Path) -> None:
     assert metadata["distance"] == "cosine"
     backend.validate_index(index_path, expected_count=4, dimension=384)
 
-    backend._embedder = lambda: _StubQueryEmbedder(_unit(0))
+    backend.runtime._embedder = lambda: _StubQueryEmbedder(_unit(0))
     hits = backend.search(index_path, "anything", 4)
 
     assert [hit.chunk_id for hit in hits] == ["c0", "c2", "c1", "c3"]
@@ -176,6 +179,40 @@ def test_exact_backend_builds_and_searches_by_cosine(tmp_path: Path) -> None:
     assert hits[1].score == pytest.approx(0.70710678, abs=1e-6)
     assert hits[2].score == pytest.approx(0.0, abs=1e-6)
     assert hits[3].score == pytest.approx(-1.0, abs=1e-6)
+
+
+def test_two_builds_in_one_backend_do_not_append_to_each_other(tmp_path: Path) -> None:
+    """One backend instance serves one process, and a build is per index path.
+
+    The ingestion workflow holds one backend per name for the whole process and
+    resumes a build from a checkpoint between phases, so the rows one build has
+    recorded must never become another build's rows. Before the split those
+    pending rows were instance attributes and a second build inherited them.
+    """
+
+    _root, first_path, first_chunks = _exact_generation(tmp_path)
+    _root, second_path, second_chunks = _exact_generation(tmp_path / "second")
+    second_chunks = [
+        {**chunk, "chunk_id": f"x{chunk['chunk_id'][1:]}", "document_id": "doc-x"}
+        for chunk in second_chunks
+    ]
+    backend = LocalVectorDenseBackend(tmp_path / "models", offline=True)
+    vectors = np.zeros((4, EMBEDDING_DIMENSION), dtype=np.float32)
+
+    backend.initialize_index(first_path, EMBEDDING_DIMENSION)
+    backend.initialize_index(second_path, EMBEDDING_DIMENSION)
+    # Two builds in flight at once, each uploading its rows out of step.
+    backend.upload_index_batch(first_chunks[:2], first_path, vectors[:2], offset=0)
+    backend.upload_index_batch(second_chunks[2:], second_path, vectors[2:], offset=0)
+    backend.upload_index_batch(second_chunks[:2], second_path, vectors[:2], offset=2)
+    backend.upload_index_batch(first_chunks[2:], first_path, vectors[2:], offset=2)
+    backend.finalize_index(first_path, expected_count=4, dimension=EMBEDDING_DIMENSION)
+    backend.finalize_index(second_path, expected_count=4, dimension=EMBEDDING_DIMENSION)
+
+    first = json.loads((first_path / "documents.json").read_text(encoding="utf-8"))
+    second = json.loads((second_path / "documents.json").read_text(encoding="utf-8"))
+    assert first["chunk_ids"] == ["c0", "c1", "c2", "c3"]
+    assert second["chunk_ids"] == ["x2", "x3", "x0", "x1"]
 
 
 def test_exact_backend_applies_document_filters_and_top_k(tmp_path: Path) -> None:
@@ -186,7 +223,7 @@ def test_exact_backend_applies_document_filters_and_top_k(tmp_path: Path) -> Non
         index_path,
         index_path.parent.parent / "portable" / "embeddings.npy",
     )
-    backend._embedder = lambda: _StubQueryEmbedder(_unit(0))
+    backend.runtime._embedder = lambda: _StubQueryEmbedder(_unit(0))
 
     restricted = backend.search(index_path, "q", 4, document_ids=["doc-a"])
     assert [hit.chunk_id for hit in restricted] == ["c0"]
@@ -295,7 +332,8 @@ def test_rerank_uses_the_configured_model_and_switches_only_on_request(
         loaded.append(model)
         return StubEncoder()
 
-    monkeypatch.setattr(dense_module, "_load_cross_encoder", fake_loader)
+    # The loader moved to `model_runtime`, so the stub replaces the name there.
+    monkeypatch.setattr(model_runtime_module, "_load_cross_encoder", fake_loader)
     backend = LocalVectorDenseBackend(
         tmp_path / "models",
         offline=True,
@@ -319,10 +357,10 @@ def test_cross_encoder_defaults_to_the_pinned_default_model(
         seen["cache_root"] = cache_root
         return object()
 
-    monkeypatch.setattr(dense_module, "_load_cross_encoder", fake_loader)
+    monkeypatch.setattr(model_runtime_module, "_load_cross_encoder", fake_loader)
     backend = LocalQdrantDenseBackend(tmp_path / "models", offline=True)
 
-    backend._cross_encoder()
+    backend.runtime._cross_encoder()
 
-    assert seen["model"] == dense_module.DEFAULT_RERANKER_MODEL
+    assert seen["model"] == DEFAULT_RERANKER_MODEL
     assert seen["cache_root"] == tmp_path / "models"
