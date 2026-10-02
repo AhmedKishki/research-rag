@@ -16,13 +16,16 @@ read read-only; nothing inside the project is written.
 Report version 2 keeps every metric version 1 published and adds what a
 known-item protocol cannot see. Each query also records what its result list
 contained rather than how it ranked: distinct evidence spans, exact and near
-duplicate slots, and slots sharing a source. Each mode also records the share of
-its slots held by a passage more than one query returned, which is how a generic
-leader looks from outside a single list, and the median and slowest query in
-seconds. A known-item score is unchanged by two copies of the same evidence
-ranking first or by a different passage carrying that evidence displacing the
-designated chunk, so these counts are what a redundancy or boundary change has to
-be read against.
+duplicate slots, and slots sharing a source. Each query also records what the
+pre-fusion cosine gate did to its dense candidates, which ``withheld_candidates``
+never reports: a search that rejects a hundred dense candidates can report zero
+withheld, because that count is about the answer rather than about the gate. Each
+mode also records the share of its slots held by a passage more than one query
+returned, which is how a generic leader looks from outside a single list, and the
+median and slowest query in seconds. A known-item score is unchanged by two copies
+of the same evidence ranking first or by a different passage carrying that evidence
+displacing the designated chunk, so these counts are what a redundancy or boundary
+change has to be read against.
 
     uv run python scripts/evaluate_retrieval.py --project /mnt/data/my-project
 
@@ -504,6 +507,18 @@ def _redundancy_means(runs: list[dict[str, Any]]) -> dict[str, float]:
         "mean_exact_duplicate_slots": mean_of("exact_duplicate_slots"),
         "mean_near_duplicate_slots": mean_of("near_duplicate_slots"),
         "mean_same_source_pairs": mean_of("same_source_pairs"),
+        "mean_dense_rejected_below_floor": mean_of("dense_rejected_below_floor"),
+        "mean_dense_admitted_below_floor": mean_of("dense_admitted_below_floor"),
+        "queries_with_dense_rejections": (
+            sum(
+                1 for run in runs if int(run.get("dense_rejected_below_floor") or 0) > 0
+            )
+            if any(
+                isinstance(run.get("dense_rejected_below_floor"), (int, float))
+                for run in runs
+            )
+            else None
+        ),
     }
 
 
@@ -545,7 +560,7 @@ def print_summary(section: str, summary: dict[str, Any]) -> None:
     header = (
         f"{'mode':<{width}}{'n':>4}{'succ@1':>8}{'succ@3':>8}{'succ@k':>8}"
         f"{'MRR':>7}{'nDCG':>7}{'doc@k':>7}{'overlap':>9}{'ret':>5}{'srcs':>6}"
-        f"{'spans':>7}{'dup':>5}{'near':>5}{'1src':>5}{'rep%':>6}{'p50s':>6}"
+        f"{'spans':>7}{'dup':>5}{'near':>5}{'1src':>5}{'rep%':>6}{'p50s':>6}{'rej':>5}"
     )
     print(header)
     print("-" * len(header))
@@ -585,6 +600,7 @@ def _result_list_columns(row: dict[str, Any], payload: dict[str, Any]) -> str:
         return f"{value:>5.1f}" if isinstance(value, (int, float)) else "     "
 
     repeated = payload.get("repeated_slot_rate")
+    rejected = row.get("mean_dense_rejected_below_floor")
     return (
         count("mean_distinct_evidence_spans")
         + count("mean_exact_duplicate_slots")
@@ -596,6 +612,7 @@ def _result_list_columns(row: dict[str, Any], payload: dict[str, Any]) -> str:
             else "     "
         )
         + f"{row.get('p50_seconds', 0.0):>6.2f}"
+        + (f"{rejected:>5.1f}" if isinstance(rejected, (int, float)) else "     ")
     )
 
 
@@ -771,6 +788,7 @@ async def _run_one(
     ranked_document_ids = [str(hit.get("document_id")) for hit in hits]
     relevant = {str(target["chunk_id"])}
     withheld = payload.get("withheld_candidates") or {}
+    gate = payload.get("dense_gate") or {}
     withheld_ids = [
         str(example)
         for entry in (withheld.get("reasons") or {}).values()
@@ -808,9 +826,40 @@ async def _run_one(
         "rerank_window": int(payload.get("rerank_window") or 0),
         "withheld_total": int(withheld.get("total") or 0),
         "target_listed_as_withheld": str(target["chunk_id"]) in set(withheld_ids),
+        **_dense_gate_measures(gate),
         "returned_chunk_ids": ranked_chunk_ids,
         "elapsed_seconds": elapsed,
         **_result_list_measures(ranked_chunk_ids, chunk_index or {}),
+    }
+
+
+def _dense_gate_measures(gate: dict[str, Any]) -> dict[str, Any]:
+    """What the pre-fusion cosine gate did to this query's dense candidates.
+
+    These are the engine's own counts, read rather than recomputed: the gate
+    decides before fusion, so a harness that inferred its rejections from the
+    fused list would be measuring the wrong thing. ``withheld_candidates`` is a
+    different count entirely — passages withheld from the *answer*, after ranking
+    — and a search that rejects a hundred dense candidates can report zero
+    withheld, which is why a run record carrying only that total says nothing
+    about whether the gate is doing work.
+
+    The gate's own admitted-above-floor count is not reported by the engine, so
+    the share of candidates it rejected cannot be computed here and is not
+    claimed. What is recorded is how many it rejected, how many the relative
+    margin rescued, and the best cosine the query produced.
+    """
+
+    if not gate:
+        return {
+            "dense_rejected_below_floor": None,
+            "dense_admitted_below_floor": None,
+            "dense_best_cosine_similarity": None,
+        }
+    return {
+        "dense_rejected_below_floor": int(gate.get("rejected_below_floor") or 0),
+        "dense_admitted_below_floor": int(gate.get("admitted_below_floor") or 0),
+        "dense_best_cosine_similarity": gate.get("best_cosine_similarity"),
     }
 
 
