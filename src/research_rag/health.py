@@ -216,7 +216,7 @@ def _validate_managed_runtime(
     config: ResearchConfig, root: Path, runtime: Any
 ) -> Check:
     validator = getattr(runtime, "validate_managed_runtime", None)
-    install = "vanilla-ultra-rag-runtime"
+    install = "research-rag-runtime"
     if validator is None:
         return Check(
             "vanilla_runtime",
@@ -265,7 +265,7 @@ def _validate_managed_runtime(
 
 def _vanilla_runtime_check(config: ResearchConfig) -> Check:
     try:
-        from vanilla_ultra_rag_mcp import runtime as vanilla
+        from .gateway import runtime as vanilla
 
         locator = getattr(vanilla, "managed_runtime_path", None)
     except Exception as exc:  # noqa: BLE001 - a broken install fails to import.

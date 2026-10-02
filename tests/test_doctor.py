@@ -12,7 +12,6 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-from vanilla_ultra_rag_mcp import runtime as vanilla_runtime
 
 import research_rag.doctor as doctor_module
 from research_rag.config import ResearchConfig, resolve_config
@@ -24,6 +23,7 @@ from research_rag.doctor import (
     mcp_url_block,
     run_doctor,
 )
+from research_rag.gateway import runtime as vanilla_runtime
 
 READY_STATUS: dict[str, Any] = {
     "ready": True,

@@ -52,10 +52,21 @@ def test_the_cli_help_lists_every_installed_command() -> None:
         assert command in CLI_HELP, f"{command!r} is installed but absent from --help"
 
 
-def test_the_distribution_and_the_documentation_agree_on_one_command() -> None:
+def test_the_distribution_installs_nothing_named_for_another_product() -> None:
+    """Three scripts, all this product's: the command, the gateway, the runtime.
+
+    The gateway is a child this app spawns rather than a separate product, and the
+    runtime script is what `doctor --repair-runtime` names. A script named for
+    another project would be one a client could not tell from that project's.
+    """
+
     project = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
 
-    assert list(project["project"]["scripts"]) == ["research-rag"]
+    assert list(project["project"]["scripts"]) == [
+        "research-rag",
+        "research-rag-gateway",
+        "research-rag-runtime",
+    ]
     assert project["project"]["name"] == "research-rag"
     assert project["project"]["version"]
 

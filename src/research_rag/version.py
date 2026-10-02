@@ -7,7 +7,6 @@ from importlib.metadata import version as _distribution_version
 from pathlib import Path
 
 DISTRIBUTION_NAME = "research-rag"
-UI_DISTRIBUTION_NAME = "ui-ultra-rag-mcp"
 UNKNOWN_VERSION = "0.0.0+unknown"
 
 
@@ -30,10 +29,6 @@ APP_VERSION = distribution_version(DISTRIBUTION_NAME) or UNKNOWN_VERSION
 
 def installed_version() -> str:
     return distribution_version(DISTRIBUTION_NAME) or UNKNOWN_VERSION
-
-
-def ui_version() -> str | None:
-    return distribution_version(UI_DISTRIBUTION_NAME)
 
 
 def restart_required() -> bool:
@@ -148,7 +143,6 @@ def version_block() -> dict[str, object]:
     return {
         "app": APP_VERSION,
         "installed": installed_version(),
-        "ui": ui_version(),
         "restart_required": restart_required(),
     }
 
@@ -156,23 +150,17 @@ def version_block() -> dict[str, object]:
 def version_lines() -> tuple[str, ...]:
     """The lines `research-rag --version` prints.
 
-    `version_block` is the one place these four numbers are assembled, so the
+    `version_block` is the one place these three numbers are assembled, so the
     flag, `status`, and `update` cannot print different values for one install.
     """
 
     block = version_block()
-    ui = block["ui"]
     return (
         f"{DISTRIBUTION_NAME} {block['app']}",
         f"installed {block['installed']}",
-        f"UI {ui}" if ui else "UI not installed",
         f"restart_required {str(block['restart_required']).lower()}",
     )
 
 
 def version_label() -> str:
-    parts = [f"{DISTRIBUTION_NAME} {APP_VERSION}"]
-    ui = ui_version()
-    if ui is not None:
-        parts.append(f"UI {ui}")
-    return " · ".join(parts)
+    return f"{DISTRIBUTION_NAME} {APP_VERSION}"

@@ -14,13 +14,13 @@ from types import SimpleNamespace
 from typing import Any
 
 import pytest
-import vanilla_ultra_rag_mcp as vanilla_package
-from vanilla_ultra_rag_mcp import runtime as vanilla_runtime
 
 import research_rag.health as health_module
 import research_rag.version as version_module
+from research_rag import gateway as vanilla_package
 from research_rag.config import ResearchConfig, resolve_config
 from research_rag.embeddings import resolve_embedding_model
+from research_rag.gateway import runtime as vanilla_runtime
 from research_rag.health import Check, HealthReport, health_report
 from research_rag.rerankers import resolve_reranker_model
 
@@ -180,7 +180,7 @@ def test_an_older_vanilla_still_blocks_and_says_it_cannot_name_the_file(
     blocked = report.named("vanilla_runtime")
     assert blocked.state == "blocked"
     assert "does not name the differing file" in blocked.reason
-    assert "vanilla-ultra-rag-runtime --offline" in blocked.reason
+    assert "research-rag-runtime --offline" in blocked.reason
     assert report.has_blocker is True
 
 
@@ -194,7 +194,7 @@ def test_a_vanilla_release_that_cannot_be_used_is_unknown(
 
     class Broken(SimpleNamespace):
         def __getattr__(self, name: str) -> Any:
-            raise ImportError("vanilla_ultra_rag_mcp is not installed")
+            raise ImportError("the gateway runtime is not usable")
 
     monkeypatch.setattr(
         vanilla_package,

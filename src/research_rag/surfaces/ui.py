@@ -17,13 +17,13 @@ from collections.abc import Callable, Mapping, Sequence
 from dataclasses import replace
 from typing import TYPE_CHECKING, Any
 
-from ui_ultra_rag_mcp import (
+from .workspace import (
     SourceFile,
     UICapabilities,
     UIProfile,
     UIRequestError,
 )
-from ui_ultra_rag_mcp import create_ui_app as create_shared_ui_app
+from .workspace import create_ui_app as create_shared_ui_app
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
     from starlette.applications import Starlette

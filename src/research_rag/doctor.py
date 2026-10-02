@@ -68,7 +68,7 @@ def repair_runtime(config: ResearchConfig) -> tuple[str, ...]:
     explains the failure.
     """
 
-    from vanilla_ultra_rag_mcp import runtime as vanilla
+    from .gateway import runtime as vanilla
 
     root = vanilla.managed_runtime_path(config.runtime_cache_root)
     if not root.is_dir():

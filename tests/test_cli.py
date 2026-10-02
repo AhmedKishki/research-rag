@@ -20,7 +20,7 @@ import research_rag.surfaces.cli as cli_module
 import research_rag.ultrarag as ultrarag_module
 from research_rag import app as app_module
 from research_rag import registry
-from research_rag.config import ConfigurationError
+from research_rag.config import GATEWAY_EXECUTABLE, ConfigurationError
 from research_rag.support import ResearchError
 from research_rag.surfaces.cli import (
     _init,
@@ -735,7 +735,7 @@ def test_the_stop_sweep_leaves_the_other_products_processes_alone(
         32,
         [
             f"{elsewhere}/python",
-            f"{elsewhere}/vanilla-ultra-rag-mcp",
+            f"{elsewhere}/{GATEWAY_EXECUTABLE}",
             "--workspace-root",
             str(state),
             "--log-level",

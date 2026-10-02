@@ -225,6 +225,7 @@ research-rag --project-root /path/to/project doctor --check-entry ~/my-client.js
 - Every command takes `--project <name-or-id>` in place of `--project-root <path>`, so one shell can work on several projects.
 - `--project` and `--project-root` together are refused rather than resolved by precedence.
 - Every command other than `status` prints the whole payload.
+- The install places two more scripts beside `research-rag`, and they are for the app rather than for you: `research-rag-gateway` is the process it spawns to reach UltraRAG, and `research-rag-runtime` is what `doctor --repair-runtime` names.
 
 ## Diagnose an installation
 
@@ -261,7 +262,7 @@ research-rag update
 - `--apply` then reports the new revision, whether any project's portable state under `.research-rag` changed, and the exact command that starts each stopped app again.
 - `--apply` does not start those apps for you.
 - `--apply` prints the command that returns a detached checkout to its branch.
-- `research-rag --version` prints this app's version, the version installed in the environment now, the shared workspace's version, and whether a restart is required.
+- `research-rag --version` prints this app's version, the version installed in the environment now, and whether a restart is required.
 - `scripts/update.sh` is a wrapper around `research-rag update`: `--check` reports only, `--offline` does not touch the network, and a project path is accepted.
 
 ## Use the workspace
@@ -343,7 +344,7 @@ research-rag --project-root /path/to/project stop                # stop it, from
 
 ## UltraRAG credit and licensing
 
-- This app is built on the [UltraRAG](https://github.com/OpenBMB/UltraRAG) project through `vanilla-ultra-rag-mcp-server`, and it uses the shared browser workspace package `ui-ultra-rag-mcp`.
+- This app is built on the [UltraRAG](https://github.com/OpenBMB/UltraRAG) project, which it reaches through the gateway in `gateway/` and the workspace in `surfaces/workspace/`; both are this app's own code.
 - This app depends on UltraRAG's MCP architecture, corpus chunker, and BM25 retriever.
 - This app adds PDF/EPUB extraction, project-scoped immutable generations, reviewed metadata, hybrid retrieval, and a browser workspace.
 - UltraRAG's upstream README identifies it as a joint project of THUNLP at Tsinghua University, NEUIR at Northeastern University, OpenBMB, and AI9stars, together with the wider UltraRAG contributor community.

@@ -16,10 +16,12 @@ SURFACES = PACKAGE / "surfaces"
 # The modules allowed to import the web stack. `app.py` composes the one ASGI
 # application; `control.py` is the control API and the handle the command line
 # holds on it; `surfaces/ui.py` builds the workspace and its adapter;
+# `surfaces/workspace/app.py` is the workspace that adapter serves;
 # `surfaces/mcp.py` declares the agent's tools; and `bridge.py` proxies stdio to
 # the app the workspace and the agent surface are already served by.
-# `ultrarag.py` is the typed boundary over the vanilla gateway, which is reached
-# over MCP, so it has always been allowed to name FastMCP.
+# `ultrarag.py` is the typed boundary over the gateway, which is reached over
+# MCP, so it has always been allowed to name FastMCP, and `gateway/server.py` is
+# that gateway: the process this app spawns and speaks MCP to.
 #
 # `surfaces/cli.py` is deliberately absent: the command line reaches the app
 # through `app.py` and `control.py` and imports no web stack of its own, which is
@@ -30,8 +32,10 @@ WEB_MODULES = frozenset(
         "app.py",
         "bridge.py",
         "control.py",
+        "gateway/server.py",
         "surfaces/mcp.py",
         "surfaces/ui.py",
+        "surfaces/workspace/app.py",
         "ultrarag.py",
     }
 )
@@ -49,11 +53,9 @@ CROSS_SURFACE = {
 # entry point rather than core and is expected to import the surface layer.
 ENTRY_MODULES = frozenset({"__main__.py"})
 
-# `mcp` stays listed beside `fastmcp` because the vanilla gateway is reached over
-# MCP, so an engine module importing either has changed the architecture.
-WEB_IMPORTS = frozenset(
-    {"fastmcp", "mcp", "pydantic", "starlette", "uvicorn", "ui_ultra_rag_mcp"}
-)
+# `mcp` stays listed beside `fastmcp` because the gateway is reached over MCP, so an
+# engine module importing either has changed the architecture.
+WEB_IMPORTS = frozenset({"fastmcp", "mcp", "pydantic", "starlette", "uvicorn"})
 
 
 def _modules() -> list[Path]:
@@ -220,8 +222,8 @@ def test_the_answer_projection_is_shared_by_the_two_bounded_readers() -> None:
 
 
 # The layer stack, the registry's `Setting` type, the coercion, the provenance, and the
-# three path helpers live in the pinned `config-ultra-rag-mcp` library. This app keeps
-# its keys, its packaged default, and its effective settings.
+# three path helpers live in `settings_layers`. This app keeps its keys, its packaged
+# default, and its effective settings.
 LAYER_MACHINERY = frozenset(
     {
         "LAYER_DEFAULT",
@@ -249,7 +251,7 @@ def test_the_settings_module_defines_no_layer_machinery() -> None:
     }
 
     assert not defined & LAYER_MACHINERY, (
-        "settings.py defines layer machinery that belongs to the pinned library: "
+        "settings.py defines layer machinery that belongs to settings_layers: "
         f"{sorted(defined & LAYER_MACHINERY)}"
     )
 

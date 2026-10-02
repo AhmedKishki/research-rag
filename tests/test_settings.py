@@ -4,11 +4,6 @@ import sys
 from pathlib import Path
 
 import pytest
-from config_ultra_rag_mcp import (
-    SettingsError,
-    describe_settings,
-    resolve_settings,
-)
 
 import research_rag.config as config_module
 from research_rag.config import (
@@ -22,6 +17,11 @@ from research_rag.settings import (
     SETTINGS,
     EffectiveSettings,
     sources_for,
+)
+from research_rag.settings_layers import (
+    SettingsError,
+    describe_settings,
+    resolve_settings,
 )
 
 # A different value would tell every existing generation that its ranking policy

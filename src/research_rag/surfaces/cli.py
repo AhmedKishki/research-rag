@@ -37,8 +37,6 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Self
 
-from config_ultra_rag_mcp import describe_settings
-
 from .. import bridge
 from ..app import (
     UI_HOST,
@@ -71,6 +69,7 @@ from ..rerankers import RERANKER_MODEL_CHOICES
 from ..service import ResearchService
 from ..settings import SETTINGS
 from ..settings_document import describe_costs, describe_docs
+from ..settings_layers import describe_settings
 from ..support import DEFAULT_RETRIEVAL_METHOD, RETRIEVAL_METHODS, ResearchError
 from ..tool_views import lean_status
 from ..ultrarag import LazyGateway, VanillaUltraRAG

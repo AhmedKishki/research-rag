@@ -7,7 +7,6 @@ from pathlib import Path
 from typing import Any, cast
 
 import pytest
-from config_ultra_rag_mcp import LAYER_PROJECT, SettingsError
 from filelock import AsyncFileLock
 
 from research_rag.config import resolve_config
@@ -19,6 +18,7 @@ from research_rag.settings_document import (
     setting_cost,
     write_project_document,
 )
+from research_rag.settings_layers import LAYER_PROJECT, SettingsError
 from research_rag.support import ResearchError
 
 pytestmark = pytest.mark.anyio

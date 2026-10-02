@@ -12,7 +12,7 @@
 - Who it serves:
   - A person searches their corpus, reads each passage beside its source, locator, and reviewed bibliography, and records what they decide about each source.
   - An agent retrieves the same passages through the same service.
-- Research behaviour belongs in neither `vanilla-ultra-rag-mcp-server` nor `ui-ultra-rag-mcp`, which are separate, versioned projects.
+- The gateway, the workspace, and the settings layer are this app's own code, and this repository resolves no dependency on another project to reach them.
 
 ## Documentation responsibilities
 
@@ -87,8 +87,8 @@
   - Serving never opens a browser; `--start-ui` is the one flag that asks for one.
   - A project that is already served is reported rather than started a second time.
   - `help` prints the commands grouped by the work plus a page per subject, needs no project, and delegates a command name to that command's own usage.
-  - `--version` prints the app version, the installed version, the shared workspace version, and whether a restart is required.
-  - `update` reports the same four numbers from the same functions.
+  - `--version` prints the app version, the installed version, and whether a restart is required.
+  - `update` reports the same three numbers from the same functions.
 - The agent surface:
   - Eight tools and one resource at `<app>/mcp` on the app's own port, plus the stdio bridge.
   - `mcp` takes `--project-name`.
@@ -97,10 +97,7 @@
 
 | Component | Pin |
 |---|---|
-| vanilla gateway | `fc339c259a672ca4dacb525840eba851d01c4b75` |
-| shared UI | `f6b74b4` |
-| shared settings-core | `cbd47bb46efe85340de34f8f8f13fc6516e7fecb` |
-| UltraRAG | `0.3.0.2` at `3a709a2aea3fbe46acca59c422621c94b6e86857` |
+| UltraRAG, through `gateway/` | `0.3.0.2` at `3a709a2aea3fbe46acca59c422621c94b6e86857` |
 | `bm25s` fork | `20f6c02` |
 
 - Every shared location is named for this app, and `tests/test_data_roots.py` states each:
@@ -179,7 +176,7 @@
   - It never grows into a cache of a project's state, and one project's record never decides what another may read.
   - A project's name is the address an agent's entry carries, so a record's name is an interface.
   - A record's name is matched exactly, an ambiguous one is refused, and a name is never resolved through an id.
-- The layer machinery lives in `config-ultra-rag-mcp`, not in this repository, and this repository owns `SETTINGS`, `EffectiveSettings`, the packaged `default.toml`, and the three names it resolves its own layers by.
+- The layer machinery lives in `settings_layers`, and this repository owns `SETTINGS`, `EffectiveSettings`, the packaged `default.toml`, and the three names it resolves its own layers by.
   - A settings write reaches `<project>/.research-rag/config.toml` and nothing else.
     - A value a layer above the project file supplied is not writable, because a lower file cannot override it.
     - A write merges into the document and never overwrites it.
@@ -211,7 +208,7 @@
   - `tests/test_architecture.py` enforces that split.
   - Neither surface re-declares the other's tool, resource, or operation, because a second copy of an operation is a second place for it to be wrong.
 - The workspace's profile turns off what it does not serve, and `ResearchUIAdapter._arguments` drops every argument an operation does not accept, so a workspace control never travels as an argument the app ignores.
-- The shared UI is pinned by commit, and the adapter, source authorization, and the process host stay in this package: the shared static workspace is never copied into it.
+- The workspace lives in `surfaces/workspace/` beside its adapter, its source authorization, and the process host, so a change to it ships with this app and a fix to the app's adapter needs no change anywhere else.
 - Workspace code never reads or mutates generation artifacts directly.
   - Workspace code calls `ResearchService`, except for safely serving an allowlisted original from the source root.
 - Browser and control write endpoints stay same-origin, JSON-only, and loopback-only.
@@ -273,7 +270,8 @@ stdio client ── bridge ──┤  --project-name, never a path
                        ├── research-rag (one process, one port, one lock)
 Local browser ── HTTP ──┤      │
                        │      ├── ResearchService
-Terminal ── control ───┘      ├── shared workspace (surfaces/ui.py)
+Terminal ── control ───┘      ├── the workspace and its adapter (surfaces/ui.py,
+                              │   surfaces/workspace/)
                               ├── agent tools and resources (surfaces/mcp.py)
                               ├── control API (control.py)
                               ├── client registry (app.py)
@@ -288,13 +286,13 @@ Terminal ── control ───┘      ├── shared workspace (surfaces/u
                                                           ├── project-local dense index
                                                           ├── reciprocal-rank fusion
                                                           ├── CPU cross-encoder reranking
-                                                          └── stdio MCP -> vanilla-ultra-rag-mcp
+                                                          └── stdio MCP -> the gateway (gateway/)
                                                           ├── UltraRAG corpus chunker
                                                           └── UltraRAG BM25 retriever
 ```
 
 - The vanilla gateway is an implementation dependency below the app, not a second surface.
-- The shared workspace package owns no research state.
+- The workspace owns no research state.
 - The stdio bridge is a transport, not a second copy of the tools.
 
 ## Working rule
@@ -325,7 +323,7 @@ uv run python -m compileall -q src tests
   - A measurement that still holds is recorded in `MEASUREMENTS.md`; one that no longer does leaves the file.
   - A documented retrieval default never changes on an unrecorded run.
 - A workspace adapter change covers safe source-file resolution, the arguments each operation forwards, and the real host against an existing project without mutating its sources.
-- Shared workspace, JSON validation, capability, and same-origin changes belong in `ui-ultra-rag-mcp` and must pass that package's own tests before the pinned commit here is updated.
+- A workspace change is an app change: it ships with this app, and `surfaces/workspace/` carries the tests that hold it.
 - A source or retrieval change keeps the integration test launching the real vanilla gateway, building both indexes, running hybrid and dense search, retrieving the known passage, and proving a neighbouring file was excluded, before it restarts offline and repeats hybrid reranked search from the caches.
 - A source or retrieval change keeps unit tests covering RRF and failure atomicity without model downloads.
   - Those unit tests also cover no-op ingestion, additions, changes, removals, reviewed metadata and exclusions, byte changes that preserve size and mtime, forced regeneration, vector reuse, and final artifacts.

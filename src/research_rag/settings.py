@@ -1,11 +1,11 @@
-"""Every tunable this app reads, as one registry over a shared layer stack.
+"""Every tunable this app reads, as one registry over a layer stack.
 
 `default.toml` in this package holds the defaults; each layer above names only what
 it changes, and later layers win **per key**:
 
     default.toml  <  user config  <  project config  <  environment  <  command line
 
-The layer machinery lives in the pinned `config-ultra-rag-mcp` library. `AGENTS.md`
+The layer machinery lives in `settings_layers` beside this module. `AGENTS.md`
 states which tunables a generation records and which are runtime only.
 """
 
@@ -17,15 +17,6 @@ from dataclasses import dataclass, fields
 from pathlib import Path
 from typing import Any, Literal
 
-from config_ultra_rag_mcp import (
-    Setting,
-    SettingsError,
-    SettingsSources,
-    default_config_path,
-    project_config_path,
-    user_config_path,
-)
-
 from .embeddings import (
     EMBEDDING_MODEL_CHOICES,
     EmbeddingModel,
@@ -33,6 +24,14 @@ from .embeddings import (
     resolve_embedding_model,
 )
 from .rerankers import RERANKER_MODELS
+from .settings_layers import (
+    Setting,
+    SettingsError,
+    SettingsSources,
+    default_config_path,
+    project_config_path,
+    user_config_path,
+)
 
 Layer = Literal["identity", "engine", "runtime"]
 

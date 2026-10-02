@@ -94,25 +94,27 @@ licenses. They are not bundled as source files in this repository; the Python
 packages are installed by the package manager and model files are downloaded
 to a shared user cache on first use.
 
-SHARED USER INTERFACE
+BROWSER WORKSPACE
 
-The browser workspace uses the independently versioned shared UI package at this
-pinned revision:
+The browser workspace, the settings layer, and the UltraRAG gateway are this
+project's own code:
 
-    ui-ultra-rag-mcp
-    commit 1db180e
-    https://github.com/AhmedKishki/ui-ultra-rag-mcp
+    src/research_rag/surfaces/workspace/
+    src/research_rag/settings_layers/
+    src/research_rag/gateway/
 
-This app owns its adapter, its source authorization, and the process that hosts
-the workspace. The shared package owns only the browser workspace and loopback
-HTTP boundary; it does not store or retrieve research data.
+The workspace, the settings layer, and the gateway were each developed in an
+earlier repository of the same author and were part of this codebase from the
+start, so this project resolves no dependency on another of that author's
+projects. None of them carries UltraRAG source: the gateway installs a pinned,
+clone-free UltraRAG snapshot at run time and proxies its stages over MCP.
 
 PROVENANCE
 
 This repository was created from `research-ultra-rag-mcp-server`, an independent
-MCP server over the same engine. That server is frozen and still installed on the
-machines that carry it, and both read and write the same projects. The on-disk
-state format is byte-compatible, so both may serve one project.
+MCP server over the same engine. That server is archived and still installed on
+the machines that carry it, and both read and write the same projects. The
+on-disk state format is byte-compatible, so both may serve one project.
 
     research-ultra-rag-mcp-server
     seed commit 0f5da3d611ae12b9807bae93c7f270b7d303b35f

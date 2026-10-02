@@ -706,9 +706,8 @@ def test_the_workspace_removes_a_generation_only_with_the_id_repeated(
     field and inventing the other is how a click would come to mean yes.
     """
 
-    from ui_ultra_rag_mcp import UIRequestError
-
     from research_rag.surfaces.ui import ResearchUIAdapter
+    from research_rag.surfaces.workspace import UIRequestError
 
     config = resolve_config(project)
     service = FakeResearchService()
@@ -749,9 +748,8 @@ def test_the_workspace_forwards_a_settings_write_whole(project: Path) -> None:
     rebuild.
     """
 
-    from ui_ultra_rag_mcp import UIRequestError
-
     from research_rag.surfaces.ui import ResearchUIAdapter
+    from research_rag.surfaces.workspace import UIRequestError
 
     config = resolve_config(project)
     service = FakeResearchService()

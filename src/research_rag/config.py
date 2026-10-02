@@ -11,7 +11,6 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from config_ultra_rag_mcp import SettingsError, resolve_settings
 from platformdirs import user_cache_path
 
 from .settings import (
@@ -19,10 +18,16 @@ from .settings import (
     EffectiveSettings,
     sources_for,
 )
+from .settings_layers import SettingsError, resolve_settings
 
 # The one console script this product installs, named because the health report
 # prints commands an operator can paste.
 CLI_COMMAND = "research-rag"
+
+# The gateway this app spawns, installed by this package beside the command above.
+# It is named for this app rather than for the project it proxies, because the
+# reader pastes it and has to be able to see which product it belongs to.
+GATEWAY_EXECUTABLE = "research-rag-gateway"
 
 # Where a remedy points when the reader has to supply the directory themselves.
 # It is a path-shaped token with no quoting, so the printed command stays
@@ -617,15 +622,13 @@ def resolve_config(
             )
 
     executable = (
-        Path(
-            vanilla_executable or Path(sys.executable).parent / "vanilla-ultra-rag-mcp"
-        )
+        Path(vanilla_executable or Path(sys.executable).parent / GATEWAY_EXECUTABLE)
         .expanduser()
         .absolute()
     )
     if not executable.is_file():
         raise ConfigurationError(
-            f"vanilla-ultra-rag-mcp executable was not found: {executable}"
+            f"{GATEWAY_EXECUTABLE} executable was not found: {executable}"
         )
 
     overrides = list(settings_overrides)

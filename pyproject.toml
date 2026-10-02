@@ -13,7 +13,6 @@ requires-python = ">=3.11,<3.13"
 dependencies = [
     "bm25s @ git+https://github.com/AhmedKishki/bm25s.git@20f6c02612b8114dca4662131ba09d5102c53308",
     "beautifulsoup4>=4.13,<5",
-    "config-ultra-rag-mcp @ git+https://github.com/AhmedKishki/config-ultra-rag-mcp.git@cbd47bb46efe85340de34f8f8f13fc6516e7fecb",
     "ebooklib>=0.20,<1",
     "fastembed==0.8.0",
     "fastmcp==3.4.0",
@@ -21,18 +20,31 @@ dependencies = [
     "httpx>=0.28",
     "filelock>=3.16,<5",
     "numpy>=1.26,<3",
+    # UltraRAG's BM25 backend runs on numba, and its own metadata does not declare
+    # it, so the gateway's index and every search through it fail without it here.
+    "numba==0.65.0",
     "platformdirs>=4.3,<5",
+    "starlette>=1.6,<2",
     "tokenizers>=0.20,<1",
     "tokie>=0.1,<1",
     "pydantic>=2.12,<3",
     "pymupdf>=1.26,<2",
     "qdrant-client==1.19.1",
-    "ui-ultra-rag-mcp @ git+https://github.com/AhmedKishki/ui-ultra-rag-mcp.git@f6b74b4",
-    "vanilla-ultra-rag-mcp @ git+https://github.com/AhmedKishki/vanilla-ultra-rag-mcp-server.git@fc339c259a672ca4dacb525840eba851d01c4b75",
+    "uvicorn>=0.53,<1",
+    # The pinned UltraRAG the gateway proxies. The managed snapshot under the runtime
+    # cache supplies each server's entry point, and those entry points import the
+    # `ultrarag` library from this environment, so the library is a direct dependency
+    # rather than something the snapshot carries.
+    "ultrarag @ https://github.com/OpenBMB/UltraRAG/archive/3a709a2aea3fbe46acca59c422621c94b6e86857.tar.gz",
 ]
 
 [project.scripts]
 research-rag = "research_rag.surfaces.cli:main"
+# The gateway this app spawns to reach UltraRAG's own stages, and the runtime
+# installer behind `doctor --repair-runtime`. Both were a separate product's
+# console scripts and are this app's own now.
+research-rag-gateway = "research_rag.gateway.server:main"
+research-rag-runtime = "research_rag.gateway.runtime:main"
 
 [project.urls]
 Repository = "https://github.com/AhmedKishki/research-rag"
@@ -53,6 +65,9 @@ where = ["src"]
 [tool.setuptools.package-data]
 # The default settings ship with the package: the code has no copy of them.
 research_rag = ["default.toml"]
+# The workspace's assets ship with the code that serves them, so a wheel holds
+# one copy of each.
+"research_rag.surfaces.workspace" = ["static/*.css", "static/*.html", "static/*.js"]
 
 [tool.uv]
 package = true

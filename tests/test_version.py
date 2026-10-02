@@ -20,15 +20,14 @@ def test_version_block_reports_the_running_and_installed_versions() -> None:
 
     assert block["app"] == APP_VERSION
     assert block["installed"] == installed_version()
-    assert isinstance(block["ui"], str)
     assert block["restart_required"] is False
 
 
-def test_version_label_names_the_app_and_the_shared_ui() -> None:
+def test_version_label_names_the_app() -> None:
     label = version_label()
 
     assert label.startswith("research-rag ")
-    assert "UI " in label
+    assert "UI " not in label
 
 
 def test_version_lines_are_the_flag_s_answer_and_the_block_is_its_one_source() -> None:
@@ -36,8 +35,8 @@ def test_version_lines_are_the_flag_s_answer_and_the_block_is_its_one_source() -
 
     assert lines[0] == f"research-rag {APP_VERSION}"
     assert lines[1] == f"installed {installed_version()}"
-    assert lines[3] in {"restart_required true", "restart_required false"}
-    assert version_block()["restart_required"] is (lines[3] == "restart_required true")
+    assert lines[2] in {"restart_required true", "restart_required false"}
+    assert version_block()["restart_required"] is (lines[2] == "restart_required true")
 
 
 def test_declared_version_matches_the_installed_distribution() -> None:
