@@ -101,13 +101,23 @@ def test_normalize_collapses_wrapping() -> None:
     assert evaluation.normalize("a  b\n c ") == "a b c"
 
 
-def test_normalized_text_keeps_everything_case_and_wrapping_do_not() -> None:
+def test_normalized_text_collapses_whitespace_and_nothing_else() -> None:
+    """The comparison key wraps neither the case nor the punctuation of a claim.
+
+    ``V`` and ``v`` are different variables and ``5!`` is not ``5``, so the key
+    keeps both. A key that folded them would report a duplicate the corpus does
+    not hold, which is a wrong claim rather than a conservative one.
+    """
+
     assert evaluation.normalized_text("Artisanal\n  mining  in the Congo") == (
-        "artisanal mining in the congo"
+        "Artisanal mining in the Congo"
     )
-    assert evaluation.normalized_text(
-        "mining in the Congo"
-    ) != evaluation.normalized_text("the Congo in mining")
+    assert evaluation.normalized_text("  padded  ") == "padded"
+    assert evaluation.normalized_text("V = 5!") == "V = 5!"
+    assert evaluation.normalized_text("5!") != "5"
+    assert evaluation.normalized_text("V") != "v"
+    assert evaluation.normalized_text("the answer.") != "the answer"
+    assert evaluation.normalized_text("a b") != evaluation.normalized_text("b a")
 
 
 # --------------------------------------------------------------------------
@@ -137,15 +147,92 @@ def test_exact_equality_keeps_a_repeated_word() -> None:
     assert measures["exact_duplicate_slots"] == 0
 
 
-def test_exact_equality_collapses_case_and_wrapping() -> None:
+def test_exact_equality_collapses_wrapping_only() -> None:
     index = _index(
         ("c1", "Artisanal mining\n  in the Congo.", "s1"),
-        ("c2", "artisanal  MINING in the congo", "s2"),
+        ("c2", "Artisanal  mining in the Congo.", "s2"),
     )
     measures = evaluation.duplicate_measures(["c1", "c2"], index)
     assert measures["distinct_normalized_texts"] == 1
     assert measures["exact_duplicate_slots"] == 1
     assert measures["exact_duplicate_groups"] == [["c1", "c2"]]
+
+
+def test_exact_equality_keeps_letter_case() -> None:
+    """``v`` against ``V`` is a different quantity, so it is a different passage."""
+
+    index = _index(
+        ("c1", "the shear modulus V of the specimen", "s1"),
+        ("c2", "the shear modulus v of the specimen", "s2"),
+    )
+    measures = evaluation.duplicate_measures(["c1", "c2"], index)
+    assert measures["distinct_normalized_texts"] == 2
+    assert measures["exact_duplicate_slots"] == 0
+    assert measures["lexical_containment_slots"] == 0
+
+
+def test_exact_equality_keeps_a_factorial_and_an_exclamation() -> None:
+    """A trailing ``!`` is an operator here, not a mark closing a sentence.
+
+    The exact measure separates all three passages, and the lenient measure is
+    never offered the passage whose operator run the others have: the words alone
+    do not decide it.
+    """
+
+    index = _index(
+        ("c1", "the sample held 5! arrangements", "s1"),
+        ("c2", "the sample held 5 arrangements", "s2"),
+        ("c3", "the sample held 5 arrangements!", "s3"),
+    )
+    measures = evaluation.duplicate_measures(["c1", "c2", "c3"], index)
+    assert measures["distinct_normalized_texts"] == 3
+    assert measures["exact_duplicate_slots"] == 0
+    assert measures["lexical_containment_pairs"] == [
+        {
+            "slot_chunk_id": "c1",
+            "repeated_chunk_id": "c3",
+            "shared_shingles": 4,
+            "slot_shingles": 4,
+            "containment": 1.0,
+        },
+        {
+            "slot_chunk_id": "c3",
+            "repeated_chunk_id": "c1",
+            "shared_shingles": 4,
+            "slot_shingles": 4,
+            "containment": 1.0,
+        },
+    ]
+    # The passage with no operator is in neither pair: a factorial is a claim the
+    # other two passages do not make.
+    assert "c2" not in {
+        identifier
+        for pair in measures["lexical_containment_pairs"]
+        for identifier in (pair["slot_chunk_id"], pair["repeated_chunk_id"])
+    }
+
+
+def test_a_factorial_is_a_protected_distinction() -> None:
+    index = _index(
+        ("c1", "the sample held 5! arrangements of the specimen", "s1"),
+        ("c2", "the sample held 5 arrangements of the specimen", "s2"),
+    )
+    assert evaluation.protected_signature("5! arrangements") != (
+        evaluation.protected_signature("5 arrangements")
+    )
+    measures = evaluation.duplicate_measures(["c1", "c2"], index)
+    assert measures["lexical_containment_slots"] == 0
+    assert measures["exact_duplicate_slots"] == 0
+
+
+def test_exact_equality_keeps_a_closing_sentence_mark_apart() -> None:
+    index = _index(
+        ("c1", "the committee approved the draft.", "s1"),
+        ("c2", "the committee approved the draft", "s2"),
+    )
+    measures = evaluation.duplicate_measures(["c1", "c2"], index)
+    assert measures["distinct_normalized_texts"] == 2
+    assert measures["exact_duplicate_slots"] == 0
 
 
 def test_exact_equality_keeps_two_different_passages_apart() -> None:
