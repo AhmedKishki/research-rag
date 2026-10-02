@@ -18,6 +18,7 @@ from conftest import write_pdf
 
 import research_rag.surfaces.cli as cli_module
 import research_rag.ultrarag as ultrarag_module
+from research_rag import app as app_module
 from research_rag import registry
 from research_rag.config import ConfigurationError
 from research_rag.support import ResearchError
@@ -322,6 +323,7 @@ def test_the_projects_listing_names_every_registered_project(
             "url": None,
             "port": None,
             "attached_to": None,
+            "detached": False,
         }
         assert entry["attached_clients"] == 0
         assert "ready" not in entry
@@ -863,6 +865,9 @@ def test_start_leaves_an_app_another_terminal_owns_alone(
         return cli_module.CommandResult()
 
     monkeypatch.setattr(cli_module, "_serve_attached", _serving)
+    # The serving process is declared attached, because this test is about an app
+    # another terminal owns and not about the case that one owns no terminal.
+    monkeypatch.setattr(app_module, "has_terminal", lambda _pid: True)
     args = _args("--project-root", str(project), "start")
     config = _resolve(args)
     # Both files are what the app writes, and a recorded port whose process is gone
@@ -876,6 +881,38 @@ def test_start_leaves_an_app_another_terminal_owns_alone(
 
     assert served == []
     assert "already served" in capsys.readouterr().out
+
+
+def test_start_names_a_detached_app_and_its_remedy(
+    project: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """A process with no terminal holds the project, so no terminal holds it, and
+    blaming one is a sentence about a terminal that does not exist."""
+
+    served: list[object] = []
+
+    async def _serving(*_: Any, **__: Any):
+        served.append(True)
+        return cli_module.CommandResult()
+
+    monkeypatch.setattr(cli_module, "_serve_attached", _serving)
+    monkeypatch.setattr(app_module, "has_terminal", lambda _pid: False)
+    args = _args("--project-root", str(project), "start")
+    config = _resolve(args)
+    (config.state_root / "research-rag-ui.port").write_text("5099\n", encoding="utf-8")
+    (config.state_root / "research-rag-ui.pid").write_text(
+        str(os.getpid()), encoding="utf-8"
+    )
+
+    asyncio.run(_start(args, config))
+
+    out = capsys.readouterr().out
+    assert served == []
+    assert "no terminal attached" in out
+    assert "'research-rag stop'" in out
+    assert "this terminal does not own" not in out
 
 
 def test_generations_lists_and_can_roll_back() -> None:

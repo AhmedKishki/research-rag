@@ -18,6 +18,9 @@ my-research-project/
     └── runtime/                       disposable derived state
         ├── current.json                  selected generation pointer
         ├── project.lock
+        ├── research-rag-ui.port          port a running app serves, while it runs
+        ├── research-rag-ui.pid           its process, while it runs
+        ├── research-rag-ui.tty           the terminal it is attached to; absent when it has none
         ├── logs/
         ├── failures/                     small failed-build records
         ├── staging/<build-id>/           resumable incomplete build plus checkpoint

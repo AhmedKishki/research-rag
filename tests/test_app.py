@@ -570,7 +570,7 @@ async def test_the_control_api_answers_the_account_and_the_client_entry(
     """
 
     from research_rag import registry
-    from research_rag.app import PID_FILE, PORT_FILE
+    from research_rag.app import PID_FILE, PORT_FILE, has_terminal
     from research_rag.control import Control
     from research_rag.doctor import mcp_entry_block
 
@@ -593,6 +593,9 @@ async def test_the_control_api_answers_the_account_and_the_client_entry(
         ]
         assert body["projects"][0]["app"] == {
             "attached_to": None,
+            # This test's own process is the serving one, so the answer is whatever
+            # its controlling terminal is rather than a value the run happens to have.
+            "detached": has_terminal(os.getpid()) is False,
             "running": True,
             "url": app.url,
             "port": app.port,

@@ -16,8 +16,16 @@ from typing import Any
 
 import pytest
 
+from research_rag import app as app_module
 from research_rag import registry
-from research_rag.app import PID_FILE, PORT_FILE, TTY_FILE, App, recorded_port
+from research_rag.app import (
+    PID_FILE,
+    PORT_FILE,
+    TTY_FILE,
+    App,
+    has_terminal,
+    recorded_port,
+)
 from research_rag.config import ConfigurationError, resolve_config
 from research_rag.surfaces import cli
 
@@ -293,3 +301,144 @@ def test_a_bare_call_with_no_project_says_how_to_make_one(
 
     with pytest.raises(ConfigurationError, match="init --project-root"):
         cli._bare_workspace(_no_arguments())
+
+
+# --- the detached app ----------------------------------------------------------
+
+
+def _stat(root: Path, pid: int, tty_nr: int, comm: str = "research-rag") -> None:
+    """Write the /proc/<pid>/stat a process with this controlling terminal has."""
+
+    process = root / str(pid)
+    process.mkdir(parents=True, exist_ok=True)
+    (process / "stat").write_text(
+        f"{pid} ({comm}) S 1 {pid} {pid} {tty_nr} -1 4194560 0 0 0 0 0 0 0 0 20 0 3 0 1000\n",
+        encoding="utf-8",
+    )
+
+
+def test_a_process_with_no_controlling_terminal_is_detached(tmp_path: Path) -> None:
+    _stat(tmp_path, 4242, tty_nr=0)
+
+    assert has_terminal(4242, proc_root=tmp_path) is False
+
+
+def test_a_process_with_a_controlling_terminal_is_attached(tmp_path: Path) -> None:
+    _stat(tmp_path, 4242, tty_nr=34816)
+
+    assert has_terminal(4242, proc_root=tmp_path) is True
+
+
+def test_a_command_name_in_parentheses_does_not_shift_the_terminal(
+    tmp_path: Path,
+) -> None:
+    """`comm` is in parentheses and may hold a space or one, so fields are counted
+    from after its final `)` rather than by splitting the line."""
+
+    _stat(tmp_path, 4242, tty_nr=0, comm="my (odd) name")
+
+    assert has_terminal(4242, proc_root=tmp_path) is False
+
+
+def test_a_process_that_cannot_be_asked_is_neither(
+    tmp_path: Path,
+) -> None:
+    """Unknown is not the same as attached, and must never read as it."""
+
+    assert has_terminal(999999, proc_root=tmp_path) is None
+
+
+def test_an_app_with_no_terminal_is_reported_detached(
+    project: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config = _initialised(project, "Orphan")
+    monkeypatch.setattr(app_module, "recorded_pid", lambda _config: 4242)
+    monkeypatch.setattr(app_module, "has_terminal", lambda pid: False)
+
+    assert registry.detached_from_terminal(config, running=True) is True
+
+
+def test_an_app_with_a_terminal_is_not_reported_detached(
+    project: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config = _initialised(project, "Held")
+    monkeypatch.setattr(app_module, "recorded_pid", lambda _config: 4242)
+    monkeypatch.setattr(app_module, "has_terminal", lambda pid: True)
+
+    assert registry.detached_from_terminal(config, running=True) is False
+
+
+def test_no_app_at_all_is_not_detached(project: Path) -> None:
+    config = _initialised(project, "Down")
+
+    assert registry.detached_from_terminal(config, running=False) is False
+
+
+def _served(config: Any, monkeypatch: pytest.MonkeyPatch, detached: bool) -> None:
+    monkeypatch.setattr(cli, "running_url", lambda _config: "http://127.0.0.1:5051")
+    monkeypatch.setattr(
+        cli, "detached_from_terminal", lambda _config, _running: detached
+    )
+
+
+def test_a_bare_call_names_a_detached_app_and_its_remedy(
+    project: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    _initialised(project, "Orphan")
+    _served(resolve_config(project), monkeypatch, detached=True)
+    monkeypatch.setattr(cli, "_serve_attached_sync", lambda *_a, **_k: None)
+
+    cli._bare_workspace(_no_arguments())
+
+    out = capsys.readouterr().out
+    assert "no terminal attached" in out
+    assert f"'{cli.CLI_NAME} stop'" in out
+
+
+def test_a_bare_call_blames_another_terminal_only_when_one_owns_it(
+    project: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    _initialised(project, "Held")
+    _served(resolve_config(project), monkeypatch, detached=False)
+
+    cli._bare_workspace(_no_arguments())
+
+    out = capsys.readouterr().out
+    assert "this terminal does not own" in out
+    assert "no terminal attached" not in out
+
+
+def test_stop_reports_a_detached_app_and_names_what_ends_it(
+    project: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config = _initialised(project, "Orphan")
+    monkeypatch.setattr(
+        cli,
+        "project_app_state",
+        lambda _root: {"app": {"running": True, "attached_to": None, "detached": True}},
+    )
+    monkeypatch.setattr(cli, "recorded_pid", lambda _config: None)
+
+    report = cli._stop(_no_arguments("--project-root", str(project), "stop"), config)
+
+    assert report["detached"] is True
+    assert any("no terminal attached" in note for note in report["notes"])
+
+
+def test_stop_does_not_blame_a_terminal_that_owns_nothing(
+    project: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config = _initialised(project, "Held")
+    monkeypatch.setattr(
+        cli,
+        "project_app_state",
+        lambda _root: {
+            "app": {"running": True, "attached_to": "/dev/pts/3", "detached": False}
+        },
+    )
+    monkeypatch.setattr(cli, "recorded_pid", lambda _config: None)
+
+    report = cli._stop(_no_arguments("--project-root", str(project), "stop"), config)
+
+    assert report["detached"] is False
+    assert not any("no terminal attached" in note for note in report["notes"])

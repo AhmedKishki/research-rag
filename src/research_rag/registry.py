@@ -266,6 +266,26 @@ def _attached_to(config: Any) -> str | None:
     return terminal or None
 
 
+def detached_from_terminal(config: Any, running: bool) -> bool | None:
+    """Whether the serving process has no controlling terminal.
+
+    ``True`` is the condition this app holds itself against, so it is stated
+    rather than left to be inferred from a missing terminal file. ``None`` is the
+    answer when the platform cannot be asked, which is not the same as "attached"
+    and is never reported as such.
+    """
+
+    if not running:
+        return False
+    from .app import has_terminal, recorded_pid
+
+    pid = recorded_pid(config)
+    if pid is None:
+        return None
+    terminal = has_terminal(pid)
+    return None if terminal is None else not terminal
+
+
 def project_app_state(project_root: Path) -> dict[str, Any]:
     """Whether an app is serving one project, and what that app reports.
 
@@ -295,6 +315,7 @@ def project_app_state(project_root: Path) -> dict[str, Any]:
             # deciding whether Ctrl-C in this terminal would stop that app needs
             # the difference.
             "attached_to": _attached_to(config),
+            "detached": detached_from_terminal(config, url is not None),
         },
         "attached_clients": 0,
     }
@@ -367,6 +388,7 @@ __all__ = [
     "SCHEMA_VERSION",
     "RegisteredProject",
     "account_projects",
+    "detached_from_terminal",
     "forget",
     "load",
     "matches",

@@ -234,6 +234,12 @@
 - A process is signalled only when this project can prove it owns it.
   - The stop sweep requires this app's entry point in the command line *and* this project as `--project-root`.
   - The stop sweep never signals the process doing the sweep.
+- An app is served from the terminal that started it, and a serving process with no controlling terminal is a condition this app refuses rather than adopts.
+  - The answer is read from `/proc/<pid>/stat`, because a missing `research-rag-ui.tty` would otherwise make a stopped app read as a detached one.
+  - `start`, a bare call, `projects`, and `stop` name it, and the named remedy is `stop`; none of them starts a second app.
+  - Only `stop` ends it: closing a terminal ends an app, and this is the one state where closing a terminal would not.
+  - Detached serving is deferred work in `TODO.md` rather than an option this command line carries.
+  - `tests/test_attached_workspace.py` holds the property.
 - The author's own projects, notes, drafts, and every original PDF/EPUB stay out of git, and a new personal location is added to the block in `.gitignore`.
 - An unimplemented feature keeps its explicit limitation, and planned work is never presented as shipped.
 
