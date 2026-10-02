@@ -26,6 +26,39 @@ The judged set can outlive the corpus it was written from. Target `t12` judges `
 
 Two further limits apply. Relevance gates can legitimately return fewer than `top_k`, so a miss can mean "rejected by a gate" rather than "ranked low"; the harness records rejected and withheld counts per run for that reason. The numbers also describe the generation the report names, so re-run the harness when the corpus, the extraction policy, or a retrieval default changes.
 
+## What a result list contained, beside how it ranked
+
+A known-item query has one relevant passage, so the ranking metrics cannot see a
+change that concerns the rest of the list. Two copies of the same evidence rank
+first whichever of them is judged relevant, and a different passage carrying the
+same evidence displacing the designated chunk reads as a miss. Report version 2
+therefore records what each result list contained, and changes no metric version 1
+published.
+
+Per query, `runs[].distinct_evidence_spans`, `exact_duplicate_slots`,
+`near_duplicate_slots`, and `same_source_pairs`:
+
+- `distinct_evidence_spans` — how many different passages the result list held, by word-normalized equality.
+- `exact_duplicate_slots` — slots beyond the first in an equality group. A reprinted passage retrieved twice.
+- `near_duplicate_slots` — slots whose own words are at least `duplicate_containment` present in another returned passage's. It flags the shorter of a pair and not the passage containing it, and skips exact equality, so the two counts never describe one slot twice.
+- `same_source_pairs` — slots sharing a source file with another slot. Distinct evidence often comes from one file, so this is a source-spread measure rather than a duplication one.
+
+Per mode, `summary[mode].overall` adds `mean_distinct_evidence_spans`,
+`mean_exact_duplicate_slots`, `mean_near_duplicate_slots`, `mean_same_source_pairs`,
+`p50_seconds`, and `p95_seconds`; `summary[mode].repeated_slot_rate` is the share of
+that mode's slots held by a passage more than one query returned.
+
+`repeated_slot_rate` is measured across the run because no per-query metric can
+see it: a passage that answers every question looks like a reasonable list in
+front of each query that returned it. Latency percentiles are nearest-rank, so
+both numbers are seconds the harness observed rather than an interpolation.
+
+The report carries `schema_version: 2` and `duplicate_containment`, the threshold
+`near_duplicate_slots` used. A report written before version 2 has none of these
+fields; the harness then prints blank columns and reports the means as `null`,
+because a zero for a measure that was not taken reads as an absence of
+duplication rather than as an absence of measurement.
+
 ## Running it
 
 ```bash
@@ -45,6 +78,8 @@ The harness never writes inside the project. It calls `status` and `search` in p
 ## Output
 
 The console prints two aligned tables (primary depth and deep pass) with, per mode and per class: `succ@1`, `succ@3`, `succ@k`, `MRR`, `nDCG@k`, `doc@k`, mean query-to-target overlap, mean returned passages, and `srcs` — the mean number of distinct sources those passages come from. `srcs` is what a source-diversity reordering is expected to move, so it is reported beside the quality columns rather than instead of them.
+
+Per mode, the table then carries `spans`, `dup`, `near`, `1src`, `rep%`, and `p50s`: the mean distinct evidence spans, mean exact duplicate slots, mean near duplicate slots, mean same-source pairs, the share of slots holding a repeated passage, and the median query in seconds. A column is left blank where the run carries no such measure. The per-class rows stay on the version 1 columns, because a class of two or three queries cannot support a redundancy mean worth reading.
 
 A full JSON report is written beside the judged set as `ai-and-fetishism-queries-report.json` with every per-query run, the resolved targets, the retrieval configuration recorded in the generation, the timing, and the run's own settings — the modes measured, the reranker models, `evaluated_query_count`, `skipped_targets`, and `selection_policy`, which names the source-diversity penalty the run used because the generation's recorded policy cannot carry a value applied after ranking. Reports are generated artifacts, ignored by git; regenerate one instead of editing it.
 
