@@ -16,6 +16,7 @@ reads `exclusion_records` from here rather than reaching into `ReviewWorkflow`.
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
@@ -28,7 +29,7 @@ from .sources import (
     stable_source_id,
 )
 from .storage import write_source_catalog
-from .support import ResearchError
+from .support import ResearchError, _document_matches_metadata
 
 
 def source_directory(config: ResearchConfig, manifest: dict[str, Any]) -> Path:
@@ -122,7 +123,13 @@ def sync_source_catalog(
     exclusions: dict[str, dict[str, str]],
     metadata: dict[str, dict[str, Any]],
 ) -> dict[str, str]:
-    """Durably retain every issued opaque source ID and its project path."""
+    """Durably retain every issued opaque source ID and its project path.
+
+    The write is what a reader is allowed to do: the catalog is the only memory a
+    project has of a source it has seen and no longer holds, so a file that is
+    renamed or deleted between two builds stays addressable by the ID it was given
+    while it was there. Without it, the second listing would have forgotten it.
+    """
 
     updated = dict(catalog)
     paths_to_ids = {relative: source_id for source_id, relative in catalog.items()}
@@ -179,6 +186,33 @@ def sync_source_catalog(
     return updated
 
 
+def source_matches_filters(
+    record: Mapping[str, Any],
+    *,
+    categories: set[str],
+    categories_any: set[str],
+    projects: set[str],
+    projects_any: set[str],
+    keywords: set[str],
+) -> bool:
+    """Whether one source record passes the listing's filter layers.
+
+    The same predicate a search applies to a document, so a reader who narrows the
+    listing and then searches the result is filtering by one rule rather than two.
+    A record that carries no metadata fails every layer that names a value, which
+    is what a file that has not been extracted yet does.
+    """
+
+    return _document_matches_metadata(
+        record,
+        keywords=keywords,
+        categories=categories,
+        categories_any=categories_any,
+        projects=projects,
+        projects_any=projects_any,
+    )
+
+
 def known_sources(
     config: ResearchConfig,
     catalog: dict[str, str],
@@ -189,9 +223,9 @@ def known_sources(
 ) -> dict[str, dict[str, Any]]:
     """Every source this project can name, keyed by its source-relative path.
 
-    The catalog is synchronised first, so reading this inventory is allowed to
-    rewrite `source-catalog.json` when the catalog is stale; a read that issues a
-    new source ID has to keep it.
+    Reading this inventory is allowed to rewrite `source-catalog.json` when the
+    catalog is stale, and that is the price of remembering a source this project has
+    seen and no longer holds.
     """
 
     synced = sync_source_catalog(

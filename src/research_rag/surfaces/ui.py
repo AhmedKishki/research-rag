@@ -128,11 +128,17 @@ _SEARCH_ARGUMENTS = frozenset(
         "exclude_source_ids",
     }
 )
+# The filters the shared workspace's Sources view offers, which this app serves
+# with the same predicate `search` uses.
+_SOURCE_LISTING_FILTERS = frozenset(
+    {"categories", "categories_any", "projects", "projects_any", "keywords"}
+)
+
 _OPERATION_ARGUMENTS: Mapping[str, frozenset[str]] = {
     "status": frozenset(),
     "ingest": frozenset({"force_recompute"}),
     "search": _SEARCH_ARGUMENTS,
-    "list_sources": frozenset(),
+    "list_sources": _SOURCE_LISTING_FILTERS,
     "get_passage": frozenset({"chunk_id", "context_chunks"}),
     "set_source_inclusion": frozenset({"source_path", "included", "reason"}),
     "set_chunk_inclusion": frozenset({"chunk_id", "included", "reason"}),

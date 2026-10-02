@@ -449,12 +449,15 @@ def _document_matches_metadata(
     languages_any: set[str] = frozenset(),
     authors_any: set[str] = frozenset(),
     titles_any: set[str] = frozenset(),
+    categories: set[str] = frozenset(),
+    projects: set[str] = frozenset(),
 ) -> bool:
     """Match one document against the reviewed-metadata filter layers.
 
-    `keywords` is all-of; `project`, `categories`, `language` and `authors` are
-    any-of. The project layer is a passthrough inside a one-project server and
-    matters when a corpus is copied or shared.
+    `keywords`, `categories` and `projects` without the `_any` suffix are all-of;
+    the `_any` forms, `language` and `authors` are any-of. The project layer is a
+    passthrough inside a one-project server and matters when a corpus is copied or
+    shared.
 
     `title` and `authors` are names rather than tags, so they match by
     case-insensitive substring. Reviewed values override extracted ones, so these
@@ -469,6 +472,8 @@ def _document_matches_metadata(
     document_titles = _normalized_scalar(document.get("title"))
     return (
         keywords.issubset(document_keywords)
+        and categories.issubset(document_categories)
+        and projects.issubset(document_projects)
         and (not categories_any or not categories_any.isdisjoint(document_categories))
         and (not projects_any or not projects_any.isdisjoint(document_projects))
         and (not languages_any or not languages_any.isdisjoint(document_languages))
