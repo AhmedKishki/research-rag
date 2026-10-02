@@ -6,20 +6,23 @@ retrieves and one the workspace renders are the same object.
 
 **MCP clients attach and detach.** A streamable-HTTP session is recorded on its
 first request, and a forced detach refuses the rest of it. The bridge in
-`bridge.py` names itself, so an agent is identifiable by more than a peer address.
+`bridge.py` names itself and declares the host it runs for, so an agent is
+identifiable by more than a peer address, and a client that is gone is
+forgotten rather than listed for ever.
 """
 
 from __future__ import annotations
 
 import asyncio
 import contextlib
+import json
 import logging
 import os
 import socket
 import time
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Mapping
 from contextlib import asynccontextmanager
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
@@ -44,12 +47,81 @@ CONTROL_PREFIX = "/control"
 # state uvicorn would have created for itself.
 _CLAIM_BACKLOG = 2048
 # A session that has said nothing for this long is reported as attached no
-# longer. It is kept rather than dropped, so a client that reconnects keeps one
-# identity in the list and a reader can see that it was here.
+# longer. It is listed rather than dropped straight away, so a reader can see
+# that it was here, and is forgotten once it has been silent for longer than
+# CLIENT_RETENTION_SECONDS.
 CLIENT_IDLE_SECONDS = 90.0
+# How long a client that has gone quiet is still listed. It is longer than the
+# idle window that reports it as attached, so a row is not removed while it is
+# still the answer to "who is here".
+CLIENT_RETENTION_SECONDS = 900.0
 # The header the stdio bridge sets so an agent is identifiable by name. A direct
 # HTTP client that does not set it is identified by its peer address.
 CLIENT_NAME_HEADER = "x-research-rag-client"
+# The variable a stdio bridge reads to learn what to call itself, which is how a
+# client names its own session. It is declared here beside the header it becomes,
+# because the app is what has to be told.
+CLIENT_NAME_ENV = "RESEARCH_RAG_CLIENT_NAME"
+# The header the stdio bridge sets with what the client it runs for inherited:
+# the program that started it, whether it came over ssh, the directory it was
+# started in, and the project it was asked for. A name says which agent; this
+# says where that agent is running, which a name never does.
+CLIENT_IDENTITY_HEADER = "x-research-rag-client-identity"
+# What a client is shown when it named itself nothing. The session id is an
+# opaque handle, so a row that leads with one answers nothing.
+STDIO_CLIENT_LABEL = "stdio bridge, unnamed"
+HTTP_CLIENT_LABEL = "http client, unnamed"
+# A client declares its identity in a request header it writes itself, so the
+# length is bounded and every field is taken by name: nothing a client sends
+# becomes part of the app's own answer unchecked.
+IDENTITY_HEADER_LIMIT = 1024
+IDENTITY_TEXT_LIMIT = 200
+
+
+def parse_client_identity(header: str | None) -> dict[str, Any]:
+    """The facts a client declared about itself, or nothing.
+
+    The declaration is read as a small JSON object and rebuilt field by field, so
+    a header this app does not recognise adds no key and a value that is not the
+    kind this app reads adds no fact. A client is on this app's loopback and is
+    therefore someone on this machine; the declaration is what that client says
+    about itself, and the app reports it as said rather than verifying it.
+    """
+
+    if not header or len(header) > IDENTITY_HEADER_LIMIT:
+        return {}
+    try:
+        declared = json.loads(header)
+    except ValueError:
+        return {}
+    if not isinstance(declared, dict):
+        return {}
+
+    def text(container: Mapping[str, Any], key: str) -> str:
+        value = container.get(key)
+        if not isinstance(value, str):
+            return ""
+        return value.strip()[:IDENTITY_TEXT_LIMIT]
+
+    facts: dict[str, Any] = {
+        key: text(declared, key)
+        for key in ("agent", "project", "cwd")
+        if text(declared, key)
+    }
+    pid = declared.get("pid")
+    if isinstance(pid, int) and not isinstance(pid, bool) and pid > 0:
+        facts["pid"] = pid
+    host = declared.get("host")
+    if isinstance(host, Mapping):
+        # The four host facts are always present or none of them are, so a reader
+        # of the report never has to tell an undeclared fact from a false one.
+        facts["host"] = {
+            "program": text(host, "program"),
+            "term": text(host, "term"),
+            "ssh": bool(host.get("ssh")),
+            "tmux": bool(host.get("tmux")),
+        }
+    return facts
 
 
 def _own_tty() -> str | None:
@@ -142,12 +214,33 @@ def _now() -> float:
     return time.monotonic()
 
 
+def _same_client(one: Client, other: Client) -> bool:
+    """Whether two sightings are one client opening more than one connection.
+
+    A bridge declares the process it runs in, so two sightings from one process
+    are one client. Two that declared nothing but a name are one client as far
+    as this app can tell, which is why one client's several connections are
+    counted on its own row rather than left to look like several clients.
+    """
+
+    if one.identity and other.identity:
+        return one.identity.get("pid") == other.identity.get("pid")
+    return one.name == other.name
+
+
 @dataclass
 class Client:
     """One MCP client this app has seen.
 
     `attached` is a property of recency and of an explicit drop, never a stored
-    flag.
+    flag. `name` is what the client called itself, or its session id when it
+    called itself nothing; `label` is what a reader is shown instead, and
+    `identity` is what the client said about the machine it runs in.
+
+    One client can hold more than one session id: a stdio bridge opens a new
+    upstream session per operation, so the process behind the pipe, not the
+    session, is the client. `session_id` is the one a disconnect is asked for
+    and `session_ids` is every one this client has opened.
     """
 
     session_id: str
@@ -155,7 +248,6 @@ class Client:
     first_seen: float
     last_seen: float
     requests: int = 0
-    streams: int = 1
     dropped: bool = False
     detached_reason: str | None = None
     # A sighting without a session id: the client opened a connection that has
@@ -163,6 +255,15 @@ class Client:
     # is not a client, and the MCP SDK opens the notification stream before the
     # session exists, so counting sightings would count one agent twice.
     pending: bool = False
+    # The name the client actually sent, empty when it sent none. It is kept
+    # beside `name` because that one falls back to the session id, and a reader
+    # is told whether a row is named rather than shown a handle as if it were
+    # a name.
+    declared_name: str = ""
+    identity: dict[str, Any] = field(default_factory=dict)
+    peer: str = ""
+    user_agent: str = ""
+    session_ids: list[str] = field(default_factory=list)
 
     @property
     def attached(self) -> bool:
@@ -174,39 +275,98 @@ class Client:
     def idle_seconds(self) -> float:
         return round(_now() - self.last_seen, 1)
 
+    @property
+    def transport(self) -> str:
+        """Which way this client reached the app, as the app can tell.
+
+        The stdio bridge is the only client that declares the host it runs for,
+        so a declared identity is a bridge and nothing else is.
+        """
+
+        return "stdio" if self.identity else "http"
+
+    @property
+    def label(self) -> str:
+        """The name a reader is shown, which is never a session id alone.
+
+        A client that named itself is shown its name. One that named nothing is
+        shown the kind of connection it opened, because an id in that place
+        tells a reader which row to disconnect and nothing about who sent it.
+        """
+
+        if self.declared_name:
+            return self.declared_name
+        return STDIO_CLIENT_LABEL if self.identity else HTTP_CLIENT_LABEL
+
     def report(self) -> dict[str, Any]:
         return {
             "session_id": self.session_id,
+            "session_ids": list(self.session_ids),
             "name": self.name,
+            "label": self.label,
+            "transport": self.transport,
+            "declared_name": self.declared_name,
             "attached": self.attached,
             "pending": self.pending,
-            # One client opens as many connections as it has streams, and the
-            # count is reported rather than hidden so a row is not read as one
-            # socket.
-            "streams": self.streams,
+            # A client opens as many sessions as its work needs, and the count
+            # is reported rather than hidden: the several rows one agent used to
+            # produce are now one row that says how many there were.
+            "sessions": len(self.session_ids),
             "requests": self.requests,
             "idle_seconds": self.idle_seconds,
             "detached_reason": self.detached_reason,
+            "peer": self.peer,
+            "user_agent": self.user_agent,
+            "identity": self.identity,
         }
 
 
 class ClientRegistry:
     """The clients attached to this app, and the authority to drop one.
 
-    Identity is the MCP session id once a request carries one. The initialize request
-    has no id yet, so it counts against the peer address, which keeps a client that
-    never initializes visible.
+    A client is the process behind the pipe where it declared one, and the MCP
+    session id where it did not. A stdio bridge opens a new upstream session per
+    operation, so a session id is not a client: one agent is one row, and the
+    sessions it has opened are listed beside it. A client that declared nothing
+    is the session, which is the most this app can say about a hand-written
+    HTTP client.
     """
 
     def __init__(self) -> None:
         self._clients: dict[str, Client] = {}
-        # A client's initialize request carries its name but no session id, so it
-        # is recorded against the peer address and the entry is carried over when
-        # the id appears. Without that, one client reads as two.
+        # Every session id this app has seen, mapped to the client that owns it.
+        self._sessions: dict[str, str] = {}
+        # The sightings that carry no session id, keyed by the peer address they
+        # arrived from, so one client does not read as two while its first
+        # session is still being created.
         self._awaiting: dict[str, str] = {}
 
-    def _touch(self, session_id: str, name: str, *, pending: bool = False) -> Client:
-        existing = self._clients.get(session_id)
+    @staticmethod
+    def _key(session_id: str, identity: Mapping[str, Any] | None) -> str:
+        """The one client `session_id` belongs to.
+
+        A declared process id is unique among the processes running on this
+        machine, so every session it opens lands on the same client. A pid the
+        operating system has since handed to a new bridge joins the row its
+        predecessor left, which carries the facts the new bridge declares and is
+        forgotten once it has been quiet for a while.
+        """
+
+        pid = (identity or {}).get("pid")
+        return f"bridge:{pid}" if isinstance(pid, int) else f"session:{session_id}"
+
+    def _touch(
+        self,
+        session_id: str,
+        name: str,
+        *,
+        pending: bool = False,
+        identity: Mapping[str, Any] | None = None,
+        peer: str = "",
+        user_agent: str = "",
+    ) -> Client:
+        key = self._key(session_id, identity)
+        existing = self._clients.get(key)
         if existing is None:
             existing = Client(
                 session_id=session_id,
@@ -215,46 +375,111 @@ class ClientRegistry:
                 last_seen=_now(),
                 pending=pending,
             )
-            self._clients[session_id] = existing
+            self._clients[key] = existing
         existing.last_seen = _now()
         existing.requests += 1
         if name:
             existing.name = name
+            existing.declared_name = name
+        if identity:
+            existing.identity = dict(identity)
+        if peer:
+            existing.peer = peer
+        if user_agent:
+            existing.user_agent = user_agent
+        if pending:
+            # A connection is not a session, so it is not an id a disconnect can
+            # be asked for, and it does not put a client whose session has
+            # already been seen back into the pending state.
+            self._awaiting[session_id] = key
+            return existing
+        if session_id not in existing.session_ids:
+            existing.session_ids.append(session_id)
+        if existing.pending or not existing.session_id:
+            # The first session this client carried replaces the peer address the
+            # connection was counted against.
+            existing.session_id = session_id
+        existing.pending = False
+        self._sessions[session_id] = key
         return existing
 
     def observe(self, request: Any) -> str | None:
-        session_id = (request.headers.get("mcp-session-id") or "").strip()
-        name = (request.headers.get(CLIENT_NAME_HEADER) or "").strip()
+        headers = request.headers
+        session_id = (headers.get("mcp-session-id") or "").strip()
+        name = (headers.get(CLIENT_NAME_HEADER) or "").strip()
+        identity = parse_client_identity(headers.get(CLIENT_IDENTITY_HEADER))
+        user_agent = (headers.get("user-agent") or "").strip()[:IDENTITY_TEXT_LIMIT]
         peer = f"{request.client.host}:{request.client.port}" if request.client else "?"
         if not session_id:
-            self._awaiting[peer] = peer
-            return self._touch(peer, name, pending=True).session_id
-        client = self._touch(session_id, name)
-        if client.streams == 1:
-            # A client opens one connection per stream, and the streams arrive
-            # before the session id exists, so they are folded onto the session by
-            # the name the client declared. Two clients that declare the same name
-            # are one client as far as this app can tell, which is why the row
-            # reports its stream count rather than pretending to be one socket.
-            folded = [
-                key
-                for key, sighting in self._clients.items()
-                if sighting.pending
-                and sighting is not client
-                and (sighting.name == client.name or not name)
-            ]
-            for key in folded:
-                sighting = self._clients.pop(key)
-                self._awaiting.pop(sighting.session_id, None)
-                client.streams += 1
-                client.requests += sighting.requests
+            return self._touch(
+                peer,
+                name,
+                pending=True,
+                identity=identity,
+                peer=peer,
+                user_agent=user_agent,
+            ).session_id
+        carried = session_id in self._sessions
+        client = self._touch(
+            session_id, name, identity=identity, peer=peer, user_agent=user_agent
+        )
+        if not carried:
+            self._fold_pending(client, name)
         return client.session_id
 
+    def _fold_pending(self, client: Client, name: str) -> None:
+        """Fold the sightings that carry no session onto the session they belong to.
+
+        A client opens its notification connection before the session exists, so
+        a connection is recorded against the peer address. A client that declared
+        a process is already one client; one that declared only a name is folded
+        by that name, and one that declared nothing at all is folded onto the
+        next session to arrive, which is the most this app can say about it.
+        """
+
+        for key, sighting in list(self._clients.items()):
+            if sighting is client or not sighting.pending:
+                continue
+            if name and not _same_client(sighting, client):
+                continue
+            self._clients.pop(key)
+            self._awaiting.pop(sighting.session_id, None)
+            client.requests += sighting.requests
+
+    def _forget_gone(self) -> None:
+        """Drop the clients that have been silent for longer than they are kept.
+
+        A row outlives its client so a reader can see that one was here and that
+        a disconnect took effect. A machine starts a bridge per agent session,
+        so keeping every client this app has ever seen fills the list with agents
+        that are gone, and a row that outlives its process carries the process
+        id, the directory, and the host of a program no longer running. A client
+        that comes back is recorded again, carrying the facts its current process
+        declares.
+        """
+
+        for key, client in list(self._clients.items()):
+            if client.attached or _now() - client.last_seen < CLIENT_RETENTION_SECONDS:
+                continue
+            self._clients.pop(key)
+            self._awaiting.pop(client.session_id, None)
+            for session_id in client.session_ids:
+                self._sessions.pop(session_id, None)
+
     def get(self, session_id: str) -> Client | None:
-        return self._clients.get(session_id)
+        """The client a session id belongs to, whichever of its sessions it is.
+
+        A peer address is answered as well as a session id, so a client whose
+        first session has not been created yet is refused as what it is rather
+        than as a client this app does not have.
+        """
+
+        key = self._sessions.get(session_id) or self._awaiting.get(session_id)
+        return self._clients.get(key or session_id)
 
     def disconnect(self, session_id: str, reason: str) -> Client:
-        client = self._clients.get(session_id)
+        self._forget_gone()
+        client = self.get(session_id)
         if client is None:
             raise ClientError(f"No client is attached with session {session_id}")
         if client.pending:
@@ -264,34 +489,37 @@ class ClientRegistry:
                 "initialize and ask again."
             )
         if not client.attached:
-            raise ClientError(f"Client {client.name} is already detached")
+            raise ClientError(f"Client {client.label} is already detached")
         client.dropped = True
         client.detached_reason = reason
-        # The MCP SDK opens a notification stream before the session exists, so
-        # that stream carries no session id and cannot be matched by one. It is
-        # matched by the name the client gave itself, and dropping it makes the
-        # client end rather than sit on an open stream with a session the app has
-        # already refused. A client that named nothing cannot have its stream
-        # identified, and only its session is refused.
+        # The MCP SDK opens a notification connection before the session exists,
+        # so that connection carries no session id and cannot be matched by one.
+        # It is matched by what identifies the client, and dropping it makes the
+        # client end rather than sit on an open connection with a session the app
+        # has already refused. A client that declared nothing cannot have its
+        # connection identified, and only its sessions are refused.
         for other in self._clients.values():
-            if other is not client and other.pending and other.name == client.name:
+            if other is not client and other.pending and _same_client(other, client):
                 other.dropped = True
                 other.detached_reason = reason
         return client
 
     def report(self) -> list[dict[str, Any]]:
-        """Every client this app has seen, attached or not.
+        """Every client this app is still holding, attached or not.
 
         A client stays in the listing after it is dropped so the outcome of a
         disconnect is readable: its `attached` flag says it is gone and
         `detached_reason` says why. Recency alone decides `attached`, so a session
-        whose process has ended reads as detached and is still listed.
+        whose process has ended reads as detached and is still listed, until it
+        has been silent for longer than a row is kept.
         """
 
+        self._forget_gone()
         return [client.report() for client in self._clients.values()]
 
     @property
     def attached(self) -> list[Client]:
+        self._forget_gone()
         return [client for client in self._clients.values() if client.attached]
 
 

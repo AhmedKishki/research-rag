@@ -21,9 +21,12 @@ from fastmcp.client.transports import StreamableHttpTransport
 
 from research_rag.project.config import resolve_config
 from research_rag.runtime.app import (
+    CLIENT_IDENTITY_HEADER,
     CLIENT_NAME_HEADER,
+    CLIENT_RETENTION_SECONDS,
     App,
     ClientRegistry,
+    parse_client_identity,
     recorded_port,
     running_url,
 )
@@ -733,9 +736,180 @@ def test_the_registry_counts_a_client_and_not_its_connections() -> None:
     assert len(report) == 1
     assert report[0]["attached"] is True
     assert report[0]["pending"] is False
-    assert report[0]["streams"] == 3
+    assert report[0]["sessions"] == 1
     assert report[0]["requests"] == 3
     assert len(registry.attached) == 1
+
+
+class _Request:
+    """One request, with the peer a real connection would arrive from."""
+
+    def __init__(
+        self,
+        session: str | None,
+        name: str = "",
+        port: int = 5000,
+        *,
+        identity: dict[str, Any] | None = None,
+        user_agent: str = "",
+    ) -> None:
+        self.headers = {
+            "mcp-session-id": session or "",
+            CLIENT_NAME_HEADER: name,
+            CLIENT_IDENTITY_HEADER: json.dumps(identity) if identity else "",
+            "user-agent": user_agent,
+        }
+        self.client = type("Peer", (), {"host": "127.0.0.1", "port": port})()
+
+
+def _bridge_identity(pid: int, agent: str) -> dict[str, Any]:
+    """What a stdio bridge declares about the client it runs for."""
+
+    return {
+        "agent": agent,
+        "project": "AI and fetishism",
+        "pid": pid,
+        "cwd": "/home/reader/project",
+        "host": {
+            "program": "Visual Studio Code",
+            "term": "",
+            "ssh": False,
+            "tmux": False,
+        },
+    }
+
+
+def test_a_client_is_reported_with_what_it_declared_about_itself() -> None:
+    """A name says which agent; the rest says where that agent is running."""
+
+    registry = ClientRegistry()
+    identity = _bridge_identity(4242, "reader-agent")
+
+    registry.observe(_Request(None, "reader-agent", identity=identity))
+    registry.observe(_Request("s-1", "reader-agent", identity=identity))
+
+    row = registry.report()[0]
+    assert row["transport"] == "stdio"
+    assert row["label"] == "reader-agent"
+    assert row["identity"] == identity
+    assert row["peer"] == "127.0.0.1:5000"
+    assert row["sessions"] == 1
+
+
+def test_one_bridge_that_opened_several_sessions_is_one_client() -> None:
+    """A bridge opens a new upstream session per operation, and one agent is one row.
+
+    This is the flood a reader sees otherwise: one agent behind a pipe, one row
+    per session it opened, and no way to tell those rows from other agents.
+    """
+
+    registry = ClientRegistry()
+    identity = _bridge_identity(4242, "stdio-bridge")
+
+    registry.observe(_Request(None, "stdio-bridge", identity=identity))
+    registry.observe(_Request("s-1", "stdio-bridge", identity=identity))
+    registry.observe(_Request(None, "stdio-bridge", port=5002, identity=identity))
+    registry.observe(_Request("s-2", "stdio-bridge", port=5002, identity=identity))
+
+    report = registry.report()
+    assert len(report) == 1
+    assert report[0]["session_ids"] == ["s-1", "s-2"]
+    assert report[0]["sessions"] == 2
+    # A disconnect ends every session the client opened, whichever one it names.
+    registry.disconnect("s-2", "Disconnected by request.")
+    assert registry.get("s-1") is registry.get("s-2")
+    assert registry.get("s-1").dropped is True
+
+
+def test_a_client_that_named_nothing_is_never_shown_its_session_id_alone() -> None:
+    """An id in the name column says which row to end and nothing about who sent it."""
+
+    registry = ClientRegistry()
+
+    registry.observe(_Request("b4b77876eb2145f0a73adf0bb1b89a67", user_agent="node"))
+
+    row = registry.report()[0]
+    assert row["name"] == "b4b77876eb2145f0a73adf0bb1b89a67"
+    assert row["label"] != row["name"]
+    assert row["declared_name"] == ""
+    assert row["transport"] == "http"
+    assert row["user_agent"] == "node"
+
+
+def test_two_bridges_are_two_clients_even_under_the_same_default_name() -> None:
+    """Every bridge that named nothing calls itself the same thing."""
+
+    registry = ClientRegistry()
+
+    registry.observe(
+        _Request(None, "stdio-bridge", identity=_bridge_identity(1, "stdio-bridge"))
+    )
+    registry.observe(
+        _Request("s-1", "stdio-bridge", identity=_bridge_identity(1, "stdio-bridge"))
+    )
+    registry.observe(
+        _Request(
+            None,
+            "stdio-bridge",
+            port=5002,
+            identity=_bridge_identity(2, "stdio-bridge"),
+        )
+    )
+    registry.observe(
+        _Request(
+            "s-2",
+            "stdio-bridge",
+            port=5002,
+            identity=_bridge_identity(2, "stdio-bridge"),
+        )
+    )
+
+    report = sorted(registry.report(), key=lambda row: row["session_id"])
+    assert [(row["session_id"], row["sessions"]) for row in report] == [
+        ("s-1", 1),
+        ("s-2", 1),
+    ]
+    assert [row["identity"]["pid"] for row in report] == [1, 2]
+
+
+def test_a_client_that_is_gone_for_long_enough_is_forgotten() -> None:
+    """A machine starts a bridge per agent session, so the list must not keep them."""
+
+    registry = ClientRegistry()
+    registry.observe(_Request("s-1", "reader-agent"))
+    client = registry.get("s-1")
+    client.last_seen -= CLIENT_RETENTION_SECONDS + 1
+
+    assert registry.report() == []
+    assert registry.get("s-1") is None
+
+
+def test_a_declared_identity_is_read_as_the_facts_the_app_understands() -> None:
+    """A client writes its own header, so nothing it sends is taken unchecked."""
+
+    assert parse_client_identity(None) == {}
+    assert parse_client_identity("not json") == {}
+    assert parse_client_identity("[1, 2]") == {}
+    assert parse_client_identity(json.dumps({"pid": True})) == {}
+    assert parse_client_identity(json.dumps({"cwd": " "})) == {}
+    assert parse_client_identity("x" * 4096) == {}
+
+    facts = parse_client_identity(
+        json.dumps(
+            {
+                "agent": " reader ",
+                "pid": 7,
+                "host": {"program": "kitty", "ssh": True},
+                "unknown": {"nested": "object"},
+            }
+        )
+    )
+
+    assert facts == {
+        "agent": "reader",
+        "pid": 7,
+        "host": {"program": "kitty", "term": "", "ssh": True, "tmux": False},
+    }
 
 
 def test_two_clients_with_different_names_stay_two_rows() -> None:
@@ -755,9 +929,9 @@ def test_two_clients_with_different_names_stay_two_rows() -> None:
     registry.observe(Request(None, "writer", 5002))
     registry.observe(Request("s-2", "writer", 5002))
 
-    assert [(entry["name"], entry["streams"]) for entry in registry.report()] == [
-        ("reader", 3),
-        ("writer", 2),
+    assert [(entry["name"], entry["sessions"]) for entry in registry.report()] == [
+        ("reader", 1),
+        ("writer", 1),
     ]
 
 

@@ -301,6 +301,7 @@
               and cannot be edited here.
             </p>
             <p id="settings-message" class="form-note" hidden></p>
+            <p id="settings-defaults" class="form-note measure" hidden></p>
             <p id="settings-notice" class="notice-inline" hidden></p>
             <form id="settings-form" class="settings-form">
               <div id="settings-sections" class="settings-sections"></div>
@@ -323,7 +324,15 @@
           <div id="client-summary" class="partition-summary">
             <h3>Attached clients</h3>
             <p class="form-note measure">Agents connected to this app over MCP. Disconnecting one ends its session; the client owns the process and decides whether to come back.</p>
-            <div id="client-chips" class="partition-chips"></div>
+            <p id="client-naming" class="form-note measure" hidden></p>
+            <details id="client-details" class="client-drawer">
+              <summary>
+                <span class="drawer-title">Who is attached</span>
+                <span id="client-count" class="count-badge">0</span>
+                <span id="client-detail" class="drawer-note"></span>
+              </summary>
+              <div id="client-chips" class="partition-chips"></div>
+            </details>
           </div>
 
           <div id="agent-endpoint" class="partition-summary">

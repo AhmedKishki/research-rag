@@ -31,7 +31,7 @@ from ..project.config import (
     resolve_source_reference,
 )
 from ..project.registry import account_projects
-from ..runtime.app import ClientError, ClientRegistry
+from ..runtime.app import CLIENT_NAME_ENV, ClientError, ClientRegistry
 from ..runtime.doctor import mcp_entry_block
 from ..runtime.version import version_label
 
@@ -53,6 +53,13 @@ RESEARCH_UI_PROFILE = UIProfile(
     project_fallback_name="Research project",
     navigation_label="Research views",
     source_types_label="PDF + EPUB sources",
+    # A client entry carries a command and a project, so the app cannot tell one
+    # agent from another and the reader is told how to name it instead. The
+    # variable is the bridge's, so this sentence is written where it is declared.
+    client_naming_hint=(
+        f"A client that sets {CLIENT_NAME_ENV} in its own configuration appears "
+        "here under that name."
+    ),
     ingest_intro=(
         "All included PDFs and EPUBs are extracted and indexed. The current "
         "generation stays active unless the complete build succeeds."

@@ -19,13 +19,15 @@ here, and the answer carries the command that creates the project. The other sev
 operations are absent, because there is no corpus behind them. An agent's entry
 therefore needs no editing after that command runs.
 
-The bridge names itself, so a disconnect is legible: the app lists clients by
-name, and dropping one ends its session, which ends the pipe and therefore the
-client.
+The bridge names itself and says where it is running, so a disconnect is legible
+and a list of clients is a list of agents rather than a list of session ids: the
+app lists clients by name, and dropping one ends its session, which ends the pipe
+and therefore the client.
 """
 
 from __future__ import annotations
 
+import json
 import os
 from collections.abc import Mapping
 from typing import Any
@@ -42,14 +44,15 @@ from ..project.config import (
     resolve_config,
 )
 from ..project.support import ResearchError
-from ..runtime.app import CLIENT_NAME_HEADER
+from ..runtime.app import (
+    CLIENT_IDENTITY_HEADER,
+    CLIENT_NAME_ENV,
+    CLIENT_NAME_HEADER,
+)
 from ..runtime.control import connect, is_serving, not_running_reason
 from ..runtime.version import APP_VERSION
 from .mcp import AGENT_BRIDGE_NAME, create_blocked_mcp
 
-# The env var a client configuration sets so a reader of the app's client list
-# can tell which agent is which, rather than seeing "stdio-bridge" four times.
-CLIENT_NAME_ENV = "RESEARCH_RAG_CLIENT_NAME"
 DEFAULT_CLIENT_NAME = "stdio-bridge"
 
 
@@ -59,18 +62,79 @@ def client_name() -> str:
     return os.environ.get(CLIENT_NAME_ENV) or DEFAULT_CLIENT_NAME
 
 
-def build_proxy(url: str, *, name: str) -> Any:
+def _host_program(environ: Mapping[str, str]) -> str:
+    """The program this bridge was started by, as the environment names it.
+
+    A client that starts a bridge is an editor, a terminal, or a shell over ssh,
+    and each declares itself in the environment it passes down. A shell says
+    nothing beyond its terminal, so the terminal type stands in for it.
+    """
+
+    if (
+        environ.get("VSCODE_PID")
+        or environ.get("VSCODE_IPC_HOOK")
+        or environ.get("TERM_PROGRAM", "").casefold().startswith("vscode")
+    ):
+        return "Visual Studio Code"
+    program = environ.get("TERM_PROGRAM", "").strip()
+    if program:
+        return program
+    term = environ.get("TERM", "").strip()
+    return "" if term in {"", "dumb"} else f"a {term} terminal"
+
+
+def client_identity(
+    project_name: str, *, environ: Mapping[str, str] | None = None
+) -> dict[str, Any]:
+    """What this bridge tells the app about the client it runs for.
+
+    A client entry names a command and a project, so the app would otherwise
+    show the same row for every agent on the machine. These are the facts the
+    bridge inherited rather than chose: the program that started it, whether it
+    came over ssh or inside a terminal multiplexer, the directory it was
+    started in, and the project its client asked for.
+    """
+
+    environment = os.environ if environ is None else environ
+    try:
+        directory = os.getcwd()
+    except OSError:
+        directory = ""
+    program = _host_program(environment)
+    return {
+        "agent": client_name(),
+        "project": project_name,
+        "pid": os.getpid(),
+        "cwd": directory,
+        "host": {
+            "program": program,
+            "term": environment.get("TERM", "").strip() if not program else "",
+            "ssh": bool(
+                environment.get("SSH_CONNECTION") or environment.get("SSH_CLIENT")
+            ),
+            "tmux": bool(environment.get("TMUX") or environment.get("TMUX_PANE")),
+        },
+    }
+
+
+def build_proxy(url: str, *, name: str, identity: Mapping[str, Any]) -> Any:
     """Return a stdio server that forwards everything to the app at `url`.
 
     The tools are proxied, not re-declared: a second copy of the seven operations
     would be a second place for them to be wrong, and would give the agent a
     different answer than the workspace for the same question. The transport is
-    built here rather than from a URL so the bridge can name itself, which makes
-    it identifiable in the app's client list.
+    built here rather than from a URL so the bridge can name itself and say where
+    it is running, which is what makes it identifiable in the app's client list.
     """
 
     return create_proxy(
-        StreamableHttpTransport(url, headers={CLIENT_NAME_HEADER: name}),
+        StreamableHttpTransport(
+            url,
+            headers={
+                CLIENT_NAME_HEADER: name,
+                CLIENT_IDENTITY_HEADER: json.dumps(identity, separators=(",", ":")),
+            },
+        ),
         name=AGENT_BRIDGE_NAME,
         version=APP_VERSION,
     )
@@ -168,7 +232,8 @@ def run(
         return
     with connect(config) as control:
         url = f"{control.base_url}/mcp"
-    build_proxy(url, name=name or client_name()).run(
+    name = name or client_name()
+    build_proxy(url, name=name, identity=client_identity(project_name)).run(
         transport="stdio", show_banner=False
     )
 

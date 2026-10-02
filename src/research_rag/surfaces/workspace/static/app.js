@@ -48,6 +48,11 @@ function applyProfile(profile) {
   const versionLabel = byId("version-label");
   versionLabel.textContent = profile.version_label || "";
   versionLabel.hidden = !profile.version_label;
+  // Only a host that serves MCP clients knows how one of them is named, so the
+  // note arrives with the rest of this host's wording.
+  const clientNaming = byId("client-naming");
+  clientNaming.textContent = profile.client_naming_hint || "";
+  clientNaming.hidden = !profile.client_naming_hint;
   document.querySelectorAll("[data-capability]").forEach((element) => {
     element.hidden = !hasCapability(element.dataset.capability);
   });
@@ -223,32 +228,75 @@ function configureRetrieval(status) {
   byId("search-button").disabled = !status.ready || state.busy;
 }
 
+// What the server says a client is, beside the name it gave itself: the program
+// it runs in, whether it reached the app over ssh, where it was started, and
+// which project it asked for. Every part is optional because a client may have
+// declared none of it, and a host that sends no facts at all draws the same row
+// it always did.
+function clientFacts(client) {
+  const identity = client.identity || {};
+  const host = identity.host || {};
+  const facts = [];
+  if (host.program) facts.push(host.program);
+  if (host.ssh) facts.push("over ssh");
+  if (host.tmux) facts.push("in tmux");
+  // A stdio bridge reaches the app through a Python HTTP client, so its
+  // user agent names that library rather than the agent behind the pipe. An
+  // HTTP client that named nothing is left with its user agent as the one
+  // thing that says what it is.
+  if (client.transport !== "stdio" && client.user_agent) {
+    facts.push(client.user_agent);
+  }
+  if (identity.cwd) facts.push(identity.cwd);
+  if (identity.project) facts.push(`project ${identity.project}`);
+  if (identity.pid) facts.push(`pid ${identity.pid}`);
+  return facts;
+}
+
+function clientDetail(client) {
+  if (client.attached) return `${client.requests || 0} calls`;
+  return client.detached_reason || "idle";
+}
+
+function clientRow(client) {
+  const chip = node("div", "partition-chip client-chip");
+  const head = node("div", "client-chip-head");
+  head.append(node("span", "partition-chip-label", client.label || client.name));
+  head.append(node("span", "partition-chip-count", clientDetail(client)));
+  if (client.attached) {
+    const drop = node("button", "text-button", "Disconnect");
+    drop.type = "button";
+    drop.addEventListener("click", () => disconnectClient(client.session_id));
+    head.append(drop);
+  }
+  chip.append(head);
+  const facts = clientFacts(client);
+  // The session id is how the same client is named in `clients` and in
+  // `disconnect`, and it is the last thing shown rather than the first: a
+  // reader looking for an agent reads the agent, and a reader disconnecting one
+  // reads the id. One client holds every session it opened, so the count is
+  // beside the id rather than one row per session.
+  const sessions = client.sessions || 1;
+  facts.push(sessions > 1 ? `${sessions} sessions · id ${String(client.session_id || "").slice(0, 12)}` : `session ${String(client.session_id || "").slice(0, 12)}`);
+  chip.append(node("span", "client-facts", facts.join(" · ")));
+  return chip;
+}
+
 function renderClients(clients) {
   const container = byId("client-chips");
   container.replaceChildren();
+  const attached = clients.filter((client) => client.attached).length;
+  byId("client-count").textContent = String(clients.length);
+  byId("client-detail").textContent = clients.length
+    ? `${attached} attached · ${clients.length - attached} idle`
+    : "none attached";
   if (!clients.length) {
     const empty = node("p", "form-note", "No agent is attached to this app.");
     container.append(empty);
     return;
   }
   for (const client of clients) {
-    const chip = node("div", "partition-chip");
-    const label = node("span", "partition-chip-label", client.name || client.session_id);
-    const detail = node(
-      "span",
-      "partition-chip-count",
-      client.attached
-        ? `${client.requests || 0} calls`
-        : client.detached_reason || "idle",
-    );
-    chip.append(label, detail);
-    if (client.attached) {
-      const drop = node("button", "text-button", "Disconnect");
-      drop.type = "button";
-      drop.addEventListener("click", () => disconnectClient(client.session_id));
-      chip.append(drop);
-    }
-    container.append(chip);
+    container.append(clientRow(client));
   }
 }
 
@@ -279,6 +327,8 @@ async function loadClients() {
     // the rest of the view carries on.
     const container = byId("client-chips");
     container.replaceChildren(node("p", "form-note", error.message));
+    byId("client-count").textContent = "—";
+    byId("client-detail").textContent = "";
   }
 }
 
@@ -1391,6 +1441,15 @@ function settingValueLabel(value) {
   return String(value);
 }
 
+// A value the packaged default file supplies says nothing about where it came
+// from, because every key is supplied by that file and the row already says
+// what the default is. A value another layer supplied is the one that needs
+// naming, so that is the only case where the origin is shown.
+function settingOrigin(setting) {
+  if (setting.defaulted) return null;
+  return setting.origin || "default";
+}
+
 // The server may declare a list of the values it accepts. Where it does, the
 // field is a select over exactly that list, so a reader cannot type a value the
 // server never offered. Where it declares none, the field stays the plain
@@ -1441,10 +1500,11 @@ function settingInput(setting, controlId) {
 }
 
 // A row shows the label, the server's own description, the value the page
-// loaded, where that value came from, what changing it costs, the variable
-// that would override it, and the control. Every one of those is optional: a
-// host that sends none of them draws the same row it always did, and a host
-// that sends all of them gets all of them without a truncated line.
+// loaded, the value the app starts from, where the value in force came from,
+// what changing it costs, the variable that would override it, and the
+// control. Every one of those is optional: a host that sends none of them draws
+// the same row it always did, and a host that sends all of them gets all of them
+// without a truncated line.
 function settingRow(setting, index) {
   const row = node("article", "setting-row");
   const controlId = `setting-control-${index}`;
@@ -1459,7 +1519,13 @@ function settingRow(setting, index) {
 
   const facts = node("div", "setting-facts");
   facts.append(node("span", "setting-fact setting-value", `Value: ${settingValueLabel(setting.value)}`));
-  facts.append(node("span", "locator-badge setting-origin", setting.origin || "default"));
+  if (setting.default !== undefined) {
+    facts.append(
+      node("span", "setting-fact setting-default", `Default: ${settingValueLabel(setting.default)}`),
+    );
+  }
+  const origin = settingOrigin(setting);
+  if (origin) facts.append(node("span", "locator-badge setting-origin", origin));
   const cost = setting.cost || {};
   if (cost.message) {
     const className = cost.level === "model" ? "setting-fact setting-cost setting-cost-model" : "setting-fact setting-cost";
@@ -1501,6 +1567,14 @@ function renderSettings(payload) {
   const message = byId("settings-message");
   message.hidden = !payload.message;
   message.textContent = payload.message || "";
+  // The file every default comes from is named once here, because a row that
+  // carried the path would repeat the same sentence on every row and read as
+  // thirty-nine places to look for one fact.
+  const defaults = byId("settings-defaults");
+  defaults.hidden = !payload.default_file;
+  defaults.textContent = payload.default_file
+    ? `Every default below is the one ${payload.default_file} declares.`
+    : "";
   syncSettingsSubmit();
 }
 

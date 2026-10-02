@@ -11,7 +11,13 @@ from filelock import AsyncFileLock
 
 from research_rag.core.service import ResearchService
 from research_rag.project.config import resolve_config
-from research_rag.project.settings import LOG_LEVELS, SETTINGS, SETTINGS_BY_KEY
+from research_rag.project.settings import (
+    LOG_LEVELS,
+    SETTINGS,
+    SETTINGS_BY_KEY,
+    default_config_file,
+    packaged_defaults,
+)
 from research_rag.project.settings_document import (
     merged_document,
     render_project_document,
@@ -374,6 +380,27 @@ async def test_every_key_carries_the_description_the_registry_declares(
     for setting in SETTINGS:
         assert rows[setting.key]["doc"] == setting.doc
         assert rows[setting.key]["doc"].strip()
+
+
+async def test_every_key_carries_the_default_the_packaged_file_declares(
+    project: Path,
+) -> None:
+    """A reader is told what a key starts from, and the file it starts from, once."""
+
+    answer = await _service(project).settings_read()
+    rows = _rows(answer)
+    defaults = packaged_defaults()
+
+    assert answer["default_file"] == str(default_config_file())
+    assert answer["default_file"].endswith("default.toml")
+    for setting in SETTINGS:
+        assert rows[setting.key]["default"] == defaults[setting.key]
+    # The value in force is the default for every key this project did not write,
+    # and the row says so in one fact rather than by naming the file again. The
+    # suite's own environment supplies the duplicate threshold.
+    assert {row["key"] for row in rows.values() if row["defaulted"]} == set(
+        defaults
+    ) - {"retrieval.duplicate_cosine"}
 
 
 async def test_a_bound_a_choice_or_a_variable_travels_only_where_one_is_declared(
