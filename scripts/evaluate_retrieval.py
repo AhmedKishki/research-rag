@@ -18,9 +18,10 @@ read read-only; nothing inside the project is written.
 Report version 3. The known-item metrics version 1 published keep their names and
 their definitions. What a result list *contained* is reported by measures that
 say what they compare: two passages are exact duplicates when their normalized
-text is equal as an ordered string, so word order, a repeated word, a sign, a
-decimal point, an operator, and a non-Latin script are all differences the
-measure keeps. ``lexical_containment_slots`` is a lexical measure and is named
+text is equal as an ordered string, and normalization collapses whitespace and
+nothing else, so word order, a repeated word, letter case, a sign, a decimal
+separator, an operator, a closing mark, and a non-Latin script are all
+differences the measure keeps. ``lexical_containment_slots`` is a lexical measure and is named
 as one: it counts slots whose ordered word shingles are mostly present in another
 returned passage, refuses any pair whose numbers, operators, or negations
 differ, and is not evidence that two passages say the same thing. A returned
@@ -102,8 +103,11 @@ WORD_PATTERN = re.compile(r"\w+", re.UNICODE)
 NUMBER_PATTERN = re.compile(r"([-+]?\d+(?:[.,]\d+)*)\s*(%?)")
 #: Operator characters, compared as the runs they form. A run of hyphens alone is
 #: dropped: a dash in prose changes no claim, and treating it as a distinction
-#: would take most prose pairs out of consideration for no gain.
-OPERATOR_RUN_PATTERN = re.compile(r"[-+*/^%=<>~≈≤≥≠±×÷]+")
+#: would take most prose pairs out of consideration for no gain. An exclamation
+#: mark is in the class because ``5!`` is a factorial and not a closing sentence
+#: mark, so two passages differing in one are not offered to the containment
+#: measure as a repetition.
+OPERATOR_RUN_PATTERN = re.compile(r"[-+*/^%=<>~≈≤≥≠±×÷!]+")
 #: Words that deny rather than assert. A passage and its negation overlap almost
 #: completely, and the words are the same words.
 NEGATION_TOKENS = frozenset(
@@ -285,11 +289,16 @@ METRIC_DEFINITIONS: dict[str, str] = {
     ),
     "distinct_normalized_texts": (
         "How many different passages a result list held, by equality of normalized "
-        "text as an ordered string."
+        "text as an ordered string, where normalization collapses whitespace runs "
+        "to one space and trims the ends and changes nothing else: letter case, "
+        "punctuation, operators, signs, and word order all count as differences."
     ),
     "exact_duplicate_slots": (
         "Slots beyond the first in a normalized-text equality group, and the "
-        "identifier list of each such group."
+        "identifier list of each such group. Two passages differing only in "
+        "wrapping are one passage; two differing only in case or in a trailing "
+        "mark are not, so the count is a lower bound and the containment measure "
+        "below is where a reprint that punctuates differently is found."
     ),
     "lexical_containment_slots": (
         "Slots whose ordered word shingles are at least the threshold present in "
@@ -419,15 +428,19 @@ def normalize(value: str) -> str:
 def normalized_text(value: str) -> str:
     """The passage's text as two passages are compared for exact equality.
 
-    Case and wrapping change no evidence, so both are collapsed and nothing else
-    is. Word order, a repeated word, a sign, a decimal point, an operator, and a
-    script with no spaces in it are all kept: each of them is a difference a
-    reader would call a different claim, and a measure that discards them cannot
-    tell one passage from the other. The canonical text is never rewritten; this
-    is a comparison key and nothing else.
+    Wrapping changes no evidence, so runs of whitespace collapse to one space and
+    the ends are trimmed. Nothing else is, because every remaining character can
+    be part of a claim: letter case (``V`` against ``v``, ``k`` against ``K``),
+    word order, a repeated word, a sign, a decimal separator, an operator, a
+    closing mark (``5!`` is not ``5``, and a factorial is not a sentence), and a
+    script with no spaces in it. Collapsing any of those turns two passages into
+    one and reports an exact duplicate the corpus does not hold, which is a
+    mislabelled claim rather than a conservative reading. A measure that under-
+    reports is repairable; one that invents a duplicate is not. The canonical text
+    is never rewritten; this is a comparison key and nothing else.
     """
 
-    return WHITESPACE.sub(" ", value).strip().casefold().rstrip(".,;:!?")
+    return WHITESPACE.sub(" ", value).strip()
 
 
 def content_tokens(value: str) -> set[str]:
@@ -610,8 +623,10 @@ def duplicate_measures(
     """What one result list contains, as distinct from how well it ranked.
 
     Two passages are exact duplicates when their normalized text is equal as an
-    ordered string, so a reordered passage, a repeated word, a changed sign, and
-    a script without spaces in it are four differences rather than none.
+    ordered string, where normalization collapses whitespace and nothing else, so
+    a reordered passage, a repeated word, a changed letter case, a changed sign, a
+    dropped factorial, and a script without spaces in it are six differences
+    rather than none.
     ``lexical_containment_slots`` is the lenient companion: a slot whose ordered
     word shingles are mostly present in another returned passage, where the two
     agree about every figure, operator, and negation. It is a statement about
@@ -619,7 +634,9 @@ def duplicate_measures(
     what the reranker and the reader are for. The exact count is reported beside
     it because exact equality on a corpus that reprints material reads a
     confident low number, and a measure that can only read low is not evidence of
-    an absence.
+    an absence. It now also reads low on a passage whose case or closing mark
+    varies from its reprint's, which is the direction to err in: a missed
+    duplicate is a weaker claim than an invented one.
 
     A returned passage the generation does not hold, or one whose stored text is
     empty, is reported as missing coverage and the four counts become ``None``.
