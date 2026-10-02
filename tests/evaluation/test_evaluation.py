@@ -458,3 +458,65 @@ def _measures(spans: int, exact: int, same_source: int) -> dict:
         "same_source_pairs": same_source,
         "returned_chunk_ids": ["c1", "c2", "c3"],
     }
+
+
+def test_dense_gate_measures_read_the_engines_own_counts(evaluation) -> None:
+    gate = {
+        "minimum_cosine_similarity": 0.72,
+        "relative_margin": 0.1,
+        "best_cosine_similarity": 0.7312,
+        "admitted_below_floor": 4,
+        "rejected_below_floor": 118,
+    }
+    assert evaluation._dense_gate_measures(gate) == {
+        "dense_rejected_below_floor": 118,
+        "dense_admitted_below_floor": 4,
+        "dense_best_cosine_similarity": 0.7312,
+    }
+
+
+def test_a_search_with_no_gate_block_reports_none_rather_than_zero(evaluation) -> None:
+    # BM25 never opens the dense gate, so the block is absent. Zero rejections
+    # there would be indistinguishable from a gate that rejected nothing.
+    assert evaluation._dense_gate_measures({}) == {
+        "dense_rejected_below_floor": None,
+        "dense_admitted_below_floor": None,
+        "dense_best_cosine_similarity": None,
+    }
+
+
+def test_withheld_candidates_says_nothing_about_the_gate(evaluation) -> None:
+    # The two counts are about different things, and conflating them is how a run
+    # record comes to report a gate as inert.
+    measures = evaluation._dense_gate_measures({"rejected_below_floor": 118})
+    assert measures["dense_rejected_below_floor"] == 118
+    assert measures["dense_admitted_below_floor"] == 0
+
+
+def test_summarize_counts_the_queries_where_the_gate_acted(evaluation) -> None:
+    runs = [
+        {**_run("hybrid", "quote", hit=True, rank=1.0), **_gate(0)},
+        {**_run("hybrid", "paraphrase", hit=True, rank=1.0), **_gate(37)},
+        {**_run("hybrid", "entity", hit=True, rank=1.0), **_gate(0)},
+    ]
+    overall = evaluation.summarize(runs, 10)["hybrid"]["overall"]
+    assert overall["mean_dense_rejected_below_floor"] == pytest.approx(37 / 3)
+    assert overall["mean_dense_admitted_below_floor"] == pytest.approx(0.0)
+    assert overall["queries_with_dense_rejections"] == 1
+
+
+def test_summarize_reports_the_gate_as_unmeasured_for_a_mode_without_it(
+    evaluation,
+) -> None:
+    runs = [_run("bm25", "quote", hit=True, rank=1.0)]
+    overall = evaluation.summarize(runs, 10)["bm25"]["overall"]
+    assert overall["mean_dense_rejected_below_floor"] is None
+    assert overall["queries_with_dense_rejections"] is None
+
+
+def _gate(rejected: int) -> dict:
+    return {
+        "dense_rejected_below_floor": rejected,
+        "dense_admitted_below_floor": 0,
+        "dense_best_cosine_similarity": 0.8,
+    }
