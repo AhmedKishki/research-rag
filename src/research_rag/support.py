@@ -24,15 +24,6 @@ from .dense import (
     DenseTokenAuditUnavailable,
 )
 from .embeddings import EmbeddingModel
-from .extraction import (
-    chunk_health_flags,
-    has_searchable_alphanumeric_content,
-    normalize_inline_text,
-    normalize_reading_text,
-    text_corruption_reasons,
-    text_health_reasons,
-    text_script_notes,
-)
 from .generation import (
     value_fingerprint,
 )
@@ -43,6 +34,18 @@ from .sources import (
     normalize_metadata,
     sha256_file,
     stable_source_id,
+)
+from .text_normalization import (
+    normalize_inline_text,
+    normalize_reading_text,
+)
+from .text_quality import (
+    EXTRACTION_ARTIFACT_TOKEN,
+    chunk_health_flags,
+    has_searchable_alphanumeric_content,
+    text_corruption_reasons,
+    text_health_reasons,
+    text_script_notes,
 )
 
 
@@ -880,7 +883,7 @@ def _enrich_chunks(
 
 def _is_extraction_artifact(chunk: dict[str, Any]) -> bool:
     quality_flags = {str(item) for item in chunk.get("quality_flags", [])}
-    return "extraction_artifact" in quality_flags or not (
+    return EXTRACTION_ARTIFACT_TOKEN in quality_flags or not (
         has_searchable_alphanumeric_content(_chunk_text(chunk))
     )
 

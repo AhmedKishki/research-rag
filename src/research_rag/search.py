@@ -10,11 +10,6 @@ import numpy as np
 
 from .artifact_lookup import ArtifactLookup, VectorByContentsMapping
 from .dense import DenseSearchHit, RerankerUnavailable
-from .extraction import (
-    CHUNK_FLAG_CORRUPT_TEXT,
-    CHUNK_FLAG_EXTRACTION_ARTIFACT,
-    text_corruption_reasons,
-)
 from .storage import iter_jsonl
 from .support import (
     DEFAULT_RETRIEVAL_METHOD,
@@ -39,6 +34,11 @@ from .support import (
     _source_diverse_selection,
     document_frequencies,
     passage_token_count,
+)
+from .text_quality import (
+    CHUNK_FLAG_CORRUPT_TEXT,
+    CHUNK_FLAG_EXTRACTION_ARTIFACT,
+    text_corruption_reasons,
 )
 
 

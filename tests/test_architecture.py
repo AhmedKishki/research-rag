@@ -49,10 +49,6 @@ CROSS_SURFACE = {
     "surfaces/ui.py": frozenset({"surfaces/cli.py", "surfaces/mcp.py"}),
 }
 
-# `python -m research_rag` exists to run the command line, so this module is an
-# entry point rather than core and is expected to import the surface layer.
-ENTRY_MODULES = frozenset({"__main__.py"})
-
 # `mcp` stays listed beside `fastmcp` because the gateway is reached over MCP, so an
 # engine module importing either has changed the architecture.
 WEB_IMPORTS = frozenset({"fastmcp", "mcp", "pydantic", "starlette", "uvicorn"})

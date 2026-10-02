@@ -24,14 +24,8 @@ from research_rag.extraction import (
     _TextBlock,
     extract_scanned_pdf_pages,
     extract_sources,
-    has_searchable_alphanumeric_content,
-    normalize_inline_text,
-    normalize_reading_text,
     prepare_scanned_pdf,
     scan_pdf_pages,
-    text_corruption_reasons,
-    text_health_reasons,
-    text_script_notes,
 )
 from research_rag.sources import (
     SourcePolicyError,
@@ -39,6 +33,16 @@ from research_rag.sources import (
     scan_sources,
     sha256_file,
     stable_source_id,
+)
+from research_rag.text_normalization import (
+    normalize_inline_text,
+    normalize_reading_text,
+)
+from research_rag.text_quality import (
+    has_searchable_alphanumeric_content,
+    text_corruption_reasons,
+    text_health_reasons,
+    text_script_notes,
 )
 from research_rag.ultrarag import create_vanilla_transport
 

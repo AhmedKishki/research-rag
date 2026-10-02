@@ -151,6 +151,14 @@ def lean_passage_context(payload: Mapping[str, Any]) -> dict[str, Any]:
 INGEST = "ingest"
 RESTART_APP = "restart_app"
 
+# The conditions a surface reports about itself rather than about a corpus. Both
+# are written by `blocked_answers`, both name a command a reader runs in a
+# terminal, and neither is closed by a tool: a server blocked this way declares
+# `status` and nothing else, so naming `ingest` would ask for a call that is not
+# on this surface. A health check that blocks is not in this set, because the
+# corpus is still there and `ingest` is still the call that serves it.
+SURFACE_CONDITIONS = frozenset({"project.initialised", "app.serving"})
+
 
 def _required_actions(payload: Mapping[str, Any]) -> list[str]:
     """Return the calls that close the gap between this generation and the corpus.
@@ -161,12 +169,19 @@ def _required_actions(payload: Mapping[str, Any]) -> list[str]:
     exclusion the indexes still hold, and a build that stopped part-way. The
     answer names them once.
 
-    A project that does not exist needs none of them: there is nothing to
-    rebuild, its condition is in `blocked_by`, and its remedy is a command the
-    agent cannot call as a tool.
+    A surface that cannot act needs none of them: a project that does not exist,
+    and a project whose app is not running, both have their condition in
+    `blocked_by` and their remedy in a command the agent cannot call as a tool.
+    Naming a rebuild for either asks for a call this surface does not serve.
     """
 
     if payload.get("project_initialised") is False:
+        return []
+    if any(
+        str(entry.get("check")) in SURFACE_CONDITIONS
+        for entry in payload.get("blocked_by") or ()
+        if isinstance(entry, Mapping)
+    ):
         return []
     changes = payload.get("changes") or {}
     actions: list[str] = []

@@ -774,13 +774,13 @@ def test_stopping_asks_first_and_kills_only_the_survivors(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     sent: list[tuple[int, int]] = []
-    alive = {2}
+    still_running = {2}
 
     monkeypatch.setattr(cli_module, "STOP_GRACE_SECONDS", 0)
     monkeypatch.setattr(
         cli_module.os, "kill", lambda pid, number: sent.append((pid, number))
     )
-    monkeypatch.setattr(cli_module, "_alive", lambda pid: pid in alive)
+    monkeypatch.setattr(cli_module, "alive", lambda pid: pid in still_running)
 
     forced = _terminate([1, 2])
 

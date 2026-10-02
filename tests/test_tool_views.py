@@ -214,6 +214,55 @@ def test_status_names_a_blocker_and_its_remedy() -> None:
     assert lean["degraded"][0]["check"] == "lock"
 
 
+def test_a_blocked_surface_names_no_call_an_agent_cannot_make() -> None:
+    """A server blocked on the app declares `status` and nothing else.
+
+    Its answer says the project exists and its app is not running, and the remedy is
+    a command to run in a terminal. Naming `ingest` alongside that asks for a tool
+    this surface does not serve, so the answer carries only the blocker.
+    """
+
+    lean = present_tool_response(
+        "status",
+        _status_payload(
+            ready=False,
+            project_initialised=True,
+            blocked_by=[
+                {
+                    "check": "app.serving",
+                    "reason": "An app runs in a terminal and ends when that "
+                    "terminal closes.",
+                    "remedy": "research-rag --project 'AI and fetishism' start",
+                }
+            ],
+        ),
+        detail=LEAN_TOOL_DETAIL,
+    )
+
+    assert lean["ready"] is False
+    assert lean["blocked_by"][0]["check"] == "app.serving"
+    assert "requires" not in lean
+
+    # A health check that blocks is a different condition: the corpus is there and
+    # `ingest` is still the call that serves it.
+    blocked_by_health = present_tool_response(
+        "status",
+        _status_payload(
+            ready=False,
+            blocked_by=[
+                {
+                    "check": "vanilla_runtime",
+                    "reason": "The tree differs at servers/stray.pyc.",
+                    "remedy": "research-rag doctor --repair-runtime",
+                }
+            ],
+        ),
+        detail=LEAN_TOOL_DETAIL,
+    )
+
+    assert blocked_by_health["requires"] == ["ingest"]
+
+
 def test_status_keeps_dependencies_out_of_the_answer_when_there_are_none() -> None:
     lean = present_tool_response("status", _status_payload(), detail=LEAN_TOOL_DETAIL)
 

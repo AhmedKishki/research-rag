@@ -21,6 +21,7 @@ import pytest
 
 import research_rag.surfaces.cli as cli_module
 from research_rag import config as config_module
+from research_rag import process as process_module
 from research_rag import registry
 from research_rag import update as update_module
 from research_rag.release import FOUND, NONE, Release, ReleaseSet
@@ -50,15 +51,15 @@ class Recorder:
 
     def __call__(
         self, argv: Any, *, cwd: Path | None = None
-    ) -> update_module.CommandResult:
+    ) -> process_module.CommandResult:
         command = tuple(str(part) for part in argv)
         self.calls.append(command)
         answer = self.answers.get(command)
         if answer is None:
-            return update_module.CommandResult(127, "", f"{command[0]} is not here")
-        if isinstance(answer, update_module.CommandResult):
+            return process_module.CommandResult(127, "", f"{command[0]} is not here")
+        if isinstance(answer, process_module.CommandResult):
             return answer
-        return update_module.CommandResult(0, str(answer), "")
+        return process_module.CommandResult(0, str(answer), "")
 
     def ran(self, *command: str) -> bool:
         return tuple(command) in self.calls
@@ -410,7 +411,7 @@ def test_applying_runs_the_plan_and_reports_each_step(tmp_path: Path) -> None:
 def test_a_failing_step_stops_the_update_and_names_the_command(tmp_path: Path) -> None:
     run = Recorder(
         {
-            ("git", "checkout", "--detach", "v0.2.0"): update_module.CommandResult(
+            ("git", "checkout", "--detach", "v0.2.0"): process_module.CommandResult(
                 1, "", "error: Your local changes to the following files would be lost"
             )
         }
@@ -549,7 +550,7 @@ def test_an_install_at_the_version_the_tool_offers_has_nothing_to_do() -> None:
 def test_a_tool_that_cannot_be_asked_is_offline_rather_than_a_failure() -> None:
     run = Recorder(
         {
-            "uv tool list --outdated": update_module.CommandResult(
+            "uv tool list --outdated": process_module.CommandResult(
                 2, "", "error: network disabled"
             )
         }
@@ -744,7 +745,7 @@ def test_applying_stops_every_app_and_prints_the_command_that_starts_it_again(
     )
     stopped = Recorder()
     applied = Recorder({"git checkout --detach v0.2.0": "HEAD is now at abc\n"})
-    monkeypatch.setattr(update_module, "subprocess_runner", stopped)
+    monkeypatch.setattr(process_module, "subprocess_runner", stopped)
     monkeypatch.setattr(
         update_module,
         "apply_plan",
@@ -791,7 +792,7 @@ def test_applying_with_nothing_to_apply_stops_nothing(
         ),
     )
     run = Recorder()
-    monkeypatch.setattr(update_module, "subprocess_runner", run)
+    monkeypatch.setattr(process_module, "subprocess_runner", run)
 
     with pytest.raises(ResearchError) as refused:
         _run("update", "--apply")

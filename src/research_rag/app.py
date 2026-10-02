@@ -31,6 +31,17 @@ from starlette.types import Receive, Scope, Send
 
 from .config import ConfigurationError, ResearchConfig
 from .service import ResearchService
+from .state_files import (
+    PID_FILE,
+    PORT_FILE,
+    TTY_FILE,
+)
+from .state_files import (
+    process_alive as alive,
+)
+from .state_files import (
+    recorded_pid as _recorded_pid,
+)
 from .ultrarag import LazyGateway, VanillaUltraRAG
 
 LOGGER = logging.getLogger(__name__)
@@ -47,12 +58,6 @@ CLIENT_IDLE_SECONDS = 90.0
 # The header the stdio bridge sets so an agent is identifiable by name. A direct
 # HTTP client that does not set it is identified by its peer address.
 CLIENT_NAME_HEADER = "x-research-rag-client"
-PORT_FILE = "research-rag-ui.port"
-PID_FILE = "research-rag-ui.pid"
-# Which terminal the app is attached to, or absent when it has none. A detached
-# app and one a reader is watching look identical from another terminal
-# otherwise, and the difference decides whether Ctrl-C there closes anything.
-TTY_FILE = "research-rag-ui.tty"
 
 
 def _own_tty() -> str | None:
@@ -283,6 +288,14 @@ class ClientRegistry:
         return client
 
     def report(self) -> list[dict[str, Any]]:
+        """Every client this app has seen, attached or not.
+
+        A client stays in the listing after it is dropped so the outcome of a
+        disconnect is readable: its `attached` flag says it is gone and
+        `detached_reason` says why. Recency alone decides `attached`, so a session
+        whose process has ended reads as detached and is still listed.
+        """
+
         return [client.report() for client in self._clients.values()]
 
     @property
@@ -373,18 +386,6 @@ def _claim_loopback_port(host: str, port: int) -> socket.socket:
         sock.close()
         raise
     return sock
-
-
-def alive(pid: int) -> bool:
-    """Whether a process still exists, without signalling it."""
-
-    try:
-        os.kill(pid, 0)
-    except ProcessLookupError:
-        return False
-    except PermissionError:
-        return True
-    return True
 
 
 class App:
@@ -633,14 +634,11 @@ def recorded_pid(config: ResearchConfig) -> int | None:
     """Return the pid a running app recorded for this project, if it is still alive.
 
     The companion to `recorded_port`: a pid file survives a terminal that closed,
-    so the process behind it is checked rather than trusted.
+    so the process behind it is checked rather than trusted. The reader is
+    `state_files`, and this is where a resolved config becomes a state root for it.
     """
 
-    try:
-        pid = int((config.state_root / PID_FILE).read_text(encoding="utf-8").strip())
-    except (OSError, ValueError):
-        return None
-    return pid if alive(pid) else None
+    return _recorded_pid(config.state_root)
 
 
 def running_url(config: ResearchConfig) -> str | None:
@@ -664,6 +662,7 @@ __all__ = [
     "Surfaces",
     "alive",
     "has_terminal",
+    "recorded_pid",
     "recorded_port",
     "running",
     "running_url",

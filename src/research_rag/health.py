@@ -19,6 +19,7 @@ from . import version as version_module
 from .config import ResearchConfig, project_command, runtime_root_claim_problem
 from .embeddings import resolve_embedding_model
 from .rerankers import resolve_reranker_model
+from .state_files import LOCK_FILE, process_alive
 
 OK = "ok"
 WARN = "warn"
@@ -295,19 +296,8 @@ def _vanilla_runtime_check(config: ResearchConfig) -> Check:
     return check
 
 
-def _process_alive(pid: int) -> bool:
-    try:
-        os.kill(pid, 0)
-    except ProcessLookupError:
-        return False
-    except OSError:
-        # A process owned by another user exists and cannot be probed further.
-        return True
-    return True
-
-
 def _lock_check(config: ResearchConfig) -> Check:
-    path = config.state_root / "project.lock"
+    path = config.state_root / LOCK_FILE
     if not path.is_file():
         return Check("lock", OK, f"No other process holds {path}.")
     try:
@@ -318,7 +308,7 @@ def _lock_check(config: ResearchConfig) -> Check:
     except OSError as exc:
         return Check("lock", WARN, f"The project lock cannot be read: {exc}")
     owner = int(recorded) if recorded.isdigit() else None
-    if owner is None or owner == os.getpid() or not _process_alive(owner):
+    if owner is None or owner == os.getpid() or not process_alive(owner):
         return Check(
             "lock",
             OK,

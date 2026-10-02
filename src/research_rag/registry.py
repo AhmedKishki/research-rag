@@ -27,6 +27,7 @@ from pathlib import Path
 from typing import Any
 
 from .settings import USER_CONFIG_DIRECTORY
+from .state_files import PORTABLE_DIRECTORY
 from .support import ResearchError, _utc_now
 
 # The account-wide record, beside the settings that already live there. The name
@@ -59,7 +60,7 @@ class RegisteredProject:
 
     @property
     def descriptor_path(self) -> Path:
-        return self.project_root / ".research-rag" / "project.json"
+        return self.project_root / PORTABLE_DIRECTORY / "project.json"
 
     def initialised(self) -> bool:
         """Whether the directory this record points at holds a project.
@@ -257,7 +258,7 @@ def registered_at_label(project: RegisteredProject) -> str:
 
 
 def _attached_to(config: Any) -> str | None:
-    from .app import TTY_FILE
+    from .state_files import TTY_FILE
 
     try:
         terminal = (config.state_root / TTY_FILE).read_text(encoding="utf-8").strip()
@@ -359,7 +360,7 @@ def account_projects() -> dict[str, Any]:
             "project_id": project.project_id,
             "project_root": str(project.project_root),
             "registered_at": registered_at_label(project),
-            "root_exists": (project.project_root / ".research-rag").is_dir(),
+            "root_exists": (project.project_root / PORTABLE_DIRECTORY).is_dir(),
             "app": {"running": False, "url": None, "port": None},
             "attached_clients": 0,
         }

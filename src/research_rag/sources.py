@@ -4,10 +4,11 @@ import hashlib
 import re
 from collections import Counter
 from dataclasses import dataclass
-from pathlib import Path, PurePosixPath
+from pathlib import Path
 from typing import Any
 
 from .config import ResearchConfig
+from .normalized_paths import normalized_relative_path
 from .settings import LANGUAGE_PATTERN
 
 ALLOWED_SOURCE_EXTENSIONS = frozenset({".epub", ".pdf"})
@@ -47,15 +48,7 @@ class SourceScan:
 
 
 def stable_source_id(project_id: str, source_relative_path: str) -> str:
-    relative = PurePosixPath(source_relative_path)
-    if (
-        not project_id
-        or source_relative_path in {"", "."}
-        or "\\" in source_relative_path
-        or relative.is_absolute()
-        or ".." in relative.parts
-        or relative.as_posix() != source_relative_path
-    ):
+    if not project_id or normalized_relative_path(source_relative_path) is None:
         raise SourcePolicyError("Cannot create a source ID from an invalid identity")
     identity = f"{project_id}\0{source_relative_path}".encode()
     return f"src_{hashlib.sha256(identity).hexdigest()[:24]}"

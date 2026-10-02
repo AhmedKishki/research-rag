@@ -18,11 +18,11 @@ from research_rag.artifact_lookup import (
     ensure_artifact_lookup,
     validate_artifact_lookup,
 )
-from research_rag.extraction import (
+from research_rag.storage import write_jsonl
+from research_rag.text_quality import (
     CHUNK_FLAG_EXTRACTION_ARTIFACT,
     chunk_health_flags,
 )
-from research_rag.storage import write_jsonl
 
 
 def _artifacts(root: Path) -> tuple[Path, Path, Path]:

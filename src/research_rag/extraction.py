@@ -1,9 +1,20 @@
+"""Bibliographic inference and reading-order assembly for PDF and EPUB sources.
+
+The originals are the quote authority, so this module never rewrites a source and
+never writes to `sources/`. It imports PyMuPDF, ebooklib, and BeautifulSoup at
+module level and therefore cannot be imported where the retrieval stack is absent.
+
+Normalization of extracted text lives in `text_normalization`, and the reasons a
+text is withheld live in `text_quality`. Both are pure string modules, so a
+caller that only needs to know whether text is usable imports neither of the
+document libraries.
+"""
+
 from __future__ import annotations
 
 import hashlib
 import math
 import re
-import unicodedata
 from collections import Counter
 from dataclasses import dataclass
 from statistics import median
@@ -16,6 +27,18 @@ from ebooklib import epub
 
 from .settings import BM25_STOPWORD_LANGUAGES, bm25_stopwords
 from .sources import SourceFile, sha256_file
+from .text_normalization import (
+    HORIZONTAL_SPACE,
+    LIST_ITEM_PATTERN,
+    ends_sentence,
+    normalize_inline_text,
+    normalize_reading_text,
+)
+from .text_quality import (
+    EXTRACTION_ARTIFACT_TOKEN,
+    has_searchable_alphanumeric_content,
+    text_health_reasons,
+)
 
 pymupdf.no_recommend_layout()
 
@@ -24,15 +47,6 @@ class ExtractionError(RuntimeError):
     pass
 
 
-_HORIZONTAL_SPACE = re.compile(r"[\t\f\v \u00a0]+")
-_LIST_ITEM = re.compile(r"^(?:[-*•]|\d+[.)]|[A-Za-z][.)])\s+")
-_CONTROL_CHARACTERS = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]")
-# Compatibility folding is limited to the two blocks English scholarship
-# produces: Mathematical Alphanumeric Symbols (letters from formula fonts,
-# otherwise unmatchable by typed queries) and Alphabetic Presentation Forms
-# (fi/fl/ff ligatures). Global NFKC would also fold superscripts, subscripts,
-# and symbols that carry meaning in citations.
-_FOLDABLE_CHARACTERS = re.compile(r"[\U0001d400-\U0001d7ff\ufb00-\ufb06\ufb13-\ufb17]")
 _DOI = re.compile(r"\b10\.\d{4,9}/[-._;()/:A-Z0-9]+", re.IGNORECASE)
 _URL = re.compile(r"^(?:https?://|www\.|(?:dx\.)?doi\.org/)", re.IGNORECASE)
 _PAGE_NUMBER = re.compile(
@@ -91,8 +105,6 @@ _AUTHOR_AFFILIATION = re.compile(
 _AUTHOR_MARKER = re.compile(r"(?:\d+(?:\s*,\s*\d+)*|[*∗†‡§])+$")
 _FIGURE_CAPTION = re.compile(r"^(?:fig(?:ure)?\.?)\s*(?:\d|[ivxlcdm])", re.IGNORECASE)
 _TABLE_CAPTION = re.compile(r"^table\s*(?:\d|[ivxlcdm])", re.IGNORECASE)
-_MOJIBAKE_MARKERS = ("â€", "ï¿½", "ðŸ")
-_MOJIBAKE_LATIN1_PAIR = re.compile(r"(?:Ã|Â)[\u0080-\u00bf]")
 _EPUB_HEADING_ELEMENTS = frozenset({"h1", "h2", "h3", "h4", "h5", "h6"})
 _EPUB_CONTENT_ELEMENTS = frozenset({"p", "li", "blockquote", "table"})
 _EPUB_SEMANTIC_ELEMENTS = _EPUB_HEADING_ELEMENTS | _EPUB_CONTENT_ELEMENTS
@@ -115,210 +127,6 @@ class _TextBlock:
 class _Region:
     kind: str
     bbox: tuple[float, float, float, float]
-
-
-def _starts_with_alpha(value: str) -> bool:
-    for character in value:
-        if character.isalpha():
-            return True
-        if character.isdigit():
-            return False
-    return False
-
-
-def _ends_sentence(value: str) -> bool:
-    return value.rstrip("\"'”’)]}").endswith((".", "!", "?", "…", ":"))
-
-
-def _fold_compatibility_characters(value: str) -> str:
-    if not _FOLDABLE_CHARACTERS.search(value):
-        return value
-    return _FOLDABLE_CHARACTERS.sub(
-        lambda match: unicodedata.normalize("NFKC", match.group(0)),
-        value,
-    )
-
-
-def normalize_reading_text(value: str) -> str:
-    """Remove extraction layout wrapping without rewriting source prose."""
-
-    text = unicodedata.normalize("NFC", _fold_compatibility_characters(value))
-    text = text.replace("\r\n", "\n").replace("\r", "\n").replace("\u00ad", "")
-    text = _CONTROL_CHARACTERS.sub("", text)
-    paragraphs: list[str] = []
-    current = ""
-    separated = False
-    for raw_line in text.splitlines():
-        line = _HORIZONTAL_SPACE.sub(" ", raw_line).strip()
-        # PDF text spans sometimes leave a layout-only space after a hyphen
-        # even though the printed form is a normal hyphenated word.
-        line = re.sub(r"(?<=[^\W\d_])-\s+(?=[^\W\d_])", "-", line)
-        if not line:
-            separated = bool(current)
-            continue
-        if not current:
-            current = line
-        elif _LIST_ITEM.match(line) or (separated and _ends_sentence(current)):
-            paragraphs.append(current)
-            current = line
-        elif (
-            current.endswith("-")
-            and current[-2:-1].isalpha()
-            and _starts_with_alpha(line)
-        ):
-            current = current[:-1] + line
-        else:
-            current = f"{current} {line}"
-        separated = False
-    if current:
-        paragraphs.append(current)
-    return "\n\n".join(paragraphs)
-
-
-def normalize_inline_text(value: str) -> str:
-    return _HORIZONTAL_SPACE.sub(
-        " ", normalize_reading_text(value).replace("\n", " ")
-    ).strip()
-
-
-def _script_family(character: str) -> str | None:
-    """Script family for alphabetic text, resolved without a dependency."""
-
-    if not character.isalpha():
-        return None
-    name = unicodedata.name(character, "")
-    for prefix, family in (
-        ("LATIN ", "latin"),
-        ("CJK ", "cjk"),
-        ("IDEOGRAPHIC ", "cjk"),
-        ("HIRAGANA ", "japanese"),
-        ("KATAKANA ", "japanese"),
-        ("HANGUL ", "hangul"),
-        ("CYRILLIC ", "cyrillic"),
-        ("GREEK ", "greek"),
-        ("ARABIC ", "arabic"),
-        ("HEBREW ", "hebrew"),
-        ("ARMENIAN ", "armenian"),
-        ("DEVANAGARI ", "devanagari"),
-        ("BENGALI ", "bengali"),
-        ("GURMUKHI ", "gurmukhi"),
-        ("GUJARATI ", "gujarati"),
-        ("ORIYA ", "oriya"),
-        ("TAMIL ", "tamil"),
-        ("TELUGU ", "telugu"),
-        ("KANNADA ", "kannada"),
-        ("MALAYALAM ", "malayalam"),
-        ("SINHALA ", "sinhala"),
-        ("THAI ", "thai"),
-        ("LAO ", "lao"),
-        ("TIBETAN ", "tibetan"),
-        ("MYANMAR ", "myanmar"),
-        ("GEORGIAN ", "georgian"),
-        ("ETHIOPIC ", "ethiopic"),
-        ("CHEROKEE ", "cherokee"),
-        ("CANADIAN SYLLABICS ", "canadian_syllabics"),
-        ("MONGOLIAN ", "mongolian"),
-        ("THAANA ", "thaana"),
-        ("COPTIC ", "coptic"),
-    ):
-        if name.startswith(prefix):
-            return family
-    return name.split(" ", 1)[0].casefold() if name else "unknown"
-
-
-def _text_signals(value: str) -> tuple[list[str], list[str]]:
-    raw = unicodedata.normalize("NFC", value)
-    normalized = normalize_inline_text(raw)
-    if not normalized:
-        return [], []
-    replacement_count = normalized.count("\ufffd")
-    private_or_unassigned = sum(
-        unicodedata.category(character) in {"Co", "Cn", "Cs"}
-        for character in normalized
-    )
-    alphabetic = [character for character in normalized if character.isalpha()]
-    families = Counter(
-        family
-        for character in alphabetic
-        if (family := _script_family(character)) is not None
-    )
-    latin_count = families.get("latin", 0)
-    dominant_count = max(families.values(), default=0)
-
-    corruption: list[str] = []
-    mojibake = bool(
-        _MOJIBAKE_LATIN1_PAIR.search(raw)
-        or any(marker in raw for marker in _MOJIBAKE_MARKERS)
-    )
-    # One replacement character is only evidence of corruption when another
-    # corruption signal corroborates it. Script mixing must not corroborate,
-    # because that is how a legitimate foreign-language quotation was withheld.
-    corroborated = bool(private_or_unassigned or mojibake)
-    if replacement_count >= 2 or (replacement_count == 1 and corroborated):
-        corruption.append("replacement_characters")
-    if private_or_unassigned >= 2 or (
-        private_or_unassigned == 1 and replacement_count > 0
-    ):
-        corruption.append("private_or_unassigned_characters")
-    if mojibake:
-        corruption.append("known_mojibake")
-
-    notes: list[str] = []
-    if len(alphabetic) >= 20 and latin_count / len(alphabetic) < 0.50:
-        notes.append("non_latin_dominant")
-    if len(families) >= 4 and dominant_count / len(alphabetic) < 0.70:
-        notes.append("mixed_script_text")
-    return corruption, notes
-
-
-def text_corruption_reasons(value: str) -> list[str]:
-    """The corruption evidence that withholds extraction text.
-
-    Only incoherent output is withheld: replacement characters, private-use or
-    unassigned code points, and known damaged encoding sequences. Script mixing and
-    non-Latin dominance are notes, so quotations stay retrievable.
-    """
-
-    return _text_signals(value)[0]
-
-
-def text_script_notes(value: str) -> list[str]:
-    """Advisory non-Latin or mixed-script notes that never withhold text."""
-
-    return _text_signals(value)[1]
-
-
-def has_searchable_alphanumeric_content(value: str) -> bool:
-    return any(character.isalnum() for character in normalize_inline_text(value))
-
-
-def text_health_reasons(value: str) -> list[str]:
-    reasons = text_corruption_reasons(value)
-    normalized = normalize_inline_text(value)
-    if normalized and not has_searchable_alphanumeric_content(normalized):
-        reasons.append("symbol_only")
-    return reasons
-
-
-# Retrieval rejects a candidate for exactly two reasons, and both are properties
-# of the chunk text plus its stored quality flags rather than of the query. They
-# are computed once when the artifact lookup is built and stored as a bitmask,
-# which removes the per-query text scans from the candidate gate.
-CHUNK_FLAG_CORRUPT_TEXT = 1
-CHUNK_FLAG_EXTRACTION_ARTIFACT = 2
-
-
-def chunk_health_flags(text: str, *, quality_flags: object = None) -> int:
-    """A precomputed verdict: an extraction artifact, or has no searchable
-    alphanumeric content. Mirrors the query-time check, so counters cannot change.
-    """
-    flags = 0
-    if text_corruption_reasons(text):
-        flags |= CHUNK_FLAG_CORRUPT_TEXT
-    stored = {str(item) for item in quality_flags or ()}
-    if "extraction_artifact" in stored or not has_searchable_alphanumeric_content(text):
-        flags |= CHUNK_FLAG_EXTRACTION_ARTIFACT
-    return flags
 
 
 def _normalize_text_list(values: list[Any]) -> list[str]:
@@ -400,7 +208,7 @@ def _author_names(value: str) -> list[str]:
         )
     ):
         return []
-    if _ends_sentence(cleaned) or len(cleaned.split()) > 32:
+    if ends_sentence(cleaned) or len(cleaned.split()) > 32:
         return []
 
     has_list_separator = bool(re.search(r"\s(?:&|and)\s|;", cleaned, re.IGNORECASE))
@@ -614,7 +422,7 @@ def _page_blocks(page: pymupdf.Page) -> list[_TextBlock]:
         sizes: list[float] = []
         for line in block.get("lines", []):
             value = _pdf_line_text(line.get("spans", []))
-            value = _HORIZONTAL_SPACE.sub(" ", value).strip()
+            value = HORIZONTAL_SPACE.sub(" ", value).strip()
             if value:
                 lines.append(value)
             sizes.extend(
@@ -1096,7 +904,7 @@ def _quality_flags(text: str, kind: str) -> list[str]:
     if not has_searchable_alphanumeric_content(normalized) or (
         kind == "prose" and alphabetic < 3
     ):
-        flags.append("extraction_artifact")
+        flags.append(EXTRACTION_ARTIFACT_TOKEN)
     return flags
 
 
@@ -1107,7 +915,7 @@ def _split_prose_and_lists(
     for block in blocks:
         populated_lines = [line for line in block.lines if line.strip()]
         list_lines = sum(
-            bool(_LIST_ITEM.match(line.strip())) for line in populated_lines
+            bool(LIST_ITEM_PATTERN.match(line.strip())) for line in populated_lines
         )
         kind = (
             "list"
