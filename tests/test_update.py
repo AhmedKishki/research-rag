@@ -828,11 +828,6 @@ def test_the_version_flag_and_update_report_the_same_numbers(
     assert printed.splitlines() == [
         f"research-rag {version_block()['app']}",
         f"installed {version_block()['installed']}",
-        (
-            f"UI {version_block()['ui']}"
-            if version_block()["ui"]
-            else "UI not installed"
-        ),
         f"restart_required {str(version_block()['restart_required']).lower()}",
     ]
 

@@ -1,0 +1,694 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="color-scheme" content="light dark">
+    <meta name="description" content="Local evidence retrieval for an UltraRAG MCP knowledge base.">
+    <title>UltraRAG MCP</title>
+    <link rel="stylesheet" href="/assets/app.css">
+    <script src="/assets/app.js" defer></script>
+  </head>
+  <body>
+    <a class="skip-link" href="#workspace">Skip to knowledge-base workspace</a>
+
+    <header class="site-header">
+      <button
+        id="nav-toggle"
+        class="nav-toggle"
+        type="button"
+        aria-expanded="false"
+        aria-controls="workspace-nav"
+      >
+        <svg class="nav-toggle-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+          <path d="M4 7h16M4 12h16M4 17h16"></path>
+        </svg>
+        <span class="visually-hidden">Views</span>
+      </button>
+
+      <div id="application-name" class="brand-name">UltraRAG MCP</div>
+
+      <div class="project-identity">
+        <span id="project-label" class="project-label">Project</span>
+        <span id="project-name" class="project-name">Connecting…</span>
+        <span id="project-path" class="project-path"></span>
+        <span id="version-label" class="version-label" hidden></span>
+      </div>
+
+      <div class="header-actions">
+        <span id="connection-state" class="connection-state" data-state="loading">
+          <span class="status-dot" aria-hidden="true"></span>
+          <span>Connecting</span>
+        </span>
+        <button id="refresh-button" class="button button-quiet" type="button">
+          Refresh
+        </button>
+        <button id="export-button" class="button button-quiet" type="button" data-capability="bundle_export">
+          Export
+        </button>
+        <button id="import-button" class="button button-quiet" type="button" data-capability="bundle_import">
+          Import
+        </button>
+        <button id="ingest-button" class="button button-primary" type="button" data-capability="ingestion">
+          New generation
+        </button>
+      </div>
+    </header>
+
+    <div class="app-body">
+      <nav id="workspace-nav" class="workspace-sidebar" aria-label="Knowledge base views">
+        <div id="project-selector" class="project-selector" data-capability="projects" hidden>
+          <label class="project-selector-field" for="project-select">
+            <span class="field-label">Projects</span>
+            <select id="project-select" name="project"></select>
+          </label>
+          <p class="form-note project-selector-note">
+            Opening another project opens its own workspace in a new tab.
+          </p>
+          <p id="project-selector-message" class="form-note" hidden></p>
+          <p id="project-start-command" class="project-start-command" hidden></p>
+          <div class="project-actions">
+            <button id="project-open" class="button button-primary" type="button" hidden>
+              Open workspace
+            </button>
+            <button id="project-copy-command" class="text-button" type="button" hidden>
+              Copy start command
+            </button>
+          </div>
+        </div>
+
+        <ul class="sidebar-list">
+          <li class="sidebar-item is-active" data-view="search" data-capability="documents">
+            <button class="nav-item is-active" type="button" aria-current="page">
+              <svg class="nav-item-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+                <circle cx="11" cy="11" r="6.5"></circle>
+                <path d="m16 16 4.5 4.5"></path>
+              </svg>
+              <span class="nav-item-name">Search</span>
+            </button>
+          </li>
+          <li class="sidebar-item" data-view="sources" data-capability="sources">
+            <button class="nav-item" type="button">
+              <svg class="nav-item-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+                <path d="M4 6.5h16M4 12h16M4 17.5h10"></path>
+              </svg>
+              <span class="nav-item-name">
+                Sources <span id="source-nav-count" class="nav-item-count">0</span>
+              </span>
+            </button>
+          </li>
+          <li class="sidebar-item" data-view="config" data-capability="settings">
+            <button class="nav-item" type="button">
+              <svg class="nav-item-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+                <path d="M4 8h9M17.5 8H20"></path>
+                <circle cx="15" cy="8" r="2.25"></circle>
+                <path d="M4 16h3.5M12 16h8"></path>
+                <circle cx="9.5" cy="16" r="2.25"></circle>
+              </svg>
+              <span class="nav-item-name">Config</span>
+            </button>
+          </li>
+          <li class="sidebar-item" data-view="mcp" data-capability="clients">
+            <button class="nav-item" type="button">
+              <svg class="nav-item-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+                <path d="M9 3v5M15 3v5"></path>
+                <path d="M6 8h12v3a6 6 0 0 1-6 6 6 6 0 0 1-6-6z"></path>
+                <path d="M12 17v4"></path>
+              </svg>
+              <span class="nav-item-name">MCP</span>
+            </button>
+          </li>
+          <li class="sidebar-item" data-view="memory" data-capability="memory">
+            <button class="nav-item" type="button">
+              <svg class="nav-item-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+                <path d="M6 4h12v16l-6-4.5L6 20z"></path>
+              </svg>
+              <span class="nav-item-name">
+                <span id="memory-tab-label">Memory</span>
+                <span id="memory-nav-count" class="nav-item-count">0</span>
+              </span>
+            </button>
+          </li>
+        </ul>
+
+        <div class="sidebar-footer">
+          <span id="sidebar-project-label" class="sidebar-footer-label">Project</span>
+          <span id="sidebar-project-name" class="sidebar-footer-name">Connecting…</span>
+        </div>
+      </nav>
+
+      <div id="nav-scrim" class="nav-scrim" hidden></div>
+
+      <main id="workspace" class="workspace">
+        <section id="search-view" class="view-panel is-active" data-panel="search" data-capability="documents">
+          <form id="search-form" class="search-console">
+            <label class="query-field" for="query">
+              <span class="field-label">Query</span>
+              <textarea
+                id="query"
+                name="query"
+                rows="3"
+                required
+                placeholder="Enter a research question, phrase, name, or concept"
+              ></textarea>
+            </label>
+
+            <div class="search-controls">
+              <fieldset class="method-control" data-capability="retrieval_modes">
+                <legend>Retrieval</legend>
+                <label><input type="radio" name="retrieval_method" value="hybrid" checked><span>Hybrid</span></label>
+                <label><input type="radio" name="retrieval_method" value="bm25"><span>BM25</span></label>
+                <label><input type="radio" name="retrieval_method" value="dense"><span>Dense</span></label>
+              </fieldset>
+
+              <label class="compact-field" for="top-k">
+                <span>Results</span>
+                <select id="top-k" name="top_k">
+                  <option value="5">5</option>
+                  <option value="8" selected>8</option>
+                  <option value="12">12</option>
+                  <option value="20">20</option>
+                </select>
+              </label>
+
+              <label class="check-control" for="rerank" data-capability="reranking">
+                <input id="rerank" name="rerank" type="checkbox">
+                <span>
+                  <strong>CPU rerank</strong>
+                  <small>Slower, precision-focused</small>
+                </span>
+              </label>
+
+              <button id="search-button" class="button button-primary search-submit" type="submit">
+                Search
+              </button>
+            </div>
+
+            <details class="filter-drawer" data-capability="metadata_filters">
+              <summary>Limit by reviewed metadata</summary>
+              <div class="filter-fields">
+                <label for="category-filter">
+                  <span class="field-label">Categories</span>
+                  <input id="category-filter" type="text" placeholder="political economy, technology">
+                  <small>Comma separated; every category must match.</small>
+                </label>
+                <label for="keyword-filter">
+                  <span class="field-label">Keywords</span>
+                  <input id="keyword-filter" type="text" placeholder="labour, AI">
+                  <small>Comma separated; every keyword must match.</small>
+                </label>
+              </div>
+            </details>
+
+            <details class="filter-drawer" data-capability="category_partitions">
+              <summary>Limit to corpus partitions</summary>
+              <div class="filter-fields">
+                <label for="category-any-filter">
+                  <span class="field-label">Any of these categories</span>
+                  <input id="category-any-filter" type="text" placeholder="Commodity fetishism, Digital defetishism">
+                  <small>Comma separated; at least one category must match. Pick from the partition list beside the status.</small>
+                </label>
+              </div>
+            </details>
+
+            <details class="filter-drawer" data-capability="project_metadata">
+              <summary>Limit to projects</summary>
+              <div class="filter-fields">
+                <label for="project-any-filter">
+                  <span class="field-label">Any of these projects</span>
+                  <input id="project-any-filter" type="text" placeholder="ai-and-fetishism">
+                  <small>Comma separated; at least one project tag must match. Pick from the project list beside the status.</small>
+                </label>
+              </div>
+            </details>
+
+            <details class="filter-drawer" data-capability="bibliographic_filters">
+              <summary>Limit by author, work, or language</summary>
+              <div class="filter-fields">
+                <label for="author-filter">
+                  <span class="field-label">Any of these authors</span>
+                  <input id="author-filter" type="text" placeholder="Crawford, Gidwani">
+                  <small>Comma separated; at least one name must appear in the source's authors. A surname is enough.</small>
+                </label>
+                <label for="title-filter">
+                  <span class="field-label">Any of these titles</span>
+                  <input id="title-filter" type="text" placeholder="Atlas of AI, Waste Frontiers">
+                  <small>Comma separated; at least one phrase must appear in the source's title. A remembered fragment is enough.</small>
+                </label>
+                <label for="language-filter">
+                  <span class="field-label">Any of these languages</span>
+                  <input id="language-filter" type="text" placeholder="en, de">
+                  <small>Comma separated; at least one ISO 639 code must match the source's language. Pick from the language list beside the status.</small>
+                </label>
+              </div>
+            </details>
+
+            <details class="filter-drawer" data-capability="source_selection">
+              <summary>Limit to named sources</summary>
+              <div class="filter-fields">
+                <label for="include-source-filter">
+                  <span class="field-label">Only these sources</span>
+                  <input id="include-source-filter" type="text" placeholder="src_…, src_…">
+                  <small>Stable source IDs, comma separated. Empty searches every source. Use “Only this source” in the Sources view.</small>
+                </label>
+                <label for="exclude-source-filter">
+                  <span class="field-label">Exclude these sources</span>
+                  <input id="exclude-source-filter" type="text" placeholder="src_…, src_…">
+                  <small>Stable source IDs, comma separated. Empty excludes nothing. Use “Exclude from search” in the Sources view.</small>
+                </label>
+              </div>
+            </details>
+          </form>
+
+          <div id="search-summary" class="result-summary" hidden>
+            <h2 id="result-heading">Results</h2>
+            <div id="result-meta" class="result-meta"></div>
+          </div>
+
+          <div id="search-empty" class="empty-state">
+            Enter a query to search the current knowledge base.
+          </div>
+
+          <div id="results" class="results-list" aria-live="polite"></div>
+        </section>
+
+        <section id="sources-view" class="view-panel" data-panel="sources" data-capability="sources" hidden>
+          <div class="sources-toolbar">
+            <h2>Indexed sources</h2>
+            <label class="source-filter" for="source-filter">
+              <span class="visually-hidden">Filter sources</span>
+              <input id="source-filter" type="search" placeholder="Filter by title, author, category…">
+            </label>
+          </div>
+
+          <div id="source-list" class="source-list" aria-live="polite"></div>
+
+          <section id="excluded-section" class="excluded-section" hidden>
+            <div class="section-heading-row">
+              <h3>Excluded sources</h3>
+              <span id="excluded-count" class="count-badge">0</span>
+            </div>
+            <div id="excluded-list" class="excluded-list"></div>
+          </section>
+        </section>
+
+        <section id="config-view" class="view-panel" data-panel="config" data-capability="settings" hidden>
+          <div id="settings-panel" class="settings-panel">
+            <h2>Settings</h2>
+            <p class="form-note measure">
+              The values this server uses, where each came from, and what changing it
+              costs. A value the server set outside this project is shown as it is
+              and cannot be edited here.
+            </p>
+            <p id="settings-message" class="form-note" hidden></p>
+            <p id="settings-notice" class="notice-inline" hidden></p>
+            <form id="settings-form" class="settings-form">
+              <div id="settings-sections" class="settings-sections"></div>
+              <div class="sql-actions">
+                <button id="settings-submit" class="button button-primary" type="submit" disabled>Save changes</button>
+                <button id="settings-reload" class="button button-quiet" type="button">Reload settings</button>
+                <small class="sql-write-note">The server decides which values it will accept, and refuses anything else.</small>
+              </div>
+            </form>
+          </div>
+        </section>
+
+        <section id="mcp-view" class="view-panel" data-panel="mcp" data-capability="clients" hidden>
+          <h2>MCP</h2>
+          <p class="form-note measure">
+            Where this app serves agents, which agents are attached to it now, and
+            the entry that points a new one at it.
+          </p>
+
+          <div id="client-summary" class="partition-summary">
+            <h3>Attached clients</h3>
+            <p class="form-note measure">Agents connected to this app over MCP. Disconnecting one ends its session; the client owns the process and decides whether to come back.</p>
+            <div id="client-chips" class="partition-chips"></div>
+          </div>
+
+          <div id="agent-endpoint" class="partition-summary">
+            <h3>Agent endpoint</h3>
+            <p class="form-note measure">The address an MCP client that can open a socket is given. It is served by the app this page belongs to.</p>
+            <div class="sql-actions">
+              <p id="agent-url" class="dialog-source-name"></p>
+              <button id="agent-url-copy" class="text-button" type="button" disabled>Copy endpoint</button>
+            </div>
+          </div>
+
+          <div id="agent-entry-summary" class="partition-summary" data-capability="agent_entry">
+            <h3>Client entry</h3>
+            <p class="form-note measure">
+              For a client that cannot open a socket. Copy it into that client's own
+              configuration; it names the project rather than its directory, so one
+              entry works on every machine holding the project.
+            </p>
+            <pre id="agent-entry" class="standing-document"></pre>
+            <div class="sql-actions">
+              <button id="agent-entry-copy" class="text-button" type="button" disabled>Copy client entry</button>
+              <small class="sql-write-note">Generated by the server this page is served by, and shown exactly as it produced it.</small>
+            </div>
+          </div>
+        </section>
+
+        <section id="memory-view" class="view-panel" data-panel="memory" data-capability="memory" hidden>
+          <div class="memory-toolbar">
+            <h2 id="memory-heading">Memory</h2>
+          </div>
+
+          <p id="memory-note" class="form-note measure" hidden></p>
+
+          <div id="memory-scopes" class="memory-scopes" aria-live="polite"></div>
+        </section>
+
+        <section class="system-summary" data-capability="documents" aria-labelledby="system-summary-title">
+          <h2 id="system-summary-title">Knowledge base status</h2>
+
+          <div id="status-cards" class="status-grid" aria-live="polite">
+            <article class="stat-card">
+              <span class="stat-label">Searchable sources</span>
+              <strong id="searchable-count" class="stat-value">—</strong>
+              <span id="source-detail" class="stat-detail">Waiting for status</span>
+            </article>
+            <article class="stat-card">
+              <span class="stat-label">Passage chunks</span>
+              <strong id="chunk-count" class="stat-value">—</strong>
+              <span class="stat-detail">Current generation</span>
+            </article>
+            <article class="stat-card">
+              <span class="stat-label">Generation</span>
+              <strong id="generation-label" class="stat-value stat-value-code">—</strong>
+              <span id="generation-date" class="stat-detail">Not yet created</span>
+            </article>
+            <article class="stat-card stat-card-state">
+              <span class="stat-label">Index state</span>
+              <strong id="index-state" class="stat-value stat-value-state">Checking</strong>
+              <span id="retrieval-detail" class="stat-detail">BM25 + dense</span>
+            </article>
+          </div>
+
+          <div id="project-summary" class="partition-summary" data-capability="project_metadata" hidden>
+            <h3>Projects</h3>
+            <p class="form-note measure">Reviewed project tags with the number of searchable sources gathered for each. Select one to search it.</p>
+            <div id="project-chips" class="partition-chips"></div>
+          </div>
+
+          <div id="partition-summary" class="partition-summary" data-capability="category_partitions" hidden>
+            <h3>Corpus partitions</h3>
+            <p class="form-note measure">Reviewed categories with the number of searchable sources carrying each. Select one to search it; select several to search their union.</p>
+            <div id="partition-chips" class="partition-chips"></div>
+          </div>
+
+          <div id="language-summary" class="partition-summary" data-capability="bibliographic_filters" hidden>
+            <h3>Languages</h3>
+            <p class="form-note measure">The language recorded for each searchable source. Select one to search it; select several to search their union.</p>
+            <div id="language-chips" class="partition-chips"></div>
+          </div>
+
+          <div id="generation-summary" class="partition-summary" data-capability="generations" hidden>
+            <h3>Generations</h3>
+            <p class="form-note measure">Every successful build of this corpus, and the one a search reads now. Removing one frees its space and cannot be undone; the original sources are not touched, and rebuilding costs one ingestion.</p>
+            <div id="generation-chips" class="partition-chips"></div>
+          </div>
+
+          <div id="sql-console" class="partition-summary" data-capability="sql_console" hidden>
+            <h3>SQL console</h3>
+            <p class="form-note measure">
+              Read this project's stored records, or run a statement that changes them.
+              The server owns its store: it decides which scope a statement may reach and
+              refuses whatever it will not run. This workspace sends the statement as typed
+              and shows what came back.
+            </p>
+            <form id="sql-form" class="sql-console-form">
+              <label class="sql-scope-field" for="sql-scope">
+                <span class="field-label">Scope</span>
+                <select id="sql-scope" name="scope"></select>
+              </label>
+              <label class="sql-statement-field" for="sql-statement">
+                <span class="field-label">Statement</span>
+                <textarea id="sql-statement" name="statement" rows="4" spellcheck="false" placeholder="SELECT …"></textarea>
+              </label>
+              <div class="sql-actions">
+                <button id="sql-run-button" class="button button-primary" type="submit" disabled>Run query</button>
+                <button id="sql-execute-button" class="button button-danger" type="button" disabled>Execute write</button>
+                <small class="sql-write-note">Execute changes stored records, and the server reindexes the change. This workspace cannot undo it.</small>
+              </div>
+            </form>
+            <p id="sql-message" class="form-note" hidden></p>
+            <p id="sql-affected" class="sql-affected" hidden></p>
+            <div id="sql-results" class="sql-results" aria-live="polite"></div>
+          </div>
+
+          <div id="chunk-exclusion-summary" class="partition-summary" data-capability="chunk_exclusion" hidden>
+            <div class="section-heading-row">
+              <h3>Chunk exclusions</h3>
+              <span id="chunk-exclusion-count" class="count-badge">0</span>
+            </div>
+            <p class="form-note measure">
+              Chunks this server has removed from retrieval without removing their
+              source. The original files are not deleted or edited, and restoring one
+              returns it to the next generation.
+            </p>
+            <p id="chunk-exclusion-message" class="form-note" hidden></p>
+            <div id="chunk-exclusion-list" class="excluded-list" aria-live="polite"></div>
+          </div>
+
+          <div id="status-notice" class="notice" hidden>
+            <div>
+              <strong id="status-notice-title">Attention needed</strong>
+              <p id="status-notice-text"></p>
+            </div>
+            <button id="notice-action" class="text-button" type="button">Review sources</button>
+          </div>
+        </section>
+      </main>
+    </div>
+
+    <footer id="footer-text" class="site-footer" hidden></footer>
+
+    <dialog id="ingest-dialog" class="dialog">
+      <form id="ingest-form" method="dialog">
+        <div class="dialog-header">
+          <h2>Create a new generation</h2>
+          <button class="icon-button dialog-close" type="button" aria-label="Close">×</button>
+        </div>
+        <p id="ingest-intro" class="dialog-intro">
+          Included documents will be extracted and indexed. The current generation
+          remains active unless the complete build succeeds.
+        </p>
+        <div class="two-column-fields" data-capability="chunk_settings">
+          <label for="chunk-size">
+            <span class="field-label">Chunk size</span>
+            <input id="chunk-size" type="number" min="50" max="384" value="384" required>
+            <small>GPT-2 tokens, maximum 384.</small>
+          </label>
+          <label for="chunk-overlap">
+            <span class="field-label">Overlap</span>
+            <input id="chunk-overlap" type="number" min="0" max="383" value="64" required>
+            <small>Must be smaller than chunk size.</small>
+          </label>
+        </div>
+        <div class="dialog-actions">
+          <button class="button button-quiet dialog-close" type="button">Cancel</button>
+          <button id="ingest-submit" class="button button-primary" type="submit">Create generation</button>
+        </div>
+      </form>
+    </dialog>
+
+    <dialog id="metadata-dialog" class="dialog dialog-wide">
+      <form id="metadata-form" method="dialog">
+        <div class="dialog-header">
+          <h2>Edit source metadata</h2>
+          <button class="icon-button dialog-close" type="button" aria-label="Close">×</button>
+        </div>
+        <input id="metadata-source-path" type="hidden">
+        <div class="metadata-fields">
+          <label class="field-span" for="metadata-title">
+            <span class="field-label">Title</span>
+            <input id="metadata-title" type="text">
+          </label>
+          <label for="metadata-authors">
+            <span class="field-label">Authors</span>
+            <input id="metadata-authors" type="text" placeholder="Author One, Author Two">
+          </label>
+          <label for="metadata-year">
+            <span class="field-label">Year</span>
+            <input id="metadata-year" type="number" min="1" max="9999">
+          </label>
+          <label class="field-span" for="metadata-doi">
+            <span class="field-label">DOI</span>
+            <input id="metadata-doi" type="text" placeholder="10.xxxx/…">
+          </label>
+          <label for="metadata-categories">
+            <span class="field-label">Categories</span>
+            <input id="metadata-categories" type="text" placeholder="political economy, media theory">
+          </label>
+          <label for="metadata-keywords">
+            <span class="field-label">Keywords</span>
+            <input id="metadata-keywords" type="text" placeholder="AI, labour, fetishism">
+          </label>
+          <label for="metadata-project" data-capability="project_metadata">
+            <span class="field-label">Projects</span>
+            <input id="metadata-project" type="text" placeholder="ai-and-fetishism">
+          </label>
+        </div>
+        <p class="form-note">Metadata changes become searchable after a new ingestion.</p>
+        <div class="dialog-actions">
+          <button class="button button-quiet dialog-close" type="button">Cancel</button>
+          <button id="metadata-submit" class="button button-primary" type="submit">Save metadata</button>
+        </div>
+      </form>
+    </dialog>
+
+    <dialog id="exclusion-dialog" class="dialog">
+      <form id="exclusion-form" method="dialog">
+        <div class="dialog-header">
+          <h2>Exclude this source?</h2>
+          <button class="icon-button dialog-close" type="button" aria-label="Close">×</button>
+        </div>
+        <input id="exclusion-source-path" type="hidden">
+        <p id="exclusion-source-name" class="dialog-source-name"></p>
+        <label for="exclusion-reason">
+          <span class="field-label">Reason</span>
+          <textarea id="exclusion-reason" rows="4" required placeholder="For example: duplicate representation; preferred copy is …"></textarea>
+        </label>
+        <p class="form-note">
+          Retrieval changes immediately. The original file is not deleted or edited.
+        </p>
+        <div class="dialog-actions">
+          <button class="button button-quiet dialog-close" type="button">Cancel</button>
+          <button id="exclusion-submit" class="button button-danger" type="submit">Exclude source</button>
+        </div>
+      </form>
+    </dialog>
+
+    <dialog id="chunk-dialog" class="dialog">
+      <form id="chunk-form" method="dialog">
+        <div class="dialog-header">
+          <h2>Exclude this chunk?</h2>
+          <button class="icon-button dialog-close" type="button" aria-label="Close">×</button>
+        </div>
+        <input id="chunk-id" type="hidden">
+        <p id="chunk-name" class="dialog-source-name"></p>
+        <label for="chunk-reason">
+          <span class="field-label">Reason</span>
+          <textarea id="chunk-reason" rows="4" required placeholder="For example: this passage repeats the one beside it"></textarea>
+        </label>
+        <p class="form-note">
+          Retrieval changes for the next generation. The source file is not deleted or edited.
+        </p>
+        <p id="chunk-error" class="dialog-error" hidden></p>
+        <div class="dialog-actions">
+          <button class="button button-quiet dialog-close" type="button">Cancel</button>
+          <button id="chunk-submit" class="button button-danger" type="submit">Exclude chunk</button>
+        </div>
+      </form>
+    </dialog>
+
+    <dialog id="settings-confirm-dialog" class="dialog">
+      <form id="settings-confirm-form" method="dialog">
+        <div class="dialog-header">
+          <h2>Apply these settings?</h2>
+          <button class="icon-button dialog-close" type="button" aria-label="Close">×</button>
+        </div>
+        <p class="dialog-intro">
+          Some of these values change what the current generation holds. The server
+          keeps the generation in use until you rebuild it.
+        </p>
+        <ul id="settings-confirm-list" class="settings-confirm-list"></ul>
+        <label for="settings-confirm-word">
+          <span id="settings-confirm-label" class="field-label">Type to confirm</span>
+          <input id="settings-confirm-word" type="text" autocomplete="off" placeholder="ingest">
+        </label>
+        <p id="settings-confirm-error" class="dialog-error" hidden></p>
+        <div class="dialog-actions">
+          <button class="button button-quiet dialog-close" type="button">Cancel</button>
+          <button id="settings-confirm-submit" class="button button-primary" type="submit" disabled>Apply changes</button>
+        </div>
+      </form>
+    </dialog>
+
+    <dialog id="generation-dialog" class="dialog">
+      <form id="generation-form" method="dialog">
+        <div class="dialog-header">
+          <h2>Remove this generation?</h2>
+          <button class="icon-button dialog-close" type="button" aria-label="Close">×</button>
+        </div>
+        <input id="generation-remove-id" type="hidden">
+        <p id="generation-remove-name" class="dialog-source-name"></p>
+        <label for="generation-confirm">
+          <span class="field-label">Type the id to confirm</span>
+          <input id="generation-confirm" type="text" autocomplete="off" required placeholder="20260930T191235Z-45608dc5">
+          <small>Removal is permanent. The search index, the passages, and the vectors are deleted; the original sources are not, and rebuilding costs one ingestion.</small>
+        </label>
+        <div class="dialog-actions">
+          <button class="button button-quiet dialog-close" type="button">Cancel</button>
+          <button id="generation-submit" class="button button-danger" type="submit" disabled>Remove generation</button>
+        </div>
+      </form>
+    </dialog>
+
+    <dialog id="context-dialog" class="dialog dialog-context">
+      <div class="dialog-header">
+        <h2 id="context-title">Passage context</h2>
+        <button class="icon-button dialog-close" type="button" aria-label="Close">×</button>
+      </div>
+      <div id="context-content" class="context-content"></div>
+    </dialog>
+
+    <dialog id="bundle-dialog" class="dialog">
+      <form id="bundle-form" method="dialog">
+        <div class="dialog-header">
+          <h2>Import a project bundle</h2>
+          <button class="icon-button dialog-close" type="button" aria-label="Close">×</button>
+        </div>
+        <p id="bundle-import-intro" class="dialog-intro">
+          Place the archive in the server's project-local bundle directory, then
+          enter its filename.
+        </p>
+        <label for="bundle-name">
+          <span class="field-label">Bundle filename</span>
+          <input id="bundle-name" type="text" required placeholder="project-generation.research-rag.zip">
+        </label>
+        <label class="check-control bundle-activate" for="bundle-activate">
+          <input id="bundle-activate" type="checkbox" checked>
+          <span>
+            <strong>Select after import</strong>
+            <small>The current generation changes only after validation and index reconstruction.</small>
+          </span>
+        </label>
+        <div class="dialog-actions">
+          <button class="button button-quiet dialog-close" type="button">Cancel</button>
+          <button class="button button-primary" type="submit">Import bundle</button>
+        </div>
+      </form>
+    </dialog>
+
+    <dialog id="memory-standing-dialog" class="dialog dialog-wide">
+      <form id="memory-standing-form" method="dialog">
+        <div class="dialog-header">
+          <h2 id="memory-standing-dialog-title">Edit standing memory</h2>
+          <button class="icon-button dialog-close" type="button" aria-label="Close">×</button>
+        </div>
+        <p id="memory-standing-intro" class="dialog-intro">
+          The whole standing document is replaced. It is written only when it still
+          matches the version this page read, so a change made meanwhile is never
+          overwritten.
+        </p>
+        <label for="memory-standing-content">
+          <span class="field-label">Standing memory</span>
+          <textarea id="memory-standing-content" rows="12" required></textarea>
+        </label>
+        <div class="dialog-actions">
+          <button class="button button-quiet dialog-close" type="button">Cancel</button>
+          <button id="memory-standing-submit" class="button button-primary" type="submit">Save standing memory</button>
+        </div>
+      </form>
+    </dialog>
+
+    <div id="busy-bar" class="busy-bar" hidden role="status" aria-live="polite">
+      <span class="busy-spinner" aria-hidden="true"></span>
+      <span id="busy-message">Working…</span>
+    </div>
+    <div id="toast-region" class="toast-region" aria-live="polite"></div>
+  </body>
+</html>

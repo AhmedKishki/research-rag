@@ -35,7 +35,10 @@ from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
-from config_ultra_rag_mcp import (
+from .config import project_command
+from .generation import value_fingerprint
+from .settings import SETTINGS, SETTINGS_BY_KEY, EffectiveSettings, Setting
+from .settings_layers import (
     LAYER_COMMAND_LINE,
     LAYER_DEFAULT,
     LAYER_ENVIRONMENT,
@@ -44,10 +47,6 @@ from config_ultra_rag_mcp import (
     SettingsError,
     read_config_document,
 )
-
-from .config import project_command
-from .generation import value_fingerprint
-from .settings import SETTINGS, SETTINGS_BY_KEY, EffectiveSettings, Setting
 from .storage import fsync_directory
 from .support import ResearchError, retrieval_policy_fingerprint
 

@@ -17,7 +17,7 @@ from typing import Any
 import pytest
 from conftest import write_pdf
 
-from research_rag.config import resolve_config
+from research_rag.config import GATEWAY_EXECUTABLE, resolve_config
 from research_rag.service import ResearchService
 from research_rag.ultrarag import LazyGateway, VanillaUltraRAG
 
@@ -75,8 +75,8 @@ class Research:
         await self.gateway.aclose()
 
 
-# The gateway is a separate product with its own console script.
-VANILLA_EXECUTABLE = Path(sys.executable).parent / "vanilla-ultra-rag-mcp"
+# The gateway is a second process this app installs and spawns.
+VANILLA_EXECUTABLE = Path(sys.executable).parent / GATEWAY_EXECUTABLE
 
 
 def _config(project: Path, **options: Any) -> Any:
