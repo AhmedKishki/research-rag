@@ -17,28 +17,23 @@ from collections.abc import Callable, Mapping, Sequence
 from dataclasses import replace
 from typing import TYPE_CHECKING, Any
 
-from .workspace import (
-    SourceFile,
-    UICapabilities,
-    UIProfile,
-    UIRequestError,
-)
+from .workspace import SourceFile, UICapabilities, UIProfile, UIRequestError
 from .workspace import create_ui_app as create_shared_ui_app
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
     from starlette.applications import Starlette
 
-from ..app import ClientError, ClientRegistry
-from ..config import (
+from ..core.service import ResearchService
+from ..corpus.sources import SourcePolicyError, scan_sources
+from ..project.config import (
     ConfigurationError,
     ResearchConfig,
     resolve_source_reference,
 )
-from ..doctor import mcp_entry_block
-from ..registry import account_projects
-from ..service import ResearchService
-from ..sources import SourcePolicyError, scan_sources
-from ..version import version_label
+from ..project.registry import account_projects
+from ..runtime.app import ClientError, ClientRegistry
+from ..runtime.doctor import mcp_entry_block
+from ..runtime.version import version_label
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
     from starlette.applications import Starlette

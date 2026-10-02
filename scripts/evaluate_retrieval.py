@@ -34,16 +34,16 @@ from typing import Any
 
 from fastmcp import Client
 
-from research_rag.config import (
+from research_rag.project.config import (
     configured_source_directory,
     resolve_config,
 )
-from research_rag.rerankers import (
+from research_rag.retrieval.rerankers import (
     DEFAULT_RERANKER_MODEL,
     RERANKER_MODEL_CHOICES,
 )
-from research_rag.service import ResearchService
-from research_rag.ultrarag import (
+from research_rag.core.service import ResearchService
+from research_rag.retrieval.ultrarag import (
     VanillaUltraRAG,
     create_vanilla_transport,
 )

@@ -37,17 +37,9 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Self
 
-from .. import bridge
-from .. import process as process_module
-from ..app import (
-    UI_HOST,
-    App,
-    _claim_loopback_port,
-    _own_tty,
-    recorded_pid,
-    running_url,
-)
-from ..config import (
+from ..core.service import ResearchService
+from ..core.tool_views import lean_status
+from ..project.config import (
     CLI_COMMAND,
     DEFAULT_UI_PORT,
     ConfigurationError,
@@ -57,24 +49,32 @@ from ..config import (
     project_command,
     resolve_config,
 )
-from ..control import Control, ControlError, connect
-from ..registry import (
+from ..project.registry import (
     account_projects,
     detached_from_terminal,
     project_app_state,
     registry_path,
 )
-from ..registry import register as register_project
-from ..registry import resolve as resolve_registered
-from ..rerankers import RERANKER_MODEL_CHOICES
-from ..service import ResearchService
-from ..settings import SETTINGS
-from ..settings_document import describe_costs, describe_docs
-from ..settings_layers import describe_settings
-from ..state_files import process_alive as alive
-from ..support import DEFAULT_RETRIEVAL_METHOD, RETRIEVAL_METHODS, ResearchError
-from ..tool_views import lean_status
-from ..ultrarag import LazyGateway, VanillaUltraRAG
+from ..project.registry import register as register_project
+from ..project.registry import resolve as resolve_registered
+from ..project.settings import SETTINGS
+from ..project.settings_document import describe_costs, describe_docs
+from ..project.settings_layers import describe_settings
+from ..project.state_files import process_alive as alive
+from ..project.support import DEFAULT_RETRIEVAL_METHOD, RETRIEVAL_METHODS, ResearchError
+from ..retrieval.rerankers import RERANKER_MODEL_CHOICES
+from ..retrieval.ultrarag import LazyGateway, VanillaUltraRAG
+from ..runtime import process as process_module
+from ..runtime.app import (
+    UI_HOST,
+    App,
+    _claim_loopback_port,
+    _own_tty,
+    recorded_pid,
+    running_url,
+)
+from ..runtime.control import Control, ControlError, connect
+from . import bridge
 
 CLI_NAME = CLI_COMMAND
 DEFAULT_DEPTH = 10
@@ -1772,7 +1772,7 @@ def _install(args: argparse.Namespace) -> dict[str, Any]:
     answers that.
     """
 
-    from ..installation import (
+    from ..runtime.installation import (
         install_console_entry,
         install_desktop_entry,
         uninstall_console_entry,
@@ -1806,10 +1806,10 @@ async def _update(args: argparse.Namespace) -> dict[str, Any]:
     each one again.
     """
 
-    from .. import release as release_module
-    from .. import update as update_module
-    from ..registry import load as load_registered
-    from ..version import version_block
+    from ..project.registry import load as load_registered
+    from ..runtime import release as release_module
+    from ..runtime import update as update_module
+    from ..runtime.version import version_block
 
     offline = bool(args.offline)
     runner = process_module.subprocess_runner
@@ -1902,7 +1902,7 @@ async def _update(args: argparse.Namespace) -> dict[str, Any]:
 
 async def _doctor(args: argparse.Namespace, config: ResearchConfig) -> CommandResult:
 
-    from ..doctor import mcp_entry_block, mcp_url_block, run_doctor
+    from ..runtime.doctor import mcp_entry_block, mcp_url_block, run_doctor
 
     if args.mcp_entry:
         # Two entries, because the app is reached two ways. The URL entry names
@@ -2075,7 +2075,7 @@ def main(argv: Sequence[str] | None = None) -> None:
         # Before the project is resolved, like `help`: a reader asking what is
         # installed has no project yet, and the answer must not fail on a
         # directory that happens to hold one.
-        from ..version import version_lines
+        from ..runtime.version import version_lines
 
         sys.stdout.write("\n".join(version_lines()) + "\n")
         return

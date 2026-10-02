@@ -16,16 +16,16 @@ from fastmcp import FastMCP
 from fastmcp.exceptions import ToolError
 from pydantic import Field
 
-from ..blocked_answers import not_served_status, uninitialised_status
-from ..config import ResearchConfig
-from ..instructions import AGENT_INSTRUCTIONS
-from ..review import DEFAULT_FIND_SOURCE_LIMIT
-from ..settings import LEAN_TOOL_DETAIL
-from ..tool_views import present_tool_response
-from ..version import APP_VERSION
+from ..core.blocked_answers import not_served_status, uninitialised_status
+from ..core.review import DEFAULT_FIND_SOURCE_LIMIT
+from ..core.tool_views import present_tool_response
+from ..project.config import ResearchConfig
+from ..project.instructions import AGENT_INSTRUCTIONS
+from ..project.settings import LEAN_TOOL_DETAIL
+from ..runtime.version import APP_VERSION
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
-    from ..service import ResearchService
+    from ..core.service import ResearchService
 
 SERVER_NAME = "research-rag"
 # The path the app mounts this surface at, on the same loopback port as the
@@ -218,7 +218,7 @@ ExclusionReason: TypeAlias = Annotated[
 
 
 async def _tool_call(operation: Callable[[], Awaitable[T]]) -> T:
-    from ..support import ResearchError
+    from ..project.support import ResearchError
 
     try:
         return await operation()
@@ -338,7 +338,7 @@ def create_mcp(
         return await _tool_call(run)
 
     def _present(operation: str, payload: dict[str, Any]) -> dict[str, Any]:
-        from ..support import ResearchError
+        from ..project.support import ResearchError
 
         try:
             return present_tool_response(

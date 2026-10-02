@@ -298,23 +298,33 @@ Terminal ── control ───┘      ├── the workspace and its adapte
 
 ### What each layer owns
 
-One concern is one module, and a module that holds two is where a fix goes to be lost.
-The engine is grouped this way:
+One concern is one folder, one folder is one subject, and a folder that holds two is
+where a fix goes to be lost. Every folder under `src/research_rag/` carries a
+`README.md` saying what it owns and what it may never do, and `tests/` mirrors the
+same folders so a change in one of them is tested by that folder's tests alone:
 
-| Concern | Module |
-|---|---|
-| the durable-write primitives, and nothing about this app | `durable_io.py` |
-| the rule a path stored in a file must satisfy | `normalized_paths.py` |
-| the portable record schemas and the generation pointer | `storage.py` |
-| the reviewed files, and what the inventory knows | `review_state.py`, `source_inventory.py` |
-| the answers a blocked surface gives | `blocked_answers.py` |
-| what a status verdict asks for, and what an agent is told | `tool_views.py` |
-| text normalization and text quality, neither of which opens a document | `text_normalization.py`, `text_quality.py` |
-| model loading, and the two dense backends behind one protocol | `model_runtime.py`, `dense_backends/` |
-| the on-disk names every module agrees on | `state_files.py` |
-| how this app was installed and how it is upgraded | `tool_ownership.py` |
+```text
+src/research_rag/
+  project/     what this project is, how it is configured, the names its state is found by
+  storage/     durable writes and the record schemas they write
+  core/        the service the surfaces call, and the answers it gives when it cannot
+  corpus/      the corpus on disk, how it is read, and what its text says about itself
+  generations/ building a generation, and what is inside the one in use
+  retrieval/   answering a query against a built generation
+  surfaces/    the command line, the agent surface, and the browser workspace
+  runtime/     the running process and the commands that manage it
+  gateway/     the stdio MCP gateway to UltraRAG, and the runtime it proxies
+```
 
-Two rules follow from that table and are not negotiable:
+Three rules follow from that layout and are not negotiable:
+
+- A module imports from the folder above it and its own siblings, never from a
+  sibling folder sideways. `tests/gates/test_architecture.py` holds the two that
+  are machine-checkable.
+- A file the tests read by path is named once in the tests that read it, and a
+  folder rename is a test change rather than a silent break.
+- A concern that two folders both need lives in one of them and is imported, not
+  copied. The on-disk state names are in `project/state_files.py` for that reason.
 
 - A module that needs only an error type, a schema version, or a name reads them from a
   module that imports nothing from the retrieval stack. `research_rag.update` must stay
