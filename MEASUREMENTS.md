@@ -65,12 +65,16 @@ Four findings hold as decisions:
 - **Hybrid orders better than BM25 alone at the same reach**, so choosing BM25 for its speed gives up ordering quality rather than coverage.
 - **Dense alone is the weakest mode**, and returns fewer passages because the cosine gate rejects most of its candidates. Its worst class is entity queries: a proper noun needs its words matched, which is what BM25 is for.
 - **Paraphrase is the hardest class for every mode.** The gap is part depth and part ordering, not the relevance gates.
+- **No returned passage duplicated another**, at any gate or diversity setting measured: `mean_exact_duplicate_slots` and `mean_near_duplicate_slots` were `0.0` throughout. The corpus holds reprinted material in its chunks; a result list does not.
+- **No passage dominated the results.** `repeated_slot_rate` was 0.119 on the held-out half, meaning one passage in eight occupied a slot it also held for another query, and the most frequent passage appeared in three of sixteen queries.
 
 ## What a judged set cannot establish
 
 - The judgments are known-item and single-annotator. A mode that returns a different passage making the same point is scored as a miss, and no pooled judgment exists, so no true recall figure is claimed.
 - They come from one English-primary corpus and one generation, not from a benchmark suite.
 - Fusion weights are deliberately untouched: a judged set this size cannot separate a real weight effect from noise.
+- Thirty queries over nineteen passages register a ranking change only when the designated passage crosses the depth. On a sweep of the source-diversity penalty, which reordered every query's results and cut same-source pairs from 86 slots to 12, the quality columns moved by one query in fourteen. A metric that moves at that scale cannot score a change that improves evidence coverage without moving the designated passage, so a result-list change is read against the redundancy counts beside it rather than against `succ@k`.
+- No held-out split is recorded here. A development and a held-out half split by target, so that a quote and its own paraphrase cannot appear on both sides, is produced by a script outside this repository and belongs with the judged set rather than in a measured figure.
 
 ## Which product produced a figure
 
@@ -118,6 +122,8 @@ The staging checkpoint identity does not include the retrieval-policy fingerprin
 
 The gate is calibrated for a fused ranking. A dense-only one wants a much lower value, because the gate is what thins its candidate list; the agent-facing search tool is hybrid-only, and a dense-only method exposed later would have to not apply it.
 
+Measured across `retrieval.dense_minimum_cosine_similarity` 0.0, 0.60, 0.66, the shipped 0.72, 0.78, and 0.85 at a fixed candidate window and rerank budget, success at each depth, MRR, and nDCG were identical from 0.0 through 0.72 on both halves of the judged set, and document success fell one query in fourteen at 0.78 and again at 0.85. The gate reordered results well before it cost anything: at 0.72 five of sixteen held-out rankings differed from the ungated run, and at 0.85 fifteen of sixteen did. The judged set cannot say whether those reorderings are better, so the floor is neither justified nor refuted by this measurement and the shipped value is unchanged on grounds of a fused ranking rather than of a measured effect.
+
 ## The dense floor's relative rescue
 
 `retrieval.dense_relative_similarity_margin` answers the case the floor alone gets wrong: a query whose whole candidate list sits in a band just under it. A floor decides on score alone, so a one-word query — whose best passage can score below the floor while its neighbours sit a few hundredths behind — loses most of its semantic candidates before fusion sees them. The margin admits a below-floor candidate when the query's best candidate cleared the floor and this one is within the margin of it, and admits nothing when nothing cleared the floor, which keeps abstention intact.
@@ -152,6 +158,8 @@ The judged set holds no contentless query, so it cannot measure this behaviour; 
 
 The window is shallow enough that a target the fusion ranks outside it is never seen by the cross-encoder, so a shallower window does not merely lose precision: it loses that band entirely. The shipped window is the shallowest one that reaches the quality plateau, and its cost per query grows linearly with the candidates it holds.
 
+The window is `min(candidates ranked, retrieval.rerank_max_candidates, max(top_k * retrieval.rerank_window_multiple, retrieval.rerank_window_floor))`, so `rerank_max_candidates` binds only below `top_k * multiple`. At the shipped `top_k` of 10 and multiple of 2 that floor is 20, and budgets of 20, 30, and 50 produced identical rerank windows and byte-identical rankings across 96 of 96 queries. A budget sweep is therefore a measurement of the window multiple or of `top_k` until the budget is set below that floor, and a run reporting an unchanged window across different budgets measured one configuration.
+
 ## Pseudo-relevance feedback
 
 `retrieval.prf` searches the lexical half once, mines terms from the leading passages, searches again with the terms added, and ranks with the second result. Selection weights each candidate by how many leaders use it times how rare it is across the generation, from a document-frequency table built on the first query that needs one and kept while that generation stays loaded, so the cost stays off the query path and a process with the feature off never reads the corpus for it.
@@ -170,7 +178,11 @@ The default stays off, and it ships off for a second reason beyond the measureme
 
 `retrieval.source_diversity_penalty` reorders the final `top_k` pick. A candidate's adjusted score is its normalized relevance in the ranking that fusion and the reranker produced — 1.0 at the top, 0.0 at the bottom and for the unreranked tail — charged once for every candidate already taken from the same source, and the best adjusted score wins.
 
-It only reorders candidates that were already ranked, so it adds and removes nothing, and a ranking with no score to charge against keeps its own order. Its cost is measured in rank, not in evidence: a stronger charge displaces more of a source's own relevant passages, which a known-item judged set cannot score, because it registers that the designated passage moved and never that a run of adjacent passages became less useful. That is why the shipped value is the middle of the range the sweep covered, leaving both directions open.
+It only reorders candidates that were already ranked, so it adds and removes nothing, and a ranking with no score to charge against keeps its own order. Its cost is measured in rank, not in evidence: a stronger charge displaces more of a source's own relevant passages, which a known-item judged set cannot score, because it registers that the designated passage moved and never that a run of adjacent passages became less useful.
+
+Measured across `source_diversity_penalty` 0.0, 0.25, 0.5, and 1.0 at a fixed candidate window and rerank budget, on a development and a held-out half of the judged set split by target: mean distinct sources per query rose from 3.9 to 9.1 on the development half and 4.6 to 9.5 on the held-out half, and held-out success at depth was unchanged at every value. On the development half success at depth held through 0.25 and fell one query in fourteen at 0.5. The shipped 0.25 is therefore the largest charge the judged set scores as free, not a midpoint.
+
+That reading rests on a set of thirty queries and the free claim rests on one query of movement in the other direction, so it bounds the setting rather than establishing an optimum. The redundancy measures are what a change in this setting should be read against: at every value tested, `mean_exact_duplicate_slots` and `mean_near_duplicate_slots` were `0.0`, so the charge was reordering sources and never suppressing reprinted text.
 
 ## What a running project costs the machine
 

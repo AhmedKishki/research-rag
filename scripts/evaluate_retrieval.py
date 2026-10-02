@@ -13,6 +13,17 @@ snippet so the target re-resolves after re-ingestion. That measures the
 findability of a designated passage, not exhaustive recall. ``chunks.jsonl`` is
 read read-only; nothing inside the project is written.
 
+Report version 2 keeps every metric version 1 published and adds what a
+known-item protocol cannot see. Each query also records what its result list
+contained rather than how it ranked: distinct evidence spans, exact and near
+duplicate slots, and slots sharing a source. Each mode also records the share of
+its slots held by a passage more than one query returned, which is how a generic
+leader looks from outside a single list, and the median and slowest query in
+seconds. A known-item score is unchanged by two copies of the same evidence
+ranking first or by a different passage carrying that evidence displacing the
+designated chunk, so these counts are what a redundancy or boundary change has to
+be read against.
+
     uv run python scripts/evaluate_retrieval.py --project /mnt/data/my-project
 
 Add --validate-only to check the judged set without searching. A throwaway
@@ -268,6 +279,104 @@ def _chunk_text(chunk: dict[str, Any]) -> str:
     return str(chunk.get("contents") or chunk.get("text") or "")
 
 
+def evidence_words(chunk_id: str, index: dict[str, dict[str, Any]]) -> frozenset[str]:
+    """The word set a returned passage contributes to a duplicate comparison.
+
+    Function words are kept, because two passages a reader would call the same
+    evidence can differ only in them. A returned chunk the generation does not
+    hold contributes the empty set rather than raising, so one missing chunk
+    cannot stop a measurement that has already run.
+    """
+
+    return frozenset(
+        TOKEN_PATTERN.findall(_chunk_text(index.get(chunk_id, {})).casefold())
+    )
+
+
+def duplicate_slots(
+    chunk_ids: list[str], index: dict[str, dict[str, Any]]
+) -> tuple[int, int]:
+    """Count a result list's exact and near duplicates.
+
+    Returns ``(exact, near)``. ``exact`` is the number of slots beyond the first in
+    a word-normalized equality group. ``near`` counts slots whose own words are
+    almost wholly present in another returned passage's, which flags the shorter of
+    a pair and not the passage that contains it. Exact equality is skipped when
+    looking for near duplicates, so the two counts never describe one slot twice.
+    Both are reported because exact equality on a corpus that reprints material
+    reads a confident zero, and a metric that can only read zero is not evidence of
+    an absence.
+    """
+
+    words = [evidence_words(chunk_id, index) for chunk_id in chunk_ids]
+    exact = len(words) - len({frozenset(entry) for entry in words})
+    near = 0
+    for position, entry in enumerate(words):
+        if not entry:
+            continue
+        for other_position, other in enumerate(words):
+            if other_position == position or not other or other == entry:
+                continue
+            if len(entry & other) / len(entry) >= DUPLICATE_CONTAINMENT:
+                near += 1
+                break
+    return exact, near
+
+
+def same_source_pairs(chunk_ids: list[str], index: dict[str, dict[str, Any]]) -> int:
+    """Slots sharing a source file with another slot in the same result list.
+
+    Distinct evidence comes from one file often enough that this is reported beside
+    the text measures rather than instead of them: a source-only diversity penalty
+    moves this number and leaves the text measures alone.
+    """
+
+    counts: dict[str, int] = {}
+    for chunk_id in chunk_ids:
+        source_id = str(index.get(chunk_id, {}).get("source_id") or "")
+        if source_id:
+            counts[source_id] = counts.get(source_id, 0) + 1
+    return sum(size - 1 for size in counts.values() if size > 1)
+
+
+def repeated_slot_rate(runs: list[dict[str, Any]]) -> float:
+    """The share of result slots held by a passage more than one query returned.
+
+    A passage that answers every question is a generic leader rather than an
+    answer, and no per-query metric sees it: each query's own list looks
+    reasonable. It is measured across the run for that reason.
+    """
+
+    appearances: dict[str, int] = {}
+    for run in runs:
+        for chunk_id in run.get("returned_chunk_ids") or []:
+            appearances[chunk_id] = appearances.get(chunk_id, 0) + 1
+    slots = sum(appearances.values())
+    if not slots:
+        return 0.0
+    return sum(count for count in appearances.values() if count > 1) / slots
+
+
+def latency_percentiles(runs: list[dict[str, Any]]) -> dict[str, float]:
+    """The median and the slowest measured query, each a value that was measured.
+
+    Nearest-rank rather than interpolated, so both numbers are seconds this
+    harness actually observed.
+    """
+
+    values = sorted(
+        float(run["elapsed_seconds"])
+        for run in runs
+        if isinstance(run.get("elapsed_seconds"), (int, float))
+    )
+    if not values:
+        return {"p50_seconds": 0.0, "p95_seconds": 0.0}
+    return {
+        "p50_seconds": values[max(math.ceil(0.50 * len(values)) - 1, 0)],
+        "p95_seconds": values[max(math.ceil(0.95 * len(values)) - 1, 0)],
+    }
+
+
 def resolve_targets(
     targets: list[dict[str, Any]],
     chunks: list[dict[str, Any]],
@@ -371,6 +480,30 @@ def _aggregate(runs: list[dict[str, Any]], k: int) -> dict[str, Any]:
         ),
         "mean_withheld": _mean([float(run["withheld_total"]) for run in runs]),
         "top_k": k,
+        **latency_percentiles(runs),
+        **_redundancy_means(runs),
+    }
+
+
+def _redundancy_means(runs: list[dict[str, Any]]) -> dict[str, float]:
+    """The redundancy and source-spread means beside the quality columns.
+
+    A run record written before these fields existed carries none, and a mean over
+    a missing key would read as a measured zero rather than as an absent measure,
+    so a key that is absent contributes nothing and is reported as ``None``.
+    """
+
+    def mean_of(key: str) -> float | None:
+        values = [
+            float(run[key]) for run in runs if isinstance(run.get(key), (int, float))
+        ]
+        return _mean(values) if values else None
+
+    return {
+        "mean_distinct_evidence_spans": mean_of("distinct_evidence_spans"),
+        "mean_exact_duplicate_slots": mean_of("exact_duplicate_slots"),
+        "mean_near_duplicate_slots": mean_of("near_duplicate_slots"),
+        "mean_same_source_pairs": mean_of("same_source_pairs"),
     }
 
 
@@ -391,6 +524,7 @@ def summarize(runs: list[dict[str, Any]], top_k: int) -> dict[str, Any]:
         }
         summary[mode] = {
             "overall": _aggregate(mode_runs, top_k),
+            "repeated_slot_rate": repeated_slot_rate(mode_runs),
             "per_class": {
                 name: values
                 for name, values in by_class.items()
@@ -411,6 +545,7 @@ def print_summary(section: str, summary: dict[str, Any]) -> None:
     header = (
         f"{'mode':<{width}}{'n':>4}{'succ@1':>8}{'succ@3':>8}{'succ@k':>8}"
         f"{'MRR':>7}{'nDCG':>7}{'doc@k':>7}{'overlap':>9}{'ret':>5}{'srcs':>6}"
+        f"{'spans':>7}{'dup':>5}{'near':>5}{'1src':>5}{'rep%':>6}{'p50s':>6}"
     )
     print(header)
     print("-" * len(header))
@@ -423,7 +558,7 @@ def print_summary(section: str, summary: dict[str, Any]) -> None:
             f"{row['mrr']:>7.3f}{row['ndcg_at_k']:>7.3f}"
             f"{_percent(row['document_success_at_k']):>7}"
             f"{row['mean_lexical_overlap']:>9.3f}{row['mean_result_count']:>5.1f}"
-            f"{row['mean_distinct_sources']:>6.1f}"
+            f"{row['mean_distinct_sources']:>6.1f}" + _result_list_columns(row, payload)
         )
     for mode, payload in summary.items():
         for query_class, row in payload["per_class"].items():
@@ -435,6 +570,33 @@ def print_summary(section: str, summary: dict[str, Any]) -> None:
                 f"{row['mean_lexical_overlap']:>9.3f}{row['mean_result_count']:>5.1f}"
                 f"{row['mean_distinct_sources']:>6.1f}"
             )
+
+
+def _result_list_columns(row: dict[str, Any], payload: dict[str, Any]) -> str:
+    """The result-list columns, or blanks when the run carries no such measure.
+
+    A run record written before report version 2 has no redundancy counts, and
+    printing a zero for a measure that was not taken would read as an absence of
+    duplication rather than as an absence of measurement.
+    """
+
+    def count(key: str) -> str:
+        value = row.get(key)
+        return f"{value:>5.1f}" if isinstance(value, (int, float)) else "     "
+
+    repeated = payload.get("repeated_slot_rate")
+    return (
+        count("mean_distinct_evidence_spans")
+        + count("mean_exact_duplicate_slots")
+        + count("mean_near_duplicate_slots")
+        + count("mean_same_source_pairs")
+        + (
+            f"{100.0 * repeated:>5.1f}%"
+            if isinstance(repeated, (int, float))
+            else "     "
+        )
+        + f"{row.get('p50_seconds', 0.0):>6.2f}"
+    )
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -545,6 +707,18 @@ def _mode_settings(mode: str) -> dict[str, Any]:
     return {"retrieval_method": mode, "rerank": False}
 
 
+#: The share of one passage's words that must appear in another for the harness to
+#: call them the same evidence. Exact word equality is reported beside this, and a
+#: reader who disagrees with this threshold can recompute it from the per-query
+#: counts rather than take the threshold on trust.
+DUPLICATE_CONTAINMENT = 0.9
+
+#: The protocol this harness speaks. Report version 2 adds the redundancy,
+#: repetition, and latency records; every metric report version 1 carried keeps
+#: its name and its definition, so a published figure is still comparable.
+REPORT_SCHEMA_VERSION = 2
+
+
 def _mode_variants(
     modes: list[str],
     reranker_models: list[str],
@@ -579,6 +753,7 @@ async def _run_one(
     settings: dict[str, Any],
     top_k: int,
     target: dict[str, Any],
+    chunk_index: dict[str, dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     started = time.perf_counter()
     payload = await service.search(
@@ -635,6 +810,28 @@ async def _run_one(
         "target_listed_as_withheld": str(target["chunk_id"]) in set(withheld_ids),
         "returned_chunk_ids": ranked_chunk_ids,
         "elapsed_seconds": elapsed,
+        **_result_list_measures(ranked_chunk_ids, chunk_index or {}),
+    }
+
+
+def _result_list_measures(
+    chunk_ids: list[str], index: dict[str, dict[str, Any]]
+) -> dict[str, int]:
+    """What one result list contains, as distinct from how well it ranked.
+
+    A known-item query has one relevant passage, so nothing here can be wrong and
+    right at once: two copies of the same evidence rank first either way, and a
+    different passage carrying the same evidence is a miss. These counts are what
+    the ranking metrics cannot see, so they are recorded beside them.
+    """
+
+    exact, near = duplicate_slots(chunk_ids, index)
+    words = [evidence_words(chunk_id, index) for chunk_id in chunk_ids]
+    return {
+        "distinct_evidence_spans": len({frozenset(entry) for entry in words}),
+        "exact_duplicate_slots": exact,
+        "near_duplicate_slots": near,
+        "same_source_pairs": same_source_pairs(chunk_ids, index),
     }
 
 
@@ -712,7 +909,8 @@ async def evaluate(args: argparse.Namespace) -> dict[str, Any]:
     )
 
     report: dict[str, Any] = {
-        "schema_version": 1,
+        "schema_version": REPORT_SCHEMA_VERSION,
+        "duplicate_containment": DUPLICATE_CONTAINMENT,
         "judgments": {
             "path": str(judgments_path),
             "schema_version": payload.get("schema_version"),
@@ -760,6 +958,15 @@ async def evaluate(args: argparse.Namespace) -> dict[str, Any]:
         if not generation_root:
             raise EvaluationError("The project has no selected generation to evaluate")
         chunks, documents = load_generation(Path(str(generation_root)))
+        # The result-list measures compare returned passages against each other,
+        # so they need the canonical text and the source each chunk came from. The
+        # generation was already read for target resolution; this is that same read
+        # indexed, not a second one.
+        chunk_index = {
+            str(chunk.get("chunk_id")): chunk
+            for chunk in chunks
+            if chunk.get("chunk_id")
+        }
         resolved = resolve_targets(
             payload["targets"],
             chunks,
@@ -835,6 +1042,7 @@ async def evaluate(args: argparse.Namespace) -> dict[str, Any]:
                     settings=settings,
                     top_k=args.top_k,
                     target=target,
+                    chunk_index=chunk_index,
                 )
                 runs.append(run)
                 ranks.append(f"{label}={run['rank'] if run['rank'] else 'miss'}")
@@ -855,6 +1063,7 @@ async def evaluate(args: argparse.Namespace) -> dict[str, Any]:
                         settings=settings,
                         top_k=args.deep_top_k,
                         target=resolved[query["target_id"]],
+                        chunk_index=chunk_index,
                     )
                 )
 

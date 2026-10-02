@@ -289,3 +289,172 @@ def test_mode_variants_expand_the_reranked_mode_per_model(evaluation) -> None:
     assert variants[4][1]["rerank_model"] == "jinaai/jina-reranker-v1-turbo-en"
     assert all("rerank_model" not in settings for _, settings in variants[:3])
     assert all(settings["rerank"] is False for _, settings in variants[:3])
+
+
+def _index(*chunks: tuple[str, str, str]) -> dict[str, dict]:
+    """An index keyed by chunk id, holding canonical text and a source id."""
+
+    return {
+        chunk_id: {"chunk_id": chunk_id, "contents": contents, "source_id": source_id}
+        for chunk_id, contents, source_id in chunks
+    }
+
+
+def test_duplicate_slots_count_exact_equality_beyond_the_first(evaluation) -> None:
+    index = _index(
+        ("c1", "artisanal mining in the Congo", "s1"),
+        ("c2", "artisanal mining in the Congo", "s2"),
+        ("c3", "the cobalt supply chain", "s3"),
+    )
+    exact, near = evaluation.duplicate_slots(["c1", "c2", "c3"], index)
+    assert exact == 1
+    assert near == 0
+
+
+def test_duplicate_slots_ignore_wrapping_and_case(evaluation) -> None:
+    index = _index(
+        ("c1", "Artisanal mining\n  in the Congo", "s1"),
+        ("c2", "artisanal  MINING in the congo.", "s2"),
+    )
+    exact, _ = evaluation.duplicate_slots(["c1", "c2"], index)
+    assert exact == 1, "wrapping and case are not a different passage of evidence"
+
+
+def test_duplicate_slots_report_a_near_duplicate_beside_the_exact_count(
+    evaluation,
+) -> None:
+    index = _index(
+        ("c1", "artisanal mining in the Congo exposes workers to hazards", "s1"),
+        ("c2", "artisanal mining in the Congo", "s2"),
+        ("c3", "the cobalt supply chain depends on refining", "s3"),
+    )
+    exact, near = evaluation.duplicate_slots(["c1", "c2", "c3"], index)
+    # c2's words are wholly inside c1's, so c2 is the near duplicate; c3 is not.
+    assert exact == 0
+    assert near == 1
+
+
+def test_duplicate_slots_keep_distinct_evidence_from_one_source(evaluation) -> None:
+    index = _index(
+        ("c1", "artisanal mining in the Congo", "s1"),
+        ("c2", "the cobalt supply chain depends on refining", "s1"),
+    )
+    exact, near = evaluation.duplicate_slots(["c1", "c2"], index)
+    # Two passages from one file are not one passage twice.
+    assert (exact, near) == (0, 0)
+
+
+def test_duplicate_slots_tolerate_a_chunk_the_generation_does_not_hold(
+    evaluation,
+) -> None:
+    index = _index(("c1", "artisanal mining in the Congo", "s1"))
+    exact, near = evaluation.duplicate_slots(["c1", "missing"], index)
+    assert (exact, near) == (0, 0)
+
+
+def test_same_source_pairs_counts_slots_beyond_the_first_of_a_source(
+    evaluation,
+) -> None:
+    index = _index(
+        ("c1", "first passage", "s1"),
+        ("c2", "second passage", "s1"),
+        ("c3", "third passage", "s1"),
+        ("c4", "a passage from elsewhere", "s2"),
+    )
+    assert evaluation.same_source_pairs(["c1", "c2", "c3", "c4"], index) == 2
+
+
+def test_same_source_pairs_is_zero_when_every_result_is_from_another_source(
+    evaluation,
+) -> None:
+    index = _index(("c1", "first", "s1"), ("c2", "second", "s2"))
+    assert evaluation.same_source_pairs(["c1", "c2"], index) == 0
+
+
+def test_repeated_slot_rate_finds_a_passage_more_than_one_query_returned(
+    evaluation,
+) -> None:
+    runs = [
+        {"returned_chunk_ids": ["c1", "c2"]},
+        {"returned_chunk_ids": ["c1", "c3"]},
+        {"returned_chunk_ids": ["c4", "c5"]},
+    ]
+    # c1 occupies two of six slots, so a third of the results were a generic leader.
+    assert evaluation.repeated_slot_rate(runs) == pytest.approx(2 / 6)
+
+
+def test_repeated_slot_rate_is_zero_when_no_passage_repeats(evaluation) -> None:
+    runs = [{"returned_chunk_ids": ["c1", "c2"]}, {"returned_chunk_ids": ["c3"]}]
+    assert evaluation.repeated_slot_rate(runs) == 0.0
+
+
+def test_repeated_slot_rate_of_a_run_with_no_results_is_zero(evaluation) -> None:
+    assert evaluation.repeated_slot_rate([{"returned_chunk_ids": []}]) == 0.0
+
+
+def test_latency_percentiles_report_measured_values_at_the_nearest_rank(
+    evaluation,
+) -> None:
+    runs = [{"elapsed_seconds": float(value)} for value in range(1, 21)]
+    percentiles = evaluation.latency_percentiles(runs)
+    assert percentiles["p50_seconds"] == 10.0
+    assert percentiles["p95_seconds"] == 19.0
+
+
+def test_latency_percentiles_of_a_run_with_no_timing_is_zero(evaluation) -> None:
+    assert evaluation.latency_percentiles([{"query": "x"}]) == {
+        "p50_seconds": 0.0,
+        "p95_seconds": 0.0,
+    }
+
+
+def test_result_list_measures_record_what_a_list_contained(evaluation) -> None:
+    index = _index(
+        ("c1", "artisanal mining in the Congo", "s1"),
+        ("c2", "artisanal mining in the Congo", "s2"),
+        ("c3", "the cobalt supply chain", "s1"),
+    )
+    measures = evaluation._result_list_measures(["c1", "c2", "c3"], index)
+    assert measures == {
+        "distinct_evidence_spans": 2,
+        "exact_duplicate_slots": 1,
+        "near_duplicate_slots": 0,
+        "same_source_pairs": 1,
+    }
+
+
+def test_summarize_reports_redundancy_and_repetition_beside_quality(
+    evaluation,
+) -> None:
+    runs = [
+        {**_run("bm25", "quote", hit=True, rank=1.0), **_measures(3, 1, 2)},
+        {**_run("bm25", "paraphrase", hit=True, rank=1.0), **_measures(3, 1, 2)},
+    ]
+    summary = evaluation.summarize(runs, 10)
+    overall = summary["bm25"]["overall"]
+    assert overall["mean_distinct_evidence_spans"] == pytest.approx(3.0)
+    assert overall["mean_exact_duplicate_slots"] == pytest.approx(1.0)
+    assert overall["mean_near_duplicate_slots"] == pytest.approx(0.0)
+    assert overall["mean_same_source_pairs"] == pytest.approx(2.0)
+    assert overall["p50_seconds"] == pytest.approx(0.0)
+    assert summary["bm25"]["repeated_slot_rate"] == pytest.approx(1.0)
+
+
+def test_summarize_reports_an_absent_measure_as_none_not_zero(evaluation) -> None:
+    # A run record written before report version 2 carries no redundancy counts,
+    # and a zero would read as an absence of duplication rather than of measurement.
+    runs = [_run("bm25", "quote", hit=True, rank=1.0)]
+    overall = evaluation.summarize(runs, 10)["bm25"]["overall"]
+    assert overall["mean_distinct_evidence_spans"] is None
+    assert overall["mean_same_source_pairs"] is None
+    assert overall["mean_exact_duplicate_slots"] is None
+
+
+def _measures(spans: int, exact: int, same_source: int) -> dict:
+    return {
+        "distinct_evidence_spans": spans,
+        "exact_duplicate_slots": exact,
+        "near_duplicate_slots": 0,
+        "same_source_pairs": same_source,
+        "returned_chunk_ids": ["c1", "c2", "c3"],
+    }
