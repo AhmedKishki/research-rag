@@ -314,6 +314,9 @@ def test_the_reranked_window_follows_the_window_formula(project: Path) -> None:
             assert rerank["requested"] is True
             assert rerank["applied"] is True
             assert rerank["window"] == expected, top_k
+            assert rerank["scored_count"] == expected, top_k
+            assert rerank["scored_truncated"] is False
+            assert len(rerank["scored_ids"]) == expected, top_k
             assert answer["evaluation_trace"]["stages"]["reranked"]["count"] == expected
             # The window is a prefix of the fused order that entered it, so a
             # target outside it never reached the cross-encoder.
@@ -347,12 +350,16 @@ def test_a_reranker_that_cannot_load_is_traced_as_not_applied(project: Path) -> 
         assert answer["reranked"] is False
         assert answer["rerank_fallback"]["reason"] == "reranker_model_unavailable"
         rerank = answer["evaluation_trace"]["rerank"]
-        assert rerank == {
-            "requested": True,
-            "applied": False,
-            "fallback": answer["rerank_fallback"],
-            "window": answer["rerank_window"],
-        }
+        assert rerank["requested"] is True
+        assert rerank["applied"] is False
+        assert rerank["fallback"] == answer["rerank_fallback"]
+        assert rerank["window"] == answer["rerank_window"]
+        # The window is named and nothing is: a candidate no model read is not a
+        # scored one, and a trace saying otherwise would let a measurement treat
+        # an unranked fusion as something the cross-encoder had judged.
+        assert rerank["scored_ids"] == []
+        assert rerank["scored_count"] == 0
+        assert rerank["scored_truncated"] is False
         # The window was chosen and the candidates were in it; only the scores
         # never arrived, so the order is the one that entered it.
         trace = answer["evaluation_trace"]

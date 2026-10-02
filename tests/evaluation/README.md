@@ -3,7 +3,10 @@
 ## What is checked
 
 - `tests/evaluation/test_evaluation.py` — the metrics, and the payload readers
-  behind them. Each measure is checked against what it says it compares: an exact
+  behind them. The raw `evaluation_trace` is checked to survive into the
+  finished report with its truncation flags intact, and the scored-then-collapsed
+  count is checked complete against a cut scored list. Each measure is checked
+  against what it says it compares: an exact
   equality that collapses whitespace and nothing else, keeping letter case,
   word order, a repeated word, a sign, a decimal, an operator, a closing mark,
   and a script it cannot segment; a lexical containment that refuses a pair whose

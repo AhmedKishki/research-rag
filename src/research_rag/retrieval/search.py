@@ -1127,6 +1127,7 @@ class SearchWorkflow:
             rerank_count = 0
             fused_pre_rerank_ids = list(ordered_ids)
             reranked_window_ids: list[str] = []
+            rerank_scored_ids: list[str] = []
             if rerank and ordered_ids:
                 rerank_count = min(
                     len(ordered_ids),
@@ -1160,6 +1161,11 @@ class SearchWorkflow:
                     reranked_window_ids = list(rerank_ids)
                 else:
                     rerank_scores = dict(zip(rerank_ids, scores, strict=True))
+                    # The window entered the cross-encoder and came back scored.
+                    # A fallback leaves this empty rather than naming candidates
+                    # no model ever read, which is what makes the difference
+                    # between a window that was scored and one that was not.
+                    rerank_scored_ids = list(rerank_ids)
                     ordered_ids = (
                         sorted(
                             rerank_ids,
@@ -1553,6 +1559,13 @@ class SearchWorkflow:
                         "applied": reranked_applied,
                         "fallback": rerank_fallback,
                         "window": rerank_count,
+                        "scored_ids": rerank_scored_ids[
+                            :EVALUATION_TRACE_CANDIDATE_BUDGET
+                        ],
+                        "scored_count": len(rerank_scored_ids),
+                        "scored_truncated": (
+                            len(rerank_scored_ids) > EVALUATION_TRACE_CANDIDATE_BUDGET
+                        ),
                     },
                     stages={
                         "dense_before_filters": (

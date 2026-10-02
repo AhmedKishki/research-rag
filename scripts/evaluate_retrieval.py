@@ -344,6 +344,30 @@ METRIC_DEFINITIONS: dict[str, str] = {
         "after the gate, the fusion, the reranked window, and the collapse. null "
         "where the stage did not run or its identifier list was truncated."
     ),
+    "evaluation_trace": (
+        "The pipeline's own account of the search, kept whole: every stage's "
+        "identifier list with its count and truncation flag, the cosine gate's "
+        "counters, the reranked window and the identifiers it scored, and what the "
+        "repetition collapse discarded with each discard's source and "
+        "representative. Identifiers and counts only, every list bounded by the "
+        "engine. A run whose engine emitted no trace carries null."
+    ),
+    "reranked_then_collapsed_count": (
+        "Candidates the cross-encoder returned scores for that the repetition "
+        "collapse then discarded, read from the intersection of the scored "
+        "window's identifiers with the discarded passages of "
+        "collapsed_repetitions.pairs. The discarded side is complete, so the "
+        "count is the whole figure unless the scored list was cut."
+    ),
+    "reranked_then_collapsed_is_lower_bound": (
+        "Whether the count above is a lower bound rather than the whole figure, "
+        "which it is when the engine's trace budget cut the scored identifier "
+        "list. A count of zero beside a true flag means nothing was measured."
+    ),
+    "reranked_then_collapsed_by_reason": (
+        "The engine's own collapsed_by labels for those discards. The engine "
+        "decided them; this reports them and asserts no duplication of its own."
+    ),
     "repeated_slot_rate_all_queries": (
         "Share of a mode's query-passage pairs whose passage more than one distinct "
         "query returned. Each query contributes one slot per distinct passage."
@@ -1462,6 +1486,7 @@ async def _run_one(
         "degraded_reasons": degraded,
         **_branch_measures(payload),
         **_collapsed_measures(payload),
+        **_scored_then_collapsed(payload),
         **_rejection_measures(payload, target_chunk_id=target_chunk_id),
         **_dense_gate_measures(payload),
         **_trace_measures(payload, target_chunk_id=target_chunk_id),
@@ -1535,6 +1560,54 @@ def _collapsed_measures(payload: dict[str, Any]) -> dict[str, Any]:
         ),
         "collapsed_pairs": pairs[:REPORT_LIST_LIMIT],
         "collapsed_pairs_truncated": len(pairs) > REPORT_LIST_LIMIT,
+    }
+
+
+def _scored_then_collapsed(payload: dict[str, Any]) -> dict[str, Any]:
+    """How many candidates the cross-encoder scored were then collapsed away.
+
+    The reranked window is a budget: only so many candidates reach the model, and
+    the rest arrive in fused order. The repetition collapse runs afterwards over
+    both, so a discarded candidate may have been scored or may have arrived in
+    the tail. Which of the two it was decides what a larger window would buy, and
+    no other field in the report can say it.
+
+    The two sides are the engine's own identifiers: the window the reranker
+    returned scores for, and the passages ``collapsed_repetitions.pairs`` names as
+    discarded. That list holds one entry per collapse and is not bounded, so it
+    is the complete set. The scored side is bounded by the trace budget, so where
+    that budget cut it the intersection is a lower bound and says so rather than
+    reading as the whole.
+
+    The reasons are the engine's own ``collapsed_by`` labels, repeated here rather
+    than renamed: this counts the collapses the engine decided on, and says
+    nothing about whether any two passages say the same thing.
+    """
+
+    trace = payload.get("evaluation_trace")
+    trace = trace if isinstance(trace, dict) else {}
+    rerank = trace.get("rerank")
+    rerank = rerank if isinstance(rerank, dict) else {}
+    scored = {str(item) for item in (rerank.get("scored_ids") or [])}
+    collapse = payload.get("collapsed_repetitions")
+    collapse = collapse if isinstance(collapse, dict) else {}
+    pairs = [
+        entry for entry in (collapse.get("pairs") or []) if isinstance(entry, dict)
+    ]
+    discarded = {str(pair["chunk_id"]) for pair in pairs if pair.get("chunk_id")}
+    both = scored & discarded
+    by_reason: dict[str, int] = {}
+    for pair in pairs:
+        if str(pair.get("chunk_id") or "") in both:
+            reason = str(pair.get("collapsed_by") or "unknown")
+            by_reason[reason] = by_reason.get(reason, 0) + 1
+    complete = not bool(rerank.get("scored_truncated"))
+    return {
+        "reranked_then_collapsed_count": len(both),
+        "reranked_then_collapsed_is_lower_bound": not complete,
+        "reranked_then_collapsed_by_reason": dict(sorted(by_reason.items())),
+        "collapse_discarded_count": len(discarded),
+        "scored_candidate_count": rerank.get("scored_count"),
     }
 
 
@@ -1672,6 +1745,7 @@ def _trace_measures(payload: dict[str, Any], *, target_chunk_id: str) -> dict[st
             "evaluation_trace_available": False,
             "trace_candidate_budget": None,
             "target_stage_presence": {},
+            "evaluation_trace": trace or None,
         }
     presence: dict[str, bool | None] = {}
     for stage, entry in stages.items():
@@ -1687,6 +1761,11 @@ def _trace_measures(payload: dict[str, Any], *, target_chunk_id: str) -> dict[st
         "evaluation_trace_available": True,
         "trace_candidate_budget": trace.get("candidate_budget"),
         "target_stage_presence": presence,
+        # The pipeline's own account, kept whole so a reader can audit the stage
+        # memberships and their truncation without re-running the search. It
+        # holds identifiers and counts only: no passage text, and every list in
+        # it is bounded by the engine with its truncation flag beside it.
+        "evaluation_trace": trace,
     }
 
 
