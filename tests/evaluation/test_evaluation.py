@@ -910,6 +910,181 @@ def test_stage_presence_is_null_for_a_stage_the_branch_never_ran() -> None:
     assert measures["target_stage_presence"] == {"dense_admitted": None, "final": False}
 
 
+def test_the_raw_trace_is_kept_so_a_reader_can_audit_it() -> None:
+    """The presence flags are a summary; the lists behind them are the evidence.
+
+    A report that kept only whether the target was present cannot be audited for
+    a stage the target missed, and cannot be intersected with anything. The trace
+    holds identifiers and counts, bounded, and nothing else.
+    """
+
+    trace = {
+        "retrieval_method": "hybrid",
+        "candidate_depth": 74,
+        "candidate_budget": 256,
+        "stages": {
+            "dense_admitted": {
+                "count": 2,
+                "chunk_ids": ["c1", "c2"],
+                "truncated": False,
+            },
+            "final": {"count": 1, "chunk_ids": ["c2"], "truncated": False},
+        },
+        "rerank": {
+            "requested": True,
+            "applied": True,
+            "window": 2,
+            "scored_ids": ["c1", "c2"],
+            "scored_count": 2,
+            "scored_truncated": False,
+        },
+        "collapsed": {
+            "count": 1,
+            "by_reason": {"same_words": 1},
+            "discarded": [{"chunk_id": "c1", "repeated_chunk_id": "c2"}],
+            "truncated": False,
+        },
+        "dense": {"eligible_total": 2, "conserved": True},
+    }
+    measures = evaluation._trace_measures(
+        {"evaluation_trace": trace}, target_chunk_id="c2"
+    )
+    assert measures["evaluation_trace"] == trace
+    assert measures["target_stage_presence"] == {"dense_admitted": True, "final": True}
+    # The summary and the evidence are both there, and the summary is derived.
+    assert measures["evaluation_trace"]["stages"]["final"]["chunk_ids"] == ["c2"]
+
+
+def test_a_truncated_stage_list_is_kept_with_its_flag() -> None:
+    """Truncation is the finding, so erasing the flag would erase the finding."""
+
+    trace = {
+        "candidate_budget": 256,
+        "stages": {
+            "post_collapse": {
+                "count": 900,
+                "chunk_ids": [f"c{index}" for index in range(256)],
+                "truncated": True,
+            }
+        },
+    }
+    measures = evaluation._trace_measures(
+        {"evaluation_trace": trace}, target_chunk_id="c0"
+    )
+    stage = measures["evaluation_trace"]["stages"]["post_collapse"]
+    assert stage["truncated"] is True
+    assert stage["count"] == 900
+    assert len(stage["chunk_ids"]) == 256
+    # The target is in the kept part, so it is placed even though the list is cut.
+    assert measures["target_stage_presence"]["post_collapse"] is True
+
+
+def test_a_missing_trace_is_recorded_as_absent_rather_than_as_an_empty_one() -> None:
+    measures = evaluation._trace_measures({}, target_chunk_id="c1")
+    assert measures["evaluation_trace_available"] is False
+    assert measures["evaluation_trace"] is None
+    assert measures["target_stage_presence"] == {}
+
+
+def test_scored_then_collapsed_counts_the_discards_inside_the_scored_window() -> None:
+    payload = {
+        "evaluation_trace": {
+            "rerank": {
+                "window": 3,
+                "scored_ids": ["c1", "c2", "c3"],
+                "scored_count": 3,
+                "scored_truncated": False,
+            }
+        },
+        "collapsed_repetitions": {
+            "repetitions_collapsed": 2,
+            "pairs": [
+                {
+                    "chunk_id": "c1",
+                    "repeated_chunk_id": "c4",
+                    "collapsed_by": "same_words",
+                },
+                {
+                    "chunk_id": "c9",
+                    "repeated_chunk_id": "c8",
+                    "collapsed_by": "same_meaning",
+                },
+            ],
+        },
+    }
+    measures = evaluation._scored_then_collapsed(payload)
+    # c1 was scored and then discarded; c9 arrived in the tail, unranked, and was
+    # discarded too. Only the first is a candidate a wider window would have spent
+    # a score on.
+    assert measures["reranked_then_collapsed_count"] == 1
+    assert measures["reranked_then_collapsed_is_lower_bound"] is False
+    assert measures["reranked_then_collapsed_by_reason"] == {"same_words": 1}
+    assert measures["collapse_discarded_count"] == 2
+    assert measures["scored_candidate_count"] == 3
+
+
+def test_scored_then_collapsed_is_a_lower_bound_when_the_scored_list_was_cut() -> None:
+    payload = {
+        "evaluation_trace": {
+            "rerank": {
+                "window": 400,
+                "scored_ids": ["c1", "c2"],
+                "scored_count": 400,
+                "scored_truncated": True,
+            }
+        },
+        "collapsed_repetitions": {
+            "pairs": [
+                {
+                    "chunk_id": "c1",
+                    "repeated_chunk_id": "c4",
+                    "collapsed_by": "same_words",
+                },
+                {
+                    "chunk_id": "c300",
+                    "repeated_chunk_id": "c4",
+                    "collapsed_by": "same_words",
+                },
+            ],
+        },
+    }
+    measures = evaluation._scored_then_collapsed(payload)
+    # c300 was scored but is not in the kept list, so the observed intersection is
+    # a floor and the flag says so rather than reporting one.
+    assert measures["reranked_then_collapsed_count"] == 1
+    assert measures["reranked_then_collapsed_is_lower_bound"] is True
+    assert measures["scored_candidate_count"] == 400
+
+
+def test_scored_then_collapsed_is_zero_when_the_reranker_never_ran() -> None:
+    payload = {
+        "evaluation_trace": {
+            "rerank": {
+                "window": 10,
+                "scored_ids": [],
+                "scored_count": 0,
+                "scored_truncated": False,
+            }
+        },
+        "collapsed_repetitions": {
+            "pairs": [{"chunk_id": "c1", "repeated_chunk_id": "c2"}]
+        },
+    }
+    measures = evaluation._scored_then_collapsed(payload)
+    assert measures["reranked_then_collapsed_count"] == 0
+    assert measures["reranked_then_collapsed_is_lower_bound"] is False
+    assert measures["reranked_then_collapsed_by_reason"] == {}
+
+
+def test_scored_then_collapsed_reads_nothing_as_zero_when_there_is_no_trace() -> None:
+    measures = evaluation._scored_then_collapsed(
+        {"collapsed_repetitions": {"pairs": []}}
+    )
+    assert measures["reranked_then_collapsed_count"] == 0
+    assert measures["reranked_then_collapsed_is_lower_bound"] is False
+    assert measures["scored_candidate_count"] is None
+
+
 def test_stage_presence_is_null_when_the_engine_omitted_the_trace() -> None:
     measures = evaluation._trace_measures({}, target_chunk_id="zzz")
     assert measures["evaluation_trace_available"] is False
@@ -1530,6 +1705,77 @@ def test_the_harness_reads_a_real_fallback_as_a_degraded_reranked_row(
         assert reasons == [
             "rerank requested but not applied (reranker_model_unavailable)"
         ]
+
+    asyncio.run(exercise())
+
+
+def test_the_harness_keeps_the_trace_a_real_service_emitted(
+    project: Path, evaluation_real_service: Any
+) -> None:
+    async def exercise() -> None:
+        service = await evaluation_real_service()
+        payload = await service.search(
+            "cobalt labour",
+            top_k=3,
+            retrieval_method="hybrid",
+            rerank=True,
+            evaluation_trace=True,
+        )
+        measures = evaluation._trace_measures(payload, target_chunk_id="chk_absent")
+        trace = measures["evaluation_trace"]
+        assert measures["evaluation_trace_available"] is True
+        assert tuple(trace["stages"]) == (
+            "dense_before_filters",
+            "dense_eligible",
+            "dense_admitted",
+            "bm25_after_gates",
+            "fused_pre_rerank",
+            "reranked",
+            "post_collapse",
+            "final",
+        )
+        assert trace["candidate_budget"] == 256
+        # Every stage carries its own count beside its bounded list, so a cut
+        # stage says what it held as well as that it was cut.
+        for name, stage in trace["stages"].items():
+            if stage is None:
+                continue
+            assert stage["count"] >= len(stage["chunk_ids"]), name
+            assert stage["truncated"] == (stage["count"] > trace["candidate_budget"]), (
+                name
+            )
+        assert trace["rerank"]["window"] == payload["rerank_window"]
+        assert trace["rerank"]["scored_count"] == payload["rerank_window"]
+        assert trace["rerank"]["scored_truncated"] is False
+        assert set(trace["rerank"]["scored_ids"]) == set(
+            trace["stages"]["reranked"]["chunk_ids"]
+        )
+        # The reranker ran, so something was scored: a report that kept only the
+        # window could not say whether the model read it.
+        assert trace["rerank"]["scored_count"] > 0
+
+    asyncio.run(exercise())
+
+
+def test_the_harness_counts_scored_discards_from_a_real_service(
+    project: Path, evaluation_real_service: Any
+) -> None:
+    async def exercise() -> None:
+        service = await evaluation_real_service()
+        payload = await service.search(
+            "cobalt labour",
+            top_k=3,
+            retrieval_method="hybrid",
+            rerank=True,
+            evaluation_trace=True,
+        )
+        measures = evaluation._scored_then_collapsed(payload)
+        # The corpus here holds two passages of different text, so the collapse
+        # discarded nothing and the count is a measured zero rather than a null.
+        assert measures["collapse_discarded_count"] == 0
+        assert measures["reranked_then_collapsed_count"] == 0
+        assert measures["reranked_then_collapsed_is_lower_bound"] is False
+        assert measures["scored_candidate_count"] == payload["rerank_window"]
 
     asyncio.run(exercise())
 
