@@ -30,6 +30,7 @@ from .source_inventory import (
     known_sources,
     resolve_source_selector,
     scanned_source_identity,
+    source_matches_filters,
     sync_source_catalog,
 )
 from .sources import (
@@ -41,6 +42,7 @@ from .storage import StorageError
 from .support import (
     ResearchError,
     _effective_documents,
+    _normalized_filter,
     _public_document,
 )
 
@@ -357,7 +359,42 @@ class ReviewWorkflow:
                 "message": message,
             }
 
-    async def list_sources(self) -> dict[str, Any]:
+    async def list_sources(
+        self,
+        *,
+        categories: list[str] | None = None,
+        categories_any: list[str] | None = None,
+        projects: list[str] | None = None,
+        projects_any: list[str] | None = None,
+        keywords: list[str] | None = None,
+    ) -> dict[str, Any]:
+        """The sources this project holds, narrowed by the layers a search also reads.
+
+        The filters are the search filters, applied with the search predicate, so a
+        reader who narrows this listing and then searches what it returned is
+        filtering by one rule. A file that has not been extracted carries no
+        metadata and is excluded by every layer that names a value.
+        """
+
+        wanted = {
+            "categories": _normalized_filter(categories),
+            "categories_any": _normalized_filter(categories_any),
+            "projects": _normalized_filter(projects),
+            "projects_any": _normalized_filter(projects_any),
+            "keywords": _normalized_filter(keywords),
+        }
+
+        def keep(relative: str, record: dict[str, Any]) -> bool:
+            """Filter on the metadata a search would read for this source.
+
+            A reviewed value overrides the extracted one, so the filter layer sees
+            the same effective record the query path does.
+            """
+
+            return source_matches_filters(
+                {**record, **(metadata.get(relative) or {})}, **wanted
+            )
+
         async with self._operation():
             current = self._load_current_optional()
             try:
@@ -372,14 +409,18 @@ class ReviewWorkflow:
                 if isinstance(document, dict)
             }
             discovered_sources = [
-                {
-                    **scanned_source_identity(source),
-                    "included": source.source_relative_path not in exclusions,
-                    "indexed_in_current_generation": (
-                        source.source_relative_path in indexed_paths
-                    ),
-                }
+                record
                 for source in scan.selected
+                if keep(
+                    source.source_relative_path,
+                    record := {
+                        **scanned_source_identity(source),
+                        "included": source.source_relative_path not in exclusions,
+                        "indexed_in_current_generation": (
+                            source.source_relative_path in indexed_paths
+                        ),
+                    },
+                )
             ]
             known = self._known_sources(
                 scan,
@@ -399,6 +440,7 @@ class ReviewWorkflow:
                     "has_reviewed_metadata": relative in metadata,
                 }
                 for relative, record in sorted(known.items())
+                if keep(relative, record)
             ]
             reviewed_metadata_sources = [
                 {
@@ -409,6 +451,7 @@ class ReviewWorkflow:
                     "indexed_in_current_generation": relative in indexed_paths,
                 }
                 for relative, override in sorted(metadata.items())
+                if keep(relative, known[relative])
             ]
             if current is None:
                 return {

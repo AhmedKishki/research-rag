@@ -1277,6 +1277,73 @@ async def _assert_catalog_retains_unindexed_deleted_and_renamed_sources(
     ]
 
 
+def test_the_sources_listing_filters_with_the_search_predicate(
+    project: Path,
+) -> None:
+    """The browser's Sources filters are served, not dropped.
+
+    The shared workspace sends `categories`, `categories_any`, `projects`,
+    `projects_any`, and `keywords` to the listing, and the adapter dropped every one
+    of them because the service took no arguments at all: a filter a reader set
+    narrowed nothing and said nothing. The listing now answers with the predicate
+    `search` uses, over the effective record, so the two narrow by one rule.
+    """
+
+    first = project / "sources" / "one.pdf"
+    second = project / "sources" / "two.pdf"
+    write_pdf(first, ["First evidence."])
+    write_pdf(second, ["Second evidence."])
+    config = resolve_config(project, vanilla_executable=sys.executable)
+    service = ResearchService(  # type: ignore[arg-type]
+        config,
+        FakeUltraRAG(),
+        dense=FakeDenseBackend(),
+    )
+
+    async def scenario() -> dict[str, Any]:
+        await service.set_source_metadata(
+            {"categories": ["history"]}, source_path="one.pdf"
+        )
+        await service.set_source_metadata(
+            {"categories": ["biology"]}, source_path="two.pdf"
+        )
+        unfiltered = await service.list_sources()
+        assert len(unfiltered["known_sources"]) == 2
+
+        by_category = await service.list_sources(categories=["history"])
+        assert [
+            item["source_relative_path"] for item in by_category["known_sources"]
+        ] == ["one.pdf"]
+
+        # A reviewed value is what a search reads, so it is what a filter reads.
+        assert (
+            len(
+                (await service.list_sources(categories_any=["biology"]))[
+                    "known_sources"
+                ]
+            )
+            == 1
+        )
+        # `categories` without the suffix is all-of, as it is in a search: no source
+        # here carries both categories.
+        assert (
+            len(
+                (await service.list_sources(categories=["history", "biology"]))[
+                    "known_sources"
+                ]
+            )
+            == 0
+        )
+        assert (
+            len((await service.list_sources(keywords=["dossier"]))["known_sources"])
+            == 0
+        )
+        assert await service.list_sources() == unfiltered
+        return unfiltered
+
+    asyncio.run(scenario())
+
+
 def test_catalog_retains_unindexed_deleted_and_renamed_sources(
     project: Path,
 ) -> None:
