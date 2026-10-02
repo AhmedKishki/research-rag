@@ -9,11 +9,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from .manifest import BASELINE_COMMIT, BASELINE_VERSION, SERVER_SPECS
-from .runtime import (
-    MARKER_FILENAME,
-    RuntimeValidationError,
-    validate_managed_runtime,
-)
+from .runtime import MARKER_FILENAME, RuntimeValidationError, validate_managed_runtime
 
 
 class ConfigurationError(ValueError):

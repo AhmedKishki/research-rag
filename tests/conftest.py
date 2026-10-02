@@ -8,8 +8,8 @@ import pytest
 from ebooklib import epub
 from platformdirs import user_cache_dir
 
-from research_rag.config import ResearchConfig
-from research_rag.storage import (
+from research_rag.project.config import ResearchConfig
+from research_rag.storage.records import (
     load_metadata_overrides,
     write_metadata_overrides,
 )

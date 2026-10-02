@@ -18,13 +18,7 @@ from starlette.requests import Request
 from starlette.responses import FileResponse, JSONResponse, Response
 from starlette.routing import Route
 
-from .contracts import (
-    AdapterFactory,
-    SourceFile,
-    UIAdapter,
-    UIProfile,
-    UIRequestError,
-)
+from .contracts import AdapterFactory, SourceFile, UIAdapter, UIProfile, UIRequestError
 
 LOGGER = logging.getLogger(__name__)
 STATIC_ROOT = Path(__file__).with_name("static")

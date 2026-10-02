@@ -32,10 +32,10 @@ from typing import Any
 import pymupdf
 from fastmcp import Client
 
-import research_rag.ingestion as ingestion_module
-from research_rag.config import resolve_config
-from research_rag.service import ResearchService
-from research_rag.ultrarag import VanillaUltraRAG, create_vanilla_transport
+import research_rag.generations.ingestion as ingestion_module
+from research_rag.project.config import resolve_config
+from research_rag.core.service import ResearchService
+from research_rag.retrieval.ultrarag import VanillaUltraRAG, create_vanilla_transport
 
 WORDS = (
     "cobalt",
