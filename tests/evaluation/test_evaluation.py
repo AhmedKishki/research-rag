@@ -1,522 +1,1475 @@
-"""The harness is a measurement script, not a shipped module, so it is loaded by path."""
+"""Tests for the retrieval evaluation harness.
+
+Two things are checked here. The metrics: what each one actually measures, and
+whether it reports an absence as an absence rather than as a zero. And the
+payload contract: the harness reads the search payload the real service emits, so
+the tests that pin a gate or a reranker fallback run against a real service and a
+real payload rather than a shape the engine cannot produce.
+"""
 
 from __future__ import annotations
 
+import asyncio
 import importlib.util
-import json
 import sys
 from pathlib import Path
+from typing import Any
 
 import pytest
 
-SCRIPT = Path(__file__).parents[2] / "scripts" / "evaluate_retrieval.py"
+# Loaded by path rather than imported: scripts/ is not a package.
+_SPEC = importlib.util.spec_from_file_location(
+    "evaluate_retrieval",
+    Path(__file__).resolve().parents[2] / "scripts" / "evaluate_retrieval.py",
+)
+assert _SPEC and _SPEC.loader
+evaluation = importlib.util.module_from_spec(_SPEC)
+sys.modules["evaluate_retrieval"] = evaluation
+_SPEC.loader.exec_module(evaluation)
+EvaluationError = evaluation.EvaluationError
 
 
-def load_module():
-    spec = importlib.util.spec_from_file_location("evaluate_retrieval", SCRIPT)
-    assert spec is not None and spec.loader is not None
-    module = importlib.util.module_from_spec(spec)
-    sys.modules["evaluate_retrieval"] = module
-    spec.loader.exec_module(module)
-    return module
+def _index(*chunks: tuple[str, str, str]) -> dict[str, dict[str, Any]]:
+    """A chunk index from (chunk_id, text, source_id) triples."""
 
-
-@pytest.fixture(scope="module")
-def evaluation():
-    return load_module()
-
-
-def test_success_at_and_reciprocal_rank(evaluation) -> None:
-    ranked = ["c1", "c2", "c3"]
-    relevant = {"c2"}
-    assert evaluation.success_at(ranked, relevant, 1) is False
-    assert evaluation.success_at(ranked, relevant, 2) is True
-    assert evaluation.reciprocal_rank(ranked, relevant) == pytest.approx(0.5)
-    assert evaluation.reciprocal_rank(ranked, {"c1"}) == 1.0
-    assert evaluation.reciprocal_rank(ranked, {"absent"}) == 0.0
-
-
-def test_ndcg_at_rewards_higher_ranks(evaluation) -> None:
-    assert evaluation.ndcg_at(["c1"], {"c1"}, 10) == pytest.approx(1.0)
-    # Rank 2 is discounted by log2(3) against the ideal rank-1 placement.
-    assert evaluation.ndcg_at(["c2", "c1"], {"c1"}, 10) == pytest.approx(
-        1 / 1.584962500721156
-    )
-    assert evaluation.ndcg_at(["c2"], {"c1"}, 10) == 0.0
-    assert evaluation.ndcg_at(["c2", "c3"], {"c1"}, 1) == 0.0
-
-
-def test_lexical_overlap_ignores_stopwords_and_short_tokens(evaluation) -> None:
-    passage = "The cobalt supply chain depends on artisanal mining in the Congo."
-    assert evaluation.lexical_overlap("cobalt mining Congo", passage) == pytest.approx(
-        1.0
-    )
-    assert evaluation.lexical_overlap("cobalt lithium Congo", passage) == pytest.approx(
-        2 / 3
-    )
-    # Nothing to match, so no signal.
-    assert evaluation.lexical_overlap("what is the of it", passage) == 0.0
-    assert evaluation.content_tokens("the and it of") == set()
-
-
-def test_normalize_collapses_wrapping(evaluation) -> None:
-    assert evaluation.normalize("a\n  b\tc ") == "a b c"
-
-
-def test_load_judgments_rejects_unknown_class_and_missing_target(
-    evaluation, tmp_path: Path
-) -> None:
-    good = {
-        "schema_version": 1,
-        "targets": [
-            {"target_id": "t1", "source_path": "sources/a.pdf", "snippet": "x"}
-        ],
-        "queries": [
-            {"query_id": "q1", "class": "quote", "target_id": "t1", "query": "x"}
-        ],
-    }
-    path = tmp_path / "set.json"
-    path.write_text(json.dumps(good), encoding="utf-8")
-    assert evaluation.load_judgments(path)["queries"][0]["query_id"] == "q1"
-
-    bad_class = json.loads(json.dumps(good))
-    bad_class["queries"][0]["class"] = "vibes"
-    path.write_text(json.dumps(bad_class), encoding="utf-8")
-    with pytest.raises(evaluation.EvaluationError):
-        evaluation.load_judgments(path)
-
-    bad_target = json.loads(json.dumps(good))
-    bad_target["queries"][0]["target_id"] = "missing"
-    path.write_text(json.dumps(bad_target), encoding="utf-8")
-    with pytest.raises(evaluation.EvaluationError):
-        evaluation.load_judgments(path)
-
-    path.write_text(json.dumps({"schema_version": 99}), encoding="utf-8")
-    with pytest.raises(evaluation.EvaluationError):
-        evaluation.load_judgments(path)
-
-
-def _chunk(chunk_id: str, contents: str, document_id: str = "doc_1") -> dict:
     return {
-        "chunk_id": chunk_id,
-        "document_id": document_id,
-        "contents": contents,
-        "locator": {"type": "pdf_page", "page": 1},
+        chunk_id: {"chunk_id": chunk_id, "contents": text, "source_id": source_id}
+        for chunk_id, text, source_id in chunks
     }
 
 
-DOCUMENTS = {
-    "doc_1": {
-        "document_id": "doc_1",
-        "source_path": "sources/a.pdf",
-        "source_relative_path": "a.pdf",
+def _run(query_id: str, **overrides: Any) -> dict[str, Any]:
+    """A run record with the fields the repetition rates read."""
+
+    run = {
+        "query_id": query_id,
+        "mode": "hybrid",
+        "target_id": f"t-{query_id}",
+        "family_id": f"t-{query_id}",
+        "returned_chunk_ids": [],
+        "elapsed_seconds": 1.0,
     }
+    run.update(overrides)
+    return run
+
+
+# --------------------------------------------------------------------------
+# Known-item metrics. These published their names before the report gained any
+# other measure, and they are unchanged: a figure is comparable only with a
+# figure measured the same way.
+# --------------------------------------------------------------------------
+
+
+def test_success_at_and_reciprocal_rank() -> None:
+    assert evaluation.success_at(["a", "b", "c"], {"b"}, 1) is False
+    assert evaluation.success_at(["a", "b", "c"], {"b"}, 3) is True
+    assert evaluation.reciprocal_rank(["a", "b"], {"b"}) == 0.5
+    assert evaluation.reciprocal_rank(["a"], {"z"}) == 0.0
+
+
+def test_ndcg_at_rewards_higher_ranks() -> None:
+    assert evaluation.ndcg_at(["a", "b"], {"b"}, 10) == pytest.approx(
+        1 / 1.58496, rel=1e-3
+    )
+    assert evaluation.ndcg_at(["a", "b"], {"a"}, 10) == 1.0
+    assert evaluation.ndcg_at(["a"], {"z"}, 10) == 0.0
+
+
+def test_lexical_overlap_ignores_stopwords_and_short_tokens() -> None:
+    query = "artisanal mining and the cobalt"
+    text = "The artisanal cobalt mine in the Congo."
+    assert evaluation.lexical_overlap(query, text) == pytest.approx(2 / 3)
+    assert evaluation.lexical_overlap("the of and", text) == 0.0
+
+
+def test_lexical_overlap_keeps_its_published_ascii_tokenizer() -> None:
+    """The overlap is a version 1 figure, so it is not quietly re-tokenized.
+
+    A passage in a script this tokenizer cannot segment shares no tokens with a
+    query in it, and the version 1 measure reported that as zero overlap. The
+    Unicode-aware tokenizer serves the containment measure, where no published
+    figure depends on it; moving it here would have restated every published
+    overlap column without saying so.
+    """
+
+    assert evaluation.lexical_overlap("矿业 劳工", "科特迪瓦的矿业劳工记录") == 0.0
+    assert evaluation.TOKEN_PATTERN.pattern == "[a-z0-9]+"
+    assert evaluation.WORD_PATTERN.pattern == "\\w+"
+
+
+def test_normalize_collapses_wrapping() -> None:
+    assert evaluation.normalize("a  b\n c ") == "a b c"
+
+
+def test_normalized_text_keeps_everything_case_and_wrapping_do_not() -> None:
+    assert evaluation.normalized_text("Artisanal\n  mining  in the Congo") == (
+        "artisanal mining in the congo"
+    )
+    assert evaluation.normalized_text(
+        "mining in the Congo"
+    ) != evaluation.normalized_text("the Congo in mining")
+
+
+# --------------------------------------------------------------------------
+# Duplication: what a result list held, and what the measures say they compare.
+# --------------------------------------------------------------------------
+
+
+def test_exact_equality_keeps_word_order() -> None:
+    index = _index(
+        ("c1", "consent binds the person to the object", "s1"),
+        ("c2", "the object binds the person to consent", "s2"),
+    )
+    measures = evaluation.duplicate_measures(["c1", "c2"], index)
+    # The engine's own equality key is an ordered join of the words, so these two
+    # are two passages to it and to this measure alike.
+    assert measures["distinct_normalized_texts"] == 2
+    assert measures["exact_duplicate_slots"] == 0
+
+
+def test_exact_equality_keeps_a_repeated_word() -> None:
+    index = _index(
+        ("c1", "the mine and the mill", "s1"),
+        ("c2", "the mine and mill", "s2"),
+    )
+    measures = evaluation.duplicate_measures(["c1", "c2"], index)
+    assert measures["distinct_normalized_texts"] == 2
+    assert measures["exact_duplicate_slots"] == 0
+
+
+def test_exact_equality_collapses_case_and_wrapping() -> None:
+    index = _index(
+        ("c1", "Artisanal mining\n  in the Congo.", "s1"),
+        ("c2", "artisanal  MINING in the congo", "s2"),
+    )
+    measures = evaluation.duplicate_measures(["c1", "c2"], index)
+    assert measures["distinct_normalized_texts"] == 1
+    assert measures["exact_duplicate_slots"] == 1
+    assert measures["exact_duplicate_groups"] == [["c1", "c2"]]
+
+
+def test_exact_equality_keeps_two_different_passages_apart() -> None:
+    index = _index(
+        ("c1", "The committee reviewed the ledger.", "s1"),
+        ("c2", "The committee approved the second draft.", "s2"),
+    )
+    measures = evaluation.duplicate_measures(["c1", "c2"], index)
+    assert measures["distinct_normalized_texts"] == 2
+    assert measures["exact_duplicate_slots"] == 0
+    assert measures["lexical_containment_slots"] == 0
+
+
+def test_exact_equality_tells_two_scripts_apart_and_copies_of_one_apart() -> None:
+    index = _index(
+        ("c1", "科特迪瓦的矿业劳工记录", "s1"),
+        ("c2", "记录劳工矿业科特迪瓦", "s2"),
+        ("c3", "科特迪瓦的矿业劳工记录", "s3"),
+    )
+    # Two sentences in the same order are one passage written twice; the same
+    # words in another order are another passage. An ASCII token set finds no
+    # tokens in either, and merges all three into one group.
+    measures = evaluation.duplicate_measures(["c1", "c2", "c3"], index)
+    assert measures["distinct_normalized_texts"] == 2
+    assert measures["exact_duplicate_slots"] == 1
+    assert measures["exact_duplicate_groups"] == [["c1", "c3"]]
+
+
+def test_exact_equality_keeps_signs_decimals_and_operators() -> None:
+    index = _index(
+        ("c1", "the deposit holds 5.5% copper", "s1"),
+        ("c2", "the deposit holds 5,5% copper", "s2"),
+        ("c3", "the deposit holds 6% copper", "s3"),
+        ("c4", "the depth is <= 200 m", "s4"),
+        ("c5", "the depth is >= 200 m", "s5"),
+    )
+    measures = evaluation.duplicate_measures(["c1", "c2", "c3", "c4", "c5"], index)
+    assert measures["distinct_normalized_texts"] == 5
+    assert measures["exact_duplicate_slots"] == 0
+    # And the lenient measure keeps them apart too, because a pair whose figures
+    # or operators differ is never offered to it.
+    assert measures["lexical_containment_slots"] == 0
+
+
+def test_independent_authors_with_equal_text_keep_separate_provenance() -> None:
+    index = _index(
+        ("c1", "Artisanal mining in the Congo.", "source-a"),
+        ("c2", "Artisanal mining in the Congo.", "source-b"),
+    )
+    measures = evaluation.duplicate_measures(["c1", "c2"], index)
+    # Two files carrying one passage is one piece of evidence twice and no source
+    # twice, so the text measure and the source measure answer different questions.
+    assert measures["distinct_normalized_texts"] == 1
+    assert measures["exact_duplicate_slots"] == 1
+    assert measures["same_source_pairs"] == 0
+    assert measures["duplicate_measure_coverage"]["complete"] is True
+
+
+def test_a_missing_passage_is_reported_as_coverage_not_as_a_duplicate() -> None:
+    index = _index(
+        ("c1", "Artisanal mining in the Congo.", "s1"),
+        ("c3", "The committee approved the draft.", "s3"),
+    )
+    measures = evaluation.duplicate_measures(["c1", "missing-1", "missing-2"], index)
+    coverage = measures["duplicate_measure_coverage"]
+    assert coverage == {
+        "slots_total": 3,
+        "slots_with_text": 1,
+        "slots_missing_text": 2,
+        "missing_chunk_ids": ["missing-1", "missing-2"],
+        "complete": False,
+    }
+    # Two passages this harness cannot read are not two copies of one passage.
+    for key in (
+        "distinct_normalized_texts",
+        "exact_duplicate_slots",
+        "exact_duplicate_groups",
+        "lexical_containment_slots",
+        "lexical_containment_groups",
+        "lexical_containment_pairs",
+        "same_source_pairs",
+    ):
+        assert measures[key] is None, key
+
+
+def test_an_empty_passage_counts_as_missing_rather_than_as_an_empty_copy() -> None:
+    index = _index(
+        ("c1", "Artisanal mining in the Congo.", "s1"),
+        ("c2", "   ", "s2"),
+    )
+    measures = evaluation.duplicate_measures(["c1", "c2"], index)
+    assert measures["distinct_normalized_texts"] is None
+    assert measures["duplicate_measure_coverage"]["slots_missing_text"] == 1
+
+
+def test_lexical_containment_flags_a_subset_of_prose() -> None:
+    index = _index(
+        (
+            "c1",
+            (
+                "The committee reviewed the ledger and approved the second draft "
+                "of the agreement in March."
+            ),
+            "s1",
+        ),
+        ("c2", "The committee reviewed the ledger.", "s2"),
+    )
+    measures = evaluation.duplicate_measures(["c1", "c2"], index)
+    assert measures["exact_duplicate_slots"] == 0
+    assert measures["lexical_containment_slots"] == 1
+    assert measures["lexical_containment_groups"] == 1
+    pair = measures["lexical_containment_pairs"][0]
+    assert pair["slot_chunk_id"] == "c2"
+    assert pair["repeated_chunk_id"] == "c1"
+    assert pair["containment"] == 1.0
+
+
+def test_lexical_containment_is_exclusive_with_exact_duplicates() -> None:
+    index = _index(
+        *[(f"c{n}", "Artisanal mining in the Congo.", f"s{n}") for n in range(1, 6)]
+    )
+    measures = evaluation.duplicate_measures([f"c{n}" for n in range(1, 6)], index)
+    # Five copies of one passage are four duplicate slots and no containment at
+    # all: the containment measure never counts a passage twice, so it cannot
+    # read the same repetition under a second name.
+    assert measures["exact_duplicate_slots"] == 4
+    assert measures["lexical_containment_slots"] == 0
+    assert measures["lexical_containment_groups"] == 0
+
+
+def test_lexical_containment_counts_one_group_once() -> None:
+    long_text = (
+        "The committee reviewed the ledger and approved the second draft of the "
+        "agreement in March of the year."
+    )
+    index = _index(
+        ("long", long_text, "s1"),
+        ("short-a", "The committee reviewed the ledger.", "s2"),
+        ("short-b", "The committee reviewed the ledger.", "s3"),
+    )
+    measures = evaluation.duplicate_measures(["long", "short-a", "short-b"], index)
+    # Two copies of the same short passage are one repeat of one passage: one
+    # exact duplicate slot and one containment slot, not two of each.
+    assert measures["exact_duplicate_slots"] == 1
+    assert measures["lexical_containment_slots"] == 1
+    assert measures["lexical_containment_groups"] == 1
+
+
+@pytest.mark.parametrize(
+    ("left", "right"),
+    [
+        (
+            "The mine produced 12 tonnes in 2019.",
+            "The mine produced 15 tonnes in 2019.",
+        ),
+        ("The depth is <= 200 metres.", "The depth is >= 200 metres."),
+        (
+            "The film consents to display the scene.",
+            "The film does not consent to display the scene.",
+        ),
+        ("The answer is yes.", "The answer is noncommittal."),
+    ],
+)
+def test_lexical_containment_never_merges_a_pair_that_disagrees(
+    left: str, right: str
+) -> None:
+    index = _index(("c1", left, "s1"), ("c2", right, "s2"))
+    measures = evaluation.duplicate_measures(["c1", "c2"], index)
+    assert measures["lexical_containment_slots"] == 0
+    assert measures["lexical_containment_groups"] == 0
+
+
+def test_a_pair_that_agrees_on_every_protected_distinction_is_still_a_candidate() -> (
+    None
+):
+    index = _index(
+        (
+            "c1",
+            (
+                "The committee reviewed the ledger of 2019 and approved the "
+                "second draft of the agreement in March."
+            ),
+            "s1",
+        ),
+        ("c2", "The committee reviewed the ledger of 2019.", "s2"),
+    )
+    measures = evaluation.duplicate_measures(["c1", "c2"], index)
+    assert measures["lexical_containment_slots"] == 1
+
+
+def test_word_shingles_keep_a_reordering_out_of_the_measure() -> None:
+    assert evaluation.word_shingles("a b c") != evaluation.word_shingles("a c b")
+    assert evaluation.word_shingles("two words") == (("two", "words"),)
+
+
+def test_the_protected_signature_records_position_and_kind() -> None:
+    signature = evaluation.protected_signature("output is 5.5 and rate <= 0.5")
+    assert signature[0] == ("5.5", "0.5")
+    assert signature[1] == ("<=",)
+    assert evaluation.protected_signature("a hyphenated aside") == ((), (), ())
+
+
+# --------------------------------------------------------------------------
+# Repetition across a mode's queries, by question family.
+# --------------------------------------------------------------------------
+
+
+def test_a_passage_returned_twice_by_one_query_is_not_repetition() -> None:
+    rates = evaluation.repetition_rates([_run("q1", returned_chunk_ids=["c1", "c1"])])
+    # One query returning one passage twice is one slot, and a numerator counting
+    # slots rather than distinct queries would have read it as full repetition.
+    assert rates["repeated_slot_denominator"] == 1
+    assert rates["repeated_slot_rate_all_queries"] == 0.0
+    assert rates["repeated_slot_rate_cross_target_family"] == 0.0
+
+
+def test_one_family_repeating_reads_as_that_family_only() -> None:
+    runs = [
+        _run(
+            "q-quote",
+            family_id="t-1",
+            target_id="t-1",
+            returned_chunk_ids=["c1", "c2"],
+        ),
+        _run(
+            "q-paraphrase",
+            family_id="t-1",
+            target_id="t-1",
+            returned_chunk_ids=["c1", "c3"],
+        ),
+    ]
+    rates = evaluation.repetition_rates(runs)
+    assert rates["repeated_slot_rate_all_queries"] == 0.5
+    # A quote query and its own paraphrase share a target on purpose. A perfect
+    # retrieval over them returns that target's passage twice, and reads as a
+    # generic leader only if the measure cannot tell the two styles apart.
+    assert rates["repeated_slot_rate_cross_target_family"] == 0.0
+    assert rates["repeated_slot_denominator"] == 4
+
+
+def test_a_passage_answered_for_unrelated_questions_reads_as_cross_family() -> None:
+    runs = [
+        _run(
+            "q1",
+            family_id="family-a",
+            target_id="t-1",
+            returned_chunk_ids=["generic", "c1"],
+        ),
+        _run(
+            "q2",
+            family_id="family-b",
+            target_id="t-2",
+            returned_chunk_ids=["generic", "c2"],
+        ),
+    ]
+    rates = evaluation.repetition_rates(runs)
+    assert rates["repeated_slot_rate_all_queries"] == 0.5
+    assert rates["repeated_slot_rate_cross_target_family"] == 0.5
+    assert rates["cross_target_family_passage_count"] == 1
+
+
+def test_two_targets_declared_one_family_are_one_family() -> None:
+    """A judged set may declare that several passages answer one question."""
+
+    runs = [
+        _run(
+            "q1",
+            family_id="family-latin-america",
+            target_id="t-colombia",
+            returned_chunk_ids=["shared", "c1"],
+        ),
+        _run(
+            "q2",
+            family_id="family-latin-america",
+            target_id="t-peru",
+            returned_chunk_ids=["shared", "c2"],
+        ),
+    ]
+    rates = evaluation.repetition_rates(runs)
+    assert rates["repeated_slot_rate_all_queries"] == 0.5
+    # Two different targets, one declared family: a list that never overlaps
+    # beyond the passage both families legitimately quote is not repetition
+    # across families, and a measure that read it as such would punish a judged
+    # set for how it was written.
+    assert rates["repeated_slot_rate_cross_target_family"] == 0.0
+
+
+def test_repetition_without_a_family_is_unknown_rather_than_independent() -> None:
+    runs = [
+        _run("q1", family_id="", target_id="", returned_chunk_ids=["c1"]),
+        _run("q2", family_id="family-b", target_id="t-2", returned_chunk_ids=["c2"]),
+    ]
+    rates = evaluation.repetition_rates(runs)
+    assert rates["repeated_slot_rate_all_queries"] == 0.0
+    assert rates["repeated_slot_rate_cross_target_family"] is None
+    assert rates["runs_without_family_id"] == 1
+
+
+def test_repetition_over_no_slots_is_a_null_with_its_zero_denominator() -> None:
+    rates = evaluation.repetition_rates([_run("q1"), _run("q2")])
+    assert rates["repeated_slot_denominator"] == 0
+    assert rates["repeated_slot_rate_all_queries"] is None
+    assert rates["repeated_slot_rate_cross_target_family"] is None
+
+
+def test_targets_sharing_one_declared_family_form_one_family() -> None:
+    resolved = {
+        "t1": {"target_id": "t1", "family_id": "shared"},
+        "t2": {"target_id": "t2", "family_id": "shared"},
+    }
+    queries = [
+        {"query_id": "q1", "target_id": "t1"},
+        {"query_id": "q2", "target_id": "t2"},
+    ]
+    assert evaluation.resolve_families(queries, resolved) == {"t1": "t1", "t2": "t1"}
+
+
+def test_a_query_declaration_and_a_target_declaration_are_both_read() -> None:
+    """Neither declaration is the other's parent, so both join the same group.
+
+    Two targets declare one family between them, and each of their queries
+    declares a sub-family of its own. Choosing the query's declaration over the
+    target's splits the family in two; choosing the target's over the query's
+    ignores the queries. The group they form together is what both describe.
+    """
+
+    resolved = {
+        "t1": {"target_id": "t1", "family_id": "shared"},
+        "t2": {"target_id": "t2", "family_id": "shared"},
+    }
+    queries = [
+        {"query_id": "q1", "target_id": "t1", "family_id": "sub-1"},
+        {"query_id": "q2", "target_id": "t2", "family_id": "sub-2"},
+    ]
+    families = evaluation.resolve_families(queries, resolved)
+    assert families["t1"] == families["t2"] == "t1"
+    runs = [
+        _run(
+            "q1",
+            family_id=families["t1"],
+            target_id="t1",
+            returned_chunk_ids=["shared", "c1"],
+        ),
+        _run(
+            "q2",
+            family_id=families["t2"],
+            target_id="t2",
+            returned_chunk_ids=["shared", "c2"],
+        ),
+    ]
+    rates = evaluation.repetition_rates(runs)
+    assert rates["repeated_slot_rate_all_queries"] == 0.5
+    assert rates["repeated_slot_rate_cross_target_family"] == 0.0
+
+
+def test_one_label_declared_on_a_query_and_on_a_target_unites_across_levels() -> None:
+    """Both levels declare the same field, so the same label is one family twice.
+
+    A query of the first target declares ``shared`` and the second target declares
+    it on its own record. Nothing in the two records says the two targets are
+    related except the label, which is exactly what a judged set means by naming
+    one.
+    """
+
+    resolved = {
+        "t1": {"target_id": "t1"},
+        "t2": {"target_id": "t2", "family_id": "shared"},
+    }
+    queries = [
+        {"query_id": "q1", "target_id": "t1", "family_id": "shared"},
+        {"query_id": "q2", "target_id": "t2"},
+    ]
+    families = evaluation.resolve_families(queries, resolved)
+    assert families == {"t1": "t1", "t2": "t1"}
+
+
+def test_two_labels_across_both_levels_chain_one_family() -> None:
+    """A family label declared on one level meets the same label on the other."""
+
+    resolved = {
+        "t1": {"target_id": "t1", "family_id": "outer"},
+        "t2": {"target_id": "t2"},
+        "t3": {"target_id": "t3", "family_id": "outer"},
+    }
+    queries = [
+        {"query_id": "q1", "target_id": "t1"},
+        {"query_id": "q2", "target_id": "t2", "family_id": "outer"},
+        {"query_id": "q3", "target_id": "t3"},
+    ]
+    families = evaluation.resolve_families(queries, resolved)
+    assert families == {"t1": "t1", "t2": "t1", "t3": "t1"}
+
+
+def test_two_sub_families_under_one_target_declaration_are_one_family() -> None:
+    resolved = {"t1": {"target_id": "t1", "family_id": "shared"}}
+    queries = [
+        {"query_id": "q1", "target_id": "t1", "family_id": "sub-1"},
+        {"query_id": "q2", "target_id": "t1", "family_id": "sub-2"},
+    ]
+    assert evaluation.resolve_families(queries, resolved) == {"t1": "t1"}
+
+
+def test_a_query_family_label_that_reads_like_a_target_id_joins_nothing() -> None:
+    """A family label and a target id share a namespace in a judged set.
+
+    Joining them would merge two targets that declared nothing in common, so the
+    nodes are namespaced apart and the collision merges nothing.
+    """
+
+    resolved = {"t1": {"target_id": "t1"}, "t2": {"target_id": "t2"}}
+    queries = [
+        {"query_id": "q1", "target_id": "t1", "family_id": "t2"},
+        {"query_id": "q2", "target_id": "t2"},
+    ]
+    assert evaluation.resolve_families(queries, resolved) == {"t1": "t1", "t2": "t2"}
+
+
+def test_a_target_family_label_that_reads_like_a_target_id_joins_nothing() -> None:
+    resolved = {
+        "t1": {"target_id": "t1", "family_id": "t2"},
+        "t2": {"target_id": "t2"},
+    }
+    queries = [{"query_id": "q1", "target_id": "t1"}]
+    assert evaluation.resolve_families(queries, resolved) == {"t1": "t1", "t2": "t2"}
+
+
+def test_a_target_declaring_nothing_is_its_own_family() -> None:
+    resolved = {"t1": {"target_id": "t1"}, "t2": {"target_id": "t2"}}
+    queries = [
+        {"query_id": "q1", "target_id": "t1"},
+        {"query_id": "q2", "target_id": "t1"},
+        {"query_id": "q3", "target_id": "t2"},
+    ]
+    assert evaluation.resolve_families(queries, resolved) == {"t1": "t1", "t2": "t2"}
+
+
+def test_a_skipped_target_resolves_no_family_and_runs_nothing() -> None:
+    resolved = {"t1": {"target_id": "t1"}}
+    queries = [
+        {"query_id": "q1", "target_id": "t1"},
+        {"query_id": "q2", "target_id": "t-skipped"},
+    ]
+    assert evaluation.resolve_families(queries, resolved) == {"t1": "t1"}
+
+
+def test_latency_percentiles_are_percentiles_and_the_max_is_its_own_number() -> None:
+    runs = [{"elapsed_seconds": float(value)} for value in range(1, 21)]
+    measured = evaluation.latency_percentiles(runs)
+    assert measured["p50_seconds"] == 10.0
+    # Over twenty values the 95th percentile is the nineteenth, not the slowest:
+    # the slowest query is reported beside it because the two differ whenever the
+    # run is small enough to read.
+    assert measured["p95_seconds"] == 19.0
+    assert measured["max_seconds"] == 20.0
+
+
+def test_latency_percentiles_of_an_untimed_run_are_null() -> None:
+    measured = evaluation.latency_percentiles([{"elapsed_seconds": None}])
+    assert measured == {"p50_seconds": None, "p95_seconds": None, "max_seconds": None}
+
+
+# --------------------------------------------------------------------------
+# Payload readers. These take the whole payload, because which block is present
+# is not the same question as which method was ranked.
+# --------------------------------------------------------------------------
+
+
+def _gate_payload(method: str, **gate: Any) -> dict[str, Any]:
+    return {"retrieval_method": method, "dense_gate": gate}
+
+
+def test_the_gate_measures_read_the_engines_own_counts() -> None:
+    measures = evaluation._dense_gate_measures(
+        _gate_payload(
+            "hybrid",
+            minimum_cosine_similarity=0.72,
+            relative_margin=0.1,
+            best_cosine_similarity=0.81,
+            eligible_total=50,
+            admitted_above_floor=20,
+            admitted_below_floor=5,
+            rejected_below_floor=25,
+            conserved=True,
+            excluded_before_gate={
+                "returned_by_index": 60,
+                "extraction_artifact": 2,
+                "corrupt_text": 1,
+                "too_short": 4,
+                "filtered_out": 3,
+            },
+        )
+    )
+    assert measures["dense_gate_ran"] is True
+    assert measures["dense_gate_counts_complete"] is True
+    assert measures["dense_eligible_total"] == 50
+    assert measures["dense_admitted_above_floor"] == 20
+    assert measures["dense_admitted_below_floor"] == 5
+    assert measures["dense_rejected_below_floor"] == 25
+    assert measures["dense_best_cosine_similarity"] == 0.81
+    assert measures["dense_quality_excluded"]["filtered_out"] == 3
+    assert measures["dense_conserved"] is True
+
+
+def test_a_zeroed_gate_block_on_a_bm25_payload_is_not_a_gate_that_ran() -> None:
+    """The engine carries this block for every method, zeros included."""
+
+    measures = evaluation._dense_gate_measures(
+        _gate_payload(
+            "bm25",
+            minimum_cosine_similarity=0.72,
+            relative_margin=0.1,
+            best_cosine_similarity=None,
+            admitted_below_floor=0,
+            rejected_below_floor=0,
+        )
+    )
+    assert measures["dense_gate_ran"] is False
+    assert measures["dense_gate_counts_complete"] is False
+    assert measures["dense_rejected_below_floor"] is None
+    assert measures["dense_admitted_below_floor"] is None
+    assert measures["dense_best_cosine_similarity"] is None
+
+
+def test_a_gate_block_without_the_counts_reports_nothing_measured() -> None:
+    measures = evaluation._dense_gate_measures(
+        {"retrieval_method": "hybrid", "dense_gate": {"rejected_below_floor": 118}}
+    )
+    assert measures["dense_gate_ran"] is True
+    assert measures["dense_gate_counts_complete"] is False
+    assert measures["dense_rejected_below_floor"] is None
+
+
+def test_gate_counts_that_do_not_add_up_are_a_loud_failure() -> None:
+    payload = _gate_payload(
+        "hybrid",
+        best_cosine_similarity=0.9,
+        eligible_total=50,
+        admitted_above_floor=20,
+        admitted_below_floor=5,
+        rejected_below_floor=10,
+        conserved=True,
+    )
+    with pytest.raises(EvaluationError, match="do not account"):
+        evaluation._dense_gate_measures(payload)
+
+
+def test_branch_measures_carry_the_depth_the_branch_actually_used() -> None:
+    measures = evaluation._branch_measures(
+        {
+            "retrieval_method": "hybrid",
+            "candidate_depth": 74,
+            "candidate_count": 74,
+            "candidate_distinct_reference_count": 61,
+            "rerank_requested": True,
+            "reranked": True,
+            "rerank_fallback": None,
+            "rerank_window": 20,
+            "fusion": {"pool_size": 74},
+            "evaluation_trace": {"candidate_depth": 74},
+        }
+    )
+    assert measures["candidate_depth"] == 74
+    assert measures["trace_candidate_depth"] == 74
+    assert measures["rerank_requested"] is True
+    assert measures["reranked"] is True
+
+
+def test_collapsed_measures_count_the_pairs_the_engine_disclosed() -> None:
+    measures = evaluation._collapsed_measures(
+        {
+            "collapsed_repetitions": {
+                "repetitions_collapsed": 2,
+                "collapsed_by_same_words": 1,
+                "pairs": [
+                    {
+                        "chunk_id": "c1",
+                        "repeated_chunk_id": "c2",
+                        "collapsed_by": "same_words",
+                    },
+                    {
+                        "chunk_id": "c3",
+                        "repeated_chunk_id": "c4",
+                        "collapsed_by": "same_meaning",
+                    },
+                ],
+            }
+        }
+    )
+    assert measures["collapsed_count"] == 2
+    assert measures["collapsed_by_same_words"] == 1
+    assert measures["collapsed_by_same_meaning"] == 1
+    assert measures["collapsed_pairs_truncated"] is False
+
+
+def test_collapsed_measures_count_zero_when_the_disclosure_is_empty() -> None:
+    measures = evaluation._collapsed_measures({"collapsed_repetitions": {"pairs": []}})
+    assert measures["collapsed_count"] == 0
+    assert measures["collapsed_pairs"] == []
+
+
+def test_rejection_measures_name_the_reason_the_target_failed() -> None:
+    measures = evaluation._rejection_measures(
+        {
+            "withheld_candidates": {
+                "total": 1,
+                "reasons": {"corrupt_text": {"example_chunk_ids": ["other"]}},
+            },
+            "rejected_candidates": {"dense_below_threshold": 3},
+            "rejected_candidate_examples": {
+                "policy": "corruption_evidence_only",
+                "limit_per_reason": 3,
+                "reasons": {
+                    "dense_below_threshold": [
+                        {"chunk_id": "target", "cosine_similarity": 0.4},
+                        {"chunk_id": "other", "cosine_similarity": 0.3},
+                    ]
+                },
+            },
+        },
+        target_chunk_id="target",
+    )
+    assert measures["target_rejected_by"] == ["dense_below_threshold"]
+    # Withholding is about corrupt text in the answer, so a target the gate
+    # rejected is not withheld. The two counts were never the same question.
+    assert measures["target_listed_as_withheld"] is False
+    assert measures["withheld_total"] == 1
+
+
+def test_rejection_measures_keep_the_gate_counts_the_engine_reported() -> None:
+    measures = evaluation._rejection_measures(
+        {"rejected_candidates": {"dense_below_threshold": 3}}, target_chunk_id="target"
+    )
+    assert measures["rejected_candidates"]["dense_below_threshold"] == 3
+    assert measures["target_rejected_by"] == []
+
+
+def test_stage_presence_is_null_where_a_stage_list_was_cut() -> None:
+    measures = evaluation._trace_measures(
+        {
+            "evaluation_trace": {
+                "candidate_budget": 256,
+                "stages": {
+                    "fused_pre_rerank": {
+                        "count": 900,
+                        "chunk_ids": ["a", "b"],
+                        "truncated": True,
+                    },
+                    "final": {"count": 10, "chunk_ids": ["a"], "truncated": False},
+                },
+            }
+        },
+        target_chunk_id="zzz",
+    )
+    # A cut list cannot say the target was absent; an untruncated one can.
+    assert measures["target_stage_presence"] == {
+        "fused_pre_rerank": None,
+        "final": False,
+    }
+    assert measures["evaluation_trace_available"] is True
+    assert measures["trace_candidate_budget"] == 256
+
+
+def test_stage_presence_is_null_for_a_stage_the_branch_never_ran() -> None:
+    measures = evaluation._trace_measures(
+        {
+            "evaluation_trace": {
+                "stages": {
+                    "dense_admitted": None,
+                    "final": {"count": 1, "chunk_ids": [], "truncated": False},
+                }
+            }
+        },
+        target_chunk_id="zzz",
+    )
+    assert measures["target_stage_presence"] == {"dense_admitted": None, "final": False}
+
+
+def test_stage_presence_is_null_when_the_engine_omitted_the_trace() -> None:
+    measures = evaluation._trace_measures({}, target_chunk_id="zzz")
+    assert measures["evaluation_trace_available"] is False
+    assert measures["target_stage_presence"] == {}
+    assert measures["trace_candidate_budget"] is None
+
+
+class _StubService:
+    """A service that returns one payload, for the harness's own policy checks."""
+
+    def __init__(self, payload: dict[str, Any]) -> None:
+        self.payload = payload
+
+    async def search(self, *args: Any, **kwargs: Any) -> dict[str, Any]:
+        return self.payload
+
+
+def _fallback_payload() -> dict[str, Any]:
+    return {
+        "hits": [],
+        "result_count": 0,
+        "distinct_reference_count": 0,
+        "retrieval_method": "hybrid",
+        "candidate_depth": 20,
+        "candidate_count": 0,
+        "rerank_requested": True,
+        "reranked": False,
+        "rerank_fallback": {"reason": "reranker_model_unavailable"},
+        "rerank_window": 10,
+        "fusion": {"pool_size": 20},
+        "withheld_candidates": {"total": 0, "reasons": {}},
+        "evaluation_trace": {"candidate_budget": 256, "stages": {}},
+    }
+
+
+_JUDGED_TARGET = {
+    "target_id": "t1",
+    "chunk_id": "c-target",
+    "document_id": "d1",
+    "chunk_text": "A judged passage about cobalt.",
 }
 
 
-def test_resolve_targets_uses_the_snippet_as_an_identity_key(evaluation) -> None:
-    chunks = [
-        _chunk("c1", "the cobalt supply chain depends on artisanal mining"),
-        _chunk("c2", "artisanal mining in the Congo exposes workers to hazards"),
-    ]
-    targets = [
-        {
-            "target_id": "t1",
-            "source_path": "sources/a.pdf",
-            "snippet": "artisanal\n  mining in the Congo",
-            "chunk_id_at_measurement": "c2",
-        }
-    ]
+def test_a_reranked_row_that_did_not_rerank_fails_the_run() -> None:
+    """A fusion score printed under a reranked row's name is a wrong row."""
 
-    resolved = evaluation.resolve_targets(targets, chunks, DOCUMENTS)
-
-    assert resolved["t1"]["chunk_id"] == "c2"
-    assert resolved["t1"]["chunk_id_at_measurement"] == "c2"
-    assert resolved["t1"]["document_id"] == "doc_1"
-    assert resolved["t1"]["source_path"] == "sources/a.pdf"
-    assert "artisanal mining in the Congo" in resolved["t1"]["chunk_text"]
+    with pytest.raises(EvaluationError, match="did not run the way its row claims"):
+        asyncio.run(
+            evaluation._run_one(
+                _StubService(_fallback_payload()),
+                query_id="q1",
+                query_class="quote",
+                query="cobalt",
+                mode=evaluation.RERANK_MODE,
+                settings=evaluation._mode_settings(evaluation.RERANK_MODE),
+                top_k=10,
+                target=_JUDGED_TARGET,
+                family_id="t1",
+            )
+        )
 
 
-def test_resolve_targets_matches_a_renamed_source_by_document_id(evaluation) -> None:
-    """A target survives a rename because the manifest still names its document."""
-
-    chunks = [_chunk("c1", "shared wording here")]
-    targets = [
-        {
-            "target_id": "t1",
-            "source_path": "sources/renamed.pdf",
-            "source_relative_path": "renamed.pdf",
-            "document_id": "doc_1",
-            "snippet": "shared wording here",
-        }
-    ]
-
-    resolved = evaluation.resolve_targets(targets, chunks, DOCUMENTS)
-
-    assert resolved["t1"]["chunk_id"] == "c1"
-    assert resolved["t1"]["source_path"] == "sources/a.pdf"
-
-
-def test_resolve_targets_skips_requested_targets(evaluation) -> None:
-    """A target whose source the corpus no longer holds is skipped on request."""
-
-    chunks = [_chunk("c1", "shared wording here")]
-    targets = [
-        {
-            "target_id": "t1",
-            "source_path": "sources/a.pdf",
-            "snippet": "shared wording here",
-        },
-        {
-            "target_id": "t2",
-            "source_path": "sources/excluded.pdf",
-            "snippet": "no longer in the corpus",
-        },
-    ]
-
-    resolved = evaluation.resolve_targets(
-        targets,
-        chunks,
-        DOCUMENTS,
-        skip=frozenset({"t2"}),
+def test_an_allowed_degraded_row_is_recorded_rather_than_scored_silently() -> None:
+    run = asyncio.run(
+        evaluation._run_one(
+            _StubService(_fallback_payload()),
+            query_id="q1",
+            query_class="quote",
+            query="cobalt",
+            mode=evaluation.RERANK_MODE,
+            settings=evaluation._mode_settings(evaluation.RERANK_MODE),
+            top_k=10,
+            target=_JUDGED_TARGET,
+            family_id="t1",
+            allow_degraded=True,
+        )
     )
-
-    # The skip is explicit, so the absent target is left out rather than guessed
-    # at, and every other target still resolves strictly.
-    assert set(resolved) == {"t1"}
-
-
-def test_resolve_targets_refuses_ambiguity_and_absent_sources(evaluation) -> None:
-    chunks = [
-        _chunk("c1", "shared wording here"),
-        _chunk("c2", "shared wording here too"),
+    assert run["degraded_reasons"] == [
+        "rerank requested but not applied (reranker_model_unavailable)"
     ]
-    ambiguous = [
+    assert run["reranked"] is False
+    assert run["rerank_fallback"]["reason"] == "reranker_model_unavailable"
+    # The row still reports the branch it took, so a reader can see what it is.
+    assert run["candidate_depth"] == 20
+
+
+def test_a_hybrid_row_without_a_fusion_fails_the_run() -> None:
+    payload = {**_fallback_payload(), "rerank_requested": False, "fusion": None}
+    with pytest.raises(EvaluationError, match="hybrid row without a fusion block"):
+        asyncio.run(
+            evaluation._run_one(
+                _StubService(payload),
+                query_id="q1",
+                query_class="quote",
+                query="cobalt",
+                mode="hybrid",
+                settings=evaluation._mode_settings("hybrid"),
+                top_k=10,
+                target=_JUDGED_TARGET,
+                family_id="t1",
+            )
+        )
+
+
+def test_a_reranked_row_that_ran_is_not_flagged() -> None:
+    payload = {
+        **_fallback_payload(),
+        "reranked": True,
+        "rerank_fallback": None,
+        "hits": [
+            {
+                "chunk_id": "c-target",
+                "document_id": "d1",
+                "source_id": "s1",
+                "score": 0.9,
+            }
+        ],
+        "result_count": 1,
+        "distinct_reference_count": 1,
+    }
+    run = asyncio.run(
+        evaluation._run_one(
+            _StubService(payload),
+            query_id="q1",
+            query_class="quote",
+            query="cobalt",
+            mode=evaluation.RERANK_MODE,
+            settings=evaluation._mode_settings(evaluation.RERANK_MODE),
+            top_k=10,
+            target=_JUDGED_TARGET,
+            chunk_index={"c-target": {"contents": "A judged passage about cobalt."}},
+            family_id="t1",
+        )
+    )
+    assert run["degraded_reasons"] == []
+    assert run["success_at_1"] is True
+
+
+def test_a_reranked_row_that_did_not_rerank_names_itself() -> None:
+    reasons = evaluation._degradation_reasons(
         {
-            "target_id": "t1",
-            "source_path": "sources/a.pdf",
-            "snippet": "shared wording here",
-        }
+            "rerank_requested": True,
+            "reranked": False,
+            "rerank_fallback": {"reason": "reranker_model_unavailable"},
+            "fusion": {"pool_size": 74},
+        },
+        mode=evaluation.RERANK_MODE,
+    )
+    assert reasons == ["rerank requested but not applied (reranker_model_unavailable)"]
+
+
+def test_a_hybrid_row_without_a_fusion_names_itself() -> None:
+    assert evaluation._degradation_reasons({"fusion": None}, mode="hybrid") == [
+        "hybrid row without a fusion block"
     ]
-    with pytest.raises(evaluation.EvaluationError):
-        evaluation.resolve_targets(ambiguous, chunks, DOCUMENTS)
-
-    absent = [{"target_id": "t1", "source_path": "sources/b.pdf", "snippet": "x"}]
-    with pytest.raises(evaluation.EvaluationError):
-        evaluation.resolve_targets(absent, chunks, DOCUMENTS)
-
-    missing_text = [
-        {"target_id": "t1", "source_path": "sources/a.pdf", "snippet": "nowhere"}
-    ]
-    with pytest.raises(evaluation.EvaluationError):
-        evaluation.resolve_targets(missing_text, chunks, DOCUMENTS)
 
 
-def _run(mode: str, query_class: str, *, hit: bool, rank: float) -> dict:
-    return {
-        "mode": mode,
-        "class": query_class,
-        "success_at_1": hit and rank == 1.0,
-        "success_at_3": hit,
-        "success_at_k": hit,
-        "reciprocal_rank": rank,
-        "ndcg_at_k": rank,
+def test_a_row_that_ran_the_way_it_names_reports_nothing() -> None:
+    payload = {"rerank_requested": True, "reranked": True, "fusion": {"pool_size": 74}}
+    assert evaluation._degradation_reasons(payload, mode=evaluation.RERANK_MODE) == []
+    assert evaluation._degradation_reasons(payload, mode="hybrid") == []
+
+
+# --------------------------------------------------------------------------
+# Summaries.
+# --------------------------------------------------------------------------
+
+
+def _measured_run(**overrides: Any) -> dict[str, Any]:
+    run = {
+        "query_id": "q1",
+        "mode": "hybrid",
+        "class": "quote",
+        "target_id": "t-1",
+        "family_id": "t-1",
+        "returned_chunk_ids": ["c1"],
+        "success_at_1": True,
+        "success_at_3": True,
+        "success_at_k": True,
+        "reciprocal_rank": 1.0,
+        "ndcg_at_k": 1.0,
         "document_success_at_k": True,
         "lexical_overlap": 0.5,
         "result_count": 10,
         "distinct_source_count": 4,
         "withheld_total": 0,
+        "distinct_normalized_texts": 9.0,
+        "exact_duplicate_slots": 1.0,
+        "lexical_containment_slots": 2.0,
+        "same_source_pairs": 0.0,
+        "duplicate_measure_coverage": {"complete": True},
+        "dense_gate_counts_complete": True,
+        "dense_eligible_total": 50.0,
+        "dense_admitted_above_floor": 20.0,
+        "dense_admitted_below_floor": 5.0,
+        "dense_rejected_below_floor": 25.0,
+        "dense_conserved": True,
+        "elapsed_seconds": 1.0,
     }
+    run.update(overrides)
+    return run
 
 
-def test_summarize_reports_modes_and_classes_separately(evaluation) -> None:
+def test_a_summary_reports_the_new_measures_beside_the_quality_ones() -> None:
+    summary = evaluation.summarize([_measured_run()], 10)["hybrid"]
+    overall = summary["overall"]
+    assert overall["mean_distinct_normalized_texts"] == 9.0
+    assert overall["mean_exact_duplicate_slots"] == 1.0
+    assert overall["mean_lexical_containment_slots"] == 2.0
+    assert overall["mean_same_source_pairs"] == 0.0
+    assert overall["queries_with_duplicate_coverage"] == 1
+    assert overall["mean_dense_eligible_total"] == 50.0
+    assert overall["mean_dense_rejected_below_floor"] == 25.0
+    assert overall["queries_with_dense_rejections"] == 1
+    assert overall["queries_with_dense_gate_conservation_failures"] == 0
+    assert overall["p50_seconds"] == 1.0
+    assert "repeated_slot_rate_all_queries" in summary
+    assert "repeated_slot_rate_cross_target_family" in summary
+
+
+def test_a_summary_reports_an_absent_measure_as_null_rather_than_zero() -> None:
+    run = _measured_run()
+    for key in (
+        "distinct_normalized_texts",
+        "exact_duplicate_slots",
+        "lexical_containment_slots",
+        "same_source_pairs",
+        "duplicate_measure_coverage",
+        "dense_gate_counts_complete",
+    ):
+        del run[key]
+    summary = evaluation.summarize([run], 10)["hybrid"]["overall"]
+    for key in (
+        "mean_distinct_normalized_texts",
+        "mean_exact_duplicate_slots",
+        "mean_lexical_containment_slots",
+        "mean_same_source_pairs",
+        "queries_with_duplicate_coverage",
+        "mean_dense_eligible_total",
+        "mean_dense_rejected_below_floor",
+        "queries_with_dense_rejections",
+    ):
+        assert summary[key] is None, key
+
+
+def test_a_summary_reports_the_gate_as_unmeasured_for_a_mode_that_never_ran_it() -> (
+    None
+):
+    run = _measured_run(dense_gate_counts_complete=False)
+    summary = evaluation.summarize([run], 10)["hybrid"]["overall"]
+    assert summary["mean_dense_rejected_below_floor"] is None
+    assert summary["queries_with_dense_rejections"] is None
+
+
+def test_a_summary_reports_where_the_target_was_at_each_stage() -> None:
     runs = [
-        _run("bm25", "quote", hit=True, rank=1.0),
-        _run("bm25", "paraphrase", hit=False, rank=0.0),
-        _run("dense", "paraphrase", hit=True, rank=1.0),
+        _measured_run(
+            query_id="q1",
+            target_stage_presence={
+                "fused_pre_rerank": True,
+                "reranked": True,
+                "post_collapse": False,
+                "final": False,
+                "bm25_after_gates": None,
+            },
+        ),
+        _measured_run(
+            query_id="q2",
+            target_stage_presence={
+                "fused_pre_rerank": True,
+                "reranked": False,
+                "post_collapse": False,
+                "final": False,
+                "bm25_after_gates": None,
+            },
+        ),
+    ]
+    overall = evaluation.summarize(runs, 10)["hybrid"]["overall"]
+    assert overall["mean_target_present_fused_pre_rerank"] == 1.0
+    assert overall["mean_target_present_reranked"] == 0.5
+    assert overall["mean_target_present_post_collapse"] == 0.0
+    # A stage that never ran is not a stage the target missed.
+    assert overall["mean_target_present_bm25_after_gates"] is None
+    assert overall["target_stage_evaluated_queries_bm25_after_gates"] == 0
+    assert overall["target_stage_evaluated_queries_final"] == 2
+
+
+def test_the_console_row_leaves_an_unmeasured_column_blank() -> None:
+    summary = evaluation.summarize([_measured_run()], 10)
+    evaluation.print_summary("test", summary)
+    summary["hybrid"]["overall"]["mean_lexical_containment_slots"] = None
+    evaluation.print_summary("test without containment", summary)
+
+
+# --------------------------------------------------------------------------
+# Report-level claims.
+# --------------------------------------------------------------------------
+
+
+def test_the_report_names_the_harness_that_wrote_it() -> None:
+    provenance = evaluation.harness_provenance()
+    assert provenance["script"] == "evaluate_retrieval.py"
+    assert len(provenance["script_sha256"]) == 64
+    assert provenance["python"]
+
+
+def test_the_report_states_that_no_answer_is_measured() -> None:
+    support = evaluation.no_answer_support(
+        {"queries": [{"class": "quote"}, {"class": "paraphrase"}]}
+    )
+    assert support["measured"] is False
+    assert support["judged_no_answer_queries"] == 0
+    assert "no query whose correct answer" in support["note"]
+
+
+def test_the_report_names_every_metric_it_replaced_and_why() -> None:
+    superseded = evaluation.SUPERSEDED_METRICS
+    for key in (
+        "runs[].distinct_evidence_spans",
+        "runs[].near_duplicate_slots",
+        "summary[mode].repeated_slot_rate",
+        "report.duplicate_containment",
+    ):
+        assert superseded[key], key
+    for key in (
+        "success_at_1",
+        "mrr",
+        "ndcg_at_k",
+        "distinct_normalized_texts",
+        "lexical_containment_slots",
+        "dense_eligible_total",
+        "candidate_depth",
+        "rerank_window",
+        "repeated_slot_rate_all_queries",
+        "repeated_slot_rate_cross_target_family",
+        "target_stage_presence",
+        "p50_seconds",
+        "p95_seconds",
+        "max_seconds",
+    ):
+        assert key in evaluation.METRIC_DEFINITIONS, key
+
+
+def test_the_report_names_the_containment_threshold_and_what_it_ignores() -> None:
+    assert evaluation.REPORT_SCHEMA_VERSION == 3
+
+
+# --------------------------------------------------------------------------
+# Judged-set handling.
+# --------------------------------------------------------------------------
+
+
+def test_load_judgments_accepts_a_well_formed_set(tmp_path: Path) -> None:
+    path = tmp_path / "judged.json"
+    path.write_text(
+        """
+        {
+          "schema_version": 1,
+          "targets": [
+            {"target_id": "t1", "source_path": "a.pdf",
+             "snippet": "A verbatim span of the passage."}
+          ],
+          "queries": [{"query_id": "q1", "target_id": "t1", "class": "quote",
+                       "query": "what does the span say"}]
+        }
+        """,
+        encoding="utf-8",
+    )
+    payload = evaluation.load_judgments(path)
+    assert payload["targets"][0]["target_id"] == "t1"
+
+
+def test_load_judgments_rejects_an_unknown_target(tmp_path: Path) -> None:
+    path = tmp_path / "judged.json"
+    path.write_text(
+        """
+        {
+          "schema_version": 1,
+          "targets": [
+            {"target_id": "t1", "source_path": "a.pdf", "snippet": "A span."}
+          ],
+          "queries": [{"query_id": "q1", "target_id": "nope", "class": "quote",
+                       "query": "q"}]
+        }
+        """,
+        encoding="utf-8",
+    )
+    with pytest.raises(EvaluationError, match="unknown target"):
+        evaluation.load_judgments(path)
+
+
+def test_load_judgments_rejects_an_unknown_query_class(tmp_path: Path) -> None:
+    path = tmp_path / "judged.json"
+    path.write_text(
+        """
+        {
+          "schema_version": 1,
+          "targets": [
+            {"target_id": "t1", "source_path": "a.pdf", "snippet": "A span."}
+          ],
+          "queries": [{"query_id": "q1", "target_id": "t1", "class": "vibes",
+                       "query": "q"}]
+        }
+        """,
+        encoding="utf-8",
+    )
+    with pytest.raises(EvaluationError, match="class"):
+        evaluation.load_judgments(path)
+
+
+def test_load_judgments_rejects_an_unreadable_file(tmp_path: Path) -> None:
+    with pytest.raises(EvaluationError, match="Cannot read"):
+        evaluation.load_judgments(tmp_path / "absent.json")
+
+
+def test_resolve_targets_needs_one_match_per_target() -> None:
+    chunk = {
+        "chunk_id": "c1",
+        "document_id": "d1",
+        "source_id": "s1",
+        "contents": "A verbatim span of the passage.",
+    }
+    document = {
+        "document_id": "d1",
+        "source_path": "/data/a.pdf",
+        "source_relative_path": "a.pdf",
+    }
+    targets = [
+        {"target_id": "t1", "source_path": "/data/a.pdf", "snippet": "verbatim span"}
     ]
 
-    summary = evaluation.summarize(runs, 10)
+    resolved = evaluation.resolve_targets(targets, [chunk], {"d1": document})
+    assert resolved["t1"]["chunk_id"] == "c1"
 
-    assert summary["bm25"]["overall"]["query_count"] == 2
-    assert summary["bm25"]["overall"]["success_at_1"] == pytest.approx(0.5)
-    assert summary["bm25"]["overall"]["mrr"] == pytest.approx(0.5)
-    # A reordering change that holds success flat matters only if it moves source
-    # spread, so it is reported beside the quality columns.
-    assert summary["bm25"]["overall"]["mean_distinct_sources"] == pytest.approx(4.0)
-    assert summary["bm25"]["per_class"]["quote"]["query_count"] == 1
-    assert summary["bm25"]["per_class"]["quote"]["success_at_1"] == pytest.approx(1.0)
-    assert summary["dense"]["per_class"]["paraphrase"]["success_at_1"] == pytest.approx(
-        1.0
+    with pytest.raises(EvaluationError, match="resolves to 2 chunks"):
+        evaluation.resolve_targets(
+            [{"target_id": "t1", "source_path": "/data/a.pdf", "snippet": "passage"}],
+            [chunk, {**chunk, "chunk_id": "c2"}],
+            {"d1": document},
+        )
+
+
+def test_resolve_targets_leaves_a_skipped_target_alone() -> None:
+    document = {"document_id": "d1", "source_path": "/data/a.pdf"}
+    resolved = evaluation.resolve_targets(
+        [{"target_id": "t1", "source_path": "/data/a.pdf", "snippet": "span"}],
+        [],
+        {"d1": document},
+        skip=frozenset({"t1"}),
     )
-    assert "quote" not in summary["dense"]["per_class"]
+    assert resolved == {}
 
 
-def test_shipped_judged_set_is_structurally_valid(evaluation) -> None:
-    path = Path(__file__).parents[2] / evaluation.DEFAULT_JUDGMENTS
+def test_resolve_targets_carries_the_sets_declared_family() -> None:
+    chunk = {
+        "chunk_id": "c1",
+        "document_id": "d1",
+        "source_id": "s1",
+        "contents": "A span.",
+    }
+    document = {"document_id": "d1", "source_path": "/data/a.pdf"}
+    resolved = evaluation.resolve_targets(
+        [
+            {
+                "target_id": "t1",
+                "source_path": "/data/a.pdf",
+                "snippet": "span",
+                "family_id": "family-latin-america",
+            }
+        ],
+        [chunk],
+        {"d1": document},
+    )
+    assert resolved["t1"]["family_id"] == "family-latin-america"
 
-    payload = evaluation.load_judgments(path)
 
-    classes = {item["class"] for item in payload["queries"]}
-    assert classes == set(evaluation.QUERY_CLASSES)
-    assert len(payload["queries"]) >= 30
-    assert len(payload["targets"]) >= 15
-    assert all(target["snippet"] for target in payload["targets"])
-    assert all(target["chunk_id_at_measurement"] for target in payload["targets"])
-
-
-def test_mode_variants_expand_the_reranked_mode_per_model(evaluation) -> None:
+def test_mode_variants_pass_rerank_explicitly_for_every_mode() -> None:
     variants = evaluation._mode_variants(
-        list(evaluation.MODES),
-        ["Xenova/ms-marco-MiniLM-L-6-v2", "jinaai/jina-reranker-v1-turbo-en"],
+        ["bm25", "dense", "hybrid", evaluation.RERANK_MODE],
+        [evaluation.DEFAULT_RERANKER_MODEL, "bge-reranker-base"],
     )
-
-    labels = [label for label, _ in variants]
-    # The default model keeps the plain label its published numbers use, and a second
-    # model is a second row over the same queries, not a new mode.
-    assert labels == [
+    assert [label for label, _ in variants] == [
         "bm25",
         "dense",
         "hybrid",
-        "hybrid+rerank",
-        "hybrid+rerank[jinaai/jina-reranker-v1-turbo-en]",
+        evaluation.RERANK_MODE,
+        f"{evaluation.RERANK_MODE}[bge-reranker-base]",
     ]
-    assert variants[3][1] == {
-        "retrieval_method": "hybrid",
-        "rerank": True,
-        "rerank_model": evaluation.DEFAULT_RERANKER_MODEL,
-    }
-    assert variants[4][1]["rerank_model"] == "jinaai/jina-reranker-v1-turbo-en"
-    assert all("rerank_model" not in settings for _, settings in variants[:3])
-    assert all(settings["rerank"] is False for _, settings in variants[:3])
+    assert all("rerank" in settings for _, settings in variants)
+    assert variants[3][1]["rerank"] is True
+    assert variants[0][1]["rerank"] is False
 
 
-def _index(*chunks: tuple[str, str, str]) -> dict[str, dict]:
-    """An index keyed by chunk id, holding canonical text and a source id."""
-
-    return {
-        chunk_id: {"chunk_id": chunk_id, "contents": contents, "source_id": source_id}
-        for chunk_id, contents, source_id in chunks
-    }
+def test_selection_rejects_an_unknown_mode() -> None:
+    with pytest.raises(EvaluationError, match="Unknown modes"):
+        evaluation._selection("bm25,telepathy", evaluation.MODES, "modes")
 
 
-def test_duplicate_slots_count_exact_equality_beyond_the_first(evaluation) -> None:
-    index = _index(
-        ("c1", "artisanal mining in the Congo", "s1"),
-        ("c2", "artisanal mining in the Congo", "s2"),
-        ("c3", "the cobalt supply chain", "s3"),
+def test_the_parser_offers_the_degraded_rerank_switch_explicitly() -> None:
+    args = evaluation._parser().parse_args(
+        ["--project", "/tmp/p", "--allow-degraded-rerank"]
     )
-    exact, near = evaluation.duplicate_slots(["c1", "c2", "c3"], index)
-    assert exact == 1
-    assert near == 0
-
-
-def test_duplicate_slots_ignore_wrapping_and_case(evaluation) -> None:
-    index = _index(
-        ("c1", "Artisanal mining\n  in the Congo", "s1"),
-        ("c2", "artisanal  MINING in the congo.", "s2"),
+    assert args.allow_degraded_rerank is True
+    assert (
+        evaluation._parser().parse_args(["--project", "/tmp/p"]).allow_degraded_rerank
+        is False
     )
-    exact, _ = evaluation.duplicate_slots(["c1", "c2"], index)
-    assert exact == 1, "wrapping and case are not a different passage of evidence"
 
 
-def test_duplicate_slots_report_a_near_duplicate_beside_the_exact_count(
-    evaluation,
-) -> None:
-    index = _index(
-        ("c1", "artisanal mining in the Congo exposes workers to hazards", "s1"),
-        ("c2", "artisanal mining in the Congo", "s2"),
-        ("c3", "the cobalt supply chain depends on refining", "s3"),
+def test_the_shipped_judged_set_still_resolves() -> None:
+    root = Path(__file__).resolve().parents[2]
+    payload = evaluation.load_judgments(root / evaluation.DEFAULT_JUDGMENTS)
+    assert payload["targets"]
+    assert payload["queries"]
+    # The set is known-item throughout: one target per query, and no query whose
+    # answer is that the corpus has none. Abstention is therefore unmeasured
+    # rather than measured at zero.
+    assert all(query["target_id"] for query in payload["queries"])
+    assert evaluation.no_answer_support(payload)["measured"] is False
+
+
+# --------------------------------------------------------------------------
+# The payload contract, against a real service.
+# --------------------------------------------------------------------------
+
+
+@pytest.fixture
+def evaluation_real_service(project: Path):
+    from research_rag.core.service import ResearchService
+    from research_rag.project.config import resolve_config
+    from tests.conftest import write_pdf
+    from tests.core.test_service import (
+        FakeDenseBackend,
+        FakeUltraRAG,
+        UnavailableRerankerDenseBackend,
     )
-    exact, near = evaluation.duplicate_slots(["c1", "c2", "c3"], index)
-    # c2's words are wholly inside c1's, so c2 is the near duplicate; c3 is not.
-    assert exact == 0
-    assert near == 1
+
+    async def build(*, reranker: bool = False) -> ResearchService:
+        write_pdf(
+            project / "sources" / "article.pdf",
+            [
+                (
+                    "Cobalt evidence about labour and artificial intelligence in "
+                    "the artisanal mines of the Congo."
+                ),
+                "Quartz material unrelated to the primary question.",
+            ],
+            title="Research Article",
+        )
+        config = resolve_config(project, vanilla_executable=sys.executable)
+        service = ResearchService(  # type: ignore[arg-type]
+            config,
+            FakeUltraRAG(),
+            dense=UnavailableRerankerDenseBackend() if reranker else FakeDenseBackend(),
+        )
+        await service.ingest(chunk_size=50, chunk_overlap=10)
+        return service
+
+    return build
 
 
-def test_duplicate_slots_keep_distinct_evidence_from_one_source(evaluation) -> None:
-    index = _index(
-        ("c1", "artisanal mining in the Congo", "s1"),
-        ("c2", "the cobalt supply chain depends on refining", "s1"),
-    )
-    exact, near = evaluation.duplicate_slots(["c1", "c2"], index)
-    # Two passages from one file are not one passage twice.
-    assert (exact, near) == (0, 0)
-
-
-def test_duplicate_slots_tolerate_a_chunk_the_generation_does_not_hold(
-    evaluation,
+def test_the_harness_reads_the_gate_from_a_real_bm25_payload_as_unmeasured(
+    project: Path, evaluation_real_service: Any
 ) -> None:
-    index = _index(("c1", "artisanal mining in the Congo", "s1"))
-    exact, near = evaluation.duplicate_slots(["c1", "missing"], index)
-    assert (exact, near) == (0, 0)
+    """The engine emits a zeroed gate block for BM25, and the block is not the gate."""
+
+    async def exercise() -> None:
+        service = await evaluation_real_service()
+        payload = await service.search(
+            "cobalt labour",
+            top_k=3,
+            retrieval_method="bm25",
+            rerank=False,
+            evaluation_trace=True,
+        )
+        measures = evaluation._dense_gate_measures(payload)
+        assert payload["dense_gate"]["rejected_below_floor"] is None
+        assert measures["dense_gate_ran"] is False
+        assert measures["dense_rejected_below_floor"] is None
+
+    asyncio.run(exercise())
 
 
-def test_same_source_pairs_counts_slots_beyond_the_first_of_a_source(
-    evaluation,
+def test_the_harness_reads_a_real_hybrid_gate_with_its_denominator(
+    project: Path, evaluation_real_service: Any
 ) -> None:
-    index = _index(
-        ("c1", "first passage", "s1"),
-        ("c2", "second passage", "s1"),
-        ("c3", "third passage", "s1"),
-        ("c4", "a passage from elsewhere", "s2"),
-    )
-    assert evaluation.same_source_pairs(["c1", "c2", "c3", "c4"], index) == 2
+    async def exercise() -> None:
+        service = await evaluation_real_service()
+        payload = await service.search(
+            "cobalt labour",
+            top_k=3,
+            retrieval_method="hybrid",
+            rerank=False,
+            evaluation_trace=True,
+        )
+        measures = evaluation._dense_gate_measures(payload)
+        assert measures["dense_gate_ran"] is True
+        assert measures["dense_gate_counts_complete"] is True
+        assert measures["dense_conserved"] is True
+        assert measures["dense_eligible_total"] is not None
+
+    asyncio.run(exercise())
 
 
-def test_same_source_pairs_is_zero_when_every_result_is_from_another_source(
-    evaluation,
+def test_the_harness_reads_a_real_fallback_as_a_degraded_reranked_row(
+    project: Path, evaluation_real_service: Any
 ) -> None:
-    index = _index(("c1", "first", "s1"), ("c2", "second", "s2"))
-    assert evaluation.same_source_pairs(["c1", "c2"], index) == 0
+    async def exercise() -> None:
+        service = await evaluation_real_service(reranker=True)
+        payload = await service.search(
+            "cobalt labour",
+            top_k=3,
+            retrieval_method="hybrid",
+            rerank=True,
+            evaluation_trace=True,
+        )
+        reasons = evaluation._degradation_reasons(payload, mode=evaluation.RERANK_MODE)
+        assert reasons == [
+            "rerank requested but not applied (reranker_model_unavailable)"
+        ]
+
+    asyncio.run(exercise())
 
 
-def test_repeated_slot_rate_finds_a_passage_more_than_one_query_returned(
-    evaluation,
+def test_the_harness_reads_a_real_trace_for_a_target_that_is_missed(
+    project: Path, evaluation_real_service: Any
 ) -> None:
-    runs = [
-        {"returned_chunk_ids": ["c1", "c2"]},
-        {"returned_chunk_ids": ["c1", "c3"]},
-        {"returned_chunk_ids": ["c4", "c5"]},
-    ]
-    # c1 occupies two of six slots, so a third of the results were a generic leader.
-    assert evaluation.repeated_slot_rate(runs) == pytest.approx(2 / 6)
+    """A known-item miss and a target the gate dropped are the same number otherwise."""
 
+    async def exercise() -> None:
+        service = await evaluation_real_service()
+        payload = await service.search(
+            "cobalt labour",
+            top_k=3,
+            retrieval_method="hybrid",
+            rerank=False,
+            evaluation_trace=True,
+        )
+        returned = [str(hit["chunk_id"]) for hit in payload["hits"]]
+        absent = "chk_never_returned"
+        measures = evaluation._trace_measures(payload, target_chunk_id=absent)
+        presence = measures["target_stage_presence"]
+        assert measures["evaluation_trace_available"] is True
+        assert presence["final"] is False
+        assert presence["dense_admitted"] is False
+        for chunk_id in returned:
+            found = evaluation._trace_measures(payload, target_chunk_id=chunk_id)
+            assert found["target_stage_presence"]["final"] is True
 
-def test_repeated_slot_rate_is_zero_when_no_passage_repeats(evaluation) -> None:
-    runs = [{"returned_chunk_ids": ["c1", "c2"]}, {"returned_chunk_ids": ["c3"]}]
-    assert evaluation.repeated_slot_rate(runs) == 0.0
-
-
-def test_repeated_slot_rate_of_a_run_with_no_results_is_zero(evaluation) -> None:
-    assert evaluation.repeated_slot_rate([{"returned_chunk_ids": []}]) == 0.0
-
-
-def test_latency_percentiles_report_measured_values_at_the_nearest_rank(
-    evaluation,
-) -> None:
-    runs = [{"elapsed_seconds": float(value)} for value in range(1, 21)]
-    percentiles = evaluation.latency_percentiles(runs)
-    assert percentiles["p50_seconds"] == 10.0
-    assert percentiles["p95_seconds"] == 19.0
-
-
-def test_latency_percentiles_of_a_run_with_no_timing_is_zero(evaluation) -> None:
-    assert evaluation.latency_percentiles([{"query": "x"}]) == {
-        "p50_seconds": 0.0,
-        "p95_seconds": 0.0,
-    }
-
-
-def test_result_list_measures_record_what_a_list_contained(evaluation) -> None:
-    index = _index(
-        ("c1", "artisanal mining in the Congo", "s1"),
-        ("c2", "artisanal mining in the Congo", "s2"),
-        ("c3", "the cobalt supply chain", "s1"),
-    )
-    measures = evaluation._result_list_measures(["c1", "c2", "c3"], index)
-    assert measures == {
-        "distinct_evidence_spans": 2,
-        "exact_duplicate_slots": 1,
-        "near_duplicate_slots": 0,
-        "same_source_pairs": 1,
-    }
-
-
-def test_summarize_reports_redundancy_and_repetition_beside_quality(
-    evaluation,
-) -> None:
-    runs = [
-        {**_run("bm25", "quote", hit=True, rank=1.0), **_measures(3, 1, 2)},
-        {**_run("bm25", "paraphrase", hit=True, rank=1.0), **_measures(3, 1, 2)},
-    ]
-    summary = evaluation.summarize(runs, 10)
-    overall = summary["bm25"]["overall"]
-    assert overall["mean_distinct_evidence_spans"] == pytest.approx(3.0)
-    assert overall["mean_exact_duplicate_slots"] == pytest.approx(1.0)
-    assert overall["mean_near_duplicate_slots"] == pytest.approx(0.0)
-    assert overall["mean_same_source_pairs"] == pytest.approx(2.0)
-    assert overall["p50_seconds"] == pytest.approx(0.0)
-    assert summary["bm25"]["repeated_slot_rate"] == pytest.approx(1.0)
-
-
-def test_summarize_reports_an_absent_measure_as_none_not_zero(evaluation) -> None:
-    # A run record written before report version 2 carries no redundancy counts,
-    # and a zero would read as an absence of duplication rather than of measurement.
-    runs = [_run("bm25", "quote", hit=True, rank=1.0)]
-    overall = evaluation.summarize(runs, 10)["bm25"]["overall"]
-    assert overall["mean_distinct_evidence_spans"] is None
-    assert overall["mean_same_source_pairs"] is None
-    assert overall["mean_exact_duplicate_slots"] is None
-
-
-def _measures(spans: int, exact: int, same_source: int) -> dict:
-    return {
-        "distinct_evidence_spans": spans,
-        "exact_duplicate_slots": exact,
-        "near_duplicate_slots": 0,
-        "same_source_pairs": same_source,
-        "returned_chunk_ids": ["c1", "c2", "c3"],
-    }
-
-
-def test_dense_gate_measures_read_the_engines_own_counts(evaluation) -> None:
-    gate = {
-        "minimum_cosine_similarity": 0.72,
-        "relative_margin": 0.1,
-        "best_cosine_similarity": 0.7312,
-        "admitted_below_floor": 4,
-        "rejected_below_floor": 118,
-    }
-    assert evaluation._dense_gate_measures(gate) == {
-        "dense_rejected_below_floor": 118,
-        "dense_admitted_below_floor": 4,
-        "dense_best_cosine_similarity": 0.7312,
-    }
-
-
-def test_a_search_with_no_gate_block_reports_none_rather_than_zero(evaluation) -> None:
-    # BM25 never opens the dense gate, so the block is absent. Zero rejections
-    # there would be indistinguishable from a gate that rejected nothing.
-    assert evaluation._dense_gate_measures({}) == {
-        "dense_rejected_below_floor": None,
-        "dense_admitted_below_floor": None,
-        "dense_best_cosine_similarity": None,
-    }
-
-
-def test_withheld_candidates_says_nothing_about_the_gate(evaluation) -> None:
-    # The two counts are about different things, and conflating them is how a run
-    # record comes to report a gate as inert.
-    measures = evaluation._dense_gate_measures({"rejected_below_floor": 118})
-    assert measures["dense_rejected_below_floor"] == 118
-    assert measures["dense_admitted_below_floor"] == 0
-
-
-def test_summarize_counts_the_queries_where_the_gate_acted(evaluation) -> None:
-    runs = [
-        {**_run("hybrid", "quote", hit=True, rank=1.0), **_gate(0)},
-        {**_run("hybrid", "paraphrase", hit=True, rank=1.0), **_gate(37)},
-        {**_run("hybrid", "entity", hit=True, rank=1.0), **_gate(0)},
-    ]
-    overall = evaluation.summarize(runs, 10)["hybrid"]["overall"]
-    assert overall["mean_dense_rejected_below_floor"] == pytest.approx(37 / 3)
-    assert overall["mean_dense_admitted_below_floor"] == pytest.approx(0.0)
-    assert overall["queries_with_dense_rejections"] == 1
-
-
-def test_summarize_reports_the_gate_as_unmeasured_for_a_mode_without_it(
-    evaluation,
-) -> None:
-    runs = [_run("bm25", "quote", hit=True, rank=1.0)]
-    overall = evaluation.summarize(runs, 10)["bm25"]["overall"]
-    assert overall["mean_dense_rejected_below_floor"] is None
-    assert overall["queries_with_dense_rejections"] is None
-
-
-def _gate(rejected: int) -> dict:
-    return {
-        "dense_rejected_below_floor": rejected,
-        "dense_admitted_below_floor": 0,
-        "dense_best_cosine_similarity": 0.8,
-    }
+    asyncio.run(exercise())

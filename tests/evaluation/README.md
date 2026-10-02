@@ -1,19 +1,37 @@
-# The retrieval-evaluation harness
+# Tests for the retrieval evaluation harness
 
-These tests hold the measurement rather than a retrieval claim: the metrics the harness computes, the way it loads and refuses a judged set, the way a target is re-resolved after a rebuild or a rename, and the shape of the mode table its published numbers were taken from.
+## What is checked
 
-- `test_evaluation.py` — `success@k`, reciprocal rank, and `nDCG@k`; lexical overlap that ignores stopwords and short tokens; `load_judgments` refusing an unknown class and a missing target; target resolution by snippet, by `document_id`, and by a skip list, with ambiguity refused; the per-mode and per-class summary; the shipped judged set being structurally valid; and the report version 2 result-list measures — exact and near duplicate slots, same-source pairs, the repeated-slot rate, and latency percentiles — including that an absent measure is reported as `None` rather than as zero; and the pre-fusion gate counts, read from the search payload rather than inferred, and reported separately from `withheld_candidates`.
+- `tests/evaluation/test_evaluation.py` — the metrics, and the payload readers
+  behind them. Each measure is checked against what it says it compares: an exact
+  equality that keeps word order, a repeated word, a sign, a decimal, an
+  operator, and a script it cannot segment; a lexical containment that refuses a
+  pair whose figures or negations disagree and that never counts one passage
+  twice; missing passages reported as coverage rather than as duplicates; the
+  cosine gate read only when the method ranked the dense half, and its counts
+  checked against its own denominator; repetition rates split into all-queries
+  and cross-question-family; latency as percentiles with the slowest reported
+  beside them. The reranked-row policy is checked through `_run_one` against the
+  payload a search returns, including a real service whose cross-encoder cannot
+  load.
+- The judged set beside this file resolves: `ai-and-fetishism-queries.json` is
+  checked for one target per query, and `no_answer_support` is checked to report
+  that abstention is unmeasured rather than to invent a label.
+- `tests/retrieval/test_search_evaluation_trace.py` holds the engine-side payload
+  contract, because it is the engine's payload: the eight named stages, the
+  bounded identifier lists, the gate's denominator and conservation, the
+  candidate-depth and rerank-window formulas, a BM25 payload reporting no dense
+  counts, an unavailable reranker traced as not applied, and the proof that a
+  traced search returns an answer otherwise identical to an untraced one.
 
-The harness is a measurement script rather than a shipped module, so it is loaded by path from `scripts/evaluate_retrieval.py` and no test imports it as `research_rag`. It reads `evaluation/ai-and-fetishism-queries.json` and reaches `ResearchService` through the same call the script makes. No test here runs an ingestion, so a retrieval number is produced by the script and not by this folder.
-
-## Running these
+## Running them
 
 ```bash
-.venv/bin/python -m pytest tests/evaluation -q
+uv run pytest tests/evaluation -q
 ```
 
-This is the right scope for a change to the harness or to the judged set, and it is the folder to run before a documented retrieval default changes, because a protocol change has to keep the metrics it published comparable.
-
-## What it mirrors
-
-`evaluation/` and `scripts/evaluate_retrieval.py`, which exercise the app end to end rather than one package folder.
+The suite needs no project, no gateway, and no model: the two deterministic
+fakes and the PDF writer come from `tests/core/test_service.py` and
+`tests/conftest.py`, so these tests read the payload a real service emits rather
+than a shape the engine cannot produce. The harness is loaded by path, because
+`scripts/` is not a package.
