@@ -14,7 +14,7 @@
   - The ownership proof is already two arguments in the command line plus the project; a detached app needs the terminal recorded as deliberately none rather than absent, because an absent terminal file cannot tell the two apart.
   - `stop` refuses to kill what it cannot prove it owns, so a detached app needs the same proof plus the flag, and a plain `stop` must never end one by accident.
   - Anything that reads the pid file has to learn that a detached app outlives its terminal, including `doctor` and the workspace's project selector.
-- [ ] **A session an unnamed client opened cannot have its stream dropped.** Limit. A disconnect folds the client's sightings onto the session by the name the client declared, and a client that declared nothing has only its session refused. `RESEARCH_RAG_CLIENT_NAME` is the fix, and the stdio bridge always sets it, so this only reaches a hand-written HTTP client.
+- [ ] **A connection an unnamed client opened cannot be dropped.** Limit. A client that declared nothing is one client per MCP session, and a disconnect folds its connections onto the session by the name it declared, so a hand-written HTTP client has only its sessions refused. `RESEARCH_RAG_CLIENT_NAME` is the fix, and the stdio bridge always sets it.
 - [ ] **Measure the payload difference the app makes.** Missing number. Nothing states the lean and full search sizes since the repackaging retired them. Measure them against the running app, and add the workspace, agent, and control surfaces' own overhead, because one process now serves all three and the claim that they cannot disagree is only as good as the evidence that they are one service.
 
 ## A report that is true

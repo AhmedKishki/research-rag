@@ -1009,6 +1009,71 @@ textarea:disabled {
   font-size: var(--text-xs);
 }
 
+/* A client list is as long as the number of agents a machine has run, so the
+   list is folded away and the summary carries the count. It opens on one click
+   and a reader who came for the list opens it; a reader who came for the
+   endpoint does not scroll past it. */
+.client-drawer {
+  margin-top: var(--space-2xs);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  background: var(--bg-card);
+}
+
+.client-drawer summary {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2xs);
+  padding: var(--space-2xs) var(--space-xs);
+  color: var(--text-secondary);
+  font-size: var(--text-sm);
+  cursor: pointer;
+}
+
+.client-drawer summary:hover {
+  color: var(--text-primary);
+}
+
+.client-drawer .drawer-title {
+  color: var(--text-primary);
+  font-weight: 600;
+}
+
+.client-drawer .drawer-note {
+  color: var(--text-secondary);
+  font-size: var(--text-xs);
+}
+
+.client-drawer .partition-chips {
+  margin: 0;
+  padding: 0 var(--space-xs) var(--space-xs);
+}
+
+/* One client is two lines: who it is, and the facts that identify it. The
+   second wraps rather than truncates, because a truncated path or a cut-off
+   user agent is the half of the identity a reader came for. */
+.client-chip {
+  display: grid;
+  gap: var(--space-3xs);
+  align-items: baseline;
+}
+
+.client-chip-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: var(--space-2xs);
+}
+
+.client-facts {
+  color: var(--text-secondary);
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  line-height: var(--leading-normal);
+  overflow-wrap: anywhere;
+}
+
 .sql-console-form,
 .settings-form {
   display: grid;
@@ -1161,6 +1226,10 @@ textarea:disabled {
 .setting-value {
   color: var(--text-primary);
   font-weight: 600;
+  overflow-wrap: anywhere;
+}
+
+.setting-default {
   overflow-wrap: anywhere;
 }
 

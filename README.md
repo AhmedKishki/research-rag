@@ -26,7 +26,10 @@
   - `generations` lists the generations and reclaims their space.
   - `STORAGE.md` carries the format.
 - **Attached clients are visible and droppable from either place.**
-  - The workspace status view lists every attached agent and ends one on request.
+  - The MCP view folds the list away and shows the count; opening it names each agent, the program it runs in, the directory it was started in, and the project it asked for.
+  - A client that named nothing is shown as the kind of connection it opened, never as a session id.
+  - One agent is one row however many sessions it has opened, and disconnecting it ends every one of them.
+  - A client that has said nothing for a quarter of an hour is forgotten, so the list holds the clients that are here rather than every session the machine has run.
   - `clients` and `disconnect` do the same from a terminal.
   - A client that cannot open a socket gets the same surface through `research-rag mcp`, which speaks stdio and proxies to the app.
 - **One install serves many projects.**
@@ -150,6 +153,8 @@ research-rag --project-root /path/to/project search "commodity fetishism" \\
 ## Settings
 
 - `research-rag config` prints every effective value, the layer it came from, what each key does, and what a change to each one costs.
+- The **Config** view names the file every default comes from once at the top, and each row gives its own default beside the value in force.
+  - A value another layer supplied is named on its row, because a value the default file supplied would say the same thing on every row.
 - The workspace writes those values into `.research-rag/config.toml` after naming which keys force a rebuild.
   - It preserves every key it did not change, so a hand edit in that file survives.
 - A value the environment, the command line, or `--config PATH` supplied is shown read-only.
@@ -175,6 +180,7 @@ research-rag --project-root /path/to/project search "commodity fetishism" \\
 - On a machine holding no project under that name, the connection is made and `status` reports that the project is not initialised, with the `init` command that creates it.
   - Running that `init` command serves the project with no edit to the entry.
 - `RESEARCH_RAG_CLIENT_NAME` names the agent, so the app's client list can tell two agents apart.
+  - A client that sets nothing appears as `stdio-bridge`, and the row beside it carries the program that started it, the directory it was started in, its process id, and whether it reached the app over ssh or inside a terminal multiplexer.
 - `RESEARCH_RAG_PROJECT_NAME` names the project for a client that can pass an environment but no argument.
 - The port is chosen at start and recorded, so a hard-coded URL goes stale when the port moves.
 - Print the entry for the machine it runs on, and check one already in place without editing it:
@@ -308,6 +314,7 @@ research-rag --project-root /path/to/project stop                # stop it, from
 - A project whose app is up opens in a new tab.
 - A project whose app is down shows the command that starts it rather than a link that would fail.
 - The **MCP** tab carries the address this app serves agents on and the client entry `research-rag doctor --mcp-entry` prints, copyable as it is.
+- The **MCP** tab folds the attached clients behind one click, and the summary carries the count.
 
 ## Limitations
 

@@ -189,7 +189,12 @@ class FakeResearchService:
 
     async def settings_read(self) -> dict[str, Any]:
         self._record("settings_read", {})
-        return {"revision": "rev-1", "sections": [], "message": "38 settings."}
+        return {
+            "revision": "rev-1",
+            "default_file": "/opt/research-rag/default.toml",
+            "sections": [],
+            "message": "38 settings.",
+        }
 
     async def settings_write(
         self, values: dict[str, Any], *, expected_revision: str, confirm: bool = False
@@ -627,6 +632,40 @@ def test_the_workspace_lists_the_clients_attached_to_the_app(project: Path) -> N
     assert entry["requests"] == 2
 
 
+def test_the_workspace_says_where_an_agent_is_running(project: Path) -> None:
+    """The payload the browser draws a row from names the client, not its handle."""
+
+    registry = ClientRegistry()
+    identity = {
+        "agent": "reader-agent",
+        "project": "p",
+        "pid": 991,
+        "cwd": "/home/reader/p",
+        "host": {
+            "program": "Visual Studio Code",
+            "term": "",
+            "ssh": True,
+            "tmux": False,
+        },
+    }
+    for session in ("s-1", "s-2", "s-3"):
+        registry._touch(
+            session, "reader-agent", identity=identity, peer="127.0.0.1:5000"
+        )
+
+    with _client_client(project, registry) as client:
+        clients = client.get("/api/clients").json()["clients"]
+
+    assert len(clients) == 1
+    entry = clients[0]
+    assert entry["label"] == "reader-agent"
+    assert entry["transport"] == "stdio"
+    assert entry["sessions"] == 3
+    assert entry["identity"]["host"]["program"] == "Visual Studio Code"
+    assert entry["identity"]["host"]["ssh"] is True
+    assert entry["identity"]["cwd"] == "/home/reader/p"
+
+
 def test_the_workspace_can_end_one_client(project: Path) -> None:
     registry = _registry()
     with _client_client(project, registry) as client:
@@ -804,6 +843,9 @@ def test_the_workspace_reads_the_settings_the_server_resolved(project: Path) -> 
     result = asyncio.run(adapter.call("settings_read", {}))
 
     assert result["revision"] == "rev-1"
+    # The file every default comes from is named once for the whole answer, so a
+    # row does not repeat it.
+    assert result["default_file"] == "/opt/research-rag/default.toml"
     assert service.calls == [("settings_read", {})]
 
 

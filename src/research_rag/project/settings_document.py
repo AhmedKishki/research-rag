@@ -38,7 +38,14 @@ from typing import Any
 from ..generations.generation import value_fingerprint
 from ..storage.records import fsync_directory
 from .config import project_command
-from .settings import SETTINGS, SETTINGS_BY_KEY, EffectiveSettings, Setting
+from .settings import (
+    SETTINGS,
+    SETTINGS_BY_KEY,
+    EffectiveSettings,
+    Setting,
+    default_config_file,
+    packaged_defaults,
+)
 from .settings_layers import (
     LAYER_COMMAND_LINE,
     LAYER_DEFAULT,
@@ -546,12 +553,15 @@ class SettingsWorkflow:
     def section_rows(self) -> list[dict[str, Any]]:
         """Every setting, grouped by section, in registry order.
 
-        Each row carries the sentence the registry declares for that key and the
-        domain it declares, so a reader is told what the key does without a
-        surface writing a description of its own.
+        Each row carries the sentence the registry declares for that key, the
+        domain it declares, and the value the packaged default file declares for
+        it, so a reader is told what the key does, what it starts from, and
+        where the value in force came from, without a surface writing a
+        description of its own.
         """
 
         costs = setting_costs(self.config.settings)
+        defaults = packaged_defaults()
         rows: list[dict[str, Any]] = []
         for section in dict.fromkeys(setting.key.split(".")[0] for setting in SETTINGS):
             entries = []
@@ -566,9 +576,15 @@ class SettingsWorkflow:
                         "doc": setting.doc,
                         "label": _label_for(setting),
                         "value": _public_value(self.config.settings.value(setting.key)),
+                        "default": _public_value(defaults.get(setting.key)),
                         "kind": setting.kind.__name__,
                         "layer": setting.layer,
                         "origin": origin,
+                        # Whether the value in force is the default. It is one
+                        # fact for the whole registry rather than a string a
+                        # surface reads, because a row that named the default
+                        # file on every key would say the same thing on every row.
+                        "defaulted": layer_of(origin) == LAYER_DEFAULT,
                         "writable": is_writable(origin),
                         "cost": {
                             "level": cost["level"],
@@ -591,13 +607,17 @@ class SettingsWorkflow:
 
         Nothing is resolved again, so a reader sees the values the retrieval stack
         and the next build actually use, each named with the layer that supplied it,
-        the sentence that says what the key does, and the cost of changing it.
+        the sentence that says what the key does, the value its default is, and the
+        cost of changing it. The default file is named once for the whole answer,
+        because it is the source of every row's default and repeating its path on
+        every row would say the same thing on every row.
         """
 
         return {
             "revision": settings_revision(
                 self.config.settings, self.config.settings_provenance
             ),
+            "default_file": str(default_config_file()),
             "sections": self.section_rows(),
             "message": (
                 f"{len(SETTINGS)} settings; a change to a writable key is written to "

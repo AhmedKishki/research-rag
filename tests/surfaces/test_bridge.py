@@ -8,6 +8,7 @@ the session.
 from __future__ import annotations
 
 import json
+import os
 from contextlib import nullcontext
 from pathlib import Path
 from types import SimpleNamespace
@@ -166,12 +167,21 @@ def test_the_bridge_proxies_a_project_an_app_is_serving(
         ),
     )
     monkeypatch.setattr(
-        bridge, "build_proxy", lambda url, *, name: served.update(url=url) or _Proxy()
+        bridge,
+        "build_proxy",
+        lambda url, *, name, identity: (
+            served.update(url=url, name=name, identity=identity) or _Proxy()
+        ),
     )
 
     bridge.run("AI and fetishism", name="an-agent")
 
     assert served["url"] == "http://127.0.0.1:5051/mcp"
+    assert served["name"] == "an-agent"
+    # The app cannot read the client that started the bridge, so the bridge sends
+    # what it inherited: the project it was asked for and the process it is.
+    assert served["identity"]["project"] == "AI and fetishism"
+    assert served["identity"]["pid"] == os.getpid()
     assert served["run"] == {"transport": "stdio", "show_banner": False}
 
 
@@ -215,7 +225,9 @@ def test_the_bridge_answers_a_project_no_app_is_serving_and_starts_nothing(
     monkeypatch.setattr(
         bridge,
         "build_proxy",
-        lambda url, *, name: pytest.fail("no proxy may be built with no app serving"),
+        lambda url, *, name, identity: pytest.fail(
+            "no proxy may be built with no app serving"
+        ),
     )
 
     bridge.run("AI and fetishism")
@@ -231,6 +243,39 @@ def test_the_bridge_answers_a_project_no_app_is_serving_and_starts_nothing(
     # The remedy names the project, so no machine's directory reaches an agent.
     assert "start" in payload["blocked_by"][0]["remedy"]
     assert "AI and fetishism" in payload["blocked_by"][0]["remedy"]
+
+
+@pytest.mark.parametrize(
+    ("environment", "expected"),
+    [
+        ({"VSCODE_PID": "991"}, "Visual Studio Code"),
+        ({"TERM_PROGRAM": "vscode"}, "Visual Studio Code"),
+        ({"TERM_PROGRAM": "WezTerm"}, "WezTerm"),
+        ({"TERM": "xterm-256color"}, "a xterm-256color terminal"),
+        ({"TERM": "dumb"}, ""),
+        ({}, ""),
+    ],
+)
+def test_a_bridge_reports_the_program_it_was_started_by(
+    environment: dict[str, str], expected: str
+) -> None:
+    """A client entry names a command, so the app cannot tell one agent from another."""
+
+    identity = bridge.client_identity("AI and fetishism", environ=environment)
+
+    assert identity["host"]["program"] == expected
+
+
+def test_a_bridge_reports_a_remote_shell_and_its_own_project() -> None:
+    identity = bridge.client_identity(
+        "AI and fetishism",
+        environ={"SSH_CONNECTION": "10.0.0.2 51000 10.0.0.9 22", "TMUX": "/tmp/tmux"},
+    )
+
+    assert identity["project"] == "AI and fetishism"
+    assert identity["pid"] == os.getpid()
+    assert identity["host"]["ssh"] is True
+    assert identity["host"]["tmux"] is True
 
 
 def test_the_mcp_command_hands_the_bridge_a_name(

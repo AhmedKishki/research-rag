@@ -62,11 +62,28 @@ class ClientControlAdapter:
             {
                 "session_id": "s-1",
                 "name": "reader-agent",
+                "label": "reader-agent",
+                "transport": "stdio",
+                "declared_name": "reader-agent",
                 "attached": True,
                 "requests": 7,
-                "streams": 2,
+                "sessions": 3,
                 "idle_seconds": 0.2,
                 "detached_reason": None,
+                "peer": "127.0.0.1:5000",
+                "user_agent": "",
+                "identity": {
+                    "agent": "reader-agent",
+                    "project": "p",
+                    "pid": 991,
+                    "cwd": "/home/reader/p",
+                    "host": {
+                        "program": "Visual Studio Code",
+                        "term": "",
+                        "ssh": False,
+                        "tmux": False,
+                    },
+                },
             }
         ]
 
@@ -150,7 +167,7 @@ def test_a_host_can_report_its_attached_clients() -> None:
     clients = response.json()["clients"]
     assert [entry["name"] for entry in clients] == ["reader-agent"]
     assert clients[0]["requests"] == 7
-    assert clients[0]["streams"] == 2
+    assert clients[0]["sessions"] == 3
 
 
 def test_a_host_can_end_one_session_from_the_workspace() -> None:
@@ -257,6 +274,58 @@ def test_the_mcp_view_carries_the_clients_panel() -> None:
     assert 'id="agent-url"' in page.text
     assert "status.mcp_url" in script.text
     assert "This host reports no MCP endpoint" in script.text
+
+
+def test_the_client_list_is_folded_away_and_says_how_many_clients_it_holds() -> None:
+    """A machine runs a client per agent session, so the list is not the panel.
+
+    The count is on the summary, because a reader who came for the count should
+    not have to open the list to read it, and a reader who came for the list
+    opens it with one click.
+    """
+
+    with _host(ClientControlAdapter()) as client:
+        page = client.get("/")
+        script = client.get("/assets/app.js").text
+        css = client.get("/assets/app.css").text
+
+    assert '<details id="client-details" class="client-drawer">' in page.text
+    assert 'id="client-count"' in page.text
+    assert 'id="client-detail"' in page.text
+    # A <details> with no open attribute starts closed, so nothing else has to
+    # close it on load.
+    assert "client-details" in page.text
+    assert "open" not in page.text.split('id="client-details"')[1].split(">")[0]
+    assert 'byId("client-count").textContent' in script
+    assert 'byId("client-detail").textContent' in script
+    assert ".client-drawer summary {" in css
+    assert ".client-facts {" in css
+
+
+def test_a_client_row_shows_who_the_client_is_and_where_it_is_running() -> None:
+    """A name, and the program, directory, and process behind it."""
+
+    with _host(ClientControlAdapter()) as client:
+        script = client.get("/assets/app.js").text
+
+    # The label is what the host says the client is, never a session id alone.
+    assert "client.label || client.name" in script
+    for fact in (
+        "host.program",
+        "host.ssh",
+        "host.tmux",
+        "identity.cwd",
+        "identity.project",
+        "identity.pid",
+    ):
+        assert fact in script
+    # A stdio bridge reaches the app through a Python HTTP client, so its user
+    # agent names that library rather than the agent behind the pipe.
+    assert 'client.transport !== "stdio" && client.user_agent' in script
+    assert "`${sessions} sessions · id ${String(client.session_id" in script
+    # The host's own words say how a client is named, so a shared page cannot
+    # name a variable only this host has.
+    assert "profile.client_naming_hint" in script
 
 
 class SqlConsoleHost:
@@ -409,6 +478,8 @@ class SettingsHost:
                                 "key": "retrieval.rrf_k",
                                 "label": "Reciprocal rank fusion k",
                                 "value": 60,
+                                "default": 60,
+                                "defaulted": False,
                                 "kind": "int",
                                 "layer": "retrieval",
                                 "origin": "project",
@@ -422,6 +493,8 @@ class SettingsHost:
                                 "key": "retrieval.model",
                                 "label": "Embedding model",
                                 "value": "bge-small",
+                                "default": "BAAI/bge-small-en-v1.5",
+                                "defaulted": True,
                                 "kind": "str",
                                 "layer": "retrieval",
                                 "origin": "environment",
@@ -434,6 +507,7 @@ class SettingsHost:
                         ],
                     }
                 ],
+                "default_file": "/opt/research-rag/default.toml",
                 "message": "Settings read.",
             }
         if operation == "list_chunk_exclusions":
@@ -507,6 +581,29 @@ def test_the_settings_panel_reads_the_shape_the_server_sends() -> None:
     assert "requires_ingest" in script
     assert "notice.textContent = result.requires_ingest" in script
     assert "/api/settings" in script
+
+
+def test_the_config_panel_states_the_default_once_and_on_every_row() -> None:
+    """The file the defaults come from is named once, and each row gives its own.
+
+    The path is the same for every key, so a row carrying it would repeat one
+    fact thirty-eight times and read as thirty-eight places to look.
+    """
+
+    with _panel_host() as client:
+        page = client.get("/").text
+        script = client.get("/assets/app.js").text
+        css = client.get("/assets/app.css").text
+
+    assert 'id="settings-defaults"' in page
+    assert "payload.default_file" in script
+    assert "Every default below is the one ${payload.default_file} declares." in script
+    # The row states the value the app starts from, beside the value in force.
+    assert "`Default: ${settingValueLabel(setting.default)}`" in script
+    # An origin that is the default is not shown at all: the row already says
+    # what the default is, and a layer that supplied nothing needs no badge.
+    assert "if (setting.defaulted) return null;" in script
+    assert ".setting-default {" in css
 
 
 def test_a_costly_settings_change_asks_for_its_word_before_it_is_sent() -> None:

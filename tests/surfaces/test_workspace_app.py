@@ -124,6 +124,7 @@ class FakeAdapter:
             },
             "settings_read": {
                 "revision": "rev-1",
+                "default_file": "/opt/research-rag/default.toml",
                 "sections": [
                     {
                         "key": "retrieval",
@@ -133,6 +134,8 @@ class FakeAdapter:
                                 "key": "retrieval.rrf_k",
                                 "label": "Reciprocal rank fusion k",
                                 "value": 60,
+                                "default": 60,
+                                "defaulted": False,
                                 "kind": "int",
                                 "layer": "retrieval",
                                 "origin": "project",
@@ -146,6 +149,8 @@ class FakeAdapter:
                                 "key": "retrieval.model",
                                 "label": "Embedding model",
                                 "value": "bge-small",
+                                "default": "BAAI/bge-small-en-v1.5",
+                                "defaulted": True,
                                 "kind": "str",
                                 "layer": "retrieval",
                                 "origin": "environment",

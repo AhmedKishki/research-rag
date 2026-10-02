@@ -14,6 +14,7 @@ from __future__ import annotations
 import re
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, fields
+from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
@@ -25,11 +26,14 @@ from ..retrieval.embeddings import (
 )
 from ..retrieval.rerankers import RERANKER_MODELS
 from .settings_layers import (
+    LAYER_DEFAULT,
     Setting,
     SettingsError,
     SettingsSources,
     default_config_path,
+    merge_settings,
     project_config_path,
+    read_config_document,
     user_config_path,
 )
 
@@ -392,9 +396,8 @@ SETTINGS: tuple[Setting, ...] = (
         layer="identity",
         doc=(
             "Dense relevance gate: a candidate below this cosine similarity is "
-            "withheld rather than ranked. A fused ranking is insensitive below the "
-            "default and loses answers above it, while a dense-only ranking wants a "
-            "much lower value."
+            "withheld from the ranking rather than ranked below it. A dense-only "
+            "ranking can afford a much lower value than a fused one."
         ),
         minimum=-1.0,
         maximum=1.0,
@@ -450,9 +453,8 @@ SETTINGS: tuple[Setting, ...] = (
         doc=(
             "Pseudo-relevance feedback: mine terms from the lexical leaders and "
             "search again with them, so a question that does not use the author's "
-            "words still reaches the passages that do. Off by default: the judged "
-            "set is known-item and cannot judge whether a query reaches more "
-            "passages by borrowing the author's vocabulary."
+            "words still reaches the passages that do. It costs one extra search "
+            "per question and adds terms the query never carried."
         ),
         env="RESEARCH_RAG_RETRIEVAL_PRF",
     ),
@@ -606,10 +608,9 @@ SETTINGS: tuple[Setting, ...] = (
         layer="identity",
         doc=(
             "Prepend the source title and the section to the text a chunk is "
-            "embedded from, never to the text a search returns, so returned "
-            "text stays quote-clean. A re-ingest with it on recomputes every "
-            "vector, because vector reuse is keyed on the passage. Measured "
-            "neutral on the reference corpus, so the default is off."
+            "embedded from, never to the text a search returns, so returned text "
+            "stays quote-clean. A re-ingest with it on recomputes every vector, "
+            "because vector reuse is keyed on the passage."
         ),
         env="RESEARCH_RAG_CHUNKING_HEADERS",
     ),
@@ -707,8 +708,8 @@ SETTINGS: tuple[Setting, ...] = (
         kind=int,
         layer="runtime",
         doc=(
-            "Sequences per embedding inference. Throughput only: padding to a "
-            "batch changes how long the batch takes, not the vectors it returns."
+            "Sequences per embedding inference. Throughput only: it sets how much "
+            "work one inference carries, not what a search can reach."
         ),
         minimum=1,
         maximum=1024,
@@ -741,14 +742,43 @@ SETTINGS_SECTIONS = tuple(
 )
 
 
+@lru_cache(maxsize=1)
+def packaged_defaults() -> Mapping[str, Any]:
+    """Every setting's value as the packaged default file declares it.
+
+    Read from `default.toml` and coerced by the registry, so the default a
+    reader is shown is the value this app started from rather than a second
+    copy of it that can drift. The file ships inside the installed package and
+    does not change while the app runs, so it is read once.
+    """
+
+    document = read_config_document(default_config_file(), source=LAYER_DEFAULT)
+    declared: dict[str, Any] = {}
+    merge_settings(declared, document, SETTINGS, source=LAYER_DEFAULT)
+    return {
+        key: SETTINGS_BY_KEY[key].coerce(value, source=LAYER_DEFAULT)
+        for key, value in declared.items()
+    }
+
+
 def sources_for(project_root: str | Path) -> SettingsSources:
     project = Path(project_root)
     return SettingsSources(
-        default_file=default_config_path(__file__),
+        default_file=default_config_file(),
         user_config=user_config_path(USER_CONFIG_DIRECTORY),
         project_root=project,
         project_config=project_config_path(project, PROJECT_CONFIG_RELATIVE),
     )
+
+
+def default_config_file() -> Path:
+    """The packaged file that declares every default this app starts from.
+
+    Named here because the registry and the file beside it are one thing, and
+    every reader that reports a default reports this path.
+    """
+
+    return default_config_path(__file__)
 
 
 @dataclass(frozen=True, slots=True)

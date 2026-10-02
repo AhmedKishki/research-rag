@@ -91,6 +91,10 @@ class UIProfile:
     # reader could paste and fail on.
     project_start_command: str = ""
     navigation_label: str = "Knowledge base views"
+    # How a client of this host is given a name of its own, in the host's own
+    # words. Empty removes the note: only a host that serves MCP clients over a
+    # bridge has a variable for one to set, and a shared page cannot name it.
+    client_naming_hint: str = ""
     source_types_label: str = "document sources"
     ingest_intro: str = (
         "Included documents will be extracted and indexed. The current generation "
