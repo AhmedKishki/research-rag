@@ -3,8 +3,10 @@
 // Check one already in place, without editing it:
 //   research-rag --project-root <project> doctor --check-entry <this file>
 //
-// This entry is the stdio bridge, so it starts the app for the project if it is
-// not up. It names the project and not its directory, so the same entry serves
+// This entry is the stdio bridge, which starts nothing: the app runs in a
+// terminal and ends when that terminal closes, so a client arriving while the
+// project is not served is told which command to run. It names the project and
+// not its directory, so the same entry serves
 // the project on every machine where it was initialised. The `mcp` command comes
 // before its own options, which is the only order the parser accepts. Replace
 // the executable path and the project name. Add `--runtime-root` only when a

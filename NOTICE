@@ -100,7 +100,7 @@ The browser workspace, the settings layer, and the UltraRAG gateway are this
 project's own code:
 
     src/research_rag/surfaces/workspace/
-    src/research_rag/settings_layers/
+    src/research_rag/project/settings_layers/
     src/research_rag/gateway/
 
 The workspace, the settings layer, and the gateway were each developed in an
