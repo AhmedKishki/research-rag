@@ -17,6 +17,10 @@
   cross-question-family; latency as percentiles with the slowest reported beside
   them. The reranked-row policy is checked through `_run_one` against the payload
   a search returns, including a real service whose cross-encoder cannot load.
+- Target resolution is checked as collection rather than short-circuit: several
+  failures reported together, each keeping its own cause, a run refusing to
+  resolve the targets that did work, and a skipped target neither failing nor
+  excusing a target that was not skipped.
 - The judged set beside this file resolves: `ai-and-fetishism-queries.json` is
   checked for one target per query, and `no_answer_support` is checked to report
   that abstention is unmeasured rather than to invent a label.
