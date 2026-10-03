@@ -881,6 +881,72 @@ def latency_percentiles(runs: list[dict[str, Any]]) -> dict[str, float | None]:
     }
 
 
+def _resolve_target(
+    target: dict[str, Any],
+    by_document: dict[str, list[dict[str, Any]]],
+    documents: dict[str, dict[str, Any]],
+) -> dict[str, Any]:
+    """Resolve one judged target, or raise with why it cannot be resolved.
+
+    The reasons are kept distinct because the remedies are: a source the
+    generation does not hold, two sources answering one path, a snippet the
+    extraction no longer produces, and a snippet two passages both contain.
+    """
+
+    snippet = normalize(str(target["snippet"])).casefold()
+    wanted = {
+        str(target.get("source_path") or "").strip(),
+        str(target.get("source_relative_path") or "").strip(),
+    } - {""}
+    matched = [
+        document
+        for document in documents.values()
+        if str(document.get("source_path") or "") in wanted
+        or str(document.get("source_relative_path") or "") in wanted
+    ]
+    if not matched:
+        named = str(target.get("document_id") or "")
+        if named not in documents:
+            raise EvaluationError(
+                f"no document in this generation matches {sorted(wanted) or named!r}"
+            )
+        matched = [documents[named]]
+    if len(matched) != 1:
+        raise EvaluationError(f"{len(matched)} documents match {sorted(wanted)}")
+    document = matched[0]
+    document_id = str(document["document_id"])
+    candidates = by_document.get(document_id, [])
+    if not candidates:
+        raise EvaluationError(
+            f"the generation holds no chunks for document {document_id}"
+        )
+    hits = [
+        chunk
+        for chunk in candidates
+        if snippet in normalize(_chunk_text(chunk)).casefold()
+    ]
+    if len(hits) != 1:
+        raise EvaluationError(
+            f"snippet resolves to {len(hits)} chunks in "
+            f"{document.get('source_relative_path') or document_id}, "
+            "expected exactly one"
+        )
+    hit = hits[0]
+    return {
+        "target_id": str(target["target_id"]),
+        # A judged set may declare that several targets answer one question
+        # family. The declaration is the set's own, so it is carried through
+        # rather than inferred from the snippets.
+        "family_id": target.get("family_id"),
+        "source_path": document.get("source_path") or target.get("source_path"),
+        "locator": hit.get("locator"),
+        "chunk_id": str(hit.get("chunk_id")),
+        "document_id": document_id,
+        "chunk_id_at_measurement": target.get("chunk_id_at_measurement"),
+        "chunk_text": _chunk_text(hit),
+    }
+
+
 def resolve_targets(
     targets: list[dict[str, Any]],
     chunks: list[dict[str, Any]],
@@ -894,10 +960,18 @@ def resolve_targets(
     re-ingestion, chunk-ID changes, and a rename. Ambiguity is an error: a snippet
     matching two chunks would make the judgment meaningless.
 
-    A target in ``skip`` stays unresolved on purpose. A judged source the corpus
-    no longer holds is a benchmark decision, not a measurement, so it is named on
+    Every target is attempted before anything is reported, because a run that
+    stops at the first failure records one reason per attempt and leaves a
+    reviewer to rerun it to find the next. The failures are collected and raised
+    together, each with its own reason, so one run names every target that needs
+    a decision. Nothing is resolved for the searches: a run that searched the
+    subset that happened to resolve would report a protocol over fewer judgments
+    than the set declares, which is the number a reader would take away.
+
+    A target in ``skip`` is not attempted at all. A judged source the corpus no
+    longer holds is a benchmark decision, not a measurement, so it is named on
     the command line and in the report rather than relaxing resolution for all
-    targets.
+    targets, and a skip never excuses a failure in a target that was not skipped.
     """
 
     by_document: dict[str, list[dict[str, Any]]] = {}
@@ -905,64 +979,22 @@ def resolve_targets(
         by_document.setdefault(str(chunk.get("document_id")), []).append(chunk)
 
     resolved: dict[str, dict[str, Any]] = {}
+    failures: list[tuple[str, str]] = []
     for target in targets:
         target_id = str(target["target_id"])
         if target_id in skip:
             continue
-        snippet = normalize(str(target["snippet"])).casefold()
-        wanted = {
-            str(target.get("source_path") or "").strip(),
-            str(target.get("source_relative_path") or "").strip(),
-        } - {""}
-        matched = [
-            document
-            for document in documents.values()
-            if str(document.get("source_path") or "") in wanted
-            or str(document.get("source_relative_path") or "") in wanted
-        ]
-        if not matched:
-            named = str(target.get("document_id") or "")
-            if named not in documents:
-                raise EvaluationError(
-                    f"{target_id}: no document in this generation matches "
-                    f"{sorted(wanted) or named!r}"
-                )
-            matched = [documents[named]]
-        if len(matched) != 1:
-            raise EvaluationError(
-                f"{target_id}: {len(matched)} documents match {sorted(wanted)}"
-            )
-        document = matched[0]
-        document_id = str(document["document_id"])
-        candidates = by_document.get(document_id, [])
-        if not candidates:
-            raise EvaluationError(
-                f"{target_id}: the generation has no chunks for document {document_id}"
-            )
-        hits = [
-            chunk
-            for chunk in candidates
-            if snippet in normalize(_chunk_text(chunk)).casefold()
-        ]
-        if len(hits) != 1:
-            raise EvaluationError(
-                f"{target_id}: snippet resolves to {len(hits)} chunks in "
-                f"{document.get('source_relative_path') or document_id}, expected exactly one"
-            )
-        hit = hits[0]
-        resolved[target_id] = {
-            "target_id": target_id,
-            # A judged set may declare that several targets answer one question
-            # family. The declaration is the set's own, so it is carried through
-            # rather than inferred from the snippets.
-            "family_id": target.get("family_id"),
-            "source_path": document.get("source_path") or target.get("source_path"),
-            "locator": hit.get("locator"),
-            "chunk_id": str(hit.get("chunk_id")),
-            "document_id": document_id,
-            "chunk_id_at_measurement": target.get("chunk_id_at_measurement"),
-            "chunk_text": _chunk_text(hit),
-        }
+        try:
+            resolved[target_id] = _resolve_target(target, by_document, documents)
+        except EvaluationError as exc:
+            failures.append((target_id, str(exc)))
+    if failures:
+        raise EvaluationError(
+            f"{len(failures)} of "
+            f"{len(resolved) + len(failures)} judged targets did not resolve "
+            "uniquely:\n"
+            + "\n".join(f"  {target_id}: {reason}" for target_id, reason in failures)
+        )
     return resolved
 
 

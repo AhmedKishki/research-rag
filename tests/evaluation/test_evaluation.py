@@ -1527,6 +1527,163 @@ def test_resolve_targets_needs_one_match_per_target() -> None:
         )
 
 
+def _resolution_corpus() -> tuple[list[dict], dict[str, dict]]:
+    """One document, one passage, and the two ways a snippet can land twice."""
+
+    chunks = [
+        {
+            "chunk_id": "c1",
+            "document_id": "d1",
+            "source_id": "s1",
+            "locator": "p. 1",
+            "contents": "A verbatim span of the passage.",
+        }
+    ]
+    documents = {
+        "d1": {
+            "document_id": "d1",
+            "source_path": "/data/a.pdf",
+            "source_relative_path": "a.pdf",
+        }
+    }
+    return chunks, documents
+
+
+def test_every_failure_is_recorded_at_once_rather_than_the_first() -> None:
+    """One run reports every target that needs a decision, not the first of them.
+
+    Stopping at the first failure records one reason per attempt and leaves the
+    reviewer to rerun the harness to find the next, which on a stale judged set is
+    as many runs as there are broken targets.
+    """
+
+    chunks, documents = _resolution_corpus()
+    targets = [
+        {"target_id": "t-ok", "source_path": "/data/a.pdf", "snippet": "verbatim span"},
+        {"target_id": "t-absent", "source_path": "/data/a.pdf", "snippet": "not in it"},
+        {
+            "target_id": "t-twice",
+            "source_path": "/data/a.pdf",
+            "snippet": "passage",
+        },
+        {"target_id": "t-nodoc", "source_path": "/data/gone.pdf", "snippet": "span"},
+    ]
+    # A second passage carrying the word under test without the snippet the
+    # valid target names, so only that target's judgment is ambiguous.
+    twin = {**chunks[0], "chunk_id": "c2", "contents": "A later passage continues."}
+    with pytest.raises(EvaluationError) as failure:
+        evaluation.resolve_targets(targets, chunks + [twin], documents)
+    message = str(failure.value)
+    assert "3 of 4 judged targets did not resolve uniquely" in message
+    assert "t-absent: snippet resolves to 0 chunks" in message
+    assert "t-twice: snippet resolves to 2 chunks" in message
+    assert "t-nodoc: no document in this generation matches" in message
+    # The one target that did resolve is not a failure and is not named.
+    assert "t-ok" not in message
+
+
+def test_each_failure_keeps_its_own_cause() -> None:
+    """Four causes with four remedies, so the reasons stay distinguishable."""
+
+    chunks = [
+        {"chunk_id": "c1", "document_id": "d1", "contents": "A verbatim span."},
+        {
+            "chunk_id": "c2",
+            "document_id": "d1",
+            "contents": "Another quote of the span.",
+        },
+        {"chunk_id": "c3", "document_id": "d2", "contents": "Unrelated."},
+    ]
+    documents = {
+        "d1": {
+            "document_id": "d1",
+            "source_path": "/data/a.pdf",
+            "source_relative_path": "a.pdf",
+        },
+        # Two documents answering one wanted path: the corpus holds the same
+        # name under two roots, one spelled as a full path and one relative.
+        "d3": {"document_id": "d3", "source_path": "/mirror/a.pdf"},
+        "d6": {"document_id": "d6", "source_relative_path": "/mirror/a.pdf"},
+        "d4": {"document_id": "d4", "source_path": "/data/empty.pdf"},
+        "d5": {"document_id": "d5", "source_path": "/data/b.pdf"},
+    }
+    targets = [
+        {
+            "target_id": "t-missing-doc",
+            "source_path": "/data/gone.pdf",
+            "snippet": "span",
+        },
+        {
+            "target_id": "t-ambiguous-doc",
+            "source_path": "/mirror/a.pdf",
+            "snippet": "span",
+        },
+        {
+            "target_id": "t-no-chunks",
+            "source_path": "/data/empty.pdf",
+            "snippet": "span",
+        },
+        {
+            "target_id": "t-absent-snippet",
+            "source_path": "/data/a.pdf",
+            "snippet": "gone",
+        },
+        {
+            "target_id": "t-ambiguous-snippet",
+            "source_path": "/data/a.pdf",
+            "snippet": "span",
+        },
+        {"target_id": "t-missing-doc-by-id", "document_id": "dX", "snippet": "span"},
+        {"target_id": "t-ok", "source_path": "/data/a.pdf", "snippet": "verbatim"},
+    ]
+    with pytest.raises(EvaluationError) as failure:
+        evaluation.resolve_targets(targets, chunks, documents)
+    message = str(failure.value)
+    assert "6 of 7 judged targets did not resolve uniquely" in message
+    assert (
+        "t-missing-doc: no document in this generation matches ['/data/gone.pdf']"
+        in message
+    )
+    assert "t-ambiguous-doc: 2 documents match ['/mirror/a.pdf']" in message
+    assert "t-no-chunks: the generation holds no chunks for document d4" in message
+    assert "t-absent-snippet: snippet resolves to 0 chunks" in message
+    assert "t-ambiguous-snippet: snippet resolves to 2 chunks" in message
+    assert "t-missing-doc-by-id: no document in this generation matches 'dX'" in message
+    assert "t-ok" not in message
+
+
+def test_one_failure_still_refuses_the_whole_run() -> None:
+    """A run that searched the targets that resolved would measure fewer judgments
+    than the set declares, and the number a reader takes away would be wrong."""
+
+    chunks, documents = _resolution_corpus()
+    targets = [
+        {"target_id": "t-ok", "source_path": "/data/a.pdf", "snippet": "verbatim span"},
+        {"target_id": "t-absent", "source_path": "/data/a.pdf", "snippet": "not in it"},
+    ]
+    with pytest.raises(EvaluationError, match="t-absent"):
+        evaluation.resolve_targets(targets, chunks, documents)
+
+
+def test_a_skipped_target_does_not_excuse_another_failure() -> None:
+    """A skip is a decision about one target, not a licence for the rest."""
+
+    chunks, documents = _resolution_corpus()
+    targets = [
+        {"target_id": "t-skipped", "source_path": "/data/gone.pdf", "snippet": "span"},
+        {"target_id": "t-absent", "source_path": "/data/a.pdf", "snippet": "not in it"},
+    ]
+    with pytest.raises(EvaluationError) as failure:
+        evaluation.resolve_targets(
+            targets, chunks, documents, skip=frozenset({"t-skipped"})
+        )
+    message = str(failure.value)
+    assert "1 of 1 judged targets did not resolve uniquely" in message
+    assert "t-absent" in message
+    # The skipped target was never attempted, so it cannot appear as a failure.
+    assert "t-skipped" not in message
+
+
 def test_resolve_targets_leaves_a_skipped_target_alone() -> None:
     document = {"document_id": "d1", "source_path": "/data/a.pdf"}
     resolved = evaluation.resolve_targets(

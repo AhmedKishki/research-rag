@@ -41,7 +41,7 @@ FastEmbed pads every sequence to the longest member of its batch and the runtime
 
 ## The candidate gate is stored, not recomputed
 
-A chunk's usability verdict is a property of the chunk, not of the query, so it is computed once when a generation's artifact lookup is built and stored as a bitmask per chunk. One shared function computes the bitmask for both the build and the query-time fallback, so a rejection decision and the counter that reports it cannot drift. Reason codes are recomputed only for a chunk the verdict flags as corrupt, because the response discloses them.
+A chunk's mechanical eligibility verdict is cached as a bitmask when the generation's artifact lookup is built. One shared function computes it for the build and query-time fallback. Reason codes are computed for flagged candidates. These rules are not author judgments of relevance or usability.
 
 ## What a reader waits for
 
@@ -84,9 +84,11 @@ The judged set and its protocol are in `evaluation/`; `scripts/evaluate_retrieva
 
 ## Which product produced a figure
 
-A number is comparable only with another measured by the same engine, because a process answering from a different checkout reads a different reviewed-metadata field set and can refuse the project's own state. `doctor` reports the two directories when they differ, `research-rag update` names the processes still running the pre-update code, and the reviewed-metadata file records the fields its writer understood, so an older process refuses the file by cause instead of naming a field the caller never typed.
-
-A figure is comparable with another measured by the same engine, because both call the same unchanged retrieval code. A figure measured by a different checkout is not comparable until `doctor` reports the two trees as the same, and `update` names the processes still running the pre-update code while it applies.
+- Record the engine revision, source content hash, generation identity, model configuration, and observed budgets.
+- A code-arm comparison deliberately changes the engine while keeping scoring definitions and judged inputs fixed.
+- Do not compute deltas across incompatible scorer definitions or silently substituted rerank implementations.
+- `doctor` and `update` identify running processes whose loaded code differs from the checkout.
+- A running app is not restarted by an evaluation run.
 
 ## Which version an update compares against
 
@@ -110,7 +112,7 @@ uv run python scripts/evaluate_retrieval.py --project /mnt/data/my-project \
 
 ## Reply depth is the depth the ranking reaches
 
-The reranker reorders a window of `max(top_k * retrieval.rerank_window_multiple, retrieval.rerank_window_floor)` passages, capped by `retrieval.rerank_max_candidates` and the fused candidate count. The depth a reader asks for is therefore the depth the ranking reaches, which makes `top_k` the cheapest quality lever this app has.
+The requested reply depth influences candidate retrieval and the rerank window. Keep reply depth fixed in a policy comparison, and record the observed scored window rather than assuming the cap binds.
 
 - The requested branch depth is `min(active_chunk_count, maximum_candidates, max(minimum_candidates, top_k * 4))`.
 - Pin both candidate settings to the desired depth to distinguish a branch-depth sweep from a cap-only sweep.
@@ -166,7 +168,9 @@ The judged set holds no contentless query, so it cannot measure this behaviour; 
 
 `chunking.size` is bounded by the embedding model's input limit, because a chunk has to fit inside that with its contextual header, so a chunk at the model's own limit is not expressible and the sweep runs down from the shipped size with the overlap tested separately.
 
-**A fragment problem is a length-floor problem, not a chunk-size problem.** A smaller chunk splits long units into more chunks, almost all of them above the floor, so the fragment *share* falls while the fragments themselves stay. Neither the chunk size nor the overlap touches a unit that was already short. That is why `retrieval.minimum_passage_token_fraction` is stated in tokens rather than as a hint to re-chunk.
+- Smaller chunks do not join extraction units that are already short.
+- A length floor rejects fragments; it does not repair paragraph boundaries.
+- Legitimate short prose, table rows, captions, and bibliography need judgments before evaluating a floor or a re-chunking policy.
 
 ## The reranked window
 
@@ -216,3 +220,42 @@ Two facts bound what a long build can do to a machine. An `ingest` call yields b
 - **Older generations are read as they are.** A schema-1 generation stays BM25-only until it is re-ingested, and a lookup written before the retrieval-verdict column is recomputed on first use rather than regenerated silently.
 - **The embedding thread count is left to the runtime.** The optimum is the physical core count, which is machine-specific, and nothing is auto-detected.
 - **A changed default needs a fresh run.** A corpus, an extraction policy, or a retrieval default changes on the harness's own output and nothing else.
+
+## Local exploratory measurements
+
+- The generation is `20261002T080853Z-f1ec4db7`; no new generation is built or activated.
+- Inputs contain 30 known-item queries over 18 targets, partitioned into 14 and 16 queries without shared target families.
+- Target `t12` is explicitly excluded because its source is absent from this generation.
+- The inputs are inspected and exploratory; neither partition is a confirmation set.
+- Primary depth is ten; the deep pass is disabled.
+- Records retain scorer hashes and definitions, applied-reranking flags, frozen inputs, report hashes, and closed source/registry/engine guards.
+- Report-schema-3 batches use revisions `38f5303` and `7be7709`; deltas are computed only within a batch with one scorer identity.
+
+| Observation | Scope and interpretation |
+|---|---|
+| 120 paired baseline ranking/stage comparisons agree | Two independent project copies, four modes, 30 queries; timing and run paths are excluded from equality. |
+| Branch depths 40/80/160 and rerank caps 20/30/50 produce distinct observed work | At branch depth 40, some cap-50 windows contain only 40 or 41 candidates; at depths 80 and 160 the scored windows reach 50. |
+| Default hybrid-reranked success is 26/30; depth-80/cap-50 success is 27/30 | One extra designated passage appears on partition B; partition A stays 12/14. This is exploratory, not a demonstrated policy improvement. |
+| The gate admits 837/1,200 eligible candidates at the shipped floor | 425 are above the floor, 412 are margin rescues, and 363 are rejected; the counts conserve the eligible pool. |
+| Five of 30 queries lose their designated target from the dense branch at that floor | BM25 recovers them in the fused pool on these queries; this does not establish safe admission or abstention on other questions. |
+| Default scoring spends 0/600 scores on candidates later collapsed | Six candidates are collapsed from the unscored tail; final-list duplicate counts alone do not expose this distinction. |
+| Depth-80/cap-50 spends 3/1,500 scores on candidates later collapsed | Three queries account for those scores: one engine `same_words` collapse and two cosine-based `same_meaning` collapses. Those labels are mechanisms, not human judgments. |
+| Increasing the source penalty from zero to the shipped value does not reduce cross-family repetition | Partition A stays 2/140 repeated slots; partition B rises from 2/160 to 4/160. Fewer repeated results within one question family do not establish fewer generic leaders. |
+
+### Retained local evidence
+
+- The experiment toolkit keeps generated artifacts outside tracked source under its `runs/` directory.
+
+| Batch | Record directory | Query-mode observations |
+|---|---|---:|
+| Paired baseline | `pinned-baseline-repeat-20261002T225230.896936` | 240 |
+| Corrected budget grid | `corrected-budget-grid-20261002T225521.887240` | 270 |
+| Gate-stage comparison | `gate-stage-audit-20261002T230706.629280` | 90 |
+| Source-charge comparison | `source-charge-audit-20261002T231034.507688` | 60 |
+| Scored-collapse tracing | `scored-collapse-audit-20261002T232931.884177` | 60 |
+
+- These 720 observations repeatedly evaluate the same 30 queries; they are not 720 independent questions.
+- A refused real preflight also retains its error and an unchanged source guard, without measured arms.
+- Process files, locks, logs, and gateway scratch state are declared guard exclusions for the serving app.
+- Single-pass latency observations do not establish a stable p95 or a performance winner.
+- The next quality test needs blinded author judgments of relevance, usability, independent evidence, contradictions, and no-answer cases.
