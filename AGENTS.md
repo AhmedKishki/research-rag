@@ -80,7 +80,7 @@
   - `NOTICE` records the upstream, model, retrieval-component, and AGPL-3.0 extraction terms, which stay separate from that grant.
 - The command line:
   - The one command is `research-rag`.
-  - `research-rag` registers `init`, `status`, `ingest`, `search`, `sources`, `passage`, `include`, `exclude`, `metadata`, `config`, `doctor`, `start`, `clients`, `disconnect`, `mcp`, `stop`, `generations`, `remove-generation`, `install`, `update`, and `help`.
+  - `research-rag` registers `init`, `projects`, `status`, `ingest`, `search`, `sources`, `passage`, `include`, `exclude`, `metadata`, `config`, `doctor`, `start`, `clients`, `disconnect`, `mcp`, `stop`, `generations`, `remove-generation`, `install`, `update`, and `help`.
   - `install` puts the command on the account's `PATH` and writes desktop menu entries, and it needs no project.
   - `update` reports what a newer version means and applies it, and it needs no project.
   - No command at all serves the workspace from that terminal, asking which project when there is more than one.
