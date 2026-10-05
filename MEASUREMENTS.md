@@ -236,6 +236,7 @@ Two facts bound what a long build can do to a machine. An `ingest` call yields b
 ## Local exploratory measurements
 
 - The generation is `20261002T080853Z-f1ec4db7`; no new generation is built or activated.
+- Its manifest records extraction policy 7, which the shipped policy 8 now reports as needing an upgrade, so none of these figures measures the extraction the app builds today.
 - Inputs contain 30 known-item queries over 18 targets, partitioned into 14 and 16 queries without shared target families.
 - Target `t12` is explicitly excluded because its source is absent from this generation.
 - The inputs are inspected and exploratory; neither partition is a confirmation set.

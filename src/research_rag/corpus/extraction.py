@@ -36,7 +36,12 @@ from .text_normalization import (
 )
 from .text_quality import (
     EXTRACTION_ARTIFACT_TOKEN,
+    SOURCE_REASON_NO_TEXT,
+    SOURCE_REASON_NO_TEXT_LAYER,
     has_searchable_alphanumeric_content,
+    non_argument_removal_flags,
+    opens_with_note_marker,
+    source_health_reasons,
     text_health_reasons,
 )
 
@@ -127,6 +132,110 @@ class _TextBlock:
 class _Region:
     kind: str
     bbox: tuple[float, float, float, float]
+
+
+@dataclass(slots=True)
+class _PageRemovals:
+    """What one page gave up, so the document record can name each category.
+
+    The categories are separate because they are different decisions: a repeated
+    margin block is furniture, a sidebar is layout, a footnote is a note
+    apparatus, and text cleaning removed prose that was structurally not the
+    document's argument. A reader who disagrees with one can see which one fired.
+
+    The character counter is the one total rather than a category: it counts every
+    character any of these rules removed, because the source verdict that reads it
+    asks how much of the file is left, not which rule took it.
+    """
+
+    repeated_margin_blocks: int = 0
+    sidebar_blocks: int = 0
+    footnote_blocks: int = 0
+    removed_reference_segments: int = 0
+    removed_note_segments: int = 0
+    removed_text_characters: int = 0
+    image_only_pages: int = 0
+
+    def with_counts(self, counts: dict[str, int]) -> _PageRemovals:
+        """Add a whole-source pass's counters into these page totals.
+
+        A pass over every unit at once returns a plain mapping, so this keeps the
+        counters the pages already recorded rather than replacing them.
+        """
+
+        return self.merge(
+            _PageRemovals(
+                removed_reference_segments=int(counts["removed_reference_segments"]),
+                removed_note_segments=int(counts["removed_note_segments"]),
+                removed_text_characters=int(counts["removed_non_argument_characters"]),
+            )
+        )
+
+    def merge(self, other: _PageRemovals) -> _PageRemovals:
+        return _PageRemovals(
+            repeated_margin_blocks=(
+                self.repeated_margin_blocks + other.repeated_margin_blocks
+            ),
+            sidebar_blocks=self.sidebar_blocks + other.sidebar_blocks,
+            footnote_blocks=self.footnote_blocks + other.footnote_blocks,
+            removed_reference_segments=(
+                self.removed_reference_segments + other.removed_reference_segments
+            ),
+            removed_note_segments=(
+                self.removed_note_segments + other.removed_note_segments
+            ),
+            removed_text_characters=(
+                self.removed_text_characters + other.removed_text_characters
+            ),
+            image_only_pages=self.image_only_pages + other.image_only_pages,
+        )
+
+    def record_fields(self) -> dict[str, int]:
+        return {
+            "removed_repeated_margin_blocks": self.repeated_margin_blocks,
+            "removed_sidebar_blocks": self.sidebar_blocks,
+            "removed_footnote_blocks": self.footnote_blocks,
+            "removed_reference_segments": self.removed_reference_segments,
+            "removed_note_segments": self.removed_note_segments,
+            "removed_non_argument_characters": self.removed_text_characters,
+            "image_only_pages": self.image_only_pages,
+        }
+
+
+REMOVAL_FIELDS = (
+    "removed_repeated_margin_blocks",
+    "removed_sidebar_blocks",
+    "removed_footnote_blocks",
+    "removed_reference_segments",
+    "removed_note_segments",
+    "removed_non_argument_characters",
+    "removed_epub_furniture_elements",
+    "image_only_pages",
+)
+
+
+def empty_removal_counts() -> dict[str, int]:
+    """Every removal category at zero, for a record that has removed nothing yet.
+
+    A caller builds this once and adds into it, so the categories present in a
+    document record are the same set whatever path produced them.
+    """
+
+    return dict.fromkeys(REMOVAL_FIELDS, 0)
+
+
+def merge_removal_counts(
+    accumulated: dict[str, int] | None,
+    added: dict[str, int],
+) -> dict[str, int]:
+    """Add one batch's removal counts into the running totals of a source."""
+
+    totals = empty_removal_counts()
+    for source in (accumulated or {}, added):
+        for key, value in source.items():
+            if key in totals:
+                totals[key] += int(value)
+    return totals
 
 
 def _normalize_text_list(values: list[Any]) -> list[str]:
@@ -656,6 +765,106 @@ def _block_signature(block: _TextBlock) -> str:
     return re.sub(r"\d+", "#", value)
 
 
+def _block_characters(block: _TextBlock) -> int:
+    """The characters of one block, as the reader of the record would count them."""
+
+    return len(normalize_inline_text(block.text))
+
+
+# A margin block repeats across pages, so its own signature decides it is
+# furniture. The bands are the outer eighth of the page, which is where a running
+# head, a folio, and a journal line sit, and where a table of contents entry does
+# not.
+_MARGIN_TOP = 0.12
+_MARGIN_BOTTOM = 0.88
+# A page's own prose is a block long enough to be a paragraph rather than a title
+# line, a heading, or a caption. The body size is read from those blocks first and
+# from every block only when the page holds no such paragraph.
+_BODY_PROSE_CHARACTERS = 200
+# A sidebar is narrower than the body column and separated from it by a gutter,
+# so it is identified by its position relative to the widest block on the page
+# rather than by its own text: a sidebar may hold a figure caption, a pull quote,
+# or a glossary, none of which has a recognisable shape.
+_SIDEBAR_MAXIMUM_WIDTH = 0.34
+_SIDEBAR_MINIMUM_GUTTER = 12.0
+# A footnote takes four conditions at once, and each answers one way the size and
+# the position alone read prose wrongly. A lead paragraph set larger than the prose
+# it introduces makes the whole body "small"; a data table, a block quote, and a
+# credit line are all set small and all sit low on the page. What none of those
+# three has, and a note apparatus always has, is a place in the foot of the page
+# separated from the body and a marker printed at the start of the line. A block
+# that opens as a figure or table caption is kept as well, because a caption is
+# also set small and its text is evidence about the figure.
+_FOOTNOTE_MAXIMUM_SIZE_RATIO = 0.88
+_FOOTNOTE_MINIMUM_BODY_SIZE = 6.0
+# The foot of the page, as a share of its height, and the clear space a note block
+# needs below the body it belongs to, as a multiple of the body size.
+_FOOTNOTE_BOTTOM_BAND = 0.78
+_FOOTNOTE_MINIMUM_GAP_RATIO = 0.5
+# A table is set small whatever its position, so a block inside a detected table is
+# evidence whatever else it looks like.
+_FOOTNOTE_TABLE_OVERLAP = 0.35
+
+
+def _body_font_size(blocks: list[_TextBlock]) -> float:
+    """The size the page's own prose is set in, by the characters it carries.
+
+    The body is the size most of the page's characters are set in, not the middle
+    of the sizes the page happens to contain. A median moves as soon as one lead
+    paragraph, a deck or a standfirst, is set larger than the argument it
+    introduces, and then every body paragraph on that page reads as small. Weight
+    by characters instead, so one large paragraph cannot outweigh a page of prose,
+    and a tie goes to the larger size, so a page of prose with one short small block
+    on it keeps the prose as its body rather than the block.
+    """
+
+    for minimum_characters in (_BODY_PROSE_CHARACTERS, 0):
+        weights: Counter[float] = Counter()
+        for block in blocks:
+            characters = len(normalize_inline_text(block.text))
+            if block.font_size <= 0 or characters < minimum_characters:
+                continue
+            weights[round(block.font_size * 2) / 2] += characters
+        if weights:
+            return max(weights, key=lambda size: (weights[size], size))
+    return 0.0
+
+
+# A page whose only content is an image covering at least this share of it is a
+# scanned page, and the share is what separates a scan from a page that carries a
+# figure or a logo the text runs around. A page with any text at all is not
+# image-only whatever its images cover, because the text layer is what a reader
+# of the source has to search.
+_IMAGE_ONLY_MINIMUM_AREA_SHARE = 0.5
+
+
+def _image_only_page(page: pymupdf.Page, blocks: list[_TextBlock]) -> bool:
+    """Whether a page is a scan: no text, and one image covering most of it.
+
+    The share is what separates this from a page whose text is set around a
+    figure: a figure rarely covers half the page, and when it does the page still
+    carries text. Reporting this per page is what lets a mixed file be described
+    honestly rather than refused for the pages it can read.
+    """
+
+    if any(normalize_inline_text(block.text) for block in blocks):
+        return False
+    page_area = page.rect.get_area()
+    if page_area <= 0:
+        return False
+    try:
+        payload = page.get_text("dict", sort=False, flags=pymupdf.TEXT_PRESERVE_IMAGES)
+    except (RuntimeError, ValueError):
+        return False
+    covered = 0.0
+    for block in payload.get("blocks", []):
+        if block.get("type") == 1:
+            covered += _rect_area(
+                tuple(float(item) for item in block.get("bbox", (0, 0, 0, 0)))
+            )
+    return covered >= page_area * _IMAGE_ONLY_MINIMUM_AREA_SHARE
+
+
 def _repeated_margin_signatures(
     pages: list[tuple[list[_TextBlock], float, float]],
 ) -> set[str]:
@@ -667,13 +876,95 @@ def _repeated_margin_signatures(
             {
                 signature
                 for block in blocks
-                if (block.bbox[3] <= height * 0.12 or block.bbox[1] >= height * 0.88)
+                if (
+                    block.bbox[3] <= height * _MARGIN_TOP
+                    or block.bbox[1] >= height * _MARGIN_BOTTOM
+                )
                 and (signature := _block_signature(block))
             }
         )
     counts = Counter(signature for values in page_sets for signature in values)
     threshold = max(3, math.ceil(len(pages) * 0.30))
     return {signature for signature, count in counts.items() if count >= threshold}
+
+
+def _sidebar_blocks(
+    blocks: list[_TextBlock],
+    page_width: float,
+) -> list[_TextBlock]:
+    """Blocks that sit in a narrow column beside the body, not in it.
+
+    The body column is the widest block on the page, so a block narrower than a
+    third of the page that clears it by more than a gutter is beside the text
+    rather than part of it. A page with no full-width block has no body column to
+    measure against and yields nothing, which is the conservative direction: a
+    two-column page and a table page both keep everything.
+    """
+
+    body = max(blocks, key=lambda block: block.width, default=None)
+    if body is None or body.width < page_width * 0.5:
+        return []
+    sidebars: list[_TextBlock] = []
+    for block in blocks:
+        if block.width > page_width * _SIDEBAR_MAXIMUM_WIDTH:
+            continue
+        gutter_left = body.bbox[0] - block.bbox[2]
+        gutter_right = block.bbox[0] - body.bbox[2]
+        if max(gutter_left, gutter_right) >= _SIDEBAR_MINIMUM_GUTTER:
+            sidebars.append(block)
+    return sidebars
+
+
+def _footnote_blocks(
+    blocks: list[_TextBlock],
+    body_size: float,
+    page_height: float,
+    table_regions: list[_Region],
+) -> list[_TextBlock]:
+    """Blocks that are a note apparatus, which takes four things at once.
+
+    All four are required: a size below the page's own body size, a place in the
+    foot of the page separated from the body, a leading note marker, and no overlap
+    with a detected table. The page must also establish a body size from prose of
+    its own, so a page that is uniformly small — a table page, a page of
+    equations — keeps every block.
+
+    The marker is what makes this safe rather than merely cautious. A data table, a
+    block quote, a credit line, and the last paragraph of a chapter are all set
+    small and sit low, and each of them is evidence; a note apparatus is the one of
+    those shapes that is numbered. A note printed without its marker stays in the
+    index, which is the direction that keeps text.
+    """
+
+    if body_size < _FOOTNOTE_MINIMUM_BODY_SIZE or page_height <= 0:
+        return []
+    limit = body_size * _FOOTNOTE_MAXIMUM_SIZE_RATIO
+    foot = page_height * _FOOTNOTE_BOTTOM_BAND
+    body_bottom = max(
+        (block.bbox[3] for block in blocks if block.font_size > limit),
+        default=0.0,
+    )
+    if body_bottom <= 0.0:
+        return []
+    gap = body_size * _FOOTNOTE_MINIMUM_GAP_RATIO
+    notes: list[_TextBlock] = []
+    for block in blocks:
+        if block.font_size <= 0 or block.font_size > limit:
+            continue
+        if block.bbox[1] < max(foot, body_bottom + gap):
+            continue
+        if not opens_with_note_marker(block.lines[0] if block.lines else ""):
+            continue
+        text = normalize_inline_text(block.text)
+        if _FIGURE_CAPTION.match(text) or _TABLE_CAPTION.match(text):
+            continue
+        if any(
+            _rect_intersection_ratio(block.bbox, region.bbox) >= _FOOTNOTE_TABLE_OVERLAP
+            for region in table_regions
+        ):
+            continue
+        notes.append(block)
+    return notes
 
 
 def _rect_area(rect: tuple[float, float, float, float]) -> float:
@@ -953,25 +1244,62 @@ def _pdf_page_units(
     document_id: str,
     source_id: str,
     title: str,
-) -> tuple[list[dict[str, Any]], bool, int]:
+) -> tuple[list[dict[str, Any]], bool, _PageRemovals]:
     locator = _pdf_locator(page, page_number)
+    removals = _PageRemovals(image_only_pages=int(_image_only_page(page, blocks)))
     filtered: list[_TextBlock] = []
-    removed_margin_blocks = 0
     for block in blocks:
         in_margin = (
-            block.bbox[3] <= page_height * 0.12 or block.bbox[1] >= page_height * 0.88
+            block.bbox[3] <= page_height * _MARGIN_TOP
+            or block.bbox[1] >= page_height * _MARGIN_BOTTOM
         )
         if in_margin and (
             _block_signature(block) in repeated_margins
             or _PAGE_NUMBER.fullmatch(normalize_inline_text(block.text))
         ):
-            removed_margin_blocks += 1
+            removals.repeated_margin_blocks += 1
+            removals.removed_text_characters += _block_characters(block)
             continue
         filtered.append(block)
     if not filtered:
-        return [], True, removed_margin_blocks
+        return [], True, removals
 
+    # The non-prose regions are resolved before the layout rules run, because a
+    # detected table is what tells a small block of figures at the foot of the page
+    # apart from a note apparatus. They are not resolved again afterwards.
     regions = _non_prose_regions(page)
+
+    # Sidebars and footnotes are found after the running furniture is gone, so a
+    # page's own repeated head cannot be mistaken for a narrow column beside its
+    # text, and before the regions are assigned, so a figure's caption is still
+    # reachable as that figure's label.
+    sidebar_numbers = {block.number for block in _sidebar_blocks(filtered, page_width)}
+    footnote_numbers = {
+        block.number
+        for block in _footnote_blocks(
+            [block for block in filtered if block.number not in sidebar_numbers],
+            _body_font_size(filtered),
+            page_height,
+            [region for region in regions if region.kind == "table"],
+        )
+    }
+    if sidebar_numbers or footnote_numbers:
+        removals.sidebar_blocks += len(sidebar_numbers)
+        removals.footnote_blocks += len(footnote_numbers)
+        removed_numbers = sidebar_numbers | footnote_numbers
+        # What the geometry removed is text the file did hold, so it is counted
+        # with the prose the section rules removed. A source whose furniture is
+        # most of what its text layer carried is refused by `unsafe_to_clean`,
+        # which is the only guard that sees a rule which is wrong about a page.
+        removals.removed_text_characters += sum(
+            _block_characters(block)
+            for block in filtered
+            if block.number in removed_numbers
+        )
+        filtered = [block for block in filtered if block.number not in removed_numbers]
+    if not filtered:
+        return [], True, removals
+
     assigned: set[int] = set()
     page_units: list[tuple[str, list[_TextBlock]]] = []
     for region in regions:
@@ -1029,7 +1357,7 @@ def _pdf_page_units(
                 "locator": locator,
             }
         )
-    return units, False, removed_margin_blocks
+    return units, False, removals
 
 
 def _extract_pdf(
@@ -1070,7 +1398,7 @@ def _extract_pdf(
         repeated_margins = _repeated_margin_signatures(pages)
         units: list[dict[str, Any]] = []
         empty_pages = 0
-        removed_margin_blocks = 0
+        removals = _PageRemovals()
         for page_index, page in enumerate(document):
             page_number = page_index + 1
             blocks, page_width, page_height = pages[page_index]
@@ -1087,23 +1415,34 @@ def _extract_pdf(
             )
             units.extend(page_units)
             empty_pages += int(empty)
-            removed_margin_blocks += removed
+            removals = removals.merge(removed)
 
+        units, section_counts = strip_non_argument_units(units)
+        removals = removals.with_counts(section_counts)
         record.update(
             {
                 "physical_pages": document.page_count,
                 "extracted_units": len(units),
                 "empty_units": empty_pages,
-                "removed_repeated_margin_blocks": removed_margin_blocks,
+                **removals.record_fields(),
             }
         )
+        if removals.image_only_pages >= document.page_count:
+            record["no_text_layer"] = True
+        elif removals.image_only_pages:
+            record["metadata_warnings"] = list(
+                dict.fromkeys(
+                    [
+                        *record.get("metadata_warnings", []),
+                        "image_only_pages_present",
+                    ]
+                )
+            )
     finally:
         document.close()
 
     if not units:
-        raise ExtractionError(
-            f"PDF produced no text; OCR may be required: {source.path}"
-        )
+        raise ExtractionError(_no_text_layer_message(source, "PDF"))
     return record, units
 
 
@@ -1185,14 +1524,19 @@ def _extract_epub(
     record, spine_items = prepare_epub_extraction(source, digest)
     units: list[dict[str, Any]] = []
     empty_sections = 0
+    removals = empty_removal_counts()
     for spine_index in range(spine_items):
-        batch, empty = extract_epub_spine_item(source, record, spine_index)
+        batch, empty, counts = extract_epub_spine_item(source, record, spine_index)
         units.extend(batch)
         empty_sections += int(empty)
+        removals = merge_removal_counts(removals, counts)
+    units, section_counts = strip_non_argument_units(units)
+    removals = merge_removal_counts(removals, section_counts)
+    record.update(removals)
     record["extracted_units"] = len(units)
     record["empty_units"] = empty_sections
     if not units:
-        raise ExtractionError(f"EPUB produced no readable sections: {source.path}")
+        raise ExtractionError(_no_text_layer_message(source, "EPUB"))
     return record, units
 
 
@@ -1317,7 +1661,7 @@ def prepare_scanned_pdf(
                 "physical_pages": document.page_count,
                 "extracted_units": 0,
                 "empty_units": 0,
-                "removed_repeated_margin_blocks": 0,
+                **empty_removal_counts(),
             }
         )
         return record, sorted(_repeated_margin_signatures(pages))
@@ -1330,8 +1674,12 @@ def extract_scanned_pdf_pages(
     document_record: dict[str, Any],
     page_scans: list[dict[str, Any]],
     repeated_margins: list[str],
-) -> list[tuple[int, list[dict[str, Any]], bool, int]]:
-    """A scanned page batch, from one PDF document handle."""
+) -> list[tuple[int, list[dict[str, Any]], bool, dict[str, int]]]:
+    """A scanned page batch, from one PDF document handle.
+
+    Each entry carries the page's removal counts as a plain mapping, so a staged
+    caller can add them into its checkpoint without holding an extraction type.
+    """
 
     if not page_scans:
         raise ValueError("page_scans must not be empty")
@@ -1345,7 +1693,7 @@ def extract_scanned_pdf_pages(
                 f"Password-protected PDF is unsupported: {source.path}"
             )
         repeated_margin_set = set(repeated_margins)
-        batches: list[tuple[int, list[dict[str, Any]], bool, int]] = []
+        batches: list[tuple[int, list[dict[str, Any]], bool, dict[str, int]]] = []
         for scan in page_scans:
             page_index = int(scan["page_index"])
             page = document.load_page(page_index)
@@ -1360,7 +1708,7 @@ def extract_scanned_pdf_pages(
                 source_id=str(document_record["source_id"]),
                 title=str(document_record["title"]),
             )
-            batches.append((page_index, units, empty, removed))
+            batches.append((page_index, units, empty, removed.record_fields()))
         return batches
     finally:
         document.close()
@@ -1582,6 +1930,49 @@ def _epub_table_text(table: Tag) -> str:
     return "\n".join(rows)
 
 
+_EPUB_SKIPPED_ELEMENTS = (
+    "script",
+    "style",
+    "nav",
+    "aside",
+)
+# An EPUB has no page geometry, so furniture is named rather than measured. These
+# are the class and id fragments publishers put on marginal notes, sidebars, and
+# note apparatus; nothing here is a word that could occur in body text.
+_EPUB_FURNITURE_MARKERS = re.compile(
+    r"(?:^|[\s_-])(?:sidebars?|sidenotes?|margin-?notes?|footnotes?|"
+    r"endnotes?|page-?breaks?|adverts?|newsletters?)(?:[\s_-]|$)",
+    re.IGNORECASE,
+)
+_EPUB_FURNITURE_ROLES = frozenset(
+    {"complementary", "doc-endnotes", "doc-footnote", "doc-noteref", "note"}
+)
+
+
+def _is_epub_furniture(tag: Tag) -> bool:
+    """Whether an XHTML element is furniture the document did not argue with.
+
+    Only the element's own name, role, class, and id are consulted, so a
+    sentence that mentions footnotes inside an ordinary paragraph is untouched:
+    the rule reads markup, not prose.
+    """
+
+    if str(tag.get("role") or "").casefold() in _EPUB_FURNITURE_ROLES:
+        return True
+    for attribute in ("class", "id"):
+        value = tag.get(attribute)
+        if value is None:
+            continue
+        joined = (
+            " ".join(str(item) for item in value)
+            if isinstance(value, list)
+            else str(value)
+        )
+        if _EPUB_FURNITURE_MARKERS.search(joined):
+            return True
+    return False
+
+
 def _epub_locator(
     *,
     section_index: int,
@@ -1616,9 +2007,16 @@ def extract_epub_spine_item(
     source: SourceFile,
     document_record: dict[str, Any],
     spine_index: int,
-) -> tuple[list[dict[str, Any]], bool]:
-    """One EPUB spine entry, with its original locator preserved."""
+) -> tuple[list[dict[str, Any]], bool, dict[str, int]]:
+    """One EPUB spine entry, with its original locator preserved.
 
+    The returned counts name the elements this entry gave up, so a source that
+    carried sidebars says so rather than reporting nothing. A spine entry the
+    reader is told is furniture and that has none of it reports zeros, which is
+    what a real collection without sidebars must show.
+    """
+
+    removals = empty_removal_counts()
     try:
         book = epub.read_epub(str(source.path), options={"ignore_ncx": True})
     except Exception as exc:
@@ -1627,10 +2025,34 @@ def extract_epub_spine_item(
     item_id = spine_entry[0] if isinstance(spine_entry, tuple) else spine_entry
     item = book.get_item_with_id(item_id)
     if item is None or item.get_type() != ebooklib.ITEM_DOCUMENT:
-        return [], False
+        return [], False, removals
     soup = BeautifulSoup(item.get_content(), "html.parser")
-    for unwanted in soup(["script", "style", "nav"]):
+    # The navigation, scripts, and stylesheet are removed on every EPUB and say nothing
+    # about the source's own furniture, so they are not counted. The count is what a
+    # reader uses to decide whether the cleanup did anything.
+    _EPUB_STRUCTURAL_ELEMENTS = frozenset({"script", "style", "nav"})
+    outermost = [
+        tag
+        for tag in soup.find_all(True)
+        if str(tag.name).casefold() not in _EPUB_STRUCTURAL_ELEMENTS
+        and (
+            str(tag.name).casefold() in _EPUB_SKIPPED_ELEMENTS
+            or _is_epub_furniture(tag)
+        )
+        and not any(
+            parent is not soup
+            and (
+                str(parent.name).casefold() in _EPUB_SKIPPED_ELEMENTS
+                or _is_epub_furniture(parent)
+            )
+            for parent in tag.parents
+        )
+    ]
+    for unwanted in soup(list(_EPUB_SKIPPED_ELEMENTS)):
         unwanted.decompose()
+    for furniture in outermost:
+        furniture.decompose()
+        removals["removed_epub_furniture_elements"] += 1
     heading = soup.find(re.compile(r"^h[1-6]$"))
     section_title = (
         normalize_inline_text(heading.get_text(" ", strip=True))
@@ -1655,6 +2077,8 @@ def extract_epub_spine_item(
         content_kind: str,
     ) -> None:
         nonlocal block_index
+        if not text.strip():
+            return
         block_index += 1
         locator = _epub_locator(
             section_index=spine_index + 1,
@@ -1772,7 +2196,239 @@ def extract_epub_spine_item(
             anchor=pending_heading_anchor,
             content_kind="prose",
         )
-    return units, not units
+    return units, not units, removals
+
+
+def screen_source_units(
+    source: SourceFile,
+    document: dict[str, Any],
+    units: list[dict[str, Any]],
+    *,
+    removals: dict[str, int] | None = None,
+) -> list[dict[str, Any]]:
+    """Withhold the units this source cannot use, and refuse the source if none.
+
+    This is the one gate both extraction paths apply, and it applies the section
+    removal as well: a staged build writes a page batch to disk before it knows
+    what the whole file looks like, so it cannot decide at batch time whether a
+    heading on page 40 opens a list that runs to page 43. Deciding here, over every
+    unit the source produced, is what makes the two paths reach the same answer.
+
+    Returns the retained units and records every exclusion and removal on the
+    document. Raises `ExtractionError` with the file's path, its reasons, and a
+    remedy when nothing survives, which is what makes the ingest that found it
+    abort rather than publish a generation holding one unreadable file.
+    """
+
+    cleaned, section_counts = strip_non_argument_units(units)
+
+    retained: list[dict[str, Any]] = []
+    rejected: list[dict[str, Any]] = []
+    reason_counts: Counter[str] = Counter()
+    kept_characters = 0
+    letter_characters = 0
+    for unit in cleaned:
+        text = str(unit.get("contents") or "")
+        reasons = text_health_reasons(text)
+        kept_characters += len(text)
+        if reasons:
+            reason_counts.update(reasons)
+            rejected.append(
+                {
+                    "unit_id": str(unit.get("id") or ""),
+                    "locator": dict(unit.get("locator") or {}),
+                    "reasons": reasons,
+                }
+            )
+        else:
+            retained.append(unit)
+            letter_characters += sum(
+                character.isalpha() for character in str(unit.get("contents") or "")
+            )
+    # A direct build has already written its counters onto the document and passes
+    # nothing here; a staged build holds them in its checkpoint and passes them in.
+    # Either way the section removal this gate performs is added to both.
+    counted = merge_removal_counts(
+        removals
+        if removals is not None
+        else {
+            key: document[key]
+            for key in REMOVAL_FIELDS
+            if document.get(key) is not None
+        },
+        section_counts,
+    )
+    document.update(counted)
+    document["excluded_corrupt_unit_count"] = len(rejected)
+    document["excluded_corrupt_units"] = rejected
+    document["extracted_units"] = len(retained)
+    if rejected:
+        document["metadata_warnings"] = list(
+            dict.fromkeys(
+                [
+                    *document.get("metadata_warnings", []),
+                    "corrupt_extraction_units_excluded",
+                ]
+            )
+        )
+
+    fatal = source_health_reasons(
+        unit_count=len(cleaned),
+        retained_count=len(retained),
+        withheld_reasons=reason_counts,
+        kept_characters=kept_characters,
+        removed_characters=int(
+            (counted or {}).get("removed_non_argument_characters") or 0
+        ),
+        image_only_pages=int((counted or {}).get("image_only_pages") or 0),
+        physical_pages=int(document.get("physical_pages") or 0),
+        letter_characters=letter_characters,
+    )
+    if fatal:
+        raise ExtractionError(_refusal_message(source, fatal, rejected, reason_counts))
+    if document.get("image_only_pages"):
+        document["metadata_warnings"] = list(
+            dict.fromkeys(
+                [
+                    *document.get("metadata_warnings", []),
+                    "image_only_pages_present",
+                ]
+            )
+        )
+    return retained
+
+
+def strip_non_argument_units(
+    units: list[dict[str, Any]],
+) -> tuple[list[dict[str, Any]], dict[str, int]]:
+    """Remove reference and note sections across a whole source's units.
+
+    A reference list does not fit in one unit. A book's may open with a heading on
+    its own page and run over the next three, and an EPUB emits its heading as one
+    element and each entry as another, so no single unit ever holds a heading and
+    its entries together. Deciding per unit therefore removes nothing on exactly
+    the sources that need it most, which is why this runs here, over the whole
+    unit sequence in reading order, rather than inside a page or spine item.
+
+    A unit that ends up with no paragraph left is dropped, so a page holding
+    nothing but entries contributes no unit at all. The counters say what went:
+    how many reference paragraphs, how many note paragraphs, and how many
+    characters.
+    """
+
+    units_by_index = list(enumerate(units))
+    paragraphs: list[str] = []
+    positions: list[tuple[int, int]] = []
+    for unit_index, unit in units_by_index:
+        for offset, paragraph in enumerate(
+            str(unit.get("contents") or "").split("\n\n")
+        ):
+            if not paragraph.strip():
+                continue
+            paragraphs.append(paragraph)
+            positions.append((unit_index, offset))
+
+    removed_kinds = non_argument_removal_flags(paragraphs)
+    surviving: dict[int, list[str]] = {index: [] for index, _unit in units_by_index}
+    removed_reference = 0
+    removed_notes = 0
+    removed_characters = 0
+    for (unit_index, _offset), paragraph, kind in zip(
+        positions, paragraphs, removed_kinds
+    ):
+        if kind is None:
+            surviving[unit_index].append(paragraph)
+            continue
+        removed_characters += len(paragraph)
+        if kind == "footnotes":
+            removed_notes += 1
+        else:
+            removed_reference += 1
+
+    cleaned: list[dict[str, Any]] = []
+    for unit_index, unit in units_by_index:
+        text = "\n\n".join(surviving[unit_index])
+        if not text:
+            removed_characters += len(str(unit.get("contents") or ""))
+            continue
+        cleaned.append({**unit, "contents": text})
+
+    counts = merge_removal_counts(
+        None,
+        {
+            "removed_reference_segments": removed_reference,
+            "removed_note_segments": removed_notes,
+            "removed_non_argument_characters": removed_characters,
+        },
+    )
+    return cleaned, counts
+
+
+def _no_text_layer_message(source: SourceFile, label: str) -> str:
+    """What a file with no text layer says, and what is not done about it.
+
+    A scanned page has no text to read, and this app does not recognise one. The
+    message says that plainly rather than implying OCR might run, and it names the
+    two things a reader can do.
+    """
+
+    return (
+        f"{label} yielded no text layer ({SOURCE_REASON_NO_TEXT_LAYER}): "
+        f"{source.path}. Every page carried an image or a drawing and no "
+        "extractable text. No OCR is performed, so nothing here can be read. "
+        "Supply a text-layer PDF or an EPUB, or exclude "
+        f"the source with `research-rag exclude {source.source_relative_path}"
+        ' --reason "no text layer"`.'
+    )
+
+
+def _refusal_message(
+    source: SourceFile,
+    reasons: list[str],
+    rejected: list[dict[str, Any]],
+    reason_counts: Counter[str],
+) -> str:
+    """What a refused source says, in a form a reader can act on.
+
+    A source with nothing readable left keeps its established opening sentence,
+    because that is what a reader of a failure record looks for. What follows it
+    is what makes the record actionable: the reasons the file's own excluded
+    units carry, where the first of them sits, and the two remedies a person has
+    — exclude the file, or open it. No unit text is quoted, because a source can
+    be refused for text that is unreadable and unsafe to repeat.
+    """
+
+    lead = (
+        "Source produced no readable English-oriented text after unhealthy "
+        "extraction units were excluded"
+        if reasons == [SOURCE_REASON_NO_TEXT]
+        else f"Source refused ({', '.join(reasons)})"
+    )
+    if SOURCE_REASON_NO_TEXT_LAYER in reasons:
+        return (
+            _no_text_layer_message(source, "Source")
+            + f" Refused for: {', '.join(reasons)}."
+        )
+    counts = ", ".join(
+        f"{reason}={count}" for reason, count in sorted(reason_counts.items())
+    )
+    location = ""
+    if rejected:
+        first = rejected[0]["locator"]
+        if first.get("type") == "pdf_page":
+            location = f" First excluded unit at page {first.get('page')}."
+        elif first.get("type") == "epub_section":
+            location = (
+                f" First excluded unit at section {first.get('section_index')}"
+                f" ({first.get('href')})."
+            )
+    detail = f" Reasons on excluded units: {counts}." if counts else ""
+    return (
+        f"{lead}: {source.path}.{location}{detail}"
+        " No text layer is OCRed, and the file is never edited."
+        f" Exclude it with `research-rag exclude {source.source_relative_path}"
+        ' --reason "text could not be read"`, or open the file and check it.'
+    )
 
 
 def extract_sources(
@@ -1789,40 +2445,7 @@ def extract_sources(
             document, extracted = _extract_epub(source, digest)
         else:  # pragma: no cover
             raise ExtractionError(f"Unsupported source format: {source.path}")
-        retained: list[dict[str, Any]] = []
-        rejected: list[dict[str, Any]] = []
-        for unit in extracted:
-            reasons = text_health_reasons(str(unit.get("contents") or ""))
-            if reasons:
-                rejected.append(
-                    {
-                        "unit_id": str(unit.get("id") or ""),
-                        "locator": dict(unit.get("locator") or {}),
-                        "reasons": reasons,
-                    }
-                )
-            else:
-                retained.append(unit)
-        if rejected:
-            document["excluded_corrupt_unit_count"] = len(rejected)
-            document["excluded_corrupt_units"] = rejected
-            document["metadata_warnings"] = list(
-                dict.fromkeys(
-                    [
-                        *document.get("metadata_warnings", []),
-                        "corrupt_extraction_units_excluded",
-                    ]
-                )
-            )
-        else:
-            document["excluded_corrupt_unit_count"] = 0
-            document["excluded_corrupt_units"] = []
-        document["extracted_units"] = len(retained)
-        if not retained:
-            raise ExtractionError(
-                "Source produced no readable English-oriented text after unhealthy "
-                f"extraction units were excluded: {source.path}"
-            )
+        retained = screen_source_units(source, document, extracted)
         documents.append(document)
         units.extend(retained)
     return documents, units
