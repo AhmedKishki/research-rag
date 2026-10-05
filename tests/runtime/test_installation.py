@@ -8,6 +8,7 @@ throwaway tree.
 from __future__ import annotations
 
 import asyncio
+import shutil
 import subprocess
 from pathlib import Path
 from typing import Any
@@ -252,6 +253,11 @@ def test_an_older_per_project_entry_is_replaced_by_the_one(tmp_path: Path) -> No
 
 def test_the_entry_is_valid_by_the_desktops_own_validator(tmp_path: Path) -> None:
     """A menu entry the desktop cannot parse is not an entry."""
+
+    if shutil.which("desktop-file-validate") is None:
+        pytest.skip(
+            "desktop-file-utils is not installed, so the entry cannot be checked."
+        )
 
     payload = _desktop_cli("install", "--desktop")
 

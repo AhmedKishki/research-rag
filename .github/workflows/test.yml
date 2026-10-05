@@ -32,6 +32,10 @@ jobs:
       - run: uv sync --frozen
       - name: Report the interpreter the matrix leg actually resolved
         run: uv run python -VV
+      # `desktop-file-validate` is what makes the installed menu entry a checked
+      # claim rather than a skipped one. It is not on the runner by default.
+      - name: Install the desktop entry validator
+        run: sudo apt-get update && sudo apt-get install --yes desktop-file-utils
       - run: uv run ruff format --check .
       - run: uv run ruff check .
       - run: uv run python -m compileall -q src tests
