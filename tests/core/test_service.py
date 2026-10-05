@@ -2658,6 +2658,89 @@ def test_ordinary_ingest_migrates_legacy_metadata_storage(project: Path) -> None
     asyncio.run(_assert_ordinary_ingest_migrates_legacy_metadata_storage(project))
 
 
+async def _assert_a_changed_extraction_policy_requires_a_rebuild(
+    project: Path,
+) -> None:
+    """A generation states the extraction and cleaning policies it was built under.
+
+    Extraction decides what a chunk holds and cleaning decides the text of a unit
+    that survived, so neither a changed extraction policy nor a changed cleaning
+    policy can be served from the chunks an earlier policy produced. The
+    generation stays searchable under the old policies and says an upgrade is
+    required; the next ingestion re-extracts rather than reusing what they
+    produced.
+    """
+
+    write_pdf(project / "sources" / "article.pdf", ["Cobalt evidence about labour."])
+    config = resolve_config(project, vanilla_executable=sys.executable)
+    service = ResearchService(  # type: ignore[arg-type]
+        config,
+        FakeUltraRAG(),
+        dense=FakeDenseBackend(),
+    )
+    first = await service.ingest(chunk_size=50, chunk_overlap=10)
+
+    manifest_path = Path(first["generation_root"]) / "manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    assert (
+        manifest["extraction_policy_version"]
+        == support_module.EXTRACTION_POLICY_VERSION
+    )
+
+    # The generation built under the shipped policy is not itself out of date.
+    current = await service.status()
+    assert current["generation_upgrade_required"] is False
+    assert current["upgrade_reasons"] == []
+
+    # A generation recorded under an earlier extraction policy is reported, named,
+    # and still answers, rather than being discarded.
+    manifest["extraction_policy_version"] = support_module.EXTRACTION_POLICY_VERSION - 1
+    manifest_path.write_text(
+        json.dumps(manifest, ensure_ascii=False, indent=2) + "\n",
+        encoding="utf-8",
+    )
+    superseded = await service.status()
+    assert superseded["generation_upgrade_required"] is True
+    assert superseded["upgrade_reasons"] == ["layout_extraction"]
+    answer = await service.search("cobalt labour", top_k=1, include_staleness=False)
+    assert answer["hits"]
+    assert answer["generation_upgrade_required"] is True
+
+    # The two policies are reported separately, because a generation can be behind
+    # one and not the other and a reader is told which.
+    manifest["cleaning_policy_version"] = support_module.CLEANING_POLICY_VERSION - 1
+    manifest_path.write_text(
+        json.dumps(manifest, ensure_ascii=False, indent=2) + "\n",
+        encoding="utf-8",
+    )
+    both = await service.status()
+    assert both["upgrade_reasons"] == ["layout_extraction", "semantic_cleaning"]
+
+    # Re-ingestion replaces the generation and re-extracts every source, because a
+    # changed extraction policy cannot reuse units or vectors the old one produced.
+    rebuilt = await service.ingest(chunk_size=50, chunk_overlap=10)
+    assert rebuilt["status"] == "ready"
+    assert rebuilt["generation_changed"] is True
+    assert rebuilt["generation_id"] != first["generation_id"]
+    assert rebuilt["rebuilt_document_count"] == 1
+    assert rebuilt["reused_document_count"] == 0
+    rebuilt_manifest = json.loads(
+        (Path(rebuilt["generation_root"]) / "manifest.json").read_text(encoding="utf-8")
+    )
+    assert (
+        rebuilt_manifest["extraction_policy_version"]
+        == support_module.EXTRACTION_POLICY_VERSION
+    )
+    assert (await service.status())["generation_upgrade_required"] is False
+
+    # The source file itself is untouched by either build.
+    assert (project / "sources" / "article.pdf").read_bytes().startswith(b"%PDF")
+
+
+def test_a_changed_extraction_policy_requires_a_rebuild(project: Path) -> None:
+    asyncio.run(_assert_a_changed_extraction_policy_requires_a_rebuild(project))
+
+
 async def _assert_pending_metadata_status_is_not_reported_as_active(
     project: Path,
 ) -> None:
@@ -4054,6 +4137,44 @@ async def _assert_unreadable_source_fails_without_activation(project: Path) -> N
 
 def test_unreadable_source_fails_without_activation(project: Path) -> None:
     asyncio.run(_assert_unreadable_source_fails_without_activation(project))
+
+
+def test_health_gate_failure_preserves_searchable_generation(project: Path) -> None:
+    async def verify() -> None:
+        original = project / "sources" / "article.pdf"
+        write_pdf(original, ["Readable cobalt evidence survives a failed rebuild."])
+        config = resolve_config(project, vanilla_executable=sys.executable)
+        service = ResearchService(  # type: ignore[arg-type]
+            config, FakeUltraRAG(), dense=FakeDenseBackend()
+        )
+        result = await service.ingest(chunk_size=50, chunk_overlap=10)
+        pointer = config.current_path.read_bytes()
+        original_bytes = original.read_bytes()
+        generation = Path(result["generation_root"])
+        artifacts = {
+            path.relative_to(generation): path.read_bytes()
+            for path in generation.rglob("*")
+            if path.is_file()
+        }
+        broken = project / "sources" / "broken.epub"
+        write_epub(broken, CORRUPT_TEXT)
+        broken_bytes = broken.read_bytes()
+        with pytest.raises(ExtractionError):
+            await service.ingest(chunk_size=50, chunk_overlap=10)
+        assert config.current_path.read_bytes() == pointer
+        assert original.read_bytes() == original_bytes
+        assert broken.read_bytes() == broken_bytes
+        assert artifacts == {
+            path.relative_to(generation): path.read_bytes()
+            for path in generation.rglob("*")
+            if path.is_file()
+        }
+        assert not any(config.staging_root.iterdir())
+        search = await service.search("cobalt", retrieval_method="bm25")
+        assert search["hits"]
+        assert "Readable cobalt evidence" in search["hits"][0]["text"]
+
+    asyncio.run(verify())
 
 
 async def _assert_query_paths_use_generation_lookup(

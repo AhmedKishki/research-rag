@@ -14,13 +14,16 @@ from typing import Any
 import numpy as np
 
 from ..corpus.extraction import (
-    ExtractionError,
+    REMOVAL_FIELDS,
+    empty_removal_counts,
     extract_epub_spine_item,
     extract_scanned_pdf_pages,
+    merge_removal_counts,
     pdf_page_count,
     prepare_epub_extraction,
     prepare_scanned_pdf,
     scan_pdf_pages,
+    screen_source_units,
 )
 from ..corpus.sources import (
     ALLOWED_SOURCE_EXTENSIONS,
@@ -30,7 +33,7 @@ from ..corpus.sources import (
     scan_sources,
     sha256_file,
 )
-from ..corpus.text_quality import text_corruption_reasons, text_health_reasons
+from ..corpus.text_quality import text_corruption_reasons
 from ..project.policy import (
     DEFAULT_RETRIEVAL_METHOD,
     RETRIEVAL_METHODS,
@@ -1034,9 +1037,8 @@ class IngestionWorkflow:
                             "next_index": 0,
                             "total": total,
                             "page_batch_size": self.config.settings.pdf_page_batch_size,
-                            "rejected_units": [],
+                            "removals": empty_removal_counts(),
                             "empty_units": 0,
-                            "removed_repeated_margin_blocks": 0,
                             "discarded_empty_chunks": 0,
                             "discarded_symbol_only_chunks": 0,
                             "discarded_corrupt_chunks": 0,
@@ -1064,7 +1066,7 @@ class IngestionWorkflow:
                             "extraction_stage": "epub_items",
                             "next_index": 0,
                             "total": total,
-                            "rejected_units": [],
+                            "removals": empty_removal_counts(),
                             "empty_units": 0,
                             "discarded_empty_chunks": 0,
                             "discarded_symbol_only_chunks": 0,
@@ -1202,42 +1204,26 @@ class IngestionWorkflow:
                                 f"PDF extraction batch was incomplete: {relative}"
                             )
                     else:
-                        batch, empty = await _atomic_to_thread(
+                        batch, empty, removed = await _atomic_to_thread(
                             extract_epub_spine_item,
                             source,
                             document,
                             index,
                         )
-                        page_batches = [(index, batch, empty, 0)]
+                        page_batches = [(index, batch, empty, removed)]
                     for page_index, batch, empty, removed in page_batches:
-                        retained: list[dict[str, Any]] = []
-                        for unit in batch:
-                            reasons = text_health_reasons(
-                                str(unit.get("contents") or "")
-                            )
-                            if reasons:
-                                state["rejected_units"].append(
-                                    {
-                                        "unit_id": str(unit.get("id") or ""),
-                                        "locator": dict(unit.get("locator") or {}),
-                                        "reasons": reasons,
-                                    }
-                                )
-                            else:
-                                retained.append(unit)
+                        state["removals"] = merge_removal_counts(
+                            state.get("removals"),
+                            removed,
+                        )
                         atomic_write_jsonl(
                             artifact_root / "unit-batches" / f"{page_index:08d}.jsonl",
-                            retained,
+                            batch,
                             fsync_parent=False,
                         )
                         state["empty_units"] = int(state.get("empty_units") or 0) + int(
                             empty
                         )
-                        if removed:
-                            state["removed_repeated_margin_blocks"] = (
-                                int(state.get("removed_repeated_margin_blocks") or 0)
-                                + removed
-                            )
                     state["next_index"] = (
                         end_index if extraction_stage == "pdf_pages" else index + 1
                     )
@@ -1254,32 +1240,27 @@ class IngestionWorkflow:
                                 artifact_root / "unit-batches" / f"{index:08d}.jsonl"
                             )
                         )
-                    if not units:
-                        raise ExtractionError(
-                            "Source produced no readable English-oriented text after "
-                            f"unhealthy extraction units were excluded: {source.path}"
-                        )
                     document = read_json(artifact_root / "document.json")
-                    rejected = list(state.get("rejected_units") or [])
-                    document["extracted_units"] = len(units)
                     document["empty_units"] = int(state.get("empty_units") or 0)
-                    document["excluded_corrupt_unit_count"] = len(rejected)
-                    document["excluded_corrupt_units"] = rejected
-                    if source.extension == ".pdf":
-                        document["removed_repeated_margin_blocks"] = int(
-                            state.get("removed_repeated_margin_blocks") or 0
-                        )
-                    if rejected:
-                        document["metadata_warnings"] = list(
-                            dict.fromkeys(
-                                [
-                                    *document.get("metadata_warnings", []),
-                                    "corrupt_extraction_units_excluded",
-                                ]
-                            )
-                        )
+                    removals = {
+                        key: int(value)
+                        for key, value in (state.get("removals") or {}).items()
+                        if key in REMOVAL_FIELDS
+                    }
+                    # The same gate a direct build applies. A staged build writes each
+                    # page batch before it knows the whole file, so withholding happens
+                    # here over every unit the file produced; a source a direct build
+                    # would refuse therefore fails here too, before any unit of it
+                    # reaches a chunk.
+                    retained = screen_source_units(
+                        source,
+                        document,
+                        units,
+                        removals=removals,
+                    )
                     atomic_write_json(artifact_root / "document.json", document)
-                    atomic_write_jsonl(artifact_root / "units.jsonl", units)
+                    atomic_write_jsonl(artifact_root / "units.jsonl", retained)
+                    units = retained
                     state["extraction_stage"] = "complete"
                     atomic_write_json(state_path, state)
                     checkpoint["extracted_source_paths"].append(relative)

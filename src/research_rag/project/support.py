@@ -909,9 +909,12 @@ def _record_embedding_token_counts(
 
 SCHEMA_VERSION = 5
 
-EXTRACTION_POLICY_VERSION = 7
+# Extraction decides which blocks and units exist; semantic cleaning decides the
+# text of a unit that survived. Bumping extraction alone would report a generation
+# as needing only `layout_extraction` when its unit text also changed, so both move.
+EXTRACTION_POLICY_VERSION = 8
 
-CLEANING_POLICY_VERSION = 3
+CLEANING_POLICY_VERSION = 4
 
 ARTIFACT_POLICY_VERSION = 3
 

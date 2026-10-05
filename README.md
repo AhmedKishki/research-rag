@@ -88,7 +88,7 @@ research-rag --project-root "/path/to/project" doctor --mcp-entry
 - `research-rag --help` or `research-rag help`: command reference, without a project.
 - `research-rag COMMAND --help`: arguments and examples for one command.
 - `research-rag help TOPIC`: workflow guidance for `agents`, `filters`, or `settings`.
-- Scanned PDFs need OCR first; password-protected PDFs are rejected.
+- No OCR is performed. A PDF that already carries an OCR text layer is indexed as the text it is; one with no text layer is refused. Password-protected PDFs are rejected.
 - [Features and limits](FEATURES.md), [storage and portability](STORAGE.md), [measurement protocols](MEASUREMENTS.md).
 
 ## UltraRAG credit and licensing
