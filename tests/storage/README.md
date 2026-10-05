@@ -1,19 +1,8 @@
-# Durable writes and the portable record schemas
+# Storage tests
 
-These tests hold the primitives every artifact is written through and the record layer above them: a JSONL stream that validates a line lazily without materializing the file, a JSON reader that reports a non-UTF-8 state file as invalid rather than reading it on a guess, the source catalog's round trip and its refusal of a path that is not normalized, and an atomic writer that fsyncs the file and its parent directory once each and leaves no temporary file behind.
-
-- `test_storage.py` — every case above, with the two atomic writers held to one durability order.
-
-The folder holds one file, and it imports both modules of `src/research_rag/storage/` to cover them together: the durability rule and the record rules are asserted against the same temporary path. No test here needs a project, a gateway, or a model.
-
-## Running these
-
-```bash
-.venv/bin/python -m pytest tests/storage -q
-```
-
-A change to a write path or a record schema belongs here, and this is the cheapest folder in the suite, so it is the one to run while the rest of the suite is still in use.
-
-## What it mirrors
-
-`src/research_rag/storage/`.
+- `test_storage.py` covers both modules of `src/research_rag/storage/`.
+  - A JSONL stream that validates lines lazily without materializing the file.
+  - A JSON reader that reports a non-UTF-8 state file as invalid.
+  - The source catalog's round trip and its refusal of a non-normalized path.
+  - Both atomic writers held to one durability order: fsync the file and its parent directory once each, and leave no temporary file.
+- No test needs a project, gateway, or model. This is the cheapest folder in the suite.

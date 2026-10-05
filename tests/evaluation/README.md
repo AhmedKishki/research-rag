@@ -1,41 +1,11 @@
-# Tests for the retrieval evaluation harness
+# Evaluation harness tests
 
-## What is checked
+These tests need no project, gateway, or model. The fakes and the PDF writer come from `tests/core/test_service.py` and `tests/conftest.py`. The harness is loaded by path, because `scripts/` is not a package.
 
-- `tests/evaluation/test_evaluation.py` — the metrics, and the payload readers
-  behind them. The raw `evaluation_trace` is checked to survive into the
-  finished report with its truncation flags intact, and the scored-then-collapsed
-  count is checked complete against a cut scored list. Each measure is checked
-  against what it says it compares: an exact
-  equality that collapses whitespace and nothing else, keeping letter case,
-  word order, a repeated word, a sign, a decimal, an operator, a closing mark,
-  and a script it cannot segment; a lexical containment that refuses a pair whose
-  figures or negations disagree and that never counts one passage twice; missing
-  passages reported as coverage rather than as duplicates; the cosine gate read
-  only when the method ranked the dense half, and its counts checked against its
-  own denominator; repetition rates split into all-queries and
-  cross-question-family; latency as percentiles with the slowest reported beside
-  them. The reranked-row policy is checked through `_run_one` against the payload
-  a search returns, including a real service whose cross-encoder cannot load.
-- Target resolution is checked as collection rather than short-circuit: several
-  failures reported together, each keeping its own cause, a run refusing to
-  resolve the targets that did work, and a skipped target neither failing nor
-  excusing a target that was not skipped.
-- The judged set beside this file resolves: `ai-and-fetishism-queries.json` is
-  checked for one target per query, and `no_answer_support` is checked to report
-  that abstention is unmeasured rather than to invent a label.
-- `tests/retrieval/test_search_evaluation_trace.py` holds the engine-side payload
-  contract, because it is the engine's payload; `tests/retrieval/README.md` lists
-  what it checks.
-
-## Running them
-
-```bash
-uv run pytest tests/evaluation -q
-```
-
-The suite needs no project, no gateway, and no model: the two deterministic
-fakes and the PDF writer come from `tests/core/test_service.py` and
-`tests/conftest.py`, so these tests read the payload a real service emits rather
-than a shape the engine cannot produce. The harness is loaded by path, because
-`scripts/` is not a package.
+- `test_evaluation.py`: the metrics and payload readers.
+  - Each measure against what it says it compares: exact equality, lexical containment, missing-passage coverage, the cosine gate against its own denominator, repetition rates, and latency percentiles.
+  - The raw `evaluation_trace` surviving into the report with its truncation flags, and the scored-then-collapsed count complete against a cut list.
+  - The reranked-row policy through `_run_one`, including a real service whose cross-encoder cannot load.
+- Target resolution collects failures instead of short-circuiting. A skipped target neither fails nor excuses another.
+- The shipped judged set resolves to one target per query, and `no_answer_support` reports abstention as unmeasured.
+- `tests/retrieval/test_search_evaluation_trace.py` holds the engine-side payload contract.

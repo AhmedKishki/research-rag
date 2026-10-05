@@ -1,7 +1,6 @@
 # `corpus`
 
-The corpus: what is on disk, how it is read, and what a file's text says about
-itself.
+What is on disk, how it is read, and what a file's text says about itself.
 
 | Module | Holds |
 |---|---|
@@ -10,18 +9,11 @@ itself.
 | `text_normalization.py` | Reading text as it is read: compatibility characters, whitespace, sentence ends |
 | `text_quality.py` | Whether a string is usable: corruption, scripts, the flags a chunk carries, which paragraphs belong to a non-argument section, and whether a whole source is readable |
 
-The split exists so that a module asking "is this text readable" imports
-`text_quality` and nothing else, and does not pull PDF and EPUB readers in to ask.
-
 ## Rules
 
-- `text_normalization.py` and `text_quality.py` import the standard library and
-  each other. They never import `extraction`, `sources`, or anything from this
-  package beyond those two.
+- `text_normalization.py` and `text_quality.py` import only the standard library and each other. A module asking whether text is readable imports `text_quality` and no PDF or EPUB reader.
 - `extraction.py` may not decide what a source is. That is `sources.py`'s.
-- `pymupdf.no_recommend_layout()` runs at import of `extraction.py`, which is why
-  importing this folder's extraction module has a cost. Nothing in this folder records
-  moving it.
+- `pymupdf.no_recommend_layout()` runs at import of `extraction.py`, so importing that module has a cost.
 - The stored flags a chunk carries (`text_quality.CHUNK_FLAG_*`) and the token
   `extraction.py` writes into `quality_flags` are one contract:
   `EXTRACTION_ARTIFACT_TOKEN` is its name and lives in `text_quality.py`.
@@ -39,8 +31,6 @@ The split exists so that a module asking "is this text readable" imports
   excluded unit sits, and the two remedies, and quotes no unit text.
 
 ## What the cleanup removes, and what it does not
-
-The functions below own the cleanup rules and thresholds.
 
 - Running furniture, a sidebar, and a footnote block are prose-shaped, so no
   corruption signal can tell them from evidence. They are recognised by page
@@ -91,12 +81,4 @@ The functions below own the cleanup rules and thresholds.
   image covering most of it; a share of digits or symbols is not a scan.
   An existing OCR text layer must pass the same health checks as other text.
   A PDF with no readable text is refused with the remedy to exclude it or open it.
-- Synthetic tests and read-only extraction checks do not establish removal accuracy.
-  `MEASUREMENTS.md` records no judged precision or recall for these cleanup rules.
-  Garbled text without detectable corruption or structure can pass the gate.
-
-## What lives elsewhere
-
-Deciding whether a source is reviewed, included, or metadata-overridden is a service
-operation rather than part of reading a corpus, so it belongs to `../core/`. What
-builds a generation from what this folder reads lives in `../generations/`.
+- No judged precision or recall exists for these cleanup rules. Garbled text without detectable corruption or structure can pass the gate.

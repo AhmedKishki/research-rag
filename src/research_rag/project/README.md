@@ -26,8 +26,3 @@ What one project is, how it is configured, and the names its state is found by.
 - Import `ResearchError` and policy primitives from `policy.py`, not `support.py`.
   - `support.py` still imports retrieval dependencies; `TODO.md` tracks its remaining split.
   - `tests/gates/test_lightweight_imports.py` guards commands that must run without the stack.
-
-## What lives elsewhere
-
-The durable writes these records are made through are in `../storage/`. The
-process that resolves a config and holds it is in `../runtime/app.py`.

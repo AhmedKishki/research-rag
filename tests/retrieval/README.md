@@ -1,26 +1,20 @@
-# The retrieval halves and the filters over them
+# Retrieval tests
 
-These tests hold the two retrieval paths behind one fusion, the models that decide their vectors, the identifiers and the SQLite lookup that address a chunk without holding its text, the bibliographic filters, the passage exclusions, and the typed boundary over the gateway whose failures name the log the transport already wrote. The embedding model is stood in for where the vector arithmetic is not the subject, so most of the folder needs no model download.
+The two retrieval paths, the fusion, the models, chunk identifiers, filters, and exclusions. Most tests stand in for the embedding model, so no download is needed.
 
-- `test_dense.py` — the exact cosine backend and the Qdrant backend, resumable batching, document filters and `top_k`, a rejected or misplaced index, the embedding batch size and thread count, the token audit, and the reranker defaults.
-- `test_embeddings.py` — every supported embedding model carries a pinned revision, a dimension, a token limit, and a licence, and a model may not claim a language it does not serve.
-- `test_rerankers.py` — every supported reranker is pinned to a revision and an unknown name is refused with the choices.
-- `test_artifact_lookup.py` — the UTF-8 offsets, the duplicate documents, the vectors keyed by contents, the stored chunk verdict matched against a query-time scan, and the rebuild of a missing, corrupt, or stale lookup.
-- `test_search_filters.py` — the search argument contract: source selection by stable id, the six reviewed filter layers, their combinations, the candidate ceiling a filter may not widen, and the window an empty answer names.
-- `test_chunk_exclusions.py` — a passage decision enforced by both retrieval halves, reversible, named in the answer, and reported when the generation on screen does not hold the passage.
-- `test_search_evaluation_trace.py` — the evaluation trace a search can be asked for: the eight named ranking stages with their own counts, the bounded identifier lists and the flag that says one was cut, the absence of passage text, the cosine gate's denominator and its conservation, the candidate-depth and rerank-window formulas, a BM25 payload reporting no dense counts rather than zeros, an unavailable reranker traced as not applied, and a traced search returning an answer otherwise identical to an untraced one.
-- `test_ultrarag.py` — the transport's failures: a start that fails names the reason and both logs, a gateway that exits mid-call becomes a tool error naming its log, and the handshake is bounded by its own timeout.
+- `test_dense.py`: the exact cosine and Qdrant backends, resumable batching, document filters and `top_k`, a rejected or misplaced index, embedding batch size and thread count, the token audit, and reranker defaults.
+- `test_embeddings.py`: every embedding model carries a pinned revision, dimension, token limit, and licence, and none claims a language it does not serve.
+- `test_rerankers.py`: every reranker is pinned to a revision, and an unknown name is refused with the choices.
+- `test_artifact_lookup.py`: UTF-8 offsets, duplicate documents, vectors keyed by contents, the stored verdict against a query-time scan, and rebuilding a missing, corrupt, or stale lookup.
+- `test_search_filters.py`: source selection by stable id, the six reviewed filter layers and their combinations, the candidate ceiling a filter may not widen, and the window an empty answer names.
+- `test_chunk_exclusions.py`: a passage decision enforced by both halves, reversible, named in the answer, and reported when the generation does not hold the passage.
+- `test_search_evaluation_trace.py`: the evaluation trace.
+  - The eight ranking stages with their counts, bounded identifier lists with a cut flag, and no passage text.
+  - The cosine gate's denominator and conservation.
+  - The candidate-depth and rerank-window formulas.
+  - A BM25 payload reporting no dense counts, not zeros.
+  - An unavailable reranker traced as not applied.
+  - A traced search answering identically to an untraced one.
+- `test_ultrarag.py`: a failed start names the reason and both logs, a mid-call exit becomes a tool error naming its log, and the handshake has its own timeout.
 
-`test_search_filters.py`, `test_chunk_exclusions.py`, and `test_search_evaluation_trace.py` import `FakeDenseBackend`, `FakeUltraRAG`, `ProgressivelyFilteredUltraRAG`, and `UnavailableRerankerDenseBackend` from `tests/core/test_service.py`, and the last two take the PDF writer from `tests/conftest.py`, so those three files cannot be moved out of this folder without a change to those imports.
-
-## Running these
-
-```bash
-.venv/bin/python -m pytest tests/retrieval -q
-```
-
-A change to ranking, a model pin, a filter, or an identifier belongs here, because every surface reads through these and none of them re-implements any of it.
-
-## What it mirrors
-
-`src/research_rag/retrieval/`, including `dense_backends/`.
+- `test_search_filters.py`, `test_chunk_exclusions.py`, and `test_search_evaluation_trace.py` import `FakeDenseBackend`, `FakeUltraRAG`, `ProgressivelyFilteredUltraRAG`, and `UnavailableRerankerDenseBackend` from `tests/core/test_service.py`. The last two take the PDF writer from `tests/conftest.py`. Do not move them without updating those imports.

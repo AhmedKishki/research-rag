@@ -1,23 +1,16 @@
-# The three front ends to one service
+# Surface tests
 
-These tests hold what each surface sends and what it must never send: an argument the service does not accept never reaches it, a write is same-origin, JSON-only, and loopback-only, a capability the adapter does not declare hides its route and its control, and a stdio client entry names a project and never a directory.
+What each surface sends and must never send.
 
-- `test_ui.py` — the shared UI app and its adapter against a recording service: search is always hybrid and always reranked, an unserved argument is dropped rather than forwarded, an unsafe write and a source path outside the source root are refused, a service failure becomes a safe message, and the generation and clients panels follow the same rules as every other write.
-- `test_bridge.py` — the stdio transport: a registered name resolves to its own project, a machine holding no such project answers `status` and nothing else rather than refusing the session, a missing app is answered and nothing is started, and a path in a generated `mcp` entry is refused.
-- `test_mcp_tools.py` — serialized tool schemas, descriptions and instructions, response-size budgets, mutation annotations, follow-up IDs, and the bounded app-state projection through a real MCP client.
-- `test_workspace_app.py` — `surfaces/workspace/app.py` against a fake adapter: every capability is declared in the markup and enforced at the route, the quotation rule is present in the page rather than assumed, and a statement, a write, or a removal this host cannot act on is refused or answered 501 rather than raising.
-- `test_workspace_ui.py` — the shipped pages and stylesheet: the clients view, the SQL console, the settings panel, the chunk-exclusion controls, the sidebar that is the whole navigation, the spacing and type scale, the light and dark palettes, and the WCAG AA contrast of every pair that carries text. Its node-driven tests run the page script against a stub document: the build the header offers for each corpus state, the rebuild that alone sends `force_recompute`, the health conditions and the remedy each copies, the filter lists drawn only when they narrow a search, the source lists divided into pages of ten, the project picker, the passage wording, the generations table, and the routes that Back, Forward, and a reload return to.
+- `test_ui.py`: the UI app and adapter against a recording service. Search is always hybrid and reranked, an unserved argument is dropped, an unsafe write or a source path outside the source root is refused, a service failure becomes a safe message, and the generation and clients panels follow the same write rules.
+- `test_bridge.py`: the stdio transport. A registered name resolves to its project, a machine with no such project answers `status` and nothing else, a missing app is answered and nothing starts, and a path in a generated `mcp` entry is refused.
+- `test_mcp_tools.py`: tool schemas, descriptions, instructions, response-size budgets, mutation annotations, follow-up IDs, and the bounded app-state projection, through a real MCP client.
+- `test_workspace_app.py`: `surfaces/workspace/app.py` against a fake adapter. Every capability is declared in the markup and enforced at the route, the quotation rule is in the page, and an unactionable statement, write, or removal is refused or answered 501.
+- `test_workspace_ui.py`: the shipped pages and stylesheet.
+  - The clients view, SQL console, settings panel, chunk-exclusion controls, and the sidebar as the whole navigation.
+  - The spacing and type scale, light and dark palettes, and WCAG AA contrast of every text pair.
+  - Node-driven page-script tests: the header's build offer per corpus state, the rebuild that alone sends `force_recompute`, health conditions and their copied remedies, filter lists drawn only when they narrow a search, source lists in pages of ten, the project picker, passage wording, the generations table, and the routes Back, Forward, and reload return to.
 
-The PDF and EPUB writers come from `tests/conftest.py`; `test_bridge.py` uses the `project` fixture there and marks itself `anyio`. Neither gateway nor dense backend is started: `test_ui.py` and the two workspace files stand in a fake adapter, and `test_bridge.py` proxies to an app a fixture has already served.
-
-## Running these
-
-```bash
-.venv/bin/python -m pytest tests/surfaces -q
-```
-
-A change to what a surface sends or serves belongs here, and a workspace change is tested here, because the workspace ships with this app and a change to it is an app change rather than a presentation change.
-
-## What it mirrors
-
-`src/research_rag/surfaces/`, including `workspace/`.
+- The PDF and EPUB writers come from `tests/conftest.py`. `test_bridge.py` uses the `project` fixture there and is marked `anyio`.
+- No gateway or dense backend starts. The UI and workspace tests use a fake adapter, and `test_bridge.py` proxies to an app a fixture already serves.
+- A workspace change is tested here, because the workspace ships with this app.
