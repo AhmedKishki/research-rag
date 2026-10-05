@@ -741,7 +741,7 @@ def test_the_workspace_carries_the_chunk_exclusion_controls() -> None:
     assert "/api/chunk-inclusion" in script
     # A chunk the server already excluded is offered a restore instead.
     assert "state.chunkExclusions.has(chunk.chunk_id)" in script
-    assert "This chunk is not in the current generation." in script
+    assert "Not in the current generation" in script
     # The whole-source exclusion is a separate control and stays as it was.
     assert 'id="exclusion-dialog"' in page.text
     assert 'hasCapability("source_inclusion")' in script
@@ -2596,3 +2596,185 @@ result.short = pagerNumbers(1, 3);
     # A long pager shows its ends and the current page's neighbours.
     assert result["window"] == [1, None, 5, 6, 7, None, 11]
     assert result["short"] == [1, 2, 3]
+
+
+def test_the_project_picker_offers_only_a_project_that_is_not_on_screen(
+    tmp_path: Path,
+) -> None:
+    """A picker over one project, or an "Open" for the project already open,
+    offered a second tab of the same workspace."""
+
+    result = _drive_page(
+        tmp_path,
+        """
+state.profile = { capabilities: { projects: true } };
+const here = { project_name: "here", running: true, url: "http://127.0.0.1:5051" };
+const there = { project_name: "there", running: true, url: "http://127.0.0.1:5052" };
+renderProjects({ projects: [here], current: "here", message: "" });
+result.single = document.getElementById("project-selector").hidden;
+renderProjects({ projects: [here, there], current: "here", message: "" });
+result.several = document.getElementById("project-selector").hidden;
+result.openForCurrent = !document.getElementById("project-open").hidden;
+document.getElementById("project-select").value = "there";
+showProjectActions();
+result.openForOther = !document.getElementById("project-open").hidden;
+""",
+    )
+
+    assert result == {
+        "single": True,
+        "several": False,
+        "openForCurrent": False,
+        "openForOther": True,
+    }
+
+
+def test_the_workspace_calls_a_passage_a_passage(tmp_path: Path) -> None:
+    """The page said "chunk" in some places and "passage" in others.
+
+    The server's messages keep "chunk", the word its agent tools use, so the page
+    states each decision and the exclusion list in its own words from the fields
+    the server returned. An empty list says so once rather than twice.
+    """
+
+    with _panel_host() as client:
+        page = client.get("/").text
+        script = client.get("/assets/app.js").text
+    for retired in (
+        "Exclude this chunk",
+        "Restore this chunk",
+        "Chunk exclusions",
+        "Exclude chunk<",
+        "No chunk is excluded",
+        "Chunk restored.",
+    ):
+        assert retired not in page
+        assert retired not in script
+
+    result = _drive_page(
+        tmp_path,
+        """
+state.profile = { capabilities: { chunk_exclusion: true } };
+renderChunkExclusions({ exclusions: [], message: "No chunk is excluded from retrieval." });
+const message = document.getElementById("chunk-exclusion-message");
+const list = document.getElementById("chunk-exclusion-list");
+result.empty = { messageHidden: message.hidden, list: text(list) };
+renderChunkExclusions({
+  exclusions: [
+    { chunk_id: "c1", in_current_generation: true, reason: "repeats" },
+    { chunk_id: "c2", in_current_generation: false, reason: "repeats" },
+  ],
+  message: "1 of the 2 excluded chunks are withheld.",
+});
+result.mixed = { messageHidden: message.hidden, message: message.textContent, list: text(list) };
+result.decisions = [
+  passageDecisionMessage({ status: "changed", in_current_generation: true }, false),
+  passageDecisionMessage({ status: "changed", in_current_generation: false }, false),
+  passageDecisionMessage({ status: "changed", in_current_generation: true }, true),
+  passageDecisionMessage({ status: "unchanged" }, false),
+];
+""",
+    )
+
+    assert result["empty"] == {
+        "messageHidden": True,
+        "list": "No passage is excluded from search.",
+    }
+    assert result["mixed"]["messageHidden"] is False
+    assert result["mixed"]["message"].startswith(
+        "1 of 2 excluded passages are withheld from current search"
+    )
+    assert "chunk" not in result["mixed"]["message"]
+    assert "Not in the current generation" in result["mixed"]["list"]
+    assert result["decisions"] == [
+        "Passage excluded from search. The original file is unchanged.",
+        "Passage exclusion saved. This generation does not hold the passage, so no current result changes.",
+        "Passage restored to search.",
+        "This passage is already excluded with this reason.",
+    ]
+
+
+def test_the_generations_are_one_table_with_their_total_size(tmp_path: Path) -> None:
+    """Ten builds were ten cards of six labelled lines each; a table compares
+    them on one screen and says what they hold on disk together."""
+
+    result = _drive_page(
+        tmp_path,
+        """
+state.profile = { capabilities: { generations: true } };
+state.status = { retained_generation_bytes: 3 * 1024 * 1024 };
+renderGenerations([
+  { generation_id: "g-new", is_current: true, created_at: "2026-10-05T08:38:11Z", chunk_count: 24829, document_count: 106, size_bytes: 2 * 1024 * 1024 },
+  { generation_id: "g-old", is_current: false, created_at: "2026-10-02T08:08:53Z", chunk_count: 24483, document_count: 102, size_bytes: 1024 * 1024, manifest_error: "truncated" },
+]);
+const container = document.getElementById("generation-chips");
+const table = container.children[1].children[0];
+const rows = table.children[1].children;
+result.total = container.children[0].textContent;
+result.columns = table.children[0].children[0].children.map((cell) => text(cell));
+result.rows = rows.length;
+result.current = text(rows[0]);
+result.currentRemovable = Boolean(find(rows[0], (item) => item.textContent === "Remove"));
+result.old = text(rows[1]);
+result.oldRemovable = Boolean(find(rows[1], (item) => item.textContent === "Remove"));
+""",
+    )
+
+    assert result["total"] == "2 builds use 3.0 MB on disk."
+    assert result["columns"] == [
+        "Generation",
+        "Built",
+        "Passages",
+        "Sources",
+        "Size",
+        "Action",
+    ]
+    assert result["rows"] == 2
+    assert "g-new" in result["current"] and "In use" in result["current"]
+    assert "24,829" in result["current"] and "2.0 MB" in result["current"]
+    assert result["currentRemovable"] is False
+    assert "Retained" in result["old"]
+    assert "Manifest unreadable: truncated" in result["old"]
+    assert result["oldRemovable"] is True
+
+
+def test_small_layout_and_keyboard_fixes_hold() -> None:
+    """Three small faults: a page number broke onto two lines beside a long
+    title, Ctrl+Enter did nothing in the query box, and the clients summary put
+    a session count beside the words "Who is attached"."""
+
+    with _host(ClientControlAdapter()) as client:
+        page = client.get("/").text
+        script = client.get("/assets/app.js").text
+        css = client.get("/assets/app.css").text
+
+    assert ".result-card-header .locator-badge {\n  flex: 0 0 auto;" in css
+    assert 'aria-keyshortcuts="Control+Enter Meta+Enter"' in page
+    assert "Ctrl+Enter searches from the query box." in page
+    assert "(event.ctrlKey || event.metaKey)" in script
+    assert 'byId("search-form").requestSubmit();' in script
+    assert "Who is attached" not in page
+    assert '<span class="drawer-title">Clients</span>' in page
+
+
+def test_a_section_opens_with_at_most_one_sentence() -> None:
+    """Most sections opened with two to four sentences a reader had already read.
+
+    Each introduction under a view's heading now says one thing. The SQL console
+    is exempt: this app never shows it, and its host writes its own wording.
+    """
+
+    with _panel_host() as client:
+        page = client.get("/").text
+
+    views = page.split("<main", 1)[1].split("</main>", 1)[0]
+    views = re.sub(r'<div id="sql-console".*?</form>', "", views, flags=re.DOTALL)
+    intros = [
+        " ".join(body.split())
+        for body in re.findall(
+            r'<p class="form-note measure[^"]*"[^>]*>(.*?)</p>', views, flags=re.DOTALL
+        )
+    ]
+    assert len(intros) >= 12
+    for intro in intros:
+        assert len(re.findall(r"[.!?](?:\s|$)", intro)) <= 1, intro

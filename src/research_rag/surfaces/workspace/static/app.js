@@ -427,7 +427,9 @@ function showProjectActions() {
   const project = selectedProject();
   const url = project?.url || "";
   const open = byId("project-open");
-  open.hidden = !url;
+  // The project on screen is this page, so opening it would only open a second
+  // tab of the same workspace.
+  open.hidden = !url || project.project_name === state.currentProject;
   // The command is the host's own, supplied through the profile, because a
   // project with no app has no address and an invented one would be a command
   // the reader pastes and fails on.
@@ -465,6 +467,10 @@ function renderProjects(payload) {
   const message = byId("project-selector-message");
   message.hidden = !payload.message;
   message.textContent = payload.message || "";
+  // A selector over one project has nothing to switch to, so it is not drawn;
+  // the sidebar footer still names the project.
+  byId("project-selector").hidden =
+    !hasCapability("projects") || (state.projects.length <= 1 && !payload.message);
   showProjectActions();
 }
 
@@ -1754,49 +1760,48 @@ function bytes(count) {
   return `${unit === 0 ? value : value.toFixed(1)} ${units[unit]}`;
 }
 
+// One row per build, in a table: a reader comparing builds reads down a column,
+// and ten builds as cards of six labelled lines each were a page of scrolling.
+// The identifier is the row's head because it is what a removal names.
 function generationRow(generation) {
-  const row = node("article", "record-row");
-  const head = node("div", "record-row-head");
+  const row = node("tr", generation.is_current ? "is-current" : "");
+  const head = node("th", "record-id-cell");
+  head.scope = "row";
   head.append(node("code", "record-id", generation.generation_id));
   if (generation.is_current) {
     head.append(node("span", "state-badge state-badge-current", "In use"));
   } else {
     head.append(node("span", "state-badge", "Retained"));
   }
-  row.append(head);
-  // Every number here is a fact about what a build kept, and none of them is a
-  // headline: the identifier above is what identifies the generation.
-  const facts = [
-    ["Built", generation.created_at ? formatDate(generation.created_at) : "Unknown"],
-    ["Passages", formatNumber(generation.chunk_count ?? 0)],
-    ["Sources", formatNumber(generation.document_count ?? 0)],
-    ["Size on disk", bytes(generation.size_bytes)],
-  ];
-  if (generation.file_count) facts.push(["Files", formatNumber(generation.file_count)]);
-  if (generation.schema_version) facts.push(["Schema", String(generation.schema_version)]);
-  row.append(factList(facts, "fact-list"));
   // A generation whose manifest cannot be read is named rather than counted,
   // because a reader deciding what to remove needs to know which rows are facts.
   if (generation.manifest_error) {
-    row.append(node("p", "record-warning", `Manifest unreadable: ${generation.manifest_error}`));
+    head.append(node("p", "record-warning", `Manifest unreadable: ${generation.manifest_error}`));
   }
+  row.append(head);
+  row.append(node("td", "", generation.created_at ? formatDate(generation.created_at) : "Unknown"));
+  row.append(node("td", "number-cell", formatNumber(generation.chunk_count ?? 0)));
+  row.append(node("td", "number-cell", formatNumber(generation.document_count ?? 0)));
+  row.append(node("td", "number-cell", bytes(generation.size_bytes)));
+  const action = node("td", "action-cell");
   // The one a search reads cannot be removed, so the action is not offered
   // rather than offered and refused: a button that always fails is a button
-  // that teaches a reader to click through the answers. It sits beside the
-  // identifier because that is what it acts on.
+  // that teaches a reader to click through the answers.
   if (!generation.is_current) {
     const drop = node("button", "text-button", "Remove");
     drop.type = "button";
+    drop.setAttribute("aria-label", `Remove ${generation.generation_id}`);
     drop.addEventListener("click", () => openGenerationRemoval(generation.generation_id));
-    head.append(drop);
+    action.append(drop);
   }
+  row.append(action);
   return row;
 }
 
+const GENERATION_COLUMNS = ["Generation", "Built", "Passages", "Sources", "Size"];
+
 function renderGenerations(generations) {
-  // The id stays the container hook other code and tests already read; the
-  // contents are rows rather than chips, because an identifier and a size do not
-  // belong in a badge.
+  // The id stays the container hook other code and tests already read.
   const container = byId("generation-chips");
   container.replaceChildren();
   byId("generation-count").textContent = formatNumber(generations.length);
@@ -1804,9 +1809,34 @@ function renderGenerations(generations) {
     container.append(node("p", "form-note", "This project has no build yet."));
     return;
   }
-  for (const generation of generations) {
-    container.append(generationRow(generation));
-  }
+  const total = state.status?.retained_generation_bytes
+    ?? generations.reduce((sum, generation) => sum + (generation.size_bytes || 0), 0);
+  container.append(
+    node(
+      "p",
+      "form-note generation-total",
+      `${formatNumber(generations.length)} build${generations.length === 1 ? "" : "s"} use ${bytes(total)} on disk.`,
+    ),
+  );
+  const table = node("table", "record-table");
+  const header = node("tr");
+  GENERATION_COLUMNS.forEach((label, index) => {
+    const cell = node("th", index >= 2 ? "number-cell" : "", label);
+    cell.scope = "col";
+    header.append(cell);
+  });
+  const actionHead = node("th", "action-cell");
+  actionHead.scope = "col";
+  actionHead.append(node("span", "visually-hidden", "Action"));
+  header.append(actionHead);
+  const head = node("thead");
+  head.append(header);
+  const body = node("tbody");
+  generations.forEach((generation) => body.append(generationRow(generation)));
+  table.append(head, body);
+  const scroller = node("div", "table-scroll");
+  scroller.append(table);
+  container.append(scroller);
 }
 
 function openGenerationRemoval(generationId) {
@@ -2470,7 +2500,7 @@ async function reloadSettings() {
 }
 
 function chunkExcludeButton(chunk) {
-  const control = button("Exclude this chunk", "exclude-chunk", chunk.chunk_id);
+  const control = button("Exclude this passage", "exclude-chunk", chunk.chunk_id);
   control.dataset.chunkSource = chunk.source_relative_path || chunk.source_path || "Unknown source";
   control.dataset.chunkLocator = chunk.locator ? locatorLabel(chunk.locator) : "No locator reported";
   return control;
@@ -2480,8 +2510,21 @@ function chunkAction(chunk) {
   // A chunk the server already lists as excluded is offered a restore instead,
   // so the reader is never asked to exclude what is already out.
   return state.chunkExclusions.has(chunk.chunk_id)
-    ? button("Restore this chunk", "restore-chunk", chunk.chunk_id)
+    ? button("Restore this passage", "restore-chunk", chunk.chunk_id)
     : chunkExcludeButton(chunk);
+}
+
+// What a passage decision did, from the fields the server returned. A passage
+// this generation does not hold is excluded for later generations only, so the
+// reader is told nothing on screen changed.
+function passageDecisionMessage(result, included) {
+  if (result.status === "unchanged") {
+    return included ? "This passage is already in search." : "This passage is already excluded with this reason.";
+  }
+  if (included) return "Passage restored to search.";
+  return result.in_current_generation === false
+    ? "Passage exclusion saved. This generation does not hold the passage, so no current result changes."
+    : "Passage excluded from search. The original file is unchanged.";
 }
 
 function openChunkExclusion(control) {
@@ -2493,14 +2536,14 @@ function openChunkExclusion(control) {
 }
 
 async function writeChunkInclusion(payload, fromDialog = false) {
-  setBusy(true, payload.included ? "Restoring the chunk…" : "Excluding the chunk…");
+  setBusy(true, payload.included ? "Restoring the passage…" : "Excluding the passage…");
   try {
     const result = await api("/api/chunk-inclusion", {
       method: "POST",
       body: JSON.stringify(payload),
     });
     if (fromDialog) byId("chunk-dialog").close();
-    toast(result.message || (payload.included ? "Chunk restored." : "Chunk excluded."));
+    toast(passageDecisionMessage(result, payload.included));
     clearResults();
     await loadChunkExclusions();
   } catch (error) {
@@ -2537,14 +2580,14 @@ function chunkExclusionCard(entry) {
   body.append(node("strong", "", entry.source_relative_path || entry.chunk_id));
   body.append(node("p", "source-path", entry.locator || "No locator reported"));
   body.append(node("p", "excluded-reason", inlineText(entry.reason) || "No reason recorded"));
-  // A chunk this generation does not hold is named as such, because restoring it
-  // changes the next generation rather than the passages already on screen.
+  // A passage this generation does not hold is named as such, because restoring
+  // it changes a later generation rather than the passages already on screen.
   body.append(
     node(
       "span",
       "state-badge state-badge-blocked",
       entry.in_current_generation === false
-        ? entry.message || "This chunk is not in the current generation."
+        ? "Not in the current generation"
         : "Blocked from current search",
     ),
   );
@@ -2556,14 +2599,20 @@ function renderChunkExclusions(payload) {
   const entries = payload.exclusions || [];
   state.chunkExclusions = new Map(entries.map((entry) => [entry.chunk_id, entry]));
   byId("chunk-exclusion-count").textContent = String(entries.length);
+  // The summary is the page's own sentence over the server's fields. The
+  // server's message says "chunk", the word its agent tools use; this page calls
+  // the same thing a passage everywhere. An empty list says so once, in the list.
+  const withheld = entries.filter((entry) => entry.in_current_generation !== false).length;
   const message = byId("chunk-exclusion-message");
-  message.hidden = !payload.message;
-  message.textContent = payload.message || "";
+  message.hidden = !entries.length;
+  message.textContent = withheld === entries.length
+    ? `Every excluded passage is withheld from current search.`
+    : `${formatNumber(withheld)} of ${formatNumber(entries.length)} excluded passages are withheld from current search; the others are not in this generation, and no ingestion restores them.`;
 
   const list = byId("chunk-exclusion-list");
   list.replaceChildren();
   if (!entries.length) {
-    list.append(node("div", "no-records", "No chunk is excluded from retrieval."));
+    list.append(node("div", "no-records", "No passage is excluded from search."));
     return;
   }
   entries.forEach((entry) => list.append(chunkExclusionCard(entry)));
@@ -2820,6 +2869,13 @@ function initialize() {
     void copyText(command, "Update command copied.");
   });
   byId("search-form").addEventListener("submit", search);
+  // The query box is multi-line, so Enter keeps adding a line and Ctrl+Enter
+  // (Cmd+Enter on a Mac) searches without reaching for the button.
+  byId("query").addEventListener("keydown", (event) => {
+    if (event.key !== "Enter" || !(event.ctrlKey || event.metaKey)) return;
+    event.preventDefault();
+    byId("search-form").requestSubmit();
+  });
   byId("metadata-form").addEventListener("submit", saveMetadata);
   byId("exclusion-form").addEventListener("submit", excludeSource);
   byId("ingest-form").addEventListener("submit", ingest);

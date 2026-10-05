@@ -616,6 +616,11 @@ h3 {
   background: var(--bg-surface);
 }
 
+.search-hint {
+  color: var(--text-secondary);
+  font-size: var(--text-xs);
+}
+
 .method-control {
   display: flex;
   flex-wrap: wrap;
@@ -855,6 +860,14 @@ h3 {
 
 .result-card-header {
   align-items: flex-start;
+}
+
+/* Beside a title the badge keeps a short locator on one line, and a long
+   section title wraps inside its own share of the row instead of squeezing the
+   page number onto two lines. */
+.result-card-header .locator-badge {
+  flex: 0 0 auto;
+  max-width: min(45%, 18rem);
 }
 
 .result-title {
@@ -1156,7 +1169,6 @@ textarea:disabled {
   margin-top: var(--space-2xs);
 }
 
-.record-row,
 .client-row {
   display: grid;
   gap: var(--space-2xs);
@@ -1166,7 +1178,6 @@ textarea:disabled {
   background: var(--bg-card);
 }
 
-.record-row-head,
 .client-row-head {
   display: flex;
   flex-wrap: wrap;
@@ -1190,9 +1201,69 @@ textarea:disabled {
 
 /* A row's own action sits at the end of its headline, beside the identifier it
    acts on, and never alone on a line of its own. */
-.record-row-head > .text-button,
 .client-row-head > .text-button {
   margin-left: auto;
+}
+
+/* Builds are compared down a column, so they are a table. The wrapper scrolls
+   sideways on a narrow window so the page itself never does. */
+.table-scroll {
+  overflow-x: auto;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  background: var(--bg-card);
+}
+
+.record-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: var(--text-sm);
+}
+
+.record-table th,
+.record-table td {
+  padding: var(--space-2xs) var(--space-xs);
+  border-bottom: 1px solid var(--border-subtle);
+  text-align: left;
+  vertical-align: middle;
+  white-space: nowrap;
+}
+
+.record-table thead th {
+  color: var(--text-secondary);
+  font-size: var(--text-xs);
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.record-table tbody tr:last-child > * {
+  border-bottom: 0;
+}
+
+.record-table .number-cell {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+.record-table .action-cell {
+  text-align: right;
+}
+
+.record-id-cell {
+  font-weight: 400;
+}
+
+.record-id-cell .state-badge {
+  margin-left: var(--space-2xs);
+}
+
+.record-id-cell .record-warning {
+  white-space: normal;
+}
+
+.generation-total {
+  margin: 0;
 }
 
 /* A damaged manifest is named where the reader can act on it, never folded into
@@ -2505,10 +2576,6 @@ textarea:disabled {
 
   .fact-label + .fact-value {
     margin-bottom: var(--space-2xs);
-  }
-
-  .record-row-head > .text-button {
-    margin-left: 0;
   }
 
   .memory-line {

@@ -167,6 +167,7 @@
               <span class="field-label">Query</span>
               <textarea
                 id="query"
+                aria-keyshortcuts="Control+Enter Meta+Enter"
                 name="query"
                 rows="3"
                 required
@@ -203,6 +204,7 @@
               <button id="search-button" class="button button-primary search-submit" type="submit">
                 Search
               </button>
+              <small class="search-hint">Ctrl+Enter searches from the query box.</small>
             </div>
           </form>
 
@@ -214,9 +216,8 @@
                 <span id="filter-summary-note" class="drawer-note">No filter set</span>
               </summary>
               <p class="form-note measure filter-intro">
-                A filter narrows the passages a search reads. A field left empty
-                matches everything, and every value here applies to the next search
-                without rebuilding anything.
+                A field left empty matches everything, and a filter applies to
+                the next search without a rebuild.
               </p>
               <div class="filter-groups">
                 <fieldset class="filter-group" data-capability="metadata_filters">
@@ -310,8 +311,8 @@
                 <div id="partition-summary" class="pick-group" data-capability="category_partitions" hidden>
                   <h3>Corpus partitions</h3>
                   <p class="form-note measure">
-                    Reviewed categories with the number of searchable sources
-                    carrying each. Select one to add it to the filter above.
+                    Select a category to add it to the filter; each count is
+                    the searchable sources carrying it.
                   </p>
                   <div id="partition-chips" class="pick-list"></div>
                 </div>
@@ -319,8 +320,8 @@
                 <div id="project-summary" class="pick-group" data-capability="project_metadata" hidden>
                   <h3>Projects</h3>
                   <p class="form-note measure">
-                    Reviewed project tags with the number of searchable sources
-                    gathered for each. Select one to add it to the filter above.
+                    Select a project tag to add it to the filter; each count
+                    is the searchable sources carrying it.
                   </p>
                   <div id="project-chips" class="pick-list"></div>
                 </div>
@@ -328,8 +329,8 @@
                 <div id="language-summary" class="pick-group" data-capability="bibliographic_filters" hidden>
                   <h3>Languages</h3>
                   <p class="form-note measure">
-                    The language recorded for each searchable source. Select one to
-                    add it to the filter above.
+                    Select a language to add it to the filter; each count is
+                    the searchable sources carrying it.
                   </p>
                   <div id="language-chips" class="pick-list"></div>
                 </div>
@@ -352,8 +353,8 @@
         <section id="sources-view" class="view-panel" data-panel="sources" data-capability="sources" hidden>
           <h2>Indexed sources</h2>
           <p class="form-note measure">
-            What this project has indexed, what it is leaving out of retrieval,
-            and the reviewed metadata a reader can change on each source.
+            Each indexed source, with the metadata you can review and the decisions
+            you can make on it.
           </p>
 
           <div class="sources-toolbar">
@@ -374,9 +375,8 @@
               <span id="excluded-count" class="count-badge">0</span>
             </div>
             <p class="form-note measure">
-              Sources this project is not searching. A restored source becomes
-              searchable again without a rebuild, and the original file is never
-              deleted or edited.
+              Sources this project does not search; restoring one needs no
+              rebuild, and no file is edited.
             </p>
             <div id="excluded-list" class="excluded-list"></div>
             <nav id="excluded-pager" class="pager" aria-label="Excluded source pages" hidden></nav>
@@ -448,10 +448,8 @@
               <span id="generation-count" class="count-badge">0</span>
             </div>
             <p class="form-note measure">
-              Every successful build of this corpus, and the one a search reads
-              now. Removing one frees its space and cannot be undone; the
-              original sources are not touched, and rebuilding costs one
-              ingestion.
+              Removing a build frees its space and cannot be undone; the sources
+              are not touched.
             </p>
             <div class="rebuild-row" data-capability="force_recompute">
               <button id="rebuild-button" class="button button-quiet" type="button" hidden>
@@ -463,15 +461,12 @@
 
           <div id="chunk-exclusion-summary" class="panel-section" data-capability="chunk_exclusion" hidden>
             <div class="section-heading-row">
-              <h3>Chunk exclusions</h3>
+              <h3>Passage exclusions</h3>
               <span id="chunk-exclusion-count" class="count-badge">0</span>
             </div>
             <p class="form-note measure">
-              Chunks this server has removed from retrieval without removing
-              their source. Excluding one leaves search immediately, and
-              restoring one brings it back in every generation that holds it; no
-              ingestion undoes either decision, and the original files are never
-              deleted or edited.
+              Passages left out of search while their source stays in;
+              restoring one brings it back in every generation that holds it.
             </p>
             <p id="chunk-exclusion-message" class="form-note" hidden></p>
             <div id="chunk-exclusion-list" class="excluded-list" aria-live="polite"></div>
@@ -510,9 +505,7 @@
           <div id="settings-panel" class="settings-panel">
             <h2>Settings</h2>
             <p class="form-note measure">
-              The values this server uses, where each came from, and what changing it
-              costs. A value the server set outside this project is shown as it is
-              and cannot be edited here.
+              A value set outside this project is shown but cannot be edited here.
             </p>
             <p id="settings-message" class="form-note" hidden></p>
             <p id="settings-defaults" class="form-note measure" hidden></p>
@@ -531,17 +524,19 @@
         <section id="mcp-view" class="view-panel" data-panel="mcp" data-capability="clients" hidden>
           <h2>MCP</h2>
           <p class="form-note measure">
-            Where this app serves agents, which agents are attached to it now, and
-            the entry that points a new one at it.
+            Where agents reach this app, and which are attached now.
           </p>
 
           <div id="client-summary" class="panel-section">
             <h3>Attached clients</h3>
-            <p class="form-note measure">Agents connected to this app over MCP. Disconnecting one ends its session; the client owns the process and decides whether to come back.</p>
+            <p class="form-note measure">
+              Disconnecting a client ends its session; the client decides whether
+              to reconnect.
+            </p>
             <p id="client-naming" class="form-note measure" hidden></p>
             <details id="client-details" class="client-drawer">
               <summary>
-                <span class="drawer-title">Who is attached</span>
+                <span class="drawer-title">Clients</span>
                 <span id="client-count" class="count-badge">0</span>
                 <span id="client-detail" class="drawer-note"></span>
               </summary>
@@ -551,7 +546,9 @@
 
           <div id="agent-endpoint" class="panel-section">
             <h3>Agent endpoint</h3>
-            <p class="form-note measure">The address an MCP client that can open a socket is given. It is served by the app this page belongs to.</p>
+            <p class="form-note measure">
+              For a client that connects over HTTP.
+            </p>
             <div class="sql-actions">
               <p id="agent-url" class="copyable-value"></p>
               <button id="agent-url-copy" class="text-button" type="button" disabled>Copy endpoint</button>
@@ -561,9 +558,8 @@
           <div id="agent-entry-summary" class="panel-section" data-capability="agent_entry">
             <h3>Client entry</h3>
             <p class="form-note measure">
-              For a client that cannot open a socket. Copy it into that client's own
-              configuration; it names the project rather than its directory, so one
-              entry works on every machine holding the project.
+              For a client that cannot open a socket: it names the project rather
+              than its directory, so one entry works on every machine.
             </p>
             <pre id="agent-entry" class="standing-document"></pre>
             <div class="sql-actions">
@@ -586,9 +582,8 @@
         <section id="updates-view" class="view-panel" data-panel="updates" data-capability="updates" hidden>
           <h2>Updates</h2>
           <p class="form-note measure">
-            This page asks the server whether a newer release has been published.
-            Nothing is downloaded or installed here: a running app never replaces
-            itself, and changing an installation is a command in a terminal.
+            Checking reads the published releases and installs nothing; an update
+            runs from a terminal.
           </p>
 
           <div class="update-toolbar">
@@ -723,7 +718,7 @@
     <dialog id="chunk-dialog" class="dialog">
       <form id="chunk-form" method="dialog">
         <div class="dialog-header">
-          <h2>Exclude this chunk?</h2>
+          <h2>Exclude this passage?</h2>
           <button class="icon-button dialog-close" type="button" aria-label="Close">×</button>
         </div>
         <input id="chunk-id" type="hidden">
@@ -740,7 +735,7 @@
         <p id="chunk-error" class="dialog-error" hidden></p>
         <div class="dialog-actions">
           <button class="button button-quiet dialog-close" type="button">Cancel</button>
-          <button id="chunk-submit" class="button button-danger" type="submit">Exclude chunk</button>
+          <button id="chunk-submit" class="button button-danger" type="submit">Exclude passage</button>
         </div>
       </form>
     </dialog>
