@@ -49,6 +49,7 @@ description: Research app boundaries, evidence contracts, and validation rules.
 
 - `pyproject.toml` owns the version and Python range; runtime version reads installed distribution metadata.
   - `update` compares published releases, not branch heads.
+  - Show the matching GitHub changelog before approval; declining or unavailable approval must not install, stop apps, or change project state.
   - `tests/runtime/test_release.py` validates release versions and local tag targets.
 - `LICENSE` grants Apache-2.0 for this code; `NOTICE` owns separate dependency terms, including AGPL-3.0 extraction.
 - `README.md` owns the quickstart; `research-rag help` owns the command reference.

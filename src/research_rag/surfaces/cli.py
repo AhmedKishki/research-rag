@@ -2379,6 +2379,13 @@ async def _update(args: argparse.Namespace) -> dict[str, Any]:
     if not approval.granted:
         payload["notes"] = [*notes, "Declined, so nothing was changed."]
         return payload
+    expected_version = plan.release_version or plan.remote_revision
+    if not published.found or published.version != expected_version:
+        raise ResearchError(
+            "Nothing was changed. The published GitHub release and changelog "
+            f"must match the approved version {expected_version}. "
+            "Run 'research-rag update' again after release information is available."
+        )
     # An approved release is the one previewed, not whatever is newest by now.
     moved = update_module.target_moved(local, plan, runner, offline=offline)
     if moved:
