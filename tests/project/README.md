@@ -17,7 +17,7 @@ The `project` fixture and the throwaway account directory come from `tests/conft
 .venv/bin/python -m pytest tests/project -q
 ```
 
-This is the right scope when a change moves a setting, a layer, or a shared name, because each of those is read by a command, a surface, or a file outside this folder and no other test would notice it.
+A change that moves a setting, a layer, or a shared name belongs here, because each of those is read by a command, a surface, or a file outside this folder and no other test would notice it.
 
 ## What it mirrors
 

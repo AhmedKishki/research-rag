@@ -2,6 +2,11 @@
 
 Imports nothing from the service, the MCP surface, or an entry point, so it stays
 a leaf.
+
+The failure type, the retrieval-method set, and the two digests a generation
+identity is written with are not here: they are in `policy.py`, which imports
+nothing at all, so a command that answers without a corpus can reach them without
+installing the retrieval stack.
 """
 
 from __future__ import annotations
@@ -32,50 +37,11 @@ from ..corpus.text_quality import (
     text_health_reasons,
     text_script_notes,
 )
-from ..generations.generation import value_fingerprint
 from ..retrieval.artifact_lookup import LOOKUP_HEALTH_FLAGS_KEY
 from ..retrieval.dense import DenseTokenAuditUnavailable
 from ..retrieval.embeddings import EmbeddingModel
 from ..retrieval.rerankers import resolve_reranker_model
-from .settings import EffectiveSettings
-
-
-def retrieval_policy_fingerprint(settings: EffectiveSettings) -> str:
-    """Return the identity of the ranking policy these settings describe.
-
-    The fusion constants and gates decide what a search returns, so they are part
-    of what a generation *is*, and a generation recording a different policy is
-    not reusable.
-
-    A value stays out when it only reorders what those already return: the
-    source-diversity penalty is taken at the final top_k pick and changes no stored
-    artifact, so fingerprinting it would report a byte-identical rebuild.
-    """
-
-    return value_fingerprint(
-        {
-            "default_method": DEFAULT_RETRIEVAL_METHOD,
-            "available_methods": sorted(RETRIEVAL_METHODS),
-            "bm25": {
-                "language": settings.bm25_stopwords_language,
-                "tokenizer": "default",
-            },
-            "fusion": {
-                "method": "weighted_reciprocal_rank_fusion",
-                "rrf_k": settings.rrf_k,
-                "bm25_weight": settings.bm25_weight,
-                "dense_weight": settings.dense_weight,
-                "minimum_candidates": settings.minimum_candidates,
-                "maximum_candidates": settings.maximum_candidates,
-            },
-            "relevance_gates": {
-                "bm25_requires_query_token_overlap": True,
-                "dense_minimum_cosine_similarity": (
-                    settings.dense_minimum_cosine_similarity
-                ),
-            },
-        }
-    )
+from .policy import ResearchError, value_fingerprint
 
 
 def _selection_relevance(
@@ -170,10 +136,6 @@ async def _atomic_to_thread(function: Any, /, *args: Any, **kwargs: Any) -> Any:
     except asyncio.CancelledError:
         await asyncio.gather(task, return_exceptions=True)
         raise
-
-
-def _utc_now() -> str:
-    return datetime.now(UTC).isoformat().replace("+00:00", "Z")
 
 
 def _generation_id() -> str:
@@ -945,10 +907,6 @@ def _record_embedding_token_counts(
     return True
 
 
-DEFAULT_RETRIEVAL_METHOD = "hybrid"
-
-RETRIEVAL_METHODS = frozenset({"bm25", "dense", "hybrid"})
-
 SCHEMA_VERSION = 5
 
 EXTRACTION_POLICY_VERSION = 7
@@ -971,7 +929,3 @@ METADATA_STORAGE_POLICY = "automatic_only_runtime_overlay_v1"
 GENERATION_ID_PATTERN = r"\d{8}T\d{6}Z-[0-9a-f]{8}"
 
 _WORD = re.compile(r"[^\W_]+", re.UNICODE)
-
-
-class ResearchError(RuntimeError):
-    """User-facing research workflow failure."""

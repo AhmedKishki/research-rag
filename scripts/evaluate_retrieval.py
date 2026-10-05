@@ -66,7 +66,7 @@ from research_rag.project.config import (
     configured_source_directory,
     resolve_config,
 )
-from research_rag.project.support import retrieval_policy_fingerprint
+from research_rag.project.policy import retrieval_policy_fingerprint
 from research_rag.retrieval.rerankers import (
     DEFAULT_RERANKER_MODEL,
     RERANKER_MODEL_CHOICES,

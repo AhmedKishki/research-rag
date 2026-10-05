@@ -1,4 +1,4 @@
-# What this project is
+# `surfaces`
 
 The three front ends, and the transport that reaches the app.
 
@@ -18,9 +18,9 @@ The three front ends, and the transport that reaches the app.
   re-declaring them, so an agent and a browser cannot disagree about one call.
 - A blocked surface declares `status` and nothing else, and the remedy it gives is
   a command a reader runs in a terminal.
-- `cli.py` is the largest file in this project and holds the parser, the command
-  bodies, and the output shaping. `TODO.md` records the cut between those three
-  as work to do.
+- `cli.py` combines parsing, command bodies, and output shaping; their split remains open.
+  - Retrieval imports are deferred until commands need them.
+  - Lightweight command coverage lives in `tests/gates/test_lightweight_imports.py`.
 - `workspace/` owns no project state and imports nothing outside itself. A host
   that stores a document in a shared package is a host that cannot say where its
   state is.

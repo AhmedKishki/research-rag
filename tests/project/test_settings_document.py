@@ -11,6 +11,7 @@ from filelock import AsyncFileLock
 
 from research_rag.core.service import ResearchService
 from research_rag.project.config import resolve_config
+from research_rag.project.policy import ResearchError
 from research_rag.project.settings import (
     LOG_LEVELS,
     SETTINGS,
@@ -25,7 +26,6 @@ from research_rag.project.settings_document import (
     write_project_document,
 )
 from research_rag.project.settings_layers import LAYER_PROJECT, SettingsError
-from research_rag.project.support import ResearchError
 
 pytestmark = pytest.mark.anyio
 
@@ -367,6 +367,57 @@ async def test_a_key_the_command_line_supplied_is_refused_a_project_write(
         )
 
     assert "cannot override" in str(refusal.value)
+    assert not (project / ".research-rag" / "config.toml").exists()
+
+
+async def test_a_lone_surrogate_is_refused_by_the_writer_rather_than_the_encoder(
+    project: Path,
+) -> None:
+    """A JSON body can carry a code point that is not a character.
+
+    `\\ud800` names a code point rather than a character, and no UTF-8 encoding of
+    it exists, so the file this writer produces could not hold it. The refusal
+    names the key and the reason, where the alternative is an encoder failure
+    part-way through a write -- which the writer's callers do not translate, so a
+    reader would see a failed request with no reason in it.
+
+    Every string setting the registry ships is validated before it reaches here,
+    so this is the guard for the writer itself rather than for one shipped key.
+    """
+
+    with pytest.raises(SettingsError) as refusal:
+        render_project_document({"runtime": {"model_cache_root": "\ud800"}})
+
+    assert "runtime.model_cache_root" in str(refusal.value)
+    assert "UTF-8" in str(refusal.value)
+
+
+async def test_a_hostile_json_value_is_answered_with_a_refusal_naming_the_key(
+    project: Path,
+) -> None:
+    """The value arrives the way a browser sends it, and the answer names the key.
+
+    The body is encoded as `bytes` on purpose: a Python source literal cannot carry
+    a lone surrogate through a UTF-8 encoder either, and JSON is what brings one
+    to this app. The registry refuses both shipped string settings first, with a
+    message of its own; what this pins is that the answer is that refusal rather
+    than a failed request.
+    """
+
+    service = _service(project)
+    before = await service.settings_read()
+    body = json.dumps(
+        {"values": {"language.bm25_stopwords": "\ud800"}, "expected_revision": ""}
+    ).encode("utf-8", errors="surrogatepass")
+    assert json.loads(body.decode("utf-8", errors="surrogatepass"))["values"]
+
+    with pytest.raises(ResearchError) as refusal:
+        await service.settings_write(
+            json.loads(body)["values"],
+            expected_revision=before["revision"],
+        )
+
+    assert "language.bm25_stopwords" in str(refusal.value)
     assert not (project / ".research-rag" / "config.toml").exists()
 
 

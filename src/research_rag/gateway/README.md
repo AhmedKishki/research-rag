@@ -1,4 +1,4 @@
-# What this project is
+# `gateway`
 
 The stdio MCP gateway this app spawns, and the UltraRAG runtime it proxies.
 
@@ -17,8 +17,7 @@ The stdio MCP gateway this app spawns, and the UltraRAG runtime it proxies.
 - The gateway is an implementation dependency below the app, not a surface. It is
   reached over MCP and nothing else.
 - The runtime cache directory, its marker file, and the environment variable that
-  relocates it are shared with the machines that ran this gateway as its own
-  product. They are found by name, so a rename re-downloads a runtime for every
+  relocates it are found by name, so a rename re-downloads a runtime for every
   machine that already has one.
 - `runtime.py` imports the standard library and `platformdirs`. It installs a
   clone-free snapshot at run time, so the gateway has no import-time dependency on

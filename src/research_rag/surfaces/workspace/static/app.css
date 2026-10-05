@@ -404,6 +404,9 @@ code {
   display: flex;
   width: var(--sidebar-width);
   max-height: 100vh;
+  /* The column fills the window rather than ending where its last item ends, so
+     the page beside it shows no band of bare ground under the nav. */
+  align-self: stretch;
   flex: 0 0 var(--sidebar-width);
   flex-direction: column;
   gap: var(--space-md);
@@ -478,6 +481,21 @@ code {
 .nav-item.is-active .nav-item-count {
   border-color: var(--accent);
   color: var(--accent-ink);
+}
+
+/* The one thing a reader needs to know about an update before opening the view:
+   that there is one. A badge in the column keeps it to a word, where an
+   announcement across the page would be read on every search. */
+.nav-item-badge {
+  padding: var(--space-3xs) var(--space-2xs);
+  border: 1px solid var(--accent);
+  border-radius: 999px;
+  background: var(--accent-soft);
+  color: var(--accent-ink);
+  font-size: var(--text-xs);
+  font-weight: 600;
+  line-height: var(--leading-normal);
+  text-transform: uppercase;
 }
 
 .sidebar-footer {
@@ -659,12 +677,23 @@ h3 {
   min-width: 8rem;
 }
 
+/* One labelled disclosure holds every filter field, so the search console
+   stays a query box and its controls, and the fields a reader rarely opens are
+   closed by default with a count on the summary saying how many are set. */
 .filter-drawer {
-  border-top: 1px solid var(--border-subtle);
+  margin-top: var(--space-2xs);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  background: var(--bg-card);
 }
 
 .filter-drawer summary {
-  padding: var(--space-sm) var(--space-md);
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2xs);
+  min-height: var(--control-height);
+  padding: var(--space-2xs) var(--space-xs);
   color: var(--text-secondary);
   font-size: var(--text-sm);
 }
@@ -673,19 +702,21 @@ h3 {
   color: var(--text-primary);
 }
 
-.filter-fields {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(18rem, 1fr));
-  gap: var(--space-sm) var(--space-md);
-  padding: 0 var(--space-md) var(--space-md);
+.filter-drawer .drawer-title {
+  color: var(--text-primary);
+  font-weight: 600;
 }
 
-.filter-fields label {
-  display: grid;
-  gap: var(--space-3xs);
+.filter-drawer .drawer-note {
+  color: var(--text-secondary);
+  font-size: var(--text-xs);
 }
 
-.filter-fields small,
+.filter-drawer > .filter-groups {
+  border-top: 1px solid var(--border-subtle);
+}
+
+.filter-group small,
 .dialog label small,
 .memory-append-field small {
   display: block;
@@ -833,7 +864,6 @@ h3 {
 .source-tags,
 .result-actions,
 .source-card-actions,
-.score-row,
 .header-actions,
 .project-actions,
 .dialog-actions,
@@ -863,9 +893,15 @@ h3 {
   line-height: 1.4;
 }
 
+/* A locator names a place inside a source, and a section title or an identifier
+   can be as long as a paragraph. The badge shrinks and wraps rather than holding
+   its intrinsic width, because the card holding it clips what does not fit and a
+   clipped locator is a locator the reader cannot use. */
 .locator-badge {
-  flex: 0 0 auto;
+  flex: 0 1 auto;
+  max-width: 100%;
   font-family: var(--font-mono);
+  overflow-wrap: anywhere;
 }
 
 .format-badge {
@@ -884,43 +920,26 @@ h3 {
   color: var(--accent-ink);
 }
 
-.tag-button {
-  cursor: pointer;
-  font: inherit;
-}
-
-.tag-button:hover,
-.tag-button:focus-visible {
-  border-color: var(--accent);
-  background: var(--accent-soft);
-  color: var(--accent-ink);
-}
-
-.source-id,
 .source-path,
 .setting-key,
 .setting-readonly,
 .setting-env,
 .stat-value-code,
 .stat-detail,
-.result-meta,
-.score-label {
+.result-meta {
   font-family: var(--font-mono);
 }
 
-.source-id,
 .source-path,
 .setting-key,
 .setting-readonly,
 .setting-env,
 .result-meta,
-.score-label,
 .stat-detail {
   color: var(--text-tertiary);
   font-size: var(--text-xs);
 }
 
-.source-id,
 .source-path,
 .result-doi,
 .setting-key,
@@ -968,46 +987,298 @@ textarea:disabled {
   opacity: 0.65;
 }
 
-/* ---------------------------------------------------------- partition UI -- */
+/* ------------------------------------------------------------ page blocks -- */
 
-.partition-summary {
+/* One section of a view: a heading, a sentence about what it is, and the thing
+   it holds. The margin belongs to the block rather than to each child, so two
+   sections on one page are separated by one space instead of by two. */
+.panel-section {
+  display: grid;
+  gap: var(--space-2xs);
   margin-top: var(--space-lg);
 }
 
-.partition-summary h3 {
-  margin-bottom: var(--space-2xs);
+.panel-section > h3,
+.panel-section > .section-heading-row h3 {
+  margin-bottom: 0;
 }
 
-.partition-chips {
-  display: flex;
-  flex-wrap: wrap;
-  gap: var(--space-2xs);
+.section-heading-row > .form-note {
+  margin: 0;
+}
+
+/* A label and a value, one pair per row. Two columns keep the label readable at
+   a glance and give the value every remaining pixel, which is what an identifier
+   or a path needs; below the medium breakpoint the pair stacks so neither half
+   is squeezed. */
+.fact-list {
+  display: grid;
+  grid-template-columns: minmax(9rem, max-content) minmax(0, 1fr);
+  gap: var(--space-2xs) var(--space-md);
+  margin: 0;
+}
+
+.fact-label {
+  color: var(--text-secondary);
+  font-size: var(--text-xs);
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  line-height: var(--leading-normal);
+  text-transform: uppercase;
+}
+
+.fact-value {
+  min-width: 0;
+  margin: 0;
+  color: var(--text-primary);
+  font-size: var(--text-sm);
+  line-height: var(--leading-normal);
+  overflow-wrap: anywhere;
+}
+
+/* An identifier, a path, a directory, and a score are all set in the code face
+   wherever they appear, because they are the values a reader copies. */
+.client-facts .fact-value,
+.identifier-list .fact-value,
+.score-facts .fact-value {
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+}
+
+/* A disclosure whose contents are facts and identifiers. It is the one place a
+   long identifier, a path, or a per-component score is shown: in full, labelled,
+   and selectable, because the reader who opens it came to read the whole of it. */
+.detail-drawer,
+.identifier-drawer {
   margin-top: var(--space-2xs);
-}
-
-.partition-chip {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: var(--space-2xs);
-  max-width: 100%;
-  padding: var(--space-2xs) var(--space-xs);
   border: 1px solid var(--border-subtle);
   border-radius: var(--radius-sm);
   background: var(--bg-card);
 }
 
-.partition-chip-label {
-  color: var(--text-primary);
+.detail-drawer > summary,
+.identifier-drawer > summary {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2xs);
+  min-height: var(--control-height);
+  padding: var(--space-2xs) var(--space-xs);
+  color: var(--text-secondary);
   font-size: var(--text-sm);
-  font-weight: 600;
-  overflow-wrap: anywhere;
+  cursor: pointer;
 }
 
-.partition-chip-count {
+.detail-drawer > summary:hover,
+.identifier-drawer > summary:hover {
+  color: var(--text-primary);
+}
+
+.detail-drawer .drawer-title {
+  color: var(--text-primary);
+  font-weight: 600;
+}
+
+.detail-drawer .drawer-note,
+.identifier-drawer .drawer-note {
   color: var(--text-secondary);
   font-size: var(--text-xs);
 }
+
+.detail-drawer > .fact-list,
+.identifier-drawer > .fact-list {
+  padding: var(--space-2xs) var(--space-xs) var(--space-xs);
+  border-top: 1px solid var(--border-subtle);
+}
+
+/* A list of records the reader acts on: one generation, one client, one build.
+   A row is a headline and a set of labelled facts rather than a badge with a
+   number folded into it, because the headline is an identifier and an identifier
+   does not fit in a badge. */
+.record-list,
+.client-list {
+  display: grid;
+  gap: var(--space-2xs);
+  margin-top: var(--space-2xs);
+}
+
+.record-row,
+.client-row {
+  display: grid;
+  gap: var(--space-2xs);
+  padding: var(--space-sm) var(--space-xs);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  background: var(--bg-card);
+}
+
+.record-row-head,
+.client-row-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2xs);
+}
+
+.record-id {
+  min-width: 0;
+  color: var(--text-primary);
+  font-size: var(--text-sm);
+  overflow-wrap: anywhere;
+}
+
+.client-row-name {
+  min-width: 0;
+  color: var(--text-primary);
+  font-size: var(--text-md);
+  overflow-wrap: anywhere;
+}
+
+/* A row's own action sits at the end of its headline, beside the identifier it
+   acts on, and never alone on a line of its own. */
+.record-row-head > .text-button,
+.client-row-head > .text-button {
+  margin-left: auto;
+}
+
+/* A damaged manifest is named where the reader can act on it, never folded into
+   a count. */
+.record-warning {
+  margin: 0;
+  color: var(--warning);
+  font-size: var(--text-sm);
+  line-height: var(--leading-normal);
+  overflow-wrap: anywhere;
+}
+
+/* A badge is neutral unless it says something about state. "In use" is the one
+   generation a search reads, so it wears the ready colour; "Retained", "N calls"
+   and "idle" say nothing alarming and stay grey. Only a badge the code marks as
+   blocked takes the danger colour, because a badge that paints every count red
+   stops meaning anything. */
+.state-badge-current {
+  border-color: var(--ready);
+  background: color-mix(in srgb, var(--ready) 8%, var(--bg-surface));
+  color: var(--ready);
+}
+
+.state-badge-blocked {
+  border-color: var(--danger-border);
+  color: var(--danger);
+}
+
+/* ---------------------------------------------------------------- filters -- */
+
+.filter-section > .section-heading-row {
+  align-items: center;
+}
+
+.filter-groups {
+  display: grid;
+  /* The track's floor is the column width when the column is narrower than the
+     floor, so a 320-pixel window gets one column rather than an overflowing one. */
+  grid-template-columns: repeat(auto-fit, minmax(min(20rem, 100%), 1fr));
+  gap: var(--space-md) var(--space-lg);
+  padding: var(--space-xs) var(--space-xs) var(--space-sm);
+}
+
+.filter-group {
+  display: grid;
+  gap: var(--space-xs);
+  align-content: start;
+  min-width: 0;
+  margin: 0;
+  padding: var(--space-xs) 0 0;
+  border: 0;
+  /* Every group carries the rule above its own legend, so a reader can find the
+     boundary of a group in one column or in three. */
+  border-top: 1px solid var(--border-subtle);
+}
+
+.filter-group > legend {
+  padding: 0;
+  color: var(--text-primary);
+  font-size: var(--text-sm);
+  font-weight: 600;
+}
+
+/* One sentence per group states whether its values must all match or whether
+   any one of them is enough, because that difference decides the result and is
+   not visible from the field name. */
+.filter-note {
+  max-width: var(--measure);
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: var(--text-sm);
+  line-height: var(--leading-prose);
+}
+
+.filter-group > label {
+  display: grid;
+  gap: var(--space-3xs);
+  max-width: 34rem;
+}
+
+/* The lists a reader picks from sit beside the fields they fill, so a value
+   chosen here is one click from where it lands. */
+.filter-picks {
+  display: grid;
+  gap: var(--space-md);
+  margin-top: var(--space-md);
+}
+
+.pick-group {
+  display: grid;
+  gap: var(--space-2xs);
+}
+
+.pick-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2xs);
+  margin-top: var(--space-3xs);
+}
+
+/* The label takes what is left and wraps over as many lines as it needs, so a
+   long partition name never squeezes the count beside it into two digits. */
+.pick-button {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: baseline;
+  column-gap: var(--space-2xs);
+  min-height: var(--control-height);
+  max-width: 100%;
+  padding: var(--space-2xs) var(--space-xs);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  background: var(--bg-card);
+  color: var(--text-primary);
+  font-size: var(--text-sm);
+  line-height: var(--leading-normal);
+  text-align: left;
+  overflow-wrap: anywhere;
+}
+
+.pick-button:hover,
+.pick-button:focus-visible {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+  color: var(--accent-ink);
+}
+
+.pick-count {
+  color: var(--text-secondary);
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  white-space: nowrap;
+}
+
+.pick-button:hover .pick-count,
+.pick-button:focus-visible .pick-count {
+  color: var(--accent-ink);
+}
+
+/* ------------------------------------------------------------ client list -- */
 
 /* A client list is as long as the number of agents a machine has run, so the
    list is folded away and the summary carries the count. It opens on one click
@@ -1025,6 +1296,7 @@ textarea:disabled {
   flex-wrap: wrap;
   align-items: center;
   gap: var(--space-2xs);
+  min-height: var(--control-height);
   padding: var(--space-2xs) var(--space-xs);
   color: var(--text-secondary);
   font-size: var(--text-sm);
@@ -1045,34 +1317,94 @@ textarea:disabled {
   font-size: var(--text-xs);
 }
 
-.client-drawer .partition-chips {
+.client-drawer .client-list {
   margin: 0;
   padding: 0 var(--space-xs) var(--space-xs);
 }
 
-/* One client is two lines: who it is, and the facts that identify it. The
-   second wraps rather than truncates, because a truncated path or a cut-off
-   user agent is the half of the identity a reader came for. */
-.client-chip {
-  display: grid;
-  gap: var(--space-3xs);
-  align-items: baseline;
-}
+/* --------------------------------------------------------------- updates -- */
 
-.client-chip-head {
+.update-toolbar {
   display: flex;
   flex-wrap: wrap;
-  align-items: baseline;
-  gap: var(--space-2xs);
+  align-items: center;
+  gap: var(--space-sm);
+  margin-top: var(--space-sm);
 }
 
-.client-facts {
-  color: var(--text-secondary);
+.update-toolbar .form-note {
+  flex: 1 1 18rem;
+  margin: 0;
+}
+
+.update-reason {
+  color: var(--text-primary);
+}
+
+/* Release notes are read, not rendered: the block holds the text exactly as
+   published, wraps a long line rather than widening the page, and scrolls
+   inside itself so a long set of notes never pushes the buttons off screen. */
+.release-notes {
+  max-width: var(--measure);
+  max-height: 22rem;
+  margin: var(--space-2xs) 0 0;
+  padding: var(--space-xs);
+  overflow: auto;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  background: var(--bg-surface);
   font-family: var(--font-mono);
   font-size: var(--text-xs);
   line-height: var(--leading-normal);
+  white-space: pre-wrap;
   overflow-wrap: anywhere;
 }
+
+.update-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2xs);
+  margin-top: var(--space-md);
+}
+
+.update-handoff {
+  display: grid;
+  gap: var(--space-2xs);
+  margin-top: var(--space-md);
+  padding: var(--space-sm);
+  border: 1px solid var(--accent);
+  border-radius: var(--radius-sm);
+  background: var(--accent-soft);
+}
+
+/* The command is the one thing a reader has to carry to a terminal, so it is
+   set in the code face, wraps rather than scrolling sideways, and sits beside
+   the button that copies it. */
+.update-command-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2xs);
+}
+
+.update-command {
+  flex: 1 1 16rem;
+  padding: var(--space-2xs) var(--space-xs);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  background: var(--bg-card);
+  font-family: var(--font-mono);
+  font-size: var(--text-sm);
+  overflow-wrap: anywhere;
+  user-select: all;
+}
+
+.update-handoff .form-note {
+  margin: 0;
+  line-height: var(--leading-prose);
+}
+
+/* --------------------------------------------------------------- sql console -- */
 
 .sql-console-form,
 .settings-form {
@@ -1174,12 +1506,15 @@ textarea:disabled {
 /* A row carries the label, the server's own description, the value the page
    loaded, where that value came from, what changing it costs, the variable
    that would override it, and the control. Nothing is truncated, and the two
-   text columns wrap rather than cut. */
+   text columns wrap rather than cut. The control keeps a column wide enough for
+   a value and a unit, and the facts stack below the description rather than
+   running along it, because seven short facts in one wrapped row read as one
+   sentence with no stops in it. */
 .setting-row {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(0, 15rem);
-  gap: var(--space-2xs) var(--space-md);
-  padding: var(--space-sm) 0;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 18rem);
+  gap: var(--space-2xs) var(--space-lg);
+  padding: var(--space-md) 0;
   border-top: 1px solid var(--border-subtle);
 }
 
@@ -1197,11 +1532,11 @@ textarea:disabled {
 
 .setting-field .field-label {
   margin-bottom: 0;
-  font-size: var(--text-base);
+  font-size: var(--text-md);
 }
 
 .setting-doc {
-  max-width: var(--measure);
+  max-width: 62ch;
   margin: 0;
   color: var(--text-secondary);
   font-size: var(--text-sm);
@@ -1209,18 +1544,25 @@ textarea:disabled {
 }
 
 .setting-facts {
-  display: flex;
+  display: grid;
   grid-column: 1;
-  flex-wrap: wrap;
-  align-items: baseline;
-  gap: var(--space-2xs) var(--space-xs);
+  align-content: start;
+  gap: var(--space-3xs);
+  margin-top: var(--space-2xs);
   min-width: 0;
+}
+
+/* The facts stack one per line, so a badge among them keeps the width of its own
+   word rather than the width of the column. */
+.setting-facts .locator-badge {
+  justify-self: start;
 }
 
 .setting-fact {
   color: var(--text-secondary);
-  font-size: var(--text-xs);
+  font-size: var(--text-sm);
   line-height: var(--leading-normal);
+  overflow-wrap: anywhere;
 }
 
 .setting-value {
@@ -1257,7 +1599,11 @@ textarea:disabled {
 
 .setting-control .setting-input {
   width: 100%;
-  max-width: 15rem;
+  max-width: 18rem;
+  /* A field on a card cannot rely on its fill alone to say it is a field: the
+     settings card and the input behind it are the same two creams in the light
+     theme, so the control is drawn with its own edge. */
+  border-color: var(--border-subtle);
 }
 
 .setting-input[type="checkbox"] {
@@ -1269,7 +1615,8 @@ textarea:disabled {
 
 .setting-control .setting-select {
   width: 100%;
-  max-width: 15rem;
+  max-width: 18rem;
+  border-color: var(--border-subtle);
 }
 
 .notice-inline {
@@ -1390,19 +1737,16 @@ textarea:disabled {
   gap: var(--space-3xs);
 }
 
-.score-row {
-  justify-content: flex-end;
-  gap: var(--space-3xs);
-}
-
 .source-filter {
   width: min(24rem, 45%);
 }
 
+/* One source is a column: what it is, then what it is tagged with, then what a
+   reader can do to it. The actions ran along the side of the card before, which
+   squeezed the title into the width left over after five buttons. */
 .source-card {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
-  gap: var(--space-md);
+  gap: var(--space-sm);
   padding: var(--space-md);
 }
 
@@ -1439,7 +1783,9 @@ textarea:disabled {
 
 .source-card-actions {
   align-items: flex-start;
-  justify-content: flex-end;
+  justify-content: flex-start;
+  padding-top: var(--space-xs);
+  border-top: 1px solid var(--border-subtle);
 }
 
 .source-card-actions .action-button:last-child {
@@ -1474,27 +1820,21 @@ textarea:disabled {
   line-height: var(--leading-normal);
 }
 
-.state-badge {
+.excluded-item .state-badge {
   margin-top: var(--space-3xs);
-  border-color: var(--danger-border);
-  color: var(--danger);
 }
 
 /* ---------------------------------------------------------------- status -- */
 
-.system-summary {
-  margin-top: var(--space-xl);
-  padding-top: var(--space-lg);
-  border-top: 1px solid var(--border-subtle);
-}
-
+/* The status view is a panel like any other, so it carries no rule of its own
+   here; what follows is the layout of its contents. */
 .system-summary h2 {
   margin-bottom: var(--space-sm);
 }
 
 .status-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(13rem, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(14rem, 1fr));
   gap: var(--space-sm);
 }
 
@@ -1524,8 +1864,29 @@ textarea:disabled {
   line-height: var(--leading-tight);
 }
 
+/* A generation identifier is a number to the eye and a sentence to read, so it
+   is set at body size in the code face and wraps over two lines rather than
+   being shortened to fit one. */
+.stat-value-code {
+  font-size: var(--text-sm);
+  font-weight: 600;
+  line-height: var(--leading-normal);
+}
+
 .stat-value-state {
   color: var(--ready);
+}
+
+/* The server's sentence about the project. It sits between the cards and the
+   detail drawer because it is the thing a reader reads before either. */
+.status-message {
+  margin: var(--space-sm) 0 0;
+  padding: var(--space-xs) var(--space-sm);
+  border-left: 3px solid var(--accent);
+  background: var(--bg-card);
+  color: var(--text-secondary);
+  font-size: var(--text-sm);
+  line-height: var(--leading-prose);
 }
 
 .notice {
@@ -1658,6 +2019,29 @@ textarea:disabled {
   line-height: var(--leading-normal);
 }
 
+/* An address a reader copies into another client's configuration. It is set in
+   the code face and left whole, and it shares the row with the button that
+   copies it. */
+.copyable-value {
+  max-width: var(--measure);
+  flex: 1 1 18rem;
+  margin: 0;
+  padding: var(--space-2xs) var(--space-xs);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  background: var(--bg-input);
+  font-family: var(--font-mono);
+  font-size: var(--text-sm);
+  line-height: var(--leading-normal);
+  overflow-wrap: anywhere;
+}
+
+.dialog-note {
+  margin: 0 0 var(--space-md);
+  max-width: var(--measure);
+  line-height: var(--leading-prose);
+}
+
 .context-passage {
   padding: var(--space-md);
 }
@@ -1665,6 +2049,22 @@ textarea:disabled {
 .context-passage.is-requested {
   border-color: var(--accent);
   background: var(--accent-soft);
+}
+
+/* A neighbour the corpus leaves out is marked on the passage itself, because the
+   dialog reads as a list of what a query returned and a passage no query returns
+   does not belong there without saying so. */
+.context-excluded {
+  border-color: var(--warning-border);
+  background: var(--warning-soft);
+}
+
+.context-passage .context-excluded-warning {
+  margin: var(--space-3xs) 0 0;
+  color: var(--warning);
+  font-size: var(--text-xs);
+  font-weight: 600;
+  line-height: var(--leading-normal);
 }
 
 .context-citation {
@@ -1921,13 +2321,8 @@ textarea:disabled {
     max-width: 24rem;
   }
 
-  .source-card,
   .excluded-item {
     grid-template-columns: minmax(0, 1fr);
-  }
-
-  .source-card-actions {
-    justify-content: flex-start;
   }
 
   .result-card-header,
@@ -1958,8 +2353,19 @@ textarea:disabled {
     width: 100%;
   }
 
-  .score-row {
-    justify-content: flex-start;
+  /* A labelled pair is two lines below the medium breakpoint rather than two
+     squeezed columns, so a long identifier is never cut by its own label. */
+  .fact-list {
+    grid-template-columns: minmax(0, 1fr);
+    gap: var(--space-3xs);
+  }
+
+  .fact-label + .fact-value {
+    margin-bottom: var(--space-2xs);
+  }
+
+  .record-row-head > .text-button {
+    margin-left: 0;
   }
 
   .memory-line {
@@ -1987,6 +2393,25 @@ textarea:disabled {
 
   .result-content {
     padding: var(--space-sm);
+  }
+
+  /* At the narrowest width a drawer, a row, and a card give every pixel to
+     their own text, so nothing reads as two columns of fragments. */
+  .workspace {
+    padding: var(--space-sm);
+  }
+
+  .update-toolbar {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .update-actions .button {
+    width: 100%;
+  }
+
+  .release-notes {
+    max-height: 16rem;
   }
 
   .dialog form,
@@ -2023,7 +2448,8 @@ textarea:disabled {
   .source-card-actions,
   .excluded-section,
   .system-summary,
-  .filter-drawer,
+  .filter-section,
+  .identifier-drawer,
   .toast-region,
   .busy-bar,
   dialog {

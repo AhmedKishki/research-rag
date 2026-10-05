@@ -7,7 +7,6 @@ from collections.abc import Mapping
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any
-from urllib.parse import urlsplit
 
 import uvicorn
 from starlette.applications import Starlette
@@ -18,6 +17,7 @@ from starlette.requests import Request
 from starlette.responses import FileResponse, JSONResponse, Response
 from starlette.routing import Route
 
+from . import write_guard
 from .contracts import AdapterFactory, SourceFile, UIAdapter, UIProfile, UIRequestError
 
 LOGGER = logging.getLogger(__name__)
@@ -26,7 +26,6 @@ MAX_ERROR_LENGTH = 1200
 # A statement is forwarded whole and unchanged, so the request layer is where an
 # accidental paste stops: past this length it is a file, not a statement.
 MAX_SQL_STATEMENT = 20000
-LOOPBACK_HOSTS = frozenset({"127.0.0.1", "localhost", "::1"})
 
 _OPERATION_CAPABILITY = {
     "search": "documents",
@@ -49,6 +48,7 @@ _OPERATION_CAPABILITY = {
     "set_chunk_inclusion": "chunk_exclusion",
     "list_projects": "projects",
     "agent_entry": "agent_entry",
+    "check_updates": "updates",
 }
 
 
@@ -86,23 +86,12 @@ async def _adapter_call(
     return dict(value)
 
 
-def _same_origin(request: Request) -> bool:
-    if request.headers.get("sec-fetch-site", "").casefold() == "cross-site":
-        return False
-    origin = request.headers.get("origin")
-    if not origin:
-        return True
-    parsed = urlsplit(origin)
-    return parsed.scheme in {"http", "https"} and parsed.netloc == request.headers.get(
-        "host", ""
-    )
-
-
 async def _json_body(request: Request) -> dict[str, Any]:
-    if not _same_origin(request):
-        raise HTTPException(status_code=403, detail="Cross-origin writes are blocked")
-    content_type = request.headers.get("content-type", "").split(";", 1)[0]
-    if content_type.casefold() != "application/json":
+    refusal = write_guard.write_refusal(request)
+    if refusal is not None:
+        status, detail = refusal
+        raise HTTPException(status_code=status, detail=detail)
+    if not write_guard.json_content_type(request):
         raise HTTPException(
             status_code=415,
             detail="Write requests require application/json",
@@ -646,7 +635,17 @@ async def _agent_entry(request: Request) -> Response:
     return JSONResponse(await _adapter_call(request, "agent_entry"))
 
 
+async def _updates(request: Request) -> Response:
+    """Read a release preview; this route never installs or approves an update."""
+
+    return JSONResponse(await _adapter_call(request, "check_updates"))
+
+
 async def _security_headers(request: Request, call_next: Any) -> Response:
+    if write_guard.served_authority(request) is None:
+        return JSONResponse(
+            {"error": "Requests require a loopback Host"}, status_code=403
+        )
     response = await call_next(request)
     response.headers["Content-Security-Policy"] = (
         "default-src 'self'; base-uri 'none'; form-action 'self'; "
@@ -735,6 +734,7 @@ def create_ui_app(
         Route("/api/chunk-inclusion", _set_chunk_inclusion, methods=["POST"]),
         Route("/api/projects", _projects),
         Route("/api/agent-entry", _agent_entry),
+        Route("/api/updates", _updates),
     ]
     app = Starlette(
         routes=routes,
@@ -755,7 +755,7 @@ def run_ui(
     log_level: str = "warning",
 ) -> None:
     """Run a UI on a loopback address only."""
-    if host not in LOOPBACK_HOSTS:
+    if host not in write_guard.LOOPBACK_NAMES:
         raise ValueError("The UI host must be a loopback address")
     if not 1 <= port <= 65535:
         raise ValueError("The UI port must be between 1 and 65535")

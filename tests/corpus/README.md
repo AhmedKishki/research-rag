@@ -12,7 +12,7 @@ The PDF and EPUB writers come from `tests/conftest.py`. `test_sources_and_extrac
 .venv/bin/python -m pytest tests/corpus -q
 ```
 
-This is the right scope for a change to what is selected, how a unit is read, or how text is cleaned, and it is the right scope before a retrieval run, because a change here changes what a generation holds.
+A change to what is selected, how a unit is read, or how text is cleaned belongs here, as does any change before a retrieval run, because a change here changes what a generation holds.
 
 ## What it mirrors
 

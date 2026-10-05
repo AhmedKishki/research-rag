@@ -13,7 +13,7 @@ These tests hold the boundaries a reader cannot see from one module: which packa
 .venv/bin/python -m pytest tests/gates -q
 ```
 
-This is the right scope for a change to an import edge or to a document, and for any change at all before it is pushed, because both files fail on a rule that no other folder asserts.
+A change to an import edge or to a document belongs here, as does any change at all before it is pushed, because both files fail on a rule that no other folder asserts.
 
 ## What it mirrors
 

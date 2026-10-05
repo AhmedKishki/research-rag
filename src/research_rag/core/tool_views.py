@@ -1,13 +1,8 @@
-"""Projections from service payloads to MCP tool answers.
+"""Bounded replies with follow-up IDs, evidence, and actionable conditions.
 
-Every tool answers with the lean projection, which `present_tool_response`
-applies. `--tool-detail full` returns the service payload unchanged.
-
-One rule decides what a lean answer carries: a field is here when a caller can
-act on it or could not otherwise account for it. `stale`, a blocker, a filter
-that removed every source, and a reranker that did not run all qualify. The
-query, the timing, the ranking scores, and the counts the caller could make for
-itself do not. A field whose value is the ordinary case is left out.
+Keep quote safeguards and partial-result disclosures; omit ordinary confirmations,
+query echoes, scores, timings, inventories, and inferable counts. The workspace
+and explicit full-detail mode retain complete service payloads.
 """
 
 from __future__ import annotations
@@ -15,8 +10,8 @@ from __future__ import annotations
 from collections.abc import Callable, Iterable, Mapping
 from typing import Any
 
+from ..project.policy import ResearchError
 from ..project.settings import FULL_TOOL_DETAIL, LEAN_TOOL_DETAIL, TOOL_DETAIL_MODES
-from ..project.support import ResearchError
 
 __all__ = [
     "FULL_TOOL_DETAIL",
@@ -55,6 +50,15 @@ def _add(target: dict[str, Any], key: str, value: Any) -> None:
         target[key] = value
 
 
+def _add_message(
+    target: dict[str, Any], payload: Mapping[str, Any], *, explaining: bool
+) -> None:
+    """Keep a reason when needed, not a sentence restating structured fields."""
+
+    if explaining and payload.get("message"):
+        target["message"] = payload["message"]
+
+
 def _lean_locator(locator: Mapping[str, Any]) -> dict[str, Any]:
     """Return where a passage sits: its page, or its section.
 
@@ -77,29 +81,46 @@ def _lean_locator(locator: Mapping[str, Any]) -> dict[str, Any]:
 
 
 def lean_passage(passage: Mapping[str, Any]) -> dict[str, Any]:
-    """Return one passage: its source, its authors, its position, and its text.
+    """Keep follow-up handles, attribution, locator, complete text, and safeguards.
 
-    The text is cleaned for retrieval and so never quote-safe, which the tool
-    description states once. The advisory script note belongs to the full payload.
+    Truncation and context-exclusion markers qualify the evidence; diagnostics
+    remain in the full payload.
     """
 
     result: dict[str, Any] = {}
-    for key in ("chunk_id", "source_relative_path", "authors"):
+    for key in ("chunk_id", "source_id", "source_relative_path", "title", "authors"):
         _add(result, key, passage.get(key))
     locator = _lean_locator(passage.get("locator") or {})
     if locator:
         result["locator"] = locator
     result["text"] = passage.get("text")
+    result["direct_quote_safe"] = passage.get("direct_quote_safe", False)
+    if passage.get("dense_truncated"):
+        result["dense_truncated"] = True
+    if passage.get("excluded_from_search"):
+        result["excluded_from_search"] = True
     return result
 
 
-def lean_search(payload: Mapping[str, Any]) -> dict[str, Any]:
-    """Return a search answer: the passages, and anything the caller must know.
+# The filters a caller passes, named as the tool names them, and the field each
+# one lands in. An agent reports the answer and names the filter that produced
+# it, so the name it reads has to be the name it would pass to the next search.
+_SEARCH_FILTERS = (
+    ("categories_any", "categories_any"),
+    ("projects_any", "projects_any"),
+    ("keywords", "keywords_all"),
+    ("languages_any", "languages_any"),
+    ("authors_any", "authors_any"),
+    ("titles_any", "titles_any"),
+    ("source_ids", "source_ids"),
+    ("exclude_source_ids", "exclude_source_ids"),
+)
 
-    Plus the conditions that change what the caller can conclude: `stale` when the
-    corpus has moved on, `reranked: false` when the cross-encoder did not run, an
-    upgrade note when this generation cannot serve, a filter that emptied the
-    answer, and a source id that resolved to nothing.
+
+def lean_search(payload: Mapping[str, Any]) -> dict[str, Any]:
+    """Keep passages and conditions that qualify the search or guide another query.
+
+    Filtered or partial silence must remain distinct from an unqualified corpus miss.
     """
 
     result: dict[str, Any] = {}
@@ -114,6 +135,13 @@ def lean_search(payload: Mapping[str, Any]) -> dict[str, Any]:
         "generation_upgrade_required",
         payload.get("generation_upgrade_required"),
     )
+    if payload.get("relevance_limited"):
+        result["relevance_limited"] = True
+    _add(
+        result,
+        "repetitions_collapsed",
+        (payload.get("collapsed_repetitions") or {}).get("repetitions_collapsed"),
+    )
     filters = payload.get("filters") or {}
     _add(result, "unresolved_source_ids", filters.get("unknown_source_ids"))
     _add(
@@ -121,24 +149,30 @@ def lean_search(payload: Mapping[str, Any]) -> dict[str, Any]:
         "unresolved_exclude_source_ids",
         filters.get("unknown_exclude_source_ids"),
     )
-    # The bibliographic filters travel with the answer, not only in the developer
-    # payload: a filter that removed every source is why an answer is empty, and
-    # an agent reading the answer has otherwise no way to tell that apart from a
-    # corpus that holds nothing.
+    # A window that stopped short of the whole corpus is a partial search, and an
+    # empty answer over one of those is not evidence the corpus holds nothing.
+    if filters.get("window_is_whole_corpus") is False:
+        result["search_window_partial"] = True
+    # The filters travel with the answer, not only in the developer payload: a
+    # filter that emptied the answer is why it is empty, and an agent reading the
+    # answer has otherwise no way to tell that apart from a corpus that holds
+    # nothing. Each is named as the caller would pass it again.
     _add(
         result,
         "applied_filters",
-        {
-            name: filters[name]
-            for name in ("authors_any", "titles_any")
-            if filters.get(name)
-        },
+        {name: filters[field] for name, field in _SEARCH_FILTERS if filters.get(field)},
     )
     result["hits"] = [lean_passage(hit) for hit in payload.get("hits") or []]
     return result
 
 
 def lean_passage_context(payload: Mapping[str, Any]) -> dict[str, Any]:
+    """Return the passage asked for with its immediate neighbours, one shape each.
+
+    Excluded neighbours remain context and carry `excluded_from_search: true`;
+    do not present them as eligible search results.
+    """
+
     result: dict[str, Any] = {}
     _add(result, "generation_id", payload.get("generation_id"))
     result["context"] = [lean_passage(item) for item in payload.get("context") or []]
@@ -161,18 +195,9 @@ SURFACE_CONDITIONS = frozenset({"project.initialised", "app.serving"})
 
 
 def _required_actions(payload: Mapping[str, Any]) -> list[str]:
-    """Return the calls that close the gap between this generation and the corpus.
+    """Name required generation work or an operator restart.
 
-    Every condition that needs one is a rebuild: a missing generation, a corpus
-    that moved on, a generation built by an older policy, one that predates the
-    dense index this tool searches, reviewed sources it has never indexed, an
-    exclusion the indexes still hold, and a build that stopped part-way. The
-    answer names them once.
-
-    A surface that cannot act needs none of them: a project that does not exist,
-    and a project whose app is not running, both have their condition in
-    `blocked_by` and their remedy in a command the agent cannot call as a tool.
-    Naming a rebuild for either asks for a call this surface does not serve.
+    Uninitialized or stopped projects instead carry terminal remedies in blocked_by.
     """
 
     if payload.get("project_initialised") is False:
@@ -205,9 +230,12 @@ def lean_status(payload: Mapping[str, Any]) -> dict[str, Any]:
 
     `ready` and `stale` are booleans rather than an absence, `requires` names the
     calls that make this generation serve what the project holds, and `message`
-    says why in one sentence. `changes`, `ingestion_progress`, `blocked_by`, and
-    `degraded` appear only while they hold. `project_initialised` appears only
-    when it is false, which is the one answer with no project behind it.
+    says why in one sentence while there is a why. `changes`,
+    `ingestion_progress`, `blocked_by`, and `degraded` appear only while they
+    hold. `project_initialised` appears only when it is false, which is the one
+    answer with no project behind it. A ready, current project with nothing
+    required gets the two booleans and its generation, because its own message
+    then restates them.
 
     The corpus counts, the retained generations, the retrieval policy, and the
     per-check detail are the command line's and the workspace's answer. The
@@ -215,8 +243,9 @@ def lean_status(payload: Mapping[str, Any]) -> dict[str, Any]:
     message says so when reviewed sources are still waiting to be indexed.
     """
 
+    ready = bool(payload.get("ready"))
     result: dict[str, Any] = {
-        "ready": bool(payload.get("ready")),
+        "ready": ready,
         "stale": bool(payload.get("stale")),
     }
     # Stated only when it is false: true everywhere else carries no information,
@@ -251,8 +280,31 @@ def lean_status(payload: Mapping[str, Any]) -> dict[str, Any]:
             result[key] = [
                 _copy(entry, ("check", "reason", "remedy")) for entry in entries
             ]
-    result["message"] = payload.get("message")
+    _add_message(
+        result,
+        payload,
+        explaining=(
+            not ready
+            or bool(payload.get("stale"))
+            or bool(required)
+            or bool(payload.get("blocked_by"))
+            or bool(payload.get("degraded"))
+        ),
+    )
     return result
+
+
+# The counters that say a build dropped, withheld, or could not fully read
+# material. Each is absent from a lean answer while it is zero, so any of them
+# appearing is what makes the build's own sentence worth carrying.
+_INGEST_DISCLOSURES = (
+    "discarded_empty_chunk_count",
+    "discarded_symbol_only_chunk_count",
+    "discarded_corrupt_chunk_count",
+    "excluded_corrupt_unit_count",
+    "dense_truncated_chunk_count",
+    "withheld_chunk_count",
+)
 
 
 def lean_ingest(payload: Mapping[str, Any]) -> dict[str, Any]:
@@ -261,8 +313,11 @@ def lean_ingest(payload: Mapping[str, Any]) -> dict[str, Any]:
     A build answers with its outcome and its size: whether the generation changed,
     how many documents and chunks it holds, and the next action when work is
     resumable. The counters that report discarded, withheld, or densely truncated
-    material appear only when they are not zero. What the build reused, rebuilt, or
-    re-embedded is cost rather than outcome, and belongs to `--tool-detail full`.
+    material appear only when they are not zero, and the sentence that explains
+    them travels with them. `activation_recovered` says a completed build was
+    selected after the process restarted, which is a build no call of the
+    caller's made. What the build reused, rebuilt, or re-embedded is cost rather
+    than outcome, and belongs to `--tool-detail full`.
     """
 
     result: dict[str, Any] = {}
@@ -272,19 +327,20 @@ def lean_ingest(payload: Mapping[str, Any]) -> dict[str, Any]:
         _add(result, key, payload.get(key))
     for key in ("document_count", "chunk_count"):
         _add(result, key, payload.get(key))
-    for key in (
-        "discarded_empty_chunk_count",
-        "discarded_symbol_only_chunk_count",
-        "discarded_corrupt_chunk_count",
-        "excluded_corrupt_unit_count",
-        "dense_truncated_chunk_count",
-        "withheld_chunk_count",
-    ):
+    for key in _INGEST_DISCLOSURES:
         _add(result, key, payload.get(key))
     _add(result, "withheld_chunk_reasons", payload.get("withheld_chunk_reasons"))
     _add(result, "superseded_build", payload.get("superseded_build"))
+    if payload.get("activation_recovered"):
+        result["activation_recovered"] = True
     _add(result, "next_action", payload.get("next_action"))
-    result["message"] = payload.get("message")
+    _add_message(
+        result,
+        payload,
+        explaining=any(payload.get(key) for key in _INGEST_DISCLOSURES)
+        or bool(payload.get("superseded_build"))
+        or bool(payload.get("activation_recovered")),
+    )
     return result
 
 
@@ -314,19 +370,25 @@ def lean_source_match(record: Mapping[str, Any]) -> dict[str, Any]:
 def lean_find_source(payload: Mapping[str, Any]) -> dict[str, Any]:
     """Return the sources one name resolved to, and how many were withheld.
 
-    A match count above the returned rows means `limit` hid some.
+    The query is the caller's own and does not travel back. A match count above
+    the returned rows means `limit` hid some. The sentence travels only while the
+    lookup found nothing to search, because then it is the reason rather than a
+    restatement of the rows.
     """
 
     result: dict[str, Any] = {}
     _add(result, "generation_id", payload.get("generation_id"))
-    result["query"] = payload.get("query")
     _add(result, "match_count", payload.get("match_count"))
     if payload.get("truncated"):
         result["truncated"] = True
-    result["matches"] = [
-        lean_source_match(record) for record in payload.get("matches") or []
-    ]
-    result["message"] = payload.get("message")
+    matches = [lean_source_match(record) for record in payload.get("matches") or []]
+    result["matches"] = matches
+    searchable = payload.get("searchable_match_count")
+    _add_message(
+        result,
+        payload,
+        explaining=not matches or (searchable is not None and not searchable),
+    )
     return result
 
 
@@ -339,7 +401,9 @@ def _lean_inclusion_decision(
 
     One shape serves a source and a chunk, because the decision is the same: a
     reader either has something back in retrieval or has taken it out, and the
-    only difference is the identifier that names it.
+    only difference is the identifier that names it. The sentence travels with a
+    decision that takes effect later, where it says what the caller must do
+    before the corpus answers differently.
     """
 
     result: dict[str, Any] = {}
@@ -351,11 +415,12 @@ def _lean_inclusion_decision(
     # An exclusion applies at once, which is the ordinary case and so unsaid. A
     # decision that has to wait for a rebuild is news, because the caller must
     # rebuild before the corpus answers differently.
-    if payload.get("effective_immediately") is False:
+    deferred = payload.get("effective_immediately") is False
+    if deferred:
         result["effective_immediately"] = False
     if payload.get("generation_rebuild_recommended"):
         result["generation_rebuild_recommended"] = True
-    result["message"] = payload.get("message")
+    _add_message(result, payload, explaining=deferred)
     return result
 
 
@@ -380,16 +445,24 @@ def lean_chunk_inclusion(payload: Mapping[str, Any]) -> dict[str, Any]:
 
 
 def lean_source_metadata(payload: Mapping[str, Any]) -> dict[str, Any]:
+    """Return the saved review, and whether it is in force yet.
+
+    `metadata` is the whole review this source now carries, so a cleared entry
+    travels as an empty mapping rather than as an absence, and the sentence that
+    explains a review that is not in force yet travels with it.
+    """
+
     result: dict[str, Any] = {}
     for key in ("status", "source_id", "source_relative_path"):
         _add(result, key, payload.get(key))
     if "metadata" in payload:
         result["metadata"] = payload["metadata"]
-    if payload.get("effective_immediately") is False:
+    deferred = payload.get("effective_immediately") is False
+    if deferred:
         result["effective_immediately"] = False
     if payload.get("generation_rebuild_recommended"):
         result["generation_rebuild_recommended"] = True
-    result["message"] = payload.get("message")
+    _add_message(result, payload, explaining=deferred)
     return result
 
 

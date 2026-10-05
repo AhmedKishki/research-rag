@@ -22,13 +22,12 @@ from typing import Any
 
 from ..corpus.sources import SourcePolicyError, normalize_metadata
 from ..project.config import ResearchConfig
+from ..project.policy import ResearchError, _utc_now
 from ..project.support import (
-    ResearchError,
     _document_for_chunk,
     _effective_documents,
     _locator_place,
     _public_document,
-    _utc_now,
 )
 from ..storage.records import (
     StorageError,

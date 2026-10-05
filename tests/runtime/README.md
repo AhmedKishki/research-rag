@@ -21,7 +21,7 @@ These tests hold the one process a project runs on, the control API the terminal
 .venv/bin/python -m pytest tests/runtime -q
 ```
 
-This is the right scope for a change to the app's lifetime, the control API, a health state, or an installation path, because none of those is reachable from a unit test with a fake transport, and it is the wrong scope for a change to an answer shape, which belongs to `tests/core`.
+A change to the app's lifetime, the control API, a health state, or an installation path belongs here, because none of those is reachable from a unit test with a fake transport. A change to an answer shape does not, and belongs to `tests/core`.
 
 ## What it mirrors
 

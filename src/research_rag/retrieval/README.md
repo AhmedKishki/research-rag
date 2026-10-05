@@ -1,4 +1,4 @@
-# What this project is
+# `retrieval`
 
 Answering a query against a built generation.
 
@@ -18,15 +18,14 @@ Answering a query against a built generation.
 - `dense.py` imports no numpy, fastembed, qdrant_client, or tokenizers. Those
   belong to `model_runtime.py` and to the two backends, so a caller that only
   needs the protocol does not install a search stack to get it.
-- `model_runtime.py` is the single copy of the model loaders and of the six
-  methods that used to be copied into both backends. A second copy is a second
-  answer to the same call.
+- `model_runtime.py` is the single copy of the model loaders and of the six methods
+  both backends need. A second copy is a second answer to the same call.
 - An exact index build's rows travel in an `ExactIndexBuild` or are held against
   the index path being written. One backend instance serves one process, so a
   second build in the same instance must not inherit the first one's rows.
 - `ultrarag.py` speaks MCP to a child process. It does not know what a chunk is.
 
-## What lives elsewhere now
+## What lives elsewhere
 
 The gateway it speaks to is `../gateway/`, and the records it reads were written
 by `../generations/`.

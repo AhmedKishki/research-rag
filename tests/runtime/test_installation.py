@@ -286,6 +286,29 @@ def test_installing_the_entry_twice_writes_nothing_the_second_time(
     assert installation.desktop_entry_path().read_text(encoding="utf-8") == first
 
 
+def test_this_apps_own_entry_is_replaced_and_reported_as_replaced(
+    tmp_path: Path,
+) -> None:
+    """An entry this app wrote and no longer agrees with is replaced, and says so.
+
+    An update that moves the command leaves exactly this behind, and a report that
+    read "created" over a file that already existed would leave a reader unable to
+    tell a replacement from a first install.
+    """
+
+    _desktop_cli("install", "--desktop")
+    entry = installation.desktop_entry_path()
+    entry.write_text(
+        entry.read_text(encoding="utf-8").replace("Comment=", "Comment=Stale "),
+        encoding="utf-8",
+    )
+
+    payload = _desktop_cli("install", "--desktop")
+
+    assert payload["desktop"]["entry"]["state"] == "replaced"
+    assert "Stale " not in entry.read_text(encoding="utf-8")
+
+
 def test_a_desktop_entry_this_app_did_not_write_is_left_alone(tmp_path: Path) -> None:
     entry = installation.desktop_entry_path()
     entry.parent.mkdir(parents=True, exist_ok=True)

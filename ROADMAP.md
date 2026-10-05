@@ -1,7 +1,12 @@
+---
+name: ROADMAP.md
+description: Product ideas deliberately not being built yet.
+---
+
 # Roadmap
 
 - Product ideas that are deliberately not being built yet. Nothing here is scheduled, and each would need a decision before it was started. Work that is already in scope is in `TODO.md`, current behaviour is in `README.md`, and current facts and limits are in `MEASUREMENTS.md`.
-- The app targets the envelope `MEASUREMENTS.md` states. Anything outside it — other-language corpora, OCR'd or scanned material, handwriting, formula-heavy documents — is a different product rather than a roadmap step, so it is not listed here as scheduled work. The one such gap that keeps being reported is recorded at the end of this file, so the decision is visible rather than forgotten.
+- The app targets the envelope `MEASUREMENTS.md` states. Anything outside it — other-language corpora, OCR'd or scanned material, handwriting, formula-heavy documents — is a different product rather than a roadmap step, so it is not listed here as scheduled work. The one such gap that keeps being reported is at the end of this file, so the decision is visible rather than forgotten.
 
 ## Upstream reuse
 
@@ -17,7 +22,9 @@
     - A citation contract, so a generated sentence names the passages it rests on and a reader can check each one.
   - What a local model changes: it preserves the offline rule, and it costs a GPU and a serving surface the app does not have today.
   - What it must not do: replace the passage in the answer. The evidence stays in the payload with its locators and `direct_quote_safe: false`, a generation is labelled as one, and a request that asks for a generated answer without evidence is refused rather than answered from the model's own memory.
-  - What would have to be decided first: whether the app still returns evidence only and offers generation as a separate operation, and what an answer looks like when the reranker found nothing. A model asked to write from a thin result set will write from its own knowledge, which is the failure the whole retrieval contract exists to prevent.
+  - What would have to be decided first:
+    - Whether the app still returns evidence only and offers generation as a separate operation.
+    - What an answer looks like when the reranker found nothing. A model asked to write from a thin result set will write from its own knowledge, which is the failure the whole retrieval contract exists to prevent.
 
 ## Citations and quotation
 

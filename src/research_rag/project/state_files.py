@@ -48,10 +48,14 @@ def process_alive(pid: int) -> bool:
     """Whether a process still exists, without signalling it.
 
     A `PermissionError` means alive: a process this app cannot signal has not
-    stopped, and no reader is told it is gone on the strength of being unable to
-    ask.
+    stopped.
+
+    A pid that is not a positive number names a process group, and `os.kill`
+    answers for the caller's own group given one, so it names no process here.
     """
 
+    if pid <= 0:
+        return False
     try:
         os.kill(pid, 0)
     except ProcessLookupError:
@@ -81,6 +85,10 @@ def recorded_pid(state_root: Path, portable_root: Path | None = None) -> int | N
     `portable_root` is the project's own directory, for a caller that holds it
     rather than the resolved state root; the record there is what says where the
     state went.
+
+    The answer is only that the number is in use. `runtime/ownership.py` owns
+    whether the process behind it is this project's app, which is what a signal
+    needs.
     """
 
     try:

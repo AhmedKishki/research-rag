@@ -12,7 +12,7 @@ The folder holds one file, and it imports both modules of `src/research_rag/stor
 .venv/bin/python -m pytest tests/storage -q
 ```
 
-This is the right scope for a change to a write path or a record schema, and it is the cheapest folder in the suite, so it is the one to run while the rest of the suite is still in use.
+A change to a write path or a record schema belongs here, and this is the cheapest folder in the suite, so it is the one to run while the rest of the suite is still in use.
 
 ## What it mirrors
 

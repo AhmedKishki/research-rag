@@ -11,14 +11,18 @@ import asyncio
 import os
 import signal
 import socket
+import subprocess
+import sys
 from pathlib import Path
 from typing import Any
 
 import pytest
 
 import research_rag.runtime.app as app_module
-from research_rag.project import registry
+import research_rag.runtime.update as update_module
+from research_rag.project import registry, state_files
 from research_rag.project.config import ConfigurationError, resolve_config
+from research_rag.project.state_files import recorded_pid
 from research_rag.runtime.app import (
     PID_FILE,
     PORT_FILE,
@@ -442,3 +446,78 @@ def test_stop_does_not_blame_a_terminal_that_owns_nothing(
 
     assert report["detached"] is False
     assert not any("no terminal attached" in note for note in report["notes"])
+
+
+def test_a_pid_record_that_names_no_process_is_not_signed(
+    project: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Zero and a negative number name a process group, so `stop` must not signal one.
+
+    `os.kill(0, SIGTERM)` reaches every process in the caller's own group, which
+    includes the shell that ran `stop`. A pid file holding either is not a process
+    this project owns, so it reads as no app rather than as one to end.
+    """
+
+    config = _initialised(project, "Zero")
+    config.state_root.mkdir(parents=True, exist_ok=True)
+    sent: list[tuple[int, int]] = []
+    monkeypatch.setattr(cli, "project_app_state", lambda _root: {"app": {}})
+    monkeypatch.setattr(cli.os, "kill", lambda pid, number: sent.append((pid, number)))
+
+    for recorded in ("0", "-1", "", "not-a-pid"):
+        (config.state_root / PID_FILE).write_text(f"{recorded}\n", encoding="utf-8")
+        assert recorded_pid(config.state_root) is None, recorded
+        report = cli._stop(
+            _no_arguments("--project-root", str(project), "stop"), config
+        )
+        assert report["running"] is False, recorded
+        assert report.get("stopped") is False, recorded
+
+    assert sent == []
+
+
+def test_stop_will_not_signal_an_unrelated_live_process(
+    project: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A stale record naming a live process is refused, and that process survives.
+
+    This is the record a crashed app or a copied project leaves behind: the number
+    is alive, so the liveness probe passes, and the process behind it belongs to the
+    reader. `stop` reports the refusal and leaves it running.
+    """
+
+    config = _initialised(project, "Stale")
+    config.state_root.mkdir(parents=True, exist_ok=True)
+    reader = subprocess.Popen(
+        [sys.executable, "-c", "import time; time.sleep(300)"],
+        stdout=subprocess.DEVNULL,
+    )
+    try:
+        (config.state_root / PID_FILE).write_text(f"{reader.pid}\n", encoding="utf-8")
+        monkeypatch.setattr(cli, "project_app_state", lambda _root: {"app": {}})
+
+        report = cli._stop(
+            _no_arguments("--project-root", str(project), "stop"), config
+        )
+
+        assert report["stopped"] is False
+        assert "does not run this app" in report["stop_refusal"]
+        assert reader.poll() is None
+    finally:
+        reader.kill()
+        reader.wait(timeout=30)
+
+
+def test_an_update_never_signals_a_record_that_names_a_group(
+    project: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`update --apply` signals the same record, so the guard is the reader's alone."""
+
+    state = state_files.ProjectState(project_root=project, project_name="Zero")
+    state.state_root.mkdir(parents=True, exist_ok=True)
+    (state.state_root / state_files.PID_FILE).write_text("0\n", encoding="utf-8")
+
+    stopped = update_module.stop_app(state, lambda *_args, **_kwargs: None)
+
+    assert stopped.stopped is False
+    assert "no app was running" in stopped.detail

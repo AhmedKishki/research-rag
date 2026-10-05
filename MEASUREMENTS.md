@@ -1,3 +1,8 @@
+---
+name: MEASUREMENTS.md
+description: The measurement protocol, the envelope this app is built for, and the mechanism behind each tunable.
+---
+
 # Measurements
 
 The measurement protocols, workload envelope, and limits on interpreting retrieval experiments.
@@ -6,7 +11,7 @@ The measurement protocols, workload envelope, and limits on interpreting retriev
 - Retained run records own the exact engine revision, settings, inputs, outputs, and timings.
 - Lexical diagnostics do not establish semantic relevance, usability, independence, or contradiction.
 
-Two harnesses produce everything these decisions rest on, each driving the real gateway, the real models, and the real service:
+Two harnesses produce everything these decisions rest on, each driving the gateway, the models, and the service:
 
 ```bash
 uv run python scripts/benchmark_write_pattern.py --root /path/on/target/disk
@@ -21,7 +26,11 @@ A corpus above that range is outside what this app is built for rather than some
 
 ## Why the dense index is an exact scan
 
-Three things decide this. An embedded index is dominated by per-point device cost, and every query reopens it. It returns neither chunk identity nor scores through the upstream API, which the research contract needs. The exact scan reads the portable float32 vectors the generation already stores, so it needs no separate index and ranks a query the way a brute-force scan of those vectors does.
+Three things decide this:
+
+- An embedded index is dominated by per-point device cost, and every query reopens it.
+- It returns neither chunk identity nor scores through the upstream API, which the research contract needs.
+- The exact scan reads the portable float32 vectors the generation already stores, so it needs no separate index and ranks a query the way a brute-force scan of those vectors does.
 
 Above `dense.exact_backend_chunk_limit` the embedded backend is chosen instead, and the choice is recorded in the manifest so a generation is never rebuilt with the other one.
 
@@ -51,7 +60,7 @@ A gateway that cannot start is reported by the operation that needed it, with th
 
 ## What is per query and what is not
 
-The source-tree walk behind the staleness answer is the only per-query cost that grows with the number of source files, which is why the engine takes a staleness switch at all. Only a measurement run sets it: no reader-facing operation can skip it, because a search that cannot say whether its corpus moved is answering about something unknown.
+The source-tree walk behind the staleness answer is the only per-query cost that grows with the number of source files, which is why the engine takes a staleness switch at all. Only a measurement run sets it, and no reader-facing operation can, because a search that cannot say whether its corpus moved is answering about something unknown.
 
 Nothing else per query is cached, deliberately. Caching the document map adds cross-request state that must be invalidated correctly, and reusing one SQLite connection requires that connection to be reachable from whichever thread serves the next call. At a scale where either would matter, parsing the manifest dominates both, and the answer there is a persistent document-metadata index rather than a per-process cache.
 
@@ -92,7 +101,11 @@ The judged set and its protocol are in `evaluation/`; `scripts/evaluate_retrieva
 
 ## Which version an update compares against
 
-`update` reads the remote's release tags with `git ls-remote --tags`, so a check needs no token and no API key. `DIST_TAG` is the tag name that names the current release rather than a version of its own (`latest`); a remote that publishes it wins over the highest version tag, because a maintainer moves it when a release is superseded. A tag carrying a pre-release or build-metadata suffix is not a release, and two tags claiming one version is a refusal rather than a coin toss. A checkout's position against that release is one of `at_release`, `behind_release`, `ahead_of_release`, `no_release`, and `unreadable_release`, and only `behind_release` is an update to apply: `ahead_of_release` is unreleased work, which is a fact to report and never a reason to change anything.
+- `update` reads the remote's release tags with `git ls-remote --tags`, so a check needs no token and no API key.
+- `DIST_TAG` is the tag name that names the current release rather than a version of its own (`latest`), and a remote that publishes it wins over the highest version tag, because a maintainer moves it when a release is superseded.
+- A tag carrying a pre-release or build-metadata suffix is not a release, and two tags claiming one version is a refusal rather than a coin toss.
+- A checkout's position against that release is one of `at_release`, `behind_release`, `ahead_of_release`, `no_release`, and `unreadable_release`.
+- Only `behind_release` is an update to apply: `ahead_of_release` is unreleased work, which is a fact to report and never a reason to change anything.
 
 ## The reranker model is an engine setting
 
@@ -219,7 +232,6 @@ Two facts bound what a long build can do to a machine. An `ingest` call yields b
 - **Over-limit chunks are flagged, not split.** Splitting would change chunk identities and reuse behaviour without a long-input strategy, so the build counts and flags them.
 - **Older generations are read as they are.** A schema-1 generation stays BM25-only until it is re-ingested, and a lookup written before the retrieval-verdict column is recomputed on first use rather than regenerated silently.
 - **The embedding thread count is left to the runtime.** The optimum is the physical core count, which is machine-specific, and nothing is auto-detected.
-- **A changed default needs a fresh run.** A corpus, an extraction policy, or a retrieval default changes on the harness's own output and nothing else.
 
 ## Local exploratory measurements
 

@@ -1,18 +1,9 @@
-"""The browser workspace: the shared local interface over one research project.
-
-The UI runs in this process and calls `ResearchService` directly. The shared UI
-already requested the complete payload, so nothing is lost by answering in
-process, and one process, one lock, and one generation replace a process tree.
-
-`ResearchUIAdapter.call` is the whole boundary. The shared UI sends its full
-optional argument set for every route, including fields a capability has turned
-off, so each operation here names the arguments it accepts and drops the rest,
-and a control the app does not serve never travels as an argument the app ignores.
-"""
+"""Research workspace labels, capabilities, and operation argument boundaries."""
 
 from __future__ import annotations
 
 import asyncio
+import time
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import replace
 from typing import TYPE_CHECKING, Any
@@ -35,9 +26,6 @@ from ..runtime.app import CLIENT_NAME_ENV, ClientError, ClientRegistry
 from ..runtime.doctor import mcp_entry_block
 from ..runtime.version import version_label
 
-if TYPE_CHECKING:  # pragma: no cover - typing only
-    from starlette.applications import Starlette
-
 UI_NAME = "research-rag-ui"
 MAX_ERROR_LENGTH = 1200
 # The passed passages a browser request may ask for, and the neighbours it may
@@ -56,19 +44,16 @@ RESEARCH_UI_PROFILE = UIProfile(
     # A client entry carries a command and a project, so the app cannot tell one
     # agent from another and the reader is told how to name it instead. The
     # variable is the bridge's, so this sentence is written where it is declared.
-    client_naming_hint=(
-        f"A client that sets {CLIENT_NAME_ENV} in its own configuration appears "
-        "here under that name."
-    ),
+    client_naming_hint=f"Set {CLIENT_NAME_ENV} in the client entry to name an agent.",
     ingest_intro=(
-        "All included PDFs and EPUBs are extracted and indexed. The current "
-        "generation stays active unless the complete build succeeds."
+        "Build indexes from included PDFs and EPUBs. The selected generation "
+        "is replaced only after a complete build succeeds."
     ),
-    ingest_busy_message=(
-        "Building BM25 and dense indexes. This takes several minutes…"
-    ),
-    # The shared UI's neutral labels apply here: the quote rule is stated once
-    # in README.md, not on every passage a browser renders.
+    ingest_busy_message=("Building indexes. Large collections may take a while…"),
+    ingest_resume_note="If a build runs out of time, run it again to resume from its checkpoint.",
+    result_text_label="Cleaned passage",
+    copy_text_label="Copy cleaned text",
+    footer_text="Passages are cleaned text, not verified quotations. Open the original for exact wording.",
     capabilities=UICapabilities(
         metadata=True,
         force_recompute=True,
@@ -105,6 +90,7 @@ RESEARCH_UI_PROFILE = UIProfile(
         # `research-rag doctor --mcp-entry` prints, rather than a second copy of
         # it written for a browser.
         agent_entry=True,
+        updates=True,
     ),
 )
 
@@ -151,6 +137,7 @@ _OPERATION_ARGUMENTS: Mapping[str, frozenset[str]] = {
     "settings_write": frozenset({"values", "expected_revision", "confirm"}),
     "list_projects": frozenset(),
     "agent_entry": frozenset(),
+    "check_updates": frozenset(),
 }
 
 
@@ -197,13 +184,20 @@ def _string_list(value: Any) -> list[str] | None:
     return [item.strip() for item in value]
 
 
-def _bounded_int(value: Any, *, default: int, maximum: int, name: str) -> int:
+def _bounded_int(
+    value: Any,
+    *,
+    default: int,
+    maximum: int,
+    name: str,
+    minimum: int = 1,
+) -> int:
     if value is None:
         return default
     if isinstance(value, bool) or not isinstance(value, int):
         raise UIRequestError(f"{name} must be an integer")
-    if not 1 <= value <= maximum:
-        raise UIRequestError(f"{name} must be between 1 and {maximum}")
+    if not minimum <= value <= maximum:
+        raise UIRequestError(f"{name} must be between {minimum} and {maximum}")
     return value
 
 
@@ -229,6 +223,9 @@ class ResearchUIAdapter:
         self.service = service
         self.clients = clients
         self.app_state = app_state
+        self._update_lock = asyncio.Lock()
+        self._update_preview: dict[str, Any] | None = None
+        self._update_checked_at = 0.0
 
     async def health(self) -> Mapping[str, Any]:
         return {
@@ -293,11 +290,62 @@ class ResearchUIAdapter:
             message = str(exc).strip() or exc.__class__.__name__
             raise UIRequestError(message[:MAX_ERROR_LENGTH]) from exc
 
+    async def _check_updates(self) -> Mapping[str, Any]:
+        """Cache a read-only release preview; installation remains a CLI transaction."""
+
+        from ..runtime import release, update
+
+        async with self._update_lock:
+            if (
+                self._update_preview is not None
+                and time.monotonic() - self._update_checked_at < 300
+            ):
+                return self._update_preview
+            preview = await asyncio.to_thread(
+                update.read_preview, offline=self.config.offline
+            )
+            installed = str(preview["install"]["version"])
+            published = preview["published"]
+            found = published.get("state") == release.FOUND
+            available = bool(
+                found
+                and release.is_release_version(installed)
+                and release.compare_versions(str(published["version"]), installed) > 0
+            )
+            public_release = (
+                {
+                    "version": published["version"],
+                    "tag_name": published["tag"],
+                    "name": published.get("name", published["tag"]),
+                    "published_at": published["published"],
+                    "html_url": published["url"],
+                    "body": published.get("body", ""),
+                }
+                if found
+                else None
+            )
+            self._update_preview = {
+                "installed_version": installed,
+                "update_available": available,
+                "offline": self.config.offline,
+                "release": public_release,
+                "apply_command": "research-rag update --apply",
+                "message": (
+                    preview.get("blocked")
+                    if found
+                    else published.get("detail", "Release information is unavailable.")
+                ),
+            }
+            self._update_checked_at = time.monotonic()
+            return self._update_preview
+
     async def _run(
         self,
         operation: str,
         arguments: Mapping[str, Any],
     ) -> Mapping[str, Any]:
+        if operation == "check_updates":
+            return await self._check_updates()
         if operation == "status":
             payload = dict(await self.service.status())
             if self.app_state is not None:
@@ -351,6 +399,7 @@ class ResearchUIAdapter:
                     default=1,
                     maximum=MAXIMUM_CONTEXT_CHUNKS,
                     name="context_chunks",
+                    minimum=0,
                 ),
             )
         if operation == "set_source_inclusion":

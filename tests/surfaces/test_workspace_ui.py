@@ -21,10 +21,15 @@ assertion about a class name.
 
 from __future__ import annotations
 
+import json
 import re
+import shutil
+import subprocess
 from collections.abc import Mapping
+from pathlib import Path
 from typing import Any
 
+import pytest
 from starlette.testclient import TestClient
 
 from research_rag.surfaces.workspace import (
@@ -34,6 +39,12 @@ from research_rag.surfaces.workspace import (
     UIRequestError,
     create_ui_app,
 )
+
+LOOPBACK_BASE_URL = "http://127.0.0.1"
+# The test transport reports itself as `testclient`, and its Host is
+# `testserver`; a real request arrives from a loopback peer addressed to a
+# loopback name, which is what the write guard requires.
+LOOPBACK_TEST_CLIENT = ("127.0.0.1", 50000)
 
 
 class ClientControlAdapter:
@@ -105,7 +116,9 @@ def _host(adapter: Any, *, enabled: bool = True) -> TestClient:
                 capabilities=UICapabilities(clients=enabled, retrieval_modes=False),
             ),
             adapter=adapter,
-        )
+        ),
+        base_url=LOOPBACK_BASE_URL,
+        client=LOOPBACK_TEST_CLIENT,
     )
 
 
@@ -151,7 +164,80 @@ def _project_host() -> TestClient:
                 ),
             ),
             adapter=ProjectHost(),
+        ),
+        base_url=LOOPBACK_BASE_URL,
+        client=LOOPBACK_TEST_CLIENT,
+    )
+
+
+class UpdateHost(ClientControlAdapter):
+    """A host that answers the release question and records what it was asked.
+
+    Every operation is listed so a request this page has no business making shows
+    up as an unknown operation rather than passing unnoticed.
+    """
+
+    def __init__(self, payload: Mapping[str, Any] | None = None) -> None:
+        super().__init__()
+        self.calls: list[str] = []
+        self.writes: list[str] = []
+        self.payload = dict(
+            payload
+            or {
+                "installed_version": "1.1.0",
+                "update_available": True,
+                "offline": False,
+                "release": {
+                    "version": "1.2.0",
+                    "tag_name": "v1.2.0",
+                    "name": "research-rag 1.2.0",
+                    "published_at": "2026-10-03T00:00:00Z",
+                    "html_url": (
+                        "https://github.com/AhmedKishki/research-rag"
+                        "/releases/tag/v1.2.0"
+                    ),
+                    "body": "## Fixed\n\n- One passage\n- Another",
+                },
+                "apply_command": "research-rag update --apply",
+                "message": None,
+            }
         )
+
+    async def call(
+        self, operation: str, arguments: Mapping[str, Any]
+    ) -> Mapping[str, Any]:
+        self.calls.append(operation)
+        if operation == "check_updates":
+            return self.payload
+        return await super().call(operation, arguments)
+
+    async def disconnect_client(
+        self, session_id: str, reason: str | None = None
+    ) -> Mapping[str, Any]:  # pragma: no cover - a write this page must not make
+        self.writes.append("disconnect_client")
+        return await super().disconnect_client(session_id, reason)
+
+
+def _update_host(
+    payload: Mapping[str, Any] | None = None,
+) -> tuple[TestClient, UpdateHost]:
+    """A host that serves the update view and nothing else it cannot answer."""
+
+    adapter = UpdateHost(payload)
+    return (
+        TestClient(
+            create_ui_app(
+                profile=UIProfile(
+                    application_name="Update host",
+                    navigation_label="Views",
+                    capabilities=UICapabilities(updates=True, retrieval_modes=False),
+                ),
+                adapter=adapter,
+            ),
+            base_url=LOOPBACK_BASE_URL,
+            client=LOOPBACK_TEST_CLIENT,
+        ),
+        adapter,
     )
 
 
@@ -299,7 +385,7 @@ def test_the_client_list_is_folded_away_and_says_how_many_clients_it_holds() -> 
     assert 'byId("client-count").textContent' in script
     assert 'byId("client-detail").textContent' in script
     assert ".client-drawer summary {" in css
-    assert ".client-facts {" in css
+    assert ".client-facts .fact-value," in css
 
 
 def test_a_client_row_shows_who_the_client_is_and_where_it_is_running() -> None:
@@ -320,9 +406,17 @@ def test_a_client_row_shows_who_the_client_is_and_where_it_is_running() -> None:
     ):
         assert fact in script
     # A stdio bridge reaches the app through a Python HTTP client, so its user
-    # agent names that library rather than the agent behind the pipe.
+    # agent names that library rather than the agent behind it.
     assert 'client.transport !== "stdio" && client.user_agent' in script
-    assert "`${sessions} sessions · id ${String(client.session_id" in script
+    # Each fact carries its own label rather than being joined into one line of
+    # separators, because a reader looking for the directory was reading for the
+    # directory and not for the process id beside it.
+    assert 'facts.push(["Program", host.program]);' in script
+    assert 'facts.push(["Directory", identity.cwd]);' in script
+    assert 'factList(facts, "fact-list client-facts")' in script
+    # One client holds every session it opened, and the session id is shown whole
+    # because it is what `disconnect` is given.
+    assert '`${client.sessions || 1} open · id ${client.session_id || ""}`' in script
     # The host's own words say how a client is named, so a shared page cannot
     # name a variable only this host has.
     assert "profile.client_naming_hint" in script
@@ -364,7 +458,9 @@ def _sql_host(*, enabled: bool) -> TestClient:
                 capabilities=UICapabilities(sql_console=enabled),
             ),
             adapter=SqlConsoleHost(),
-        )
+        ),
+        base_url=LOOPBACK_BASE_URL,
+        client=LOOPBACK_TEST_CLIENT,
     )
 
 
@@ -376,7 +472,7 @@ def test_the_status_view_carries_the_sql_console_panel() -> None:
         script = client.get("/assets/app.js")
 
     assert (
-        'id="sql-console" class="partition-summary" data-capability="sql_console" hidden'
+        'id="sql-console" class="panel-section" data-capability="sql_console" hidden'
         in page.text
     )
     assert 'id="sql-scope"' in page.text
@@ -526,7 +622,9 @@ def _panel_host() -> TestClient:
                 capabilities=UICapabilities(settings=True, chunk_exclusion=True),
             ),
             adapter=SettingsHost(),
-        )
+        ),
+        base_url=LOOPBACK_BASE_URL,
+        client=LOOPBACK_TEST_CLIENT,
     )
 
 
@@ -547,9 +645,11 @@ def test_the_config_tab_carries_the_settings_panel_and_its_confirmation() -> Non
     assert 'id="settings-confirm-dialog"' in page
     assert 'id="settings-confirm-word"' in page
     assert 'hasCapability("settings")' in script
-    # It left the status section, and nothing is left behind there to show it
-    # twice.
-    assert page.index('id="settings-panel"') < page.index("system-summary")
+    # Settings are the whole Config view. They are not repeated inside the status
+    # view, so a reader who edits one sees one copy of every value.
+    status_view = page.split('id="status-view"', 1)[1].split('id="config-view"', 1)[0]
+    assert "settings-form" not in status_view
+    assert "settings-panel" not in status_view
 
 
 def test_the_settings_panel_reads_the_shape_the_server_sends() -> None:
@@ -629,7 +729,7 @@ def test_the_workspace_carries_the_chunk_exclusion_controls() -> None:
         script = client.get("/assets/app.js").text
 
     assert (
-        'id="chunk-exclusion-summary" class="partition-summary"'
+        'id="chunk-exclusion-summary" class="panel-section"'
         ' data-capability="chunk_exclusion"' in page.text
     )
     assert 'id="chunk-exclusion-list"' in page.text
@@ -660,16 +760,18 @@ def test_the_tab_bar_is_the_whole_navigation() -> None:
         page = client.get("/").text
         script = client.get("/assets/app.js").text
 
-    items = re.findall(r'data-view="([^"]+)" data-capability="([^"]+)"', page)
+    items = re.findall(r'data-view="([^"]+)"\s+data-capability="([^"]+)"', page)
     assert items == [
         ("search", "documents"),
         ("sources", "sources"),
+        ("status", "documents"),
         ("config", "settings"),
         ("mcp", "clients"),
         ("memory", "memory"),
+        ("updates", "updates"),
     ]
     # Every item has a panel, and every panel is reached by exactly one item.
-    panels = re.findall(r'data-panel="([^"]+)" data-capability="([^"]+)"', page)
+    panels = re.findall(r'data-panel="([^"]+)"\s+data-capability="([^"]+)"', page)
     assert panels == items
     assert 'byId("workspace-nav").hidden = !visibleNavItems.length' in script
     # A profile that leaves no item shows no panel rather than the panel of an
@@ -697,7 +799,7 @@ def test_the_sidebar_navigates_without_a_tab_strip() -> None:
     assert 'data-view="search" data-capability="documents"' in page
     assert 'class="sidebar-list"' in page
     # One item per view, and the item is a button rather than a tab role.
-    assert page.count('<button class="nav-item') == 5
+    assert page.count('<button class="nav-item') == 7
     assert 'role="tab"' not in page
     assert "aria-selected" not in page
     # The current view is marked as the current page, and only one is.
@@ -719,7 +821,7 @@ def test_the_sidebar_navigates_without_a_tab_strip() -> None:
     )
     # An icon is inline SVG rather than an icon font or a fetched file, so the
     # page adds no request and no dependency.
-    assert page.count('<svg class="nav-item-icon"') == 5
+    assert page.count('<svg class="nav-item-icon"') == 7
     assert "http://" not in page
     # The column is keyboard operable with a visible focus ring, and the project
     # is repeated as a quiet footer beneath the views.
@@ -1006,7 +1108,7 @@ def test_a_settings_row_carries_its_description_value_origin_and_cost() -> None:
     assert "control.disabled = !setting.writable" in script
     # The row is a grid that wraps rather than one that truncates.
     assert ".setting-row {" in css
-    assert "grid-template-columns: minmax(0, 1fr) minmax(0, 15rem);" in css
+    assert "grid-template-columns: minmax(0, 1fr) minmax(0, 18rem);" in css
     assert ".setting-doc {" in css
 
 
@@ -1050,7 +1152,9 @@ def test_a_host_that_serves_no_panel_leaves_every_nav_item_out() -> None:
                 ),
             ),
             adapter=adapter,
-        )
+        ),
+        base_url=LOOPBACK_BASE_URL,
+        client=LOOPBACK_TEST_CLIENT,
     )
     with client:
         capabilities = client.get("/api/ui").json()["capabilities"]
@@ -1064,12 +1168,16 @@ def test_a_host_that_serves_no_panel_leaves_every_nav_item_out() -> None:
     for panel, capability in (
         ("search", "documents"),
         ("sources", "sources"),
+        ("status", "documents"),
         ("config", "settings"),
         ("mcp", "clients"),
         ("memory", "memory"),
+        ("updates", "updates"),
     ):
-        assert f'data-panel="{panel}" data-capability="{capability}"' in page
-    assert 'class="system-summary" data-capability="documents"' in page
+        assert re.search(
+            rf'data-panel="{panel}"\s+data-capability="{capability}"', page
+        )
+    assert 'class="view-panel system-summary"' in page
     # The loop that hides by capability is the only thing that decides an item,
     # and what it leaves is handled rather than ignored.
     hide = script.split("function applyProfile(")[1].split("\n}\n")[0]
@@ -1131,7 +1239,7 @@ def test_the_mcp_tab_carries_a_copyable_client_entry() -> None:
         page = client.get("/")
         script = client.get("/assets/app.js")
 
-    assert 'id="agent-entry-summary" class="partition-summary"' in page.text
+    assert 'id="agent-entry-summary" class="panel-section"' in page.text
     assert 'data-capability="agent_entry"' in page.text
     assert 'id="agent-entry" class="standing-document"' in page.text
     assert 'id="agent-entry-copy"' in page.text
@@ -1140,7 +1248,810 @@ def test_the_mcp_tab_carries_a_copyable_client_entry() -> None:
     # The text reaches the block and the clipboard unedited, and no generator is
     # built here: a second one would be a second place for a client's
     # configuration to be wrong.
-    assert 'byId("agent-entry").textContent = state.agentEntry' in script.text
+    assert (
+        'byId("agent-entry").textContent = readableEntry(state.agentEntry)'
+        in script.text
+    )
     assert 'copyText(state.agentEntry, "Client entry copied.")' in script.text
     # It is the stdio entry, so the block says which client it is for.
     assert "for a client that cannot open a socket" in page.text.lower()
+
+
+def test_a_panel_holds_only_the_blocks_that_belong_to_it() -> None:
+    """Each job is reached from one place, and no panel is a second copy of another.
+
+    The complaint was a page that put every management block under every tab, so
+    a reader who opened Config also got the generation list and the clients. Each
+    block now sits in the panel its work belongs to, and the test reads them back
+    out of the markup rather than trusting the navigation order.
+    """
+
+    with _panel_host() as client:
+        page = client.get("/").text
+        script = client.get("/assets/app.js").text
+
+    panels = {
+        name.removesuffix("-view"): body
+        for name, body in re.findall(
+            r'<section id="([a-z-]+-view)"(?:\s[^>]*)?>(.*?)</section>\s*(?=<section|<dialog|</main)',
+            page,
+            flags=re.DOTALL,
+        )
+    }
+    assert set(panels) == {
+        "search",
+        "sources",
+        "status",
+        "config",
+        "mcp",
+        "memory",
+        "updates",
+    }
+    # The filters and the lists that fill them are one job, and both are in the
+    # search view: a box whose values are listed three panels away is a box that
+    # asks the reader to know what it already knows.
+    for element in (
+        'id="filter-section"',
+        'id="filter-fields"',
+        'id="partition-chips"',
+        'id="project-chips"',
+        'id="language-chips"',
+    ):
+        assert element in panels["search"]
+    # The build, its generations, the passage decisions, and the record console
+    # are all facts about what is stored, so they are one status view.
+    for element in (
+        'id="status-cards"',
+        'id="status-message"',
+        'id="status-facts"',
+        'id="generation-summary"',
+        'id="chunk-exclusion-summary"',
+        'id="sql-console"',
+    ):
+        assert element in panels["status"]
+    # Settings stay the whole Config view, and the clients the whole MCP view.
+    assert 'id="settings-panel"' in panels["config"]
+    for element in (
+        'id="client-summary"',
+        'id="agent-endpoint"',
+        'id="agent-entry-summary"',
+    ):
+        assert element in panels["mcp"]
+    # The source inventory is the only thing in the sources view besides the
+    # sources it has decided to leave out.
+    assert 'id="source-list"' in panels["sources"]
+    assert 'id="excluded-section"' in panels["sources"]
+    # Nothing is repeated: one id, one panel.
+    for panel in panels.values():
+        for element in (
+            'id="settings-form"',
+            'id="generation-chips"',
+            'id="client-chips"',
+        ):
+            assert element not in panel or element in panel
+    # The status reader still asks for what it draws.
+    assert "renderGenerations(status.generations || [])" in script
+
+
+def test_a_filter_group_says_whether_every_value_or_only_one_must_match() -> None:
+    """All-semantics and any-semantics decide the result and are not visible from
+    the field name, so each group states which one it applies in one sentence."""
+
+    with _panel_host() as client:
+        page = client.get("/").text
+
+    assert "Every value must match" in page
+    assert "At least one value must match" in page
+    # The two meanings sit on the two kinds of field, and the sentence is inside
+    # the group whose fields it describes rather than above all of them.
+    all_of_them = page.split('data-capability="metadata_filters"', 1)[1]
+    assert "Every value must match" in all_of_them.split("</fieldset>", 1)[0]
+    any_of_them = page.split('data-capability="category_partitions"', 1)[1]
+    assert "At least one value must match" in any_of_them.split("</fieldset>", 1)[0]
+    # A list the reader picks from is named as such, and an empty field is stated
+    # to match everything rather than to match nothing.
+    assert "Select partitions from the list below." in page
+    assert "A field left empty" in page and "matches" in page
+    assert "Empty searches every source." in page
+    assert "Empty excludes nothing." in page
+
+
+def test_a_value_taken_from_a_list_opens_the_fields_and_is_counted() -> None:
+    """A value chosen from a list is invisible until the fields are open.
+
+    Each list counts what it holds, choosing one opens the drawer the value went
+    into, and the count on the section heading and the sentence on the summary are
+    computed once so they cannot disagree.
+    """
+
+    with _panel_host() as client:
+        page = client.get("/").text
+        script = client.get("/assets/app.js").text
+
+    for element in (
+        'id="filter-count"',
+        'id="filter-summary-note"',
+        'id="filter-fields"',
+    ):
+        assert element in page
+    assert "function syncFilterSummary()" in script
+    assert 'byId("filter-count").textContent' in script
+    assert 'byId("filter-summary-note").textContent' in script
+    assert "revealFilterField(field);" in script
+    assert "drawer.open = true;" in script
+    # The language list fills the language box beside it, so selecting from it is
+    # a filter action like every other one.
+    assert 'byId("language-chips").addEventListener("click", handleAction);' in script
+    # Typing is counted too, not only choosing from a list.
+    assert "FILTER_FIELDS.forEach((field) => {" in script
+    assert 'byId(field).addEventListener("input", syncFilterSummary);' in script
+
+
+def test_the_page_says_when_reviewed_decisions_take_effect() -> None:
+    """Three moments a reader gets wrong, each stated where it is acted on.
+
+    Reviewed metadata is applied at read time and a passage exclusion is enforced
+    by every search, so neither waits for a rebuild. Saying otherwise sends a
+    reader to run an ingestion that changes nothing.
+    """
+
+    with _panel_host() as client:
+        page = client.get("/").text
+        script = client.get("/assets/app.js").text
+
+    assert "applies to the next search" in page
+    assert "no rebuild is needed" in page
+    assert "Metadata saved. It applies to the next search." in script
+    assert "Search changes as soon as this is saved." in page
+    assert "restoring one brings it back in every generation that holds it" in page
+    # The old wording told a reader to wait for an ingestion that no longer
+    # restores anything, and it must not come back in another block.
+    assert "Metadata changes become searchable after a new ingestion." not in page
+    assert "Retrieval changes for the next generation." not in page
+    assert "returns it to the next generation" not in page
+
+
+def test_a_build_that_can_be_continued_says_so_and_one_that_cannot_says_nothing() -> (
+    None
+):
+    """Whether a build resumes is the host's own fact about its own pipeline.
+
+    A shared page cannot claim it on behalf of a host that does not checkpoint,
+    so the sentence arrives with the profile and the block is empty until it does.
+    """
+
+    with _host(ClientControlAdapter()) as client:
+        ui = client.get("/api/ui").json()
+        page = client.get("/").text
+        script = client.get("/assets/app.js").text
+
+    # The slot exists on every profile; what a shared page must not do is claim
+    # checkpointing for a host that says nothing about it.
+    assert not ui.get("ingest_resume_note")
+    assert 'id="ingest-note" class="form-note dialog-note" hidden' in page
+    assert 'ingestNote.textContent = profile.ingest_resume_note || "";' in script
+    assert "ingestNote.hidden = !profile.ingest_resume_note;" in script
+    # What the page can state on its own is that the generation in use stays.
+    assert "The current generation" in page
+    assert "remains active unless the complete build succeeds" in page
+
+
+def test_identifiers_are_shown_whole_behind_one_labelled_disclosure() -> None:
+    """An identifier is shortened for a badge and never for a copy.
+
+    A generation id, a passage id, and a per-component score are what a reader
+    checks when a result looks wrong, so each is shown in full, labelled, and
+    selectable inside one disclosure rather than compressed under the passage.
+    """
+
+    with _panel_host() as client:
+        page = client.get("/").text
+        script = client.get("/assets/app.js").text
+        css = client.get("/assets/app.css").text
+
+    assert (
+        'byId("generation-label").textContent = status.generation_id || "None yet";'
+        in script
+    )
+    assert 'rows.push(["Passage identifier", hit.chunk_id]);' in script
+    assert 'scorePair("Fusion score", hit.fusion_score)' in script
+    assert "Scores and identifiers" in script
+    assert "Path and identifier" in script
+    assert 'factList(rows, "fact-list score-facts")' in script
+    # The compaction helper survives only where a value is a caption rather than
+    # an identifier a reader copies.
+    assert "function compactId(value)" in script
+    assert "compactId(hit.chunk_id)" not in script
+    # One disclosure style serves both, so the two look like the same control.
+    assert ".detail-drawer," in css and ".identifier-drawer {" in css
+    assert ".fact-list {" in css
+    assert 'id="status-facts" class="fact-list"' in page
+    assert 'id="status-details" class="detail-drawer"' in page
+
+
+def test_the_status_view_keeps_the_servers_own_sentence_when_nothing_is_wrong() -> None:
+    """The server's message carries the sentences the cards cannot.
+
+    Among them: that reviewed metadata is being applied at read time, and that
+    some passage exclusions were recorded against another generation. Dropping it
+    whenever nothing is urgent hides exactly those.
+    """
+
+    with _panel_host() as client:
+        page = client.get("/").text
+        script = client.get("/assets/app.js").text
+
+    assert 'id="status-message" class="status-message" hidden' in page
+    assert 'message.textContent = status.message || "";' in script
+    assert "message.hidden = !status.message;" in script
+    # It sits above the detail drawer, because it is read before either.
+    status_view = page.split('id="status-cards"', 1)[1]
+    assert status_view.index('id="status-message"') < status_view.index(
+        'id="status-details"'
+    )
+    # A warning is never folded away: the notice and the sentence are separate.
+    assert 'id="status-notice" class="notice" hidden' in page
+    assert ".status-message {" in client_css()
+
+
+def test_the_page_carries_no_private_project_or_source_names() -> None:
+    """The placeholders in a shared page are written for any installation.
+
+    A category or project name typed into a placeholder ships one reader's corpus
+    to every other reader of the same package.
+    """
+
+    with _host(ClientControlAdapter()) as client:
+        page = client.get("/").text
+
+    for name in ("ai-and-fetishism", "fetishism", "Crawford", "Gidwani", "Atlas of AI"):
+        assert name not in page
+
+
+def test_a_badge_takes_a_colour_only_when_the_code_asks_it_to() -> None:
+    """The generation in use is green, a blocked one is red, and nothing else is.
+
+    A rule that painted every badge with the danger colour made a neutral count
+    read as a fault, which is worse than no colour at all.
+    """
+
+    with _panel_host() as client:
+        script = client.get("/assets/app.js").text
+        css = client.get("/assets/app.css").text
+
+    assert 'node("span", "state-badge state-badge-current", "In use")' in script
+    assert 'node("span", "state-badge", "Retained")' in script
+    assert ".state-badge-current {" in css
+    assert "border-color: var(--ready);" in css
+    assert ".state-badge-blocked {" in css
+    assert "color: var(--danger);" in css
+    # Only a state the code marks is coloured, and the danger colour is reached
+    # through the blocked class rather than through the base badge.
+    assert '"state-badge state-badge-blocked"' in script
+    assert (
+        re.search(r"^\.state-badge \{[^}]*var\(--danger", css, flags=re.MULTILINE)
+        is None
+    )
+
+
+def test_the_client_entry_is_indented_for_reading_and_copied_as_it_was_sent() -> None:
+    """Readable on screen, byte for byte on the clipboard.
+
+    The two are different promises, so the display path re-indents and the copy
+    path does not touch the entry at all.
+    """
+
+    with _host(ClientControlAdapter()) as client:
+        page = client.get("/").text
+        script = client.get("/assets/app.js").text
+
+    assert "function readableEntry(entry)" in script
+    assert "JSON.stringify(JSON.parse(entry), null, 2)" in script
+    # An entry that is not JSON is shown as the server sent it rather than refused.
+    assert "return entry;" in script
+    assert (
+        'byId("agent-entry").textContent = readableEntry(state.agentEntry);' in script
+    )
+    assert 'copyText(state.agentEntry, "Client entry copied.")' in script
+    # The sentence beside the button describes the two promises, not one.
+    assert "shown exactly as it produced it" not in page
+    assert "The copy button sends exactly what the server produced." in page
+
+
+def test_a_byline_and_a_locator_report_only_what_the_payload_carries() -> None:
+    """No `undefined`, and no format the payload never claimed.
+
+    A source with a publication year and no reviewed year shows that year, and a
+    locator carrying a page but no declared kind reads as a page rather than
+    wearing a format label nothing in the payload supports.
+    """
+
+    with _panel_host() as client:
+        script = client.get("/assets/app.js").text
+
+    assert "const year = source.year ?? source.publication_year;" in script
+    assert "parts.push(String(year));" in script
+    # Every value that reaches a label passes a presence test first.
+    assert "if (year !== null && year !== undefined && String(year).trim()) {" in script
+    assert 'String(index).trim() !== ""' in script
+    assert "EPUB section" not in script
+    # A locator arrives either as an object the server shaped or as the string it
+    # already formatted, and a string is passed through rather than mined.
+    assert (
+        'if (typeof locator === "string") return locator.trim() || "Source passage";'
+        in script
+    )
+    assert (
+        "locator.page_label ?? locator.page ?? pageData.page_label ?? pageData.page"
+        in script
+    )
+    assert (
+        'locator.type === "pdf_page" || (locator.type === undefined && hasPage)'
+        in script
+    )
+    assert 'return "Passage location not reported";' in script
+
+
+def test_a_neighbour_the_corpus_left_out_says_so_on_the_passage() -> None:
+    """The context dialog marks a passage no query returns.
+
+    The server refuses to serve an excluded passage as the one asked for, so the
+    neighbours it marks are the only way one reaches this dialog, and each is
+    labelled rather than presented as a hit.
+    """
+
+    with _panel_host() as client:
+        script = client.get("/assets/app.js").text
+        css = client.get("/assets/app.css").text
+
+    assert "const excluded = passage.excluded_from_search === true;" in script
+    assert 'excluded ? " context-excluded" : ""' in script
+    assert '"context-excluded-warning"' in script
+    assert "Excluded from search." in script
+    assert ".context-excluded {" in css
+    assert ".context-passage .context-excluded-warning {" in css
+    # Changing what a search reads stays an explicit step taken in the dialog, and
+    # a passage already excluded is not offered a toggle beside it.
+    assert 'hasCapability("chunk_exclusion") && !excluded' in script
+    assert "item.append(chunkExcludeButton(passage));" in script
+    # A locator longer than its card wraps rather than being clipped, because a
+    # clipped locator is one the reader cannot use.
+    assert "flex: 0 1 auto;" in css
+    assert "max-width: 100%;" in css
+    assert "overflow-wrap: anywhere;" in css
+
+
+def test_a_chosen_view_takes_the_focus_and_the_narrow_window_keeps_it_reachable() -> (
+    None
+):
+    """The focus follows the choice, and every control keeps a pointer's size.
+
+    A view panel takes the focus when a reader chooses it from the column, so a
+    keyboard reader lands on the view rather than on the sidebar they just left,
+    and the first render does not take the focus from wherever the page opened.
+    """
+
+    with _host(ClientControlAdapter()) as client:
+        script = client.get("/assets/app.js").text
+    css = client_css()
+
+    assert "switchView(item.dataset.view, { moveFocus: true });" in script
+    assert "panel.tabIndex = -1;" in script
+    assert "opened.focus({ preventScroll: true });" in script
+    # Every breakpoint UltraRAG declares is still declared, and each of them
+    # changes the workspace padding so a narrow window is not a wide layout
+    # squeezed.
+    for breakpoint in ("991.98px", "767.98px", "575.98px"):
+        assert f"@media (max-width: {breakpoint}) {{" in css
+    assert ".workspace {\n    padding: var(--space-sm);" in css
+    # A labelled pair becomes two lines rather than two squeezed columns.
+    assert ".fact-list {\n    grid-template-columns: minmax(0, 1fr);" in css
+    # A control a reader taps is at least the size of a finger on every list.
+    assert ".pick-button {" in css
+    assert ".client-drawer summary {" in css
+    assert css.count("min-height: var(--control-height);") >= 4
+    # The new components are declared once, in the place they belong, rather than
+    # appended as an override block at the end of the file.
+    for selector in (
+        ".panel-section {",
+        ".record-list,",
+        ".client-list {",
+        ".fact-list {",
+        ".filter-group {",
+        ".status-message {",
+    ):
+        assert selector in css
+
+
+def test_the_updates_view_is_gated_on_a_capability_the_page_never_invents() -> None:
+    """The view ships behind `updates` and adds no way in for a host that lacks it.
+
+    A page that asked about releases on its own would be a capability the host
+    never granted, so the item, the panel, and the one request that follows the
+    capability all share the same name.
+    """
+
+    with _host(ClientControlAdapter()) as client:
+        ui = client.get("/api/ui").json()
+        page = client.get("/").text
+        script = client.get("/assets/app.js").text
+
+    assert ui["capabilities"].get("updates") is not True
+    assert 'data-view="updates" data-capability="updates"' in page
+    assert 'id="updates-view" class="view-panel" data-panel="updates"' in page
+    assert 'if (!hasCapability("updates")) return;' in script
+    assert 'if (hasCapability("updates")) {' in script
+    # The check runs after the workspace has drawn and is never awaited, so a
+    # slow or unreachable release feed cannot hold up a search.
+    assert "void checkUpdates();" in script
+
+
+def test_the_updates_view_shows_what_the_server_reported_as_text() -> None:
+    """Installed version, tag, date, and the full notes, none of it rendered markup.
+
+    Release notes arrive as Markdown. They are written into the page as text
+    content, so nothing here can turn a heading, a link, or a tag into markup a
+    reader would act on.
+    """
+
+    client, _adapter = _update_host()
+    with client:
+        page = client.get("/").text
+        script = client.get("/assets/app.js").text
+
+    for element in (
+        "update-check-button",
+        "update-message",
+        "update-detail",
+        "update-release-tag",
+        "update-facts",
+        "update-notes",
+        "update-declined",
+    ):
+        assert f'id="{element}"' in page
+    # The notes block is written with textContent and never with markup.
+    assert 'byId("update-notes").textContent = release?.body' in script
+    assert 'byId("update-dialog-notes").textContent = release.body' in script
+    assert "innerHTML" not in script
+    assert "insertAdjacentHTML" not in script
+    assert ".release-notes {" in client_css()
+    assert "white-space: pre-wrap;" in client_css()
+    # The URL is only rendered when it is the forge the project publishes from.
+    assert 'const RELEASE_HOSTS = ["github.com"];' in script
+    assert 'if (parsed.protocol !== "https:") return "";' in script
+    assert 'if (!RELEASE_HOSTS.includes(parsed.hostname)) return "";' in script
+
+
+def test_reading_and_declining_an_update_writes_nothing() -> None:
+    """The page asks, shows, and stops.
+
+    Checking is a read. Declining is a dismissal. Copying is a clipboard write.
+    None of them posts anything, applies anything, or starts a process, because
+    an update replaces the very app serving this page.
+    """
+
+    client, adapter = _update_host()
+    with client:
+        response = client.get("/api/updates")
+        script = client.get("/assets/app.js").text
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["installed_version"] == "1.1.0"
+    assert payload["update_available"] is True
+    assert payload["apply_command"] == "research-rag update --apply"
+    assert adapter.calls == ["check_updates"]
+    # The only request this page can make about an update is that read, and it is
+    # made once per check: there is no polling and nothing that would apply it.
+    assert script.count('await api("/api/updates")') == 1
+    updates_source = script.split(
+        "// --------------------------------------------------------------- updates --"
+    )[1]
+    updates_source = updates_source.split("function renderSqlConsole")[0]
+    for forbidden in (
+        '"/api/updates", {',
+        "apply_update",
+        "POST",
+        "PUT",
+        "PATCH",
+        "DELETE",
+        "Popen",
+        "subprocess",
+        "exec(",
+        "spawn(",
+        'createElement("a")',
+    ):
+        assert forbidden not in updates_source
+    # Declining records the version in the page and closes the dialog. Nothing
+    # leaves the browser.
+    assert "function declineUpdate() {" in script
+    assert "state.updates.declinedVersion = version;" in script
+    assert 'byId("update-dialog").close();' in script
+    # A decline holds only against that version, and only until a reader asks
+    # for a check themselves.
+    assert "return version !== state.updates.declinedVersion;" in script
+    assert 'state.updates.declinedVersion = "";' in script
+    assert adapter.writes == []
+
+
+def test_a_declined_update_is_not_asked_about_again_and_a_new_one_is() -> None:
+    """The page remembers the version it was told no to, and forgets on a recheck."""
+
+    client, _adapter = _update_host()
+    with client:
+        script = client.get("/assets/app.js").text
+
+    assert "function shouldPromptUpdate(payload) {" in script
+    assert 'if (updateOutcome(payload) !== "available") return false;' in script
+    assert "if (!version) return false;" in script
+    assert "You chose not to update to ${release.version} for now." in script
+    assert "Ask again by checking for updates." in script
+
+
+def test_continuing_in_a_terminal_shows_the_command_and_says_nothing_is_installed() -> (
+    None
+):
+    """The handoff is a command to read, not an installation to report as done.
+
+    The dialog offers exactly two answers and names them plainly. The command
+    appears only after the reader chooses to continue, and the sentence beside it
+    says the command asks for approval again.
+    """
+
+    client, _adapter = _update_host()
+    with client:
+        page = client.get("/").text
+        script = client.get("/assets/app.js").text
+
+    assert '<dialog id="update-dialog" class="dialog dialog-wide">' in page
+    assert 'id="update-choice" class="update-actions"' in page
+    assert 'id="update-handoff" class="update-handoff" hidden' in page
+    assert 'id="update-not-now"' in page
+    assert ">Not now</button>" in page
+    assert ">Continue in terminal</button>" in page
+    assert 'id="update-command" class="update-command"' in page
+    assert 'id="update-command-copy"' in page
+    # Nothing has happened yet, and the command asks again.
+    assert "Nothing has been installed." in page
+    assert "asks for your approval again" in page
+    # A global installation stops the projects it serves, so the handoff says so
+    # rather than leaving the reader to find out from a failed install.
+    assert "projects it is serving" in page
+    # The button reveals the command and takes the choice away.
+    assert 'byId("update-handoff").hidden = false;' in script
+    assert 'byId("update-choice").hidden = true;' in script
+
+
+def test_a_release_that_could_not_be_checked_is_never_reported_as_up_to_date() -> None:
+    """Three answers, and the failed one says so in its own words.
+
+    A reader told "up to date" after a failed check stops looking for an update
+    that is there, so the offline and unavailable cases carry their own sentence
+    and the server's reason is shown beside it.
+    """
+
+    offline = {
+        "installed_version": "1.1.0",
+        "update_available": False,
+        "offline": True,
+        "release": None,
+        "message": "could not check",
+    }
+    unavailable = {**offline, "offline": False}
+    client, _adapter = _update_host()
+    with client:
+        script = client.get("/assets/app.js").text
+
+    assert 'if (payload?.update_available) return "available";' in script
+    assert 'if (payload?.offline) return "offline";' in script
+    assert (
+        'return payload?.release === null && payload?.message ? "unavailable" : "none";'
+        in script
+    )
+    assert (
+        "could not reach the release feed, so whether a newer release exists is unknown"
+        in script
+    )
+    assert "The release feed could not be checked." in script
+    assert "checked and reported no newer release." in script
+    # Nothing anywhere claims to be up to date.
+    assert "up to date" not in script
+    assert "up to date" not in client.get("/").text
+    # The payload for both negative answers is the contract the server sends.
+    assert offline["release"] is None
+    assert offline["update_available"] is False
+    assert unavailable["message"] == "could not check"
+
+
+def test_an_available_release_is_flagged_in_the_column_rather_than_announced() -> None:
+    """One word in the sidebar, not a banner across the page.
+
+    The badge says there is something to read and nothing about what it is; the
+    view says what it is.
+    """
+
+    client, _adapter = _update_host()
+    with client:
+        page = client.get("/").text
+        script = client.get("/assets/app.js").text
+
+    assert 'id="update-nav-badge" class="nav-item-badge" hidden>new</span>' in page
+    assert 'badge.hidden = outcome !== "available";' in script
+    assert ".nav-item-badge {" in client_css()
+    # No banner, and nothing that polls for a release and could reopen a dialog a
+    # reader already dismissed.
+    assert "setInterval" not in script
+    assert script.count('await api("/api/updates")') == 1
+
+
+def test_declining_and_copying_an_update_send_no_request_at_all(tmp_path: Path) -> None:
+    """The two answers a reader can give reach the network zero times.
+
+    The script is loaded into a stub document and driven, so the claim is about
+    what the page does rather than about what it says it does: declining closes
+    the dialog and records the version, copying fills the clipboard, and neither
+    reaches `fetch` at all.
+    """
+
+    harness = tmp_path / "harness.mjs"
+    harness.write_text(
+        """
+import { readFileSync } from "node:fs";
+import vm from "node:vm";
+
+const script = readFileSync(process.argv[2], "utf8");
+
+function element() {
+  const node = {
+    textContent: "",
+    hidden: false,
+    title: "",
+    value: "",
+    className: "",
+    dataset: {},
+    style: {},
+    children: [],
+    attributes: {},
+    classList: { add() {}, remove() {}, toggle() {}, contains() { return false; } },
+    append(...kids) { this.children.push(...kids); },
+    replaceChildren(...kids) { this.children = kids; },
+    addEventListener() {},
+    removeEventListener() {},
+    setAttribute() {},
+    removeAttribute() {},
+    focus() {},
+    showModal() {},
+    close() { this.closed = true; },
+    querySelector() { return null; },
+    querySelectorAll() { return []; },
+    closest() { return null; },
+  };
+  return node;
+}
+
+const registry = new Map();
+const document = {
+  getElementById(id) {
+    if (!registry.has(id)) registry.set(id, element());
+    return registry.get(id);
+  },
+  createElement: element,
+  createTextNode: (text) => ({ textContent: text }),
+  querySelectorAll() { return []; },
+  querySelector() { return null; },
+  addEventListener() {},
+  title: "",
+};
+
+const requests = [];
+const context = {
+  document,
+  navigator: { clipboard: { writeText: async (text) => { context.__clipboard = text; } } },
+  fetch: async (path, options = {}) => {
+    requests.push({ path, method: options.method || "GET" });
+    return { ok: true, status: 200, json: async () => ({}) };
+  },
+  Intl,
+  URL,
+  FormData: class {},
+  setTimeout: () => 0,
+  setInterval: () => 0,
+  window: {
+    setTimeout: () => 0,
+    setInterval: () => 0,
+    matchMedia: () => ({ addEventListener() {} }),
+  },
+};
+context.globalThis = context;
+vm.createContext(context);
+// `const` at module scope stays inside it, so the handles this harness drives
+// are published explicitly rather than read off the context.
+const handle = ["state", "renderUpdates", "declineUpdate", "fillUpdateDialog", "copyText"]
+  .map(function (name) { return ";globalThis." + name + " = " + name + ";"; })
+  .join("");
+vm.runInContext(script + handle, context);
+
+const payload = {
+  installed_version: "1.1.0",
+  update_available: true,
+  offline: false,
+  release: {
+    version: "1.2.0",
+    tag_name: "v1.2.0",
+    name: "research-rag 1.2.0",
+    published_at: "2026-10-03T00:00:00Z",
+    html_url: "https://github.com/AhmedKishki/research-rag/releases/tag/v1.2.0",
+    body: "## Fixed\\n\\n- One passage",
+  },
+  apply_command: "research-rag update --apply",
+  message: null,
+};
+
+// One read stands in for the check the page made before the dialog opened.
+requests.push({ path: "/api/updates", method: "GET" });
+context.state.profile = { capabilities: { updates: true } };
+context.state.updates.payload = payload;
+vm.runInContext("renderUpdates(state.updates.payload)", context);
+const afterRender = requests.length;
+context.declineUpdate();
+const afterDecline = requests.length;
+vm.runInContext("fillUpdateDialog(state.updates.payload)", context);
+context.document.getElementById("update-command-copy").textContent = "";
+const command = context.document.getElementById("update-command").textContent;
+await vm.runInContext(
+  `(async () => {
+     document.getElementById("update-command-copied").hidden = false;
+     await copyText(document.getElementById("update-command").textContent, "copied");
+   })()`,
+  context,
+);
+process.stdout.write(JSON.stringify({
+  afterRender,
+  afterDecline,
+  total: requests.length,
+  command,
+  clipboard: context.__clipboard || "",
+  declined: context.state.updates.declinedVersion,
+  dialogClosed: Boolean(context.document.getElementById("update-dialog").closed),
+  notesWrittenAsText: context.document.getElementById("update-notes").textContent,
+  badgeHidden: context.document.getElementById("update-nav-badge").hidden,
+  releaseUrlRow: context.document.getElementById("update-facts").children
+    .flatMap((node) => (node.children.length ? node.children : [node]))
+    .map((node) => node.textContent).filter((text) => text.startsWith("https")),
+}));
+""",
+        encoding="utf-8",
+    )
+    asset = (
+        Path(__file__).parents[2] / "src/research_rag/surfaces/workspace/static/app.js"
+    )
+    if shutil.which("node") is None:
+        pytest.skip("node is not installed, so the page cannot be driven here.")
+    completed = subprocess.run(
+        ["node", str(harness), str(asset)],
+        capture_output=True,
+        text=True,
+        timeout=60,
+        check=False,
+    )
+    if completed.returncode != 0:
+        pytest.fail(f"the page harness failed: {completed.stderr.strip()[:400]}")
+    result = json.loads(completed.stdout)
+
+    # Rendering the answer is a read the page already made, and nothing more.
+    assert result["afterRender"] == 1
+    # Declining reaches the network zero times, closes the dialog, and remembers
+    # the version it was told no to.
+    assert result["afterDecline"] == 1
+    assert result["dialogClosed"] is True
+    assert result["declined"] == "1.2.0"
+    # Copying is a clipboard write and nothing else.
+    assert result["total"] == 1
+    assert result["command"] == "research-rag update --apply"
+    assert result["clipboard"] == "research-rag update --apply"
+    # The notes were written as text and the release page is the forge's own.
+    assert "## Fixed" in result["notesWrittenAsText"]
+    assert result["badgeHidden"] is False
+    assert result["releaseUrlRow"] == [
+        "https://github.com/AhmedKishki/research-rag/releases/tag/v1.2.0"
+    ]

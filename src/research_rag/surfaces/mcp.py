@@ -2,8 +2,10 @@
 
 The tools reach the app's one `ResearchService` through a projection built for
 this reader: every answer is lean, and the workspace and the command line want
-the full one. Nothing here starts a process, resolves a project, or parses a
-command line.
+the full one. The annotations and the descriptions below are the same contract
+in the form a client reads before it calls anything, so they are kept to what a
+caller decides on: which call, which identifier, which condition. Nothing here
+starts a process, resolves a project, or parses a command line.
 """
 
 from __future__ import annotations
@@ -57,8 +59,8 @@ KeywordFilter: TypeAlias = Annotated[
     list[str] | None,
     Field(
         description=(
-            "Case-insensitive keyword filters; a result must contain every supplied "
-            "keyword. Omit or pass null for no keyword filter."
+            "Case-insensitive keywords; a result must contain every one. Omit or "
+            "pass null for no keyword filter."
         )
     ),
 ]
@@ -66,8 +68,8 @@ SourceIdFilter: TypeAlias = Annotated[
     list[str] | None,
     Field(
         description=(
-            "Stable source IDs to include; a result may match any supplied ID. "
-            "Obtain IDs from find_source. A source ID survives a change to the "
+            "Stable source IDs to include; a result may match any one. Take them "
+            "from find_source or from a search hit. An ID survives a change to the "
             "file's bytes and changes when the file is renamed or moved. Omit or "
             "pass null to search every source."
         )
@@ -77,9 +79,9 @@ ExcludeSourceIdFilter: TypeAlias = Annotated[
     list[str] | None,
     Field(
         description=(
-            "Stable source IDs to exclude; a result may not match any supplied ID. "
-            "Omit or pass null to exclude nothing. Reviewed source exclusions "
-            "always apply and cannot be undone here."
+            "Stable source IDs to exclude; a result may not match any one. Omit "
+            "or pass null to exclude nothing. A reviewed exclusion always applies "
+            "and cannot be undone here."
         )
     ),
 ]
@@ -87,10 +89,9 @@ CategoriesAnyFilter: TypeAlias = Annotated[
     list[str] | None,
     Field(
         description=(
-            "Case-insensitive 'any of' category filters; a result must carry at "
-            "least one supplied category. Categories come from reviewed source "
-            "metadata, which set_source_metadata writes, and a category no source "
-            "carries returns no passage. Omit or pass null for no filter."
+            "Case-insensitive categories; a result's source must carry at least "
+            "one. They come from reviewed source metadata, and a category no "
+            "source carries returns no passage. Omit or pass null for no filter."
         )
     ),
 ]
@@ -98,8 +99,8 @@ ProjectsAnyFilter: TypeAlias = Annotated[
     list[str] | None,
     Field(
         description=(
-            "Reviewed project tags to match with 'any of' semantics; a result must "
-            "carry at least one supplied project. Omit or pass null for no filter."
+            "Reviewed project tags; a result's source must carry at least one. "
+            "Omit or pass null for no filter."
         )
     ),
 ]
@@ -107,10 +108,9 @@ LanguagesAnyFilter: TypeAlias = Annotated[
     list[str] | None,
     Field(
         description=(
-            "Case-insensitive 'any of' language filters; a result must be written "
-            "in at least one supplied ISO 639 code. A source carries the language "
-            "detected while extracting it and the language a review set instead. "
-            "Omit or pass null for no filter."
+            "Case-insensitive ISO 639 codes; a result must be written in at least "
+            "one. A source carries the language detected while extracting it, or "
+            "the one a review set. Omit or pass null for no filter."
         )
     ),
 ]
@@ -118,12 +118,11 @@ AuthorsAnyFilter: TypeAlias = Annotated[
     list[str] | None,
     Field(
         description=(
-            "Case-insensitive 'any of' author filters; a result's source must have "
-            "at least one supplied name inside one of its author strings, so a "
-            "surname finds its author. Reviewed authors win where a review exists "
-            "and extracted ones apply otherwise; find_source reports the authors "
-            "each source carries. Combine with `titles_any` to pin one work. Omit "
-            "or pass null for no filter."
+            "Case-insensitive authors; a result's source must carry at least one "
+            "supplied name inside one of its author strings, so a surname finds "
+            "its author. Reviewed authors win over extracted ones, and "
+            "find_source reports the authors each source carries. Combine with "
+            "`titles_any` to pin one work. Omit or pass null for no filter."
         )
     ),
 ]
@@ -131,13 +130,12 @@ TitlesAnyFilter: TypeAlias = Annotated[
     list[str] | None,
     Field(
         description=(
-            "Case-insensitive 'any of' title filters; a result's source title must "
-            "contain at least one supplied phrase, so a remembered fragment finds "
-            "the work without reproducing its subtitle. Reviewed titles win over "
-            "extracted ones, and find_source reports the title each source carries. "
-            "A filter that matches no source returns no passages and says so in "
-            "`applied_filters` rather than searching everything. Omit or pass null "
-            "for no filter."
+            "Case-insensitive title fragments; a result's source title must "
+            "contain at least one, so a remembered fragment finds the work "
+            "without its subtitle. Reviewed titles win over extracted ones, and "
+            "find_source reports the title each source carries. A fragment no "
+            "source carries returns no passages and says so in `applied_filters`. "
+            "Omit or pass null for no filter."
         )
     ),
 ]
@@ -153,7 +151,10 @@ ForceRecompute: TypeAlias = Annotated[
 ChunkId: TypeAlias = Annotated[
     str,
     Field(
-        description="Exact chunk_id returned by search for the current generation.",
+        description=(
+            "Exact chunk_id a search hit or get_passage answer returned for the "
+            "current generation."
+        ),
         min_length=1,
     ),
 ]
@@ -172,7 +173,7 @@ SourceQuery: TypeAlias = Annotated[
     str,
     Field(
         description=(
-            "A filename, a title, or an author to look up. Matched "
+            "A filename, a title, or an author to look up, matched "
             "case-insensitively against every source this project can name, "
             "including one whose file is gone or whose metadata was reviewed."
         ),
@@ -215,10 +216,28 @@ ExclusionReason: TypeAlias = Annotated[
         )
     ),
 ]
+# A mapping rather than a model, because the review is the file a person edits and
+# its fields are validated by the same code that reads that file. The schema
+# carries the field names and their types, so a client can build the mapping
+# without reading prose to know what a value may be.
+MetadataReview: TypeAlias = Annotated[
+    dict[str, Any],
+    Field(
+        description=(
+            "The whole reviewed bibliography for this source: `title` and `doi` are "
+            "strings, `year` is an integer or null, and `authors`, `categories`, "
+            "`keywords`, `project`, and `language` are lists of strings, with "
+            "`language` holding ISO 639-1 codes, one per language the source is "
+            "written in. Any other field is refused. The call replaces this "
+            "source's whole review, and an empty mapping clears it so automatic "
+            "metadata applies again."
+        )
+    ),
+]
 
 
 async def _tool_call(operation: Callable[[], Awaitable[T]]) -> T:
-    from ..project.support import ResearchError
+    from ..project.policy import ResearchError
 
     try:
         return await operation()
@@ -226,6 +245,30 @@ async def _tool_call(operation: Callable[[], Awaitable[T]]) -> T:
         raise ToolError(str(exc)) from exc
     except Exception as exc:
         raise ToolError(f"Research workflow failed: {exc}") from exc
+
+
+def _agent_app_state(state: Mapping[str, Any]) -> dict[str, Any]:
+    """Return the part of the app's state an agent can act on.
+
+    The app's state is the app's, and it grows with what the app chooses to
+    record: how many clients are attached, which port it claimed, which URL its
+    own agent surface is at. None of that is the project's, and none of it is
+    something an agent can do anything with, so it is not merged into the
+    project's verdict. The workspace's address and the condition that says the
+    workspace is not being served are the two facts a client hands to a person,
+    so they travel and the rest does not.
+
+    A field added to the app's state is not added here by accident: an agent's
+    answer carries what this function names.
+    """
+
+    bounded: dict[str, Any] = {}
+    url = state.get("ui_url")
+    if url:
+        bounded["ui_url"] = url
+    if state.get("ui_error"):
+        bounded["ui_error"] = state["ui_error"]
+    return bounded
 
 
 def create_blocked_mcp(
@@ -338,7 +381,7 @@ def create_mcp(
         return await _tool_call(run)
 
     def _present(operation: str, payload: dict[str, Any]) -> dict[str, Any]:
-        from ..project.support import ResearchError
+        from ..project.policy import ResearchError
 
         try:
             return present_tool_response(
@@ -350,16 +393,20 @@ def create_mcp(
             raise ToolError(str(exc)) from exc
 
     async def _status_payload() -> dict[str, Any]:
-        """Return the `status` answer, plus the app's own state.
+        """Return the `status` answer, plus the app's own state, bounded.
 
-        The workspace and the attached clients are the app's state, not the
-        project's, and a client about to open a browser needs to know that.
+        The workspace and the attached clients are the app's state rather than the
+        project's, and a client about to open a browser needs to know where it is
+        served and whether it is being served at all. Those two facts are the
+        whole of it here: the app decides what else its state carries, so nothing
+        is merged into an agent's answer wholesale.
         """
 
         payload = _present(
             "status", await _service_call(lambda instance: instance.status())
         )
-        return {**payload, **app_state()}
+        state = app_state()
+        return {**payload, **_agent_app_state(state)}
 
     @app.tool(
         annotations={
@@ -370,19 +417,11 @@ def create_mcp(
         }
     )
     async def status() -> dict[str, Any]:
-        """Report whether this project can be searched, and what must happen first.
+        """Check readiness and freshness before searching.
 
-        Call this before telling the user their corpus is up to date.
-        `ready: false` or `stale: true` means the corpus is not what the user has.
-        `requires` names the calls that close the gap: `ingest` rebuilds the
-        generation, `restart_app` restarts this process so it runs the installed
-        code. It is absent when nothing is required.
-
-        `blocked_by` and `degraded` name what stands between this project and a
-        search that answers, each with the reason and the command that fixes it.
-        A tool error naming a gateway log holds the same information, and the log
-        is where to read the rest. `ui_url` is where this project's browser
-        workspace is served. `mcp_clients` counts the agents attached to this app.
+        Inspect `requires`, `blocked_by`, and `degraded` for next steps.
+        `ingest` rebuilds; `restart_app` requires a process restart, not a tool call.
+        `ui_url` opens this project's browser workspace.
         """
 
         return await _status_payload()
@@ -409,16 +448,12 @@ def create_mcp(
     async def ingest(
         force_recompute: ForceRecompute = False,
     ) -> dict[str, Any]:
-        """Build or refresh the generation that search reads, reusing compatible work.
+        """Build or refresh the index, reusing compatible work.
 
-        Writes persistent state and may download a model, so get the user's
-        agreement first. A long build answers status=in_progress: call it again
-        until it returns ready or unchanged, then report what changed. One call
-        covers at most `ingestion.work_budget_seconds` of work, so a larger build
-        needs repeated identical calls, and the project's own config is where the
-        budget is raised. A rejected call means another process holds the project,
-        and its message names that build. Progress that goes backwards is reported
-        as `superseded_build`: a changed corpus cannot resume the old one.
+        Obtain the user's agreement: this writes persistent state and may download
+        models. Repeat identical calls while `status` is `in_progress`; finish on
+        `ready` or `unchanged`. Report discarded or withheld evidence. Concurrent
+        builds are refused with the resident build's phase.
         """
 
         return _present(
@@ -448,13 +483,12 @@ def create_mcp(
         source_ids: SourceIdFilter = None,
         exclude_source_ids: ExcludeSourceIdFilter = None,
     ) -> dict[str, Any]:
-        """Retrieve evidence passages for a research question.
+        """Find evidence for one research question, with follow-up IDs and source locators.
 
-        Each passage gives its source filename, its authors, its position, and
-        cleaned text. Quote only from the original at that locator. Ask for more
-        passages before concluding the corpus has nothing: the reranker reorders
-        about twice as many candidates as top_k, so a low top_k hides candidates
-        from it. A question asked in other words is a different search.
+        Rephrase or raise `top_k` before concluding the corpus has no answer.
+        Inspect `applied_filters`, `search_window_partial`, `relevance_limited`,
+        `rerank_fallback`, `stale`, and `generation_upgrade_required` when present.
+        Returned text is cleaned, not a verified quotation.
         """
 
         return _present(
@@ -490,18 +524,12 @@ def create_mcp(
         query: SourceQuery,
         limit: FindLimit = DEFAULT_FIND_SOURCE_LIMIT,
     ) -> dict[str, Any]:
-        """Look up one source by filename, title, or author, and say if it is searchable.
+        """Locate a named work by filename, title, or author; never list the corpus.
 
-        Call it before naming a source in set_source_inclusion or
-        set_source_metadata, and when a user asks whether a work is in the
-        project. It returns the matches with the `source_relative_path` and
-        `source_id` those two operations take, and `indexed_in_current_generation`
-        says whether a search can reach the source: a source that is only on disk
-        or only reviewed needs `ingest` first.
-
-        It is a lookup, not a listing: ask about a name rather than for the corpus.
-        A source whose file is gone or whose metadata was reviewed is still
-        answerable. A match count above the returned rows means `limit` hid some.
+        Use returned `source_id` to filter searches and `source_relative_path` for
+        metadata or inclusion reviews. Check `indexed_in_current_generation`;
+        unindexed sources need ingestion. Raise `limit` if truncated. This lookup
+        may update the project-local source catalog.
         """
         return _present(
             "find_source",
@@ -521,12 +549,11 @@ def create_mcp(
     async def get_passage(
         chunk_id: ChunkId,
     ) -> dict[str, Any]:
-        """Return one passage with its immediate neighbors on each side.
+        """Read a current search hit with its immediate neighbours.
 
-        Use it to read around a hit. The text is still cleaned for retrieval, so
-        quote from the original at the passage's locator. A passage a reader has
-        excluded is refused here and still returned as a neighbour, because
-        context is not evidence.
+        Use a `chunk_id` from the selected generation. Excluded targets are refused;
+        excluded neighbours carry `excluded_from_search: true` and are context,
+        not eligible search evidence. Verify quotations in the original at the locator.
         """
 
         return _present(
@@ -549,9 +576,10 @@ def create_mcp(
     ) -> dict[str, Any]:
         """Exclude a source from retrieval, or restore one, without touching the file.
 
-        Act only after the agent or user has reviewed the source, and give an
-        exclusion its reason. The decision binds current retrieval at once and the
-        next ingestion. Re-ingest to drop an excluded source physically.
+        Record a decision only after you or the user has reviewed the source, and
+        give an exclusion its reason. The decision binds current retrieval at
+        once and the next ingestion. Re-ingest to drop an excluded source
+        physically.
         """
 
         return _present(
@@ -580,12 +608,13 @@ def create_mcp(
     ) -> dict[str, Any]:
         """Exclude one passage from retrieval, or restore it, without touching the file.
 
-        Act only after the agent or user has reviewed the passage, and give an
-        exclusion its reason. The decision is enforced by the retrieval filter at
-        once and in every later generation, so no ingestion is needed to keep it
-        and a rebuild leaves the passage in the index. A `chunk_id` is derived
-        from content rather than permanent, so the answer reports whether this
-        generation still holds the passage the decision was made about.
+        Record a decision only after you or the user has reviewed the passage,
+        and give an exclusion its reason. The decision is enforced by the
+        retrieval filter at once and in every later generation, so no ingestion
+        is needed to keep it and a rebuild leaves the passage in the index. A
+        `chunk_id` is derived from content rather than permanent, so the answer
+        reports whether this generation still holds the passage the decision was
+        made about.
         """
 
         return _present(
@@ -609,15 +638,14 @@ def create_mcp(
     )
     async def set_source_metadata(
         source_path: SourcePath,
-        metadata: dict[str, Any],
+        metadata: MetadataReview,
     ) -> dict[str, Any]:
         """Save reviewed bibliographic metadata for one source.
 
-        Fields: title, authors, year, doi, language, categories, keywords, and
-        project. `language` takes ISO 639 codes, one per language the source is
-        written in, and a code BM25 has no stopword list for is accepted. An empty
-        review clears the entry, so automatic metadata applies again. The review
-        binds retrieval at read time, without re-ingesting.
+        The review binds retrieval at read time, without re-ingesting, and the
+        person may edit the same review file by hand instead. Save only what a
+        source or its original states: an invented title, author, year, or DOI
+        misleads every later answer.
         """
 
         return _present(

@@ -19,6 +19,12 @@ from research_rag.project.config import resolve_config
 from research_rag.runtime.app import ClientRegistry
 from research_rag.surfaces.ui import RESEARCH_UI_PROFILE, create_ui_app
 
+LOOPBACK_BASE_URL = "http://127.0.0.1"
+# The test transport reports itself as `testclient`, and its Host is
+# `testserver`; a real request arrives from a loopback peer addressed to a
+# loopback name, which is what the write guard requires.
+LOOPBACK_TEST_CLIENT = ("127.0.0.1", 50000)
+
 
 class FakeResearchService:
     def __init__(self) -> None:
@@ -218,7 +224,11 @@ class FakeResearchService:
 def _client(project: Path) -> tuple[TestClient, FakeResearchService]:
     config = resolve_config(project, vanilla_executable=sys.executable)
     fake = FakeResearchService()
-    return TestClient(create_ui_app(config, service=fake)), fake
+    return TestClient(
+        create_ui_app(config, service=fake),
+        base_url=LOOPBACK_BASE_URL,
+        client=LOOPBACK_TEST_CLIENT,
+    ), fake
 
 
 def test_the_workspace_serves_the_page_and_read_apis(project: Path) -> None:
@@ -545,9 +555,11 @@ def test_an_unserved_search_argument_never_reaches_the_service(
         "settings_write",
         "list_projects",
         "agent_entry",
+        "check_updates",
     }
     assert _OPERATION_ARGUMENTS["list_projects"] == frozenset()
     assert _OPERATION_ARGUMENTS["agent_entry"] == frozenset()
+    assert _OPERATION_ARGUMENTS["check_updates"] == frozenset()
 
 
 def test_an_unknown_operation_is_refused(project: Path) -> None:
@@ -592,7 +604,11 @@ def test_a_service_failure_becomes_a_safe_message(project: Path) -> None:
             raise RuntimeError("the corpus is on a slow disk")
 
     config = resolve_config(project, vanilla_executable=sys.executable)
-    with TestClient(create_ui_app(config, service=Failing())) as client:  # type: ignore[arg-type]
+    with TestClient(
+        create_ui_app(config, service=Failing()),
+        base_url=LOOPBACK_BASE_URL,
+        client=LOOPBACK_TEST_CLIENT,
+    ) as client:  # type: ignore[arg-type]
         response = client.get("/api/status")
 
     assert response.status_code == 400
@@ -616,7 +632,9 @@ def _client_client(project: Path, registry: ClientRegistry | None) -> TestClient
             config,
             service=FakeResearchService(),  # type: ignore[arg-type]
             clients=registry,
-        )
+        ),
+        base_url=LOOPBACK_BASE_URL,
+        client=LOOPBACK_TEST_CLIENT,
     )
 
 
@@ -689,7 +707,11 @@ def test_the_clients_panel_is_offered_because_the_app_is_a_server(
     project: Path,
 ) -> None:
     config = resolve_config(project, vanilla_executable=sys.executable)
-    with TestClient(create_ui_app(config, service=FakeResearchService())) as client:  # type: ignore[arg-type]
+    with TestClient(
+        create_ui_app(config, service=FakeResearchService()),
+        base_url=LOOPBACK_BASE_URL,
+        client=LOOPBACK_TEST_CLIENT,
+    ) as client:  # type: ignore[arg-type]
         profile = client.get("/api/ui").json()
     assert profile["capabilities"]["clients"] is True
     assert RESEARCH_UI_PROFILE.capabilities.clients is True
@@ -710,7 +732,11 @@ def test_the_workspace_hides_the_panel_when_no_registry_is_wired(
     project: Path,
 ) -> None:
     config = resolve_config(project, vanilla_executable=sys.executable)
-    with TestClient(create_ui_app(config, service=FakeResearchService())) as client:  # type: ignore[arg-type]
+    with TestClient(
+        create_ui_app(config, service=FakeResearchService()),
+        base_url=LOOPBACK_BASE_URL,
+        client=LOOPBACK_TEST_CLIENT,
+    ) as client:  # type: ignore[arg-type]
         assert client.get("/api/ui").json()["capabilities"]["clients"] is True
         assert client.get("/api/clients").status_code == 501
 

@@ -1,4 +1,4 @@
-# What this project is
+# `corpus`
 
 The corpus: what is on disk, how it is read, and what a file's text says about
 itself.
@@ -19,16 +19,15 @@ The split exists so that a module asking "is this text readable" imports
   each other. They never import `extraction`, `sources`, or anything from this
   package beyond those two.
 - `extraction.py` may not decide what a source is. That is `sources.py`'s.
-- `pymupdf.no_recommend_layout()` runs at import of `extraction.py`. This is
-  recorded in `TODO.md` as work to move, and it is why importing this folder's
-  extraction module has a cost.
+- `pymupdf.no_recommend_layout()` runs at import of `extraction.py`, which is why
+  importing this folder's extraction module has a cost. Nothing in this folder records
+  moving it.
 - The stored flags a chunk carries (`text_quality.CHUNK_FLAG_*`) and the token
   `extraction.py` writes into `quality_flags` are one contract:
   `EXTRACTION_ARTIFACT_TOKEN` is its name and lives in `text_quality.py`.
 
-## What lives elsewhere now
+## What lives elsewhere
 
-The code that decides whether a source is reviewed, included, or metadata-
-overridden moved to `../core/`, because it is a service operation and not part of
-reading a corpus. What builds a generation from what this folder reads lives in
-`../generations/`.
+Deciding whether a source is reviewed, included, or metadata-overridden is a service
+operation rather than part of reading a corpus, so it belongs to `../core/`. What
+builds a generation from what this folder reads lives in `../generations/`.

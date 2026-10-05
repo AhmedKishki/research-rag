@@ -24,7 +24,7 @@ from collections.abc import AsyncIterator, Mapping
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import uvicorn
 from starlette.applications import Starlette
@@ -32,12 +32,16 @@ from starlette.responses import JSONResponse
 from starlette.routing import Mount
 from starlette.types import Receive, Scope, Send
 
-from ..core.service import ResearchService
 from ..project.config import ConfigurationError, ResearchConfig
 from ..project.state_files import PID_FILE, PORT_FILE, TTY_FILE
 from ..project.state_files import process_alive as alive
 from ..project.state_files import recorded_pid as _recorded_pid
-from ..retrieval.ultrarag import LazyGateway, VanillaUltraRAG
+
+if TYPE_CHECKING:
+    # The engine is reached when the app serves, not when it is imported: a command
+    # that only reads this module's port and pid records has to work on a machine
+    # where the retrieval stack is absent.
+    from ..core.service import ResearchService
 
 LOGGER = logging.getLogger(__name__)
 
@@ -608,6 +612,22 @@ def _claim_loopback_port(host: str, port: int) -> socket.socket:
     return sock
 
 
+def _service_pair(config: ResearchConfig) -> tuple[Any, ResearchService]:
+    """The gateway and the service that speaks through it, built together.
+
+    The engine is imported here rather than at module scope so that importing this
+    module — to read a port record, name a pid, or claim a port — does not need the
+    retrieval stack. `AGENTS.md` holds the rule that a command which only reports
+    has to answer on a machine where the runtime is absent.
+    """
+
+    from ..core.service import ResearchService
+    from ..retrieval.ultrarag import LazyGateway, VanillaUltraRAG
+
+    gateway = LazyGateway(config)
+    return gateway, ResearchService(config, VanillaUltraRAG(gateway, config))
+
+
 class App:
     """The one running instance: a service, a port, and two HTTP surfaces.
 
@@ -623,8 +643,7 @@ class App:
         self.port = port
         self.error: str | None = None
         self.started_at: float | None = None
-        self.gateway = LazyGateway(config)
-        self.service = ResearchService(config, VanillaUltraRAG(self.gateway, config))
+        self.gateway, self.service = _service_pair(config)
         self.clients = ClientRegistry()
         self._server: uvicorn.Server | None = None
         self._task: asyncio.Task[None] | None = None
@@ -815,6 +834,12 @@ async def _security_headers(request: Any, call_next: Any) -> Any:
     the control API and the agent surface.
     """
 
+    from .write_guard import served_authority
+
+    if served_authority(request) is None:
+        return JSONResponse(
+            {"error": "Requests require a loopback Host"}, status_code=403
+        )
     response = await call_next(request)
     response.headers["X-Content-Type-Options"] = "nosniff"
     response.headers["Referrer-Policy"] = "no-referrer"

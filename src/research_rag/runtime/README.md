@@ -1,4 +1,4 @@
-# What this project is
+# `runtime`
 
 The running process, and the commands that manage it.
 
@@ -21,8 +21,8 @@ The running process, and the commands that manage it.
 - An app belongs to the terminal that started it. Nothing here starts one to answer
   a question, and `stop` asks an app to stop rather than killing it.
 - `app.py` and `control.py` import each other, and that cycle is load-bearing: the
-  routes need an `App`, and the `App` needs its routes. `TODO.md` holds the split
-  that would remove it.
+  routes need an `App`, and the `App` needs its routes. Nothing in this folder records
+  the split that would remove it.
 - A command that answers must work on a machine where the retrieval stack is
   absent. `import research_rag.runtime.update` is the test of it.
 - `process.py` is the only place a child process is run. A second `subprocess`

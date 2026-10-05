@@ -4,7 +4,7 @@ These tests hold the operations every surface calls: ingestion and its reuse dec
 
 - `test_service.py` — ingestion, selective reuse, bounded checkpointing, crash windows, activation, retrieval, filtering, reranking, pseudo-relevance feedback, source diversity, and generation selection, plus the `FakeUltraRAG` and `FakeDenseBackend` that two other folders import.
 - `test_review_state_edits.py` — the hand-edited review files, written to disk the way a person writes them: a hand edit applies at the next read with no re-ingestion, a service write leaves an entry edited by hand intact, and a wrong field, type, or path is refused by name rather than ignored.
-- `test_tool_views.py` — the lean projection an agent reads, asserted as the absence of every diagnostic key rather than the presence of the allowed ones, with the status verdict, its blocked answers, and its remedies checked per tool.
+- `test_tool_views.py` — bounded agent replies: follow-up identifiers, quote safeguards, actionable conditions, blocked answers and remedies, and the absence of irrelevant diagnostics.
 
 `test_review_state_edits.py` imports the two fakes from `test_service.py` and the PDF writer from `tests/conftest.py`. `tests/retrieval/test_chunk_exclusions.py` and `tests/retrieval/test_search_filters.py` import the same fakes from this folder, so those two files cannot be moved out of it without a change to those imports.
 
@@ -14,7 +14,7 @@ These tests hold the operations every surface calls: ingestion and its reuse dec
 .venv/bin/python -m pytest tests/core -q
 ```
 
-This is the right scope for a change to an operation, an answer shape, or a review file, because the workspace, the command line, and the agent surface all reach those through this service and none of them owns a copy.
+A change to an operation, an answer shape, or a review file belongs here, because the workspace, the command line, and the agent surface all reach those through this service and none of them owns a copy.
 
 ## What it mirrors
 

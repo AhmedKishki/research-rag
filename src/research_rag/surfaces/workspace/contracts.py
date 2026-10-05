@@ -72,6 +72,8 @@ class UICapabilities:
     # and a generator here would be a second place for a client's configuration
     # to be wrong.
     agent_entry: bool = False
+    # Release checking only; installation and approval remain in the terminal.
+    updates: bool = False
 
     def as_dict(self) -> dict[str, bool]:
         return asdict(self)
@@ -101,6 +103,7 @@ class UIProfile:
         "remains active unless the complete build succeeds."
     )
     ingest_busy_message: str = "Building the indexes. This can take several minutes…"
+    ingest_resume_note: str = ""
     footer_text: str = ""
     result_text_label: str = "Retrieved passage"
     copy_text_label: str = "Copy passage"

@@ -3,13 +3,18 @@
 from __future__ import annotations
 
 import json
+import os
+import subprocess
+import sys
+import time
 from pathlib import Path
 
 import pytest
+from filelock import FileLock
 
 import research_rag.project.registry as registry_module
 from research_rag.project import registry
-from research_rag.project.support import ResearchError
+from research_rag.project.policy import ResearchError
 
 
 @pytest.fixture
@@ -83,12 +88,156 @@ def test_the_record_is_written_whole_or_not_at_all(account: Path) -> None:
     registry.register("pid-one", "One", "/tmp/one")
 
     # The replacement is a rename over the old file, so a reader either sees the
-    # whole previous record or the whole new one, and no temporary file is left.
+    # whole previous record or the whole new one. The only other name in the
+    # account directory is the lock the write holds, and no temporary file is left.
     assert (
         json.loads(account.read_text(encoding="utf-8"))["projects"][0]["project_id"]
         == "pid-one"
     )
-    assert sorted(path.name for path in account.parent.iterdir()) == ["projects.json"]
+    assert sorted(path.name for path in account.parent.iterdir()) == [
+        "projects.json",
+        "projects.lock",
+    ]
+
+
+@pytest.fixture
+def throwaway_account(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    """A home whose account directory exists, plus a scratch file beside it."""
+
+    home = tmp_path / "home"
+    (home / "config" / "research-rag").mkdir(parents=True)
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(home / "config"))
+    monkeypatch.setenv("HOME", str(home))
+    return home
+
+
+_REGISTER_IN_A_CHILD = """
+import sys
+
+from research_rag.project import registry
+
+registry.register(sys.argv[1], sys.argv[1], "/tmp/" + sys.argv[1])
+print("registered", sys.argv[1], flush=True)
+"""
+
+
+def _child_env(home: Path) -> dict[str, str]:
+    """A child that reads and writes the same throwaway account directory."""
+
+    return {
+        "PATH": os.environ.get("PATH", "/usr/bin:/bin"),
+        "HOME": str(home),
+        "XDG_CONFIG_HOME": str(home / "config"),
+        "PYTHONPATH": str(Path(__file__).resolve().parents[2] / "src"),
+    }
+
+
+def test_a_write_waits_for_the_record_lock_held_by_another_process(
+    throwaway_account: Path,
+) -> None:
+    """A writer does not read-modify-write while another writer holds the record.
+
+    The property is not that the record survives a crash, which the rename already
+    gives. It is that a command registering a project while another is mid-write
+    waits instead of publishing a record built from a read taken before the other
+    writer committed, which would drop the other's entry.
+    """
+
+    account = throwaway_account / "config" / "research-rag" / "projects.json"
+    script = throwaway_account / "register_child.py"
+    script.write_text(_REGISTER_IN_A_CHILD, encoding="utf-8")
+
+    held = FileLock(registry.registry_lock_path(), timeout=1)
+    held.acquire()
+    try:
+        child = subprocess.Popen(
+            [sys.executable, str(script), "pid-child"],
+            env=_child_env(throwaway_account),
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+        try:
+            # Without the lock the child finishes here, on a read taken before this
+            # process writes anything.
+            time.sleep(1.5)
+            assert child.poll() is None, "the child wrote without waiting for the lock"
+        finally:
+            child.kill()
+            child.wait(timeout=30)
+    finally:
+        held.release()
+
+    assert not account.exists()
+    assert registry.load() == []
+
+
+def test_a_write_waits_and_then_publishes_what_it_read(
+    throwaway_account: Path,
+) -> None:
+    """A writer that waited for the lock keeps the entry the holder committed.
+
+    Waiting is only half the property. A writer that blocks on the lock and then
+    publishes a record built from a read taken before it was granted would still
+    drop the other writer's entry, so this asserts the surviving record holds
+    both, in the order the lock was granted.
+    """
+
+    script = throwaway_account / "register_child.py"
+    script.write_text(_REGISTER_IN_A_CHILD, encoding="utf-8")
+
+    registry.register("pid-parent", "Parent", "/tmp/parent")
+
+    held = FileLock(registry.registry_lock_path(), timeout=1)
+    held.acquire()
+    try:
+        child = subprocess.Popen(
+            [sys.executable, str(script), "pid-child"],
+            env=_child_env(throwaway_account),
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+        try:
+            time.sleep(1.5)
+            assert child.poll() is None, "the child wrote without waiting for the lock"
+        finally:
+            held.release()
+            assert child.wait(timeout=120) == 0, child.stderr.read()
+    except BaseException:
+        child.kill()
+        child.wait(timeout=30)
+        raise
+
+    assert [project.project_id for project in registry.load()] == [
+        "pid-parent",
+        "pid-child",
+    ]
+
+
+def test_records_written_by_many_processes_at_once_are_all_kept(
+    throwaway_account: Path,
+) -> None:
+    """Every command that registers a project leaves its entry in the record."""
+
+    script = throwaway_account / "register_child.py"
+    script.write_text(_REGISTER_IN_A_CHILD, encoding="utf-8")
+    children = [
+        subprocess.Popen(
+            [sys.executable, str(script), f"pid-{index}"],
+            env=_child_env(throwaway_account),
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+        for index in range(8)
+    ]
+    for child in children:
+        assert child.wait(timeout=120) == 0, child.stderr.read()
+
+    assert sorted(project.project_id for project in registry.load()) == sorted(
+        f"pid-{index}" for index in range(8)
+    )
 
 
 def test_a_damaged_record_is_reported_rather_than_guessed(account: Path) -> None:

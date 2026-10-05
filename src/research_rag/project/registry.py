@@ -10,8 +10,9 @@ report every project the installation serves at once.
 The record is a pointer: it holds each project's stable `project_id`, its
 recorded name, and its root, and every byte of state stays in the project it
 belongs to. It sits beside the account settings this app already reads, so one
-user has one directory for both. It is written atomically because two commands
-may register two projects at the same moment.
+user has one directory for both. It is written atomically, and every write that
+reads the record first holds a lock beside it, because a replace without one drops
+the entry another command registered in the same moment.
 
 `AGENTS.md` states the rules about the recorded name and the pointer file.
 """
@@ -21,19 +22,31 @@ from __future__ import annotations
 import json
 import os
 import tempfile
+from collections.abc import Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+from filelock import BaseFileLock, FileLock
+from filelock import Timeout as FileLockTimeout
+
+from .policy import ResearchError, _utc_now
 from .settings import USER_CONFIG_DIRECTORY
 from .state_files import PORTABLE_DIRECTORY
-from .support import ResearchError, _utc_now
 
 # The account-wide record, beside the settings that already live there. The name
 # is this app's own: the MCP server shares the directory but has no registry to
 # read.
 REGISTRY_FILE = "projects.json"
+
+# The lock a write holds. One command registers a project while another removes
+# one, and a replace is atomic while a read-then-replace is not: without this, the
+# later writer publishes a record that never saw the earlier writer's entry.
+REGISTRY_LOCK_FILE = "projects.lock"
+REGISTRY_LOCK_TIMEOUT_SECONDS = 20
+
 SCHEMA_VERSION = 1
 
 
@@ -41,6 +54,30 @@ def registry_path() -> Path:
     from platformdirs import user_config_path
 
     return user_config_path(USER_CONFIG_DIRECTORY) / REGISTRY_FILE
+
+
+def registry_lock_path() -> Path:
+    return registry_path().with_name(REGISTRY_LOCK_FILE)
+
+
+@contextmanager
+def _held_lock() -> Iterator[BaseFileLock]:
+    """Hold the record's lock for the length of one read-modify-write."""
+
+    path = registry_lock_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    handle = FileLock(path, timeout=REGISTRY_LOCK_TIMEOUT_SECONDS)
+    try:
+        handle.acquire()
+    except FileLockTimeout as exc:
+        raise ResearchError(
+            "Another research command is writing the project record. Nothing was "
+            "written. Run it again once it finishes."
+        ) from exc
+    try:
+        yield handle
+    finally:
+        handle.release()
 
 
 @dataclass(frozen=True, slots=True)
@@ -154,8 +191,6 @@ def register(
     followed to where it went.
     """
 
-    path = registry_path()
-    document = _read(path)
     root = str(Path(project_root).expanduser().resolve())
     entry = RegisteredProject(
         project_id=project_id,
@@ -163,34 +198,38 @@ def register(
         project_root=Path(root),
         registered_at=_utc_now(),
     )
-    kept = [
-        item
-        for item in document.get("projects") or []
-        if isinstance(item, dict)
-        and item.get("project_root") != root
-        and item.get("project_id") != project_id
-    ]
-    document["schema_version"] = SCHEMA_VERSION
-    document["projects"] = [*kept, entry.as_record()]
-    _write(path, document)
+    with _held_lock():
+        path = registry_path()
+        document = _read(path)
+        kept = [
+            item
+            for item in document.get("projects") or []
+            if isinstance(item, dict)
+            and item.get("project_root") != root
+            and item.get("project_id") != project_id
+        ]
+        document["schema_version"] = SCHEMA_VERSION
+        document["projects"] = [*kept, entry.as_record()]
+        _write(path, document)
     return entry
 
 
 def forget(project_id: str) -> bool:
-    path = registry_path()
-    document = _read(path)
-    projects = document.get("projects") or []
-    kept = [
-        item
-        for item in projects
-        if not (isinstance(item, dict) and item.get("project_id") == project_id)
-    ]
-    if len(kept) == len(projects):
-        return False
-    document["schema_version"] = SCHEMA_VERSION
-    document["projects"] = kept
-    _write(path, document)
-    return True
+    root = registry_path()
+    with _held_lock():
+        document = _read(root)
+        projects = document.get("projects") or []
+        kept = [
+            item
+            for item in projects
+            if not (isinstance(item, dict) and item.get("project_id") == project_id)
+        ]
+        if len(kept) == len(projects):
+            return False
+        document["schema_version"] = SCHEMA_VERSION
+        document["projects"] = kept
+        _write(root, document)
+        return True
 
 
 def matches(query: str) -> list[RegisteredProject]:
@@ -386,6 +425,8 @@ def account_projects() -> dict[str, Any]:
 
 __all__ = [
     "REGISTRY_FILE",
+    "REGISTRY_LOCK_FILE",
+    "REGISTRY_LOCK_TIMEOUT_SECONDS",
     "SCHEMA_VERSION",
     "RegisteredProject",
     "account_projects",
@@ -397,6 +438,7 @@ __all__ = [
     "project_app_state",
     "register",
     "registered_at_label",
+    "registry_lock_path",
     "registry_path",
     "resolve",
 ]

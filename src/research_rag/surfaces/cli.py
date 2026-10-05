@@ -35,10 +35,16 @@ from contextlib import (
 )
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Self
+from typing import TYPE_CHECKING, Any, Self
 
-from ..core.service import ResearchService
-from ..core.tool_views import lean_status
+if TYPE_CHECKING:
+    # The service is reached when a command needs a corpus operation. A command
+    # that only reports -- `--version`, `help`, `config`, `doctor`, `install`, and
+    # `update` -- must not import the retrieval stack to get there, which is the
+    # rule `AGENTS.md` states.
+    from ..core.service import ResearchService
+    from ..runtime.release import PublishedRelease
+
 from ..project.config import (
     CLI_COMMAND,
     DEFAULT_UI_PORT,
@@ -49,6 +55,7 @@ from ..project.config import (
     project_command,
     resolve_config,
 )
+from ..project.policy import DEFAULT_RETRIEVAL_METHOD, RETRIEVAL_METHODS, ResearchError
 from ..project.registry import (
     account_projects,
     detached_from_terminal,
@@ -61,9 +68,8 @@ from ..project.settings import SETTINGS
 from ..project.settings_document import describe_costs, describe_docs
 from ..project.settings_layers import describe_settings
 from ..project.state_files import process_alive as alive
-from ..project.support import DEFAULT_RETRIEVAL_METHOD, RETRIEVAL_METHODS, ResearchError
 from ..retrieval.rerankers import RERANKER_MODEL_CHOICES
-from ..retrieval.ultrarag import LazyGateway, VanillaUltraRAG
+from ..runtime import ownership
 from ..runtime import process as process_module
 from ..runtime.app import (
     UI_HOST,
@@ -74,7 +80,6 @@ from ..runtime.app import (
     running_url,
 )
 from ..runtime.control import Control, ControlError, connect
-from . import bridge
 
 CLI_NAME = CLI_COMMAND
 DEFAULT_DEPTH = 10
@@ -83,6 +88,12 @@ DEFAULT_DEPTH = 10
 # reason: a client that offers only an environment block still has to name a
 # project.
 PROJECT_NAME_ENV = "RESEARCH_RAG_PROJECT_NAME"
+# The three variables the global options read, named once because `--help` states
+# where each default comes from and a literal typed twice is one typo away from
+# being wrong in one place only.
+PROJECT_ROOT_ENV = "RESEARCH_RAG_PROJECT_ROOT"
+PROJECT_ENV = "RESEARCH_RAG_PROJECT"
+CONFIG_ENV = "RESEARCH_RAG_CONFIG"
 # How far above the default port an attached app looks for a free one. A port a
 # reader named is never moved, so a named port that is taken fails and says so
 # rather than being served somewhere they did not ask for.
@@ -97,7 +108,6 @@ VERSION_CONTROL_NOTES = (".research-rag/runtime/",)
 # this app was seeded from is deliberately absent: during the migration both
 # products can serve one project, and stopping this app's workspace must not stop
 # a server a user started on purpose.
-SERVICE_MARKERS = ("research_rag", "research-rag")
 STOP_GRACE_SECONDS = 5.0
 
 # The menu `research-rag help` prints. argparse prints a usage block and a
@@ -200,7 +210,7 @@ HELP_GROUPS: tuple[tuple[str, tuple[tuple[str, str], ...]], ...] = (
         (
             (
                 "start",
-                "Bring the app up and report where it is. `ui` also opens a browser.",
+                "Bring the app up and report where it is. --start-ui opens a browser.",
             ),
             (
                 "projects",
@@ -227,8 +237,8 @@ HELP_GROUPS: tuple[tuple[str, tuple[tuple[str, str], ...]], ...] = (
                 "mcp",
                 (
                     "The agent surface on stdio for one project, named with "
-                    "--project-name and proxied to that project's app. `help agents` "
-                    "has the client entry."
+                    "--project-name and proxied to that project's app. It starts "
+                    "no app of its own. `help agents` has the client entry."
                 ),
             ),
             (
@@ -257,7 +267,10 @@ HELP_GROUPS: tuple[tuple[str, tuple[tuple[str, str], ...]], ...] = (
                     "Compare this installation with the latest published release, "
                     "and with --apply move to it: stop every app, put the release "
                     "in place, and print the command that starts each app again. "
-                    "The branch head is reported beside the release answer."
+                    "It previews the changelog that release was published with and "
+                    "installs only on yes, with no as the answer; --yes is for an "
+                    "unattended run. The branch head is reported beside the "
+                    "release answer."
                 ),
             ),
         ),
@@ -282,6 +295,11 @@ settings rather than a per-search choice. The agent surface has neither, nor any
 method, depth, or reranking argument: it is always hybrid, always reranked, and
 its depth is a setting. A method chosen per call is a number a reader cannot
 reproduce from the answer they were given.
+
+A filter is applied after the corpus is ranked, so an empty answer with a filter
+on means nothing the ranking reached matches it, not that no source carries it.
+A filter naming one source can therefore find nothing when that source ranks
+below the window the answer reports.
 """,
     "settings": """\
 A project's settings resolve in four layers, each overriding the one above it, and
@@ -319,7 +337,9 @@ changed in.
     "agents": """\
 The app serves MCP at /mcp on its own port, so a client that can open a socket
 needs only the URL. A client that speaks only stdio uses `research-rag mcp
---project-name NAME`, which brings that project's app up and proxies to it.
+--project-name NAME`, which proxies to that project's app while it is up and
+starts nothing itself: an app belongs to a terminal, so an agent that arrives
+when none is serving its project is told which command to run.
 
 The entry names a project, never a directory, so one entry written on one machine
 works on every machine where that project was initialised. The directory is a fact
@@ -358,10 +378,59 @@ the agent reaches with get_passage.
 """,
 }
 
+# `--help` lists the commands flat and `help` lists them grouped, so the same
+# command would be described twice and the two could disagree. The menu is the
+# canonical text and this takes its first sentence for the flat list, so a
+# command added to the parser must reach the menu and nothing else. `help` is
+# absent from the menu because a group cannot list the menu it is the contents
+# of, so its one line is written here.
+_HELP_SUMMARIES: dict[str, str] = {
+    name: description.partition(". ")[0].rstrip(".") + "."
+    for _, entries in HELP_GROUPS
+    for name, description in entries
+}
+_HELP_SUMMARIES["help"] = (
+    "Print the menu, or one page of it: a subject, or a command's own usage."
+)
+
+# The lines `--help` shows, in the order a first call needs them. Every one keeps
+# a global option in front of the command name, because an option after it is
+# read as that command's own, and every path and query is quoted because a
+# project directory and a research question both carry spaces. Each line here is
+# parsed by `test_the_examples_in_the_help_parse_as_they_are_written`, so an
+# example cannot drift from the parser it documents.
+HELP_EXAMPLES = """\
+A first project, in four commands:
+
+  research-rag --project-root "/path/to/My Project" init --name "My project"
+  research-rag --project-root "/path/to/My Project" ingest
+  research-rag --project-root "/path/to/My Project" search "what does it say?"
+  research-rag --project-root "/path/to/My Project" --start-ui start
+
+Copy the PDFs and EPUBs into "/path/to/My Project/sources" before `ingest`, and
+keep the terminal open while `start` is serving it.
+
+A project this installation already registered, named instead of its path:
+
+  research-rag --project "My project" search "what does it say?"
+
+The whole menu, one subject, and one command's own options:
+
+  research-rag help
+  research-rag help {topic}
+  research-rag search --help
+
+Every global option goes before the command name, and `--project` and
+`--project-root` both name the project, so passing one is refused.
+"""
+
 
 @asynccontextmanager
 async def _service(config: ResearchConfig) -> AsyncIterator[ResearchService]:
     """Yield the service over a gateway that opens only if it is spoken to."""
+
+    from ..core.service import ResearchService
+    from ..retrieval.ultrarag import LazyGateway, VanillaUltraRAG
 
     gateway = LazyGateway(config)
     try:
@@ -373,24 +442,70 @@ async def _service(config: ResearchConfig) -> AsyncIterator[ResearchService]:
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog=CLI_NAME,
+        # Raw text, because the orientation and the examples below are written as
+        # paragraphs and as a list, and the wrapping formatter would fold both into
+        # one paragraph. Argument help is still wrapped: only a description and an
+        # epilog are read raw.
+        formatter_class=argparse.RawDescriptionHelpFormatter,
         description=(
-            "Review evidence from a project's PDF and EPUB corpus, in a "
-            "terminal or in a browser."
+            "Review evidence from a project's PDF and EPUB corpus, in a terminal, "
+            "in a browser, or through an agent.\n"
+            "\n"
+            "One project is one app, one index, and one set of review decisions. "
+            "This command line, the browser workspace, and an agent's tools are "
+            "three ways into that one process, so they read one corpus and cannot "
+            "disagree about it.\n"
+            "\n"
+            "`init` gives a directory its project record, `ingest` builds the "
+            "searchable generation from the PDFs and EPUBs in its sources "
+            "directory, and `search` or `start` reads what was built. An answer "
+            "carries the passage, where it sits, and the original to open beside "
+            "it; the conclusion is yours."
         ),
-        epilog=(
-            f"`{CLI_NAME} help` prints the same commands grouped by the work, "
-            f"and `{CLI_NAME} help TOPIC` explains a subject."
-        ),
+        epilog=HELP_EXAMPLES.format(topic=min(HELP_TOPICS)),
     )
-    parser.add_argument(
+    project = parser.add_argument_group(
+        "Choosing a project",
+        "One project is named once per command, and these are the two ways.",
+    )
+    project.add_argument(
         # None rather than "." so a call naming a registered project has not also
         # named a path. An absent value means the current directory, resolved
         # where it is used.
         "--project-root",
-        default=os.environ.get("RESEARCH_RAG_PROJECT_ROOT"),
-        help="Project root holding .research-rag (default: the current directory).",
+        dest="project_root",
+        metavar="DIR",
+        default=os.environ.get(PROJECT_ROOT_ENV),
+        help=(
+            "Directory holding this project's `.research-rag`, which `init` "
+            "creates. Default: the current directory. Refused together with "
+            f"`--project`, and its value is read from {PROJECT_ROOT_ENV} in the "
+            "environment."
+        ),
     )
-    parser.add_argument(
+    project.add_argument(
+        "--project",
+        metavar="NAME",
+        default=os.environ.get(PROJECT_ENV),
+        help=(
+            "Name or id this installation registered, in place of "
+            f"`--project-root DIR`. `{CLI_NAME} projects` lists them. Refused "
+            f"together with `--project-root`, and its value is read from "
+            f"{PROJECT_ENV} in the environment."
+        ),
+    )
+    project.add_argument(
+        "--runtime-root",
+        metavar="DIR",
+        default=os.environ.get("RESEARCH_RAG_RUNTIME_ROOT"),
+        help=(
+            "Absolute directory for derived state, when the project itself is on "
+            "slow storage. Default: `.research-rag/runtime` inside the project. "
+            "Only derived state moves; the corpus and the review decisions stay."
+        ),
+    )
+    serving = parser.add_argument_group("Serving")
+    serving.add_argument(
         "--start-ui",
         dest="start_ui",
         action="store_true",
@@ -399,65 +514,69 @@ def _parser() -> argparse.ArgumentParser:
             "opens one by itself, so a browser appears only when this is passed."
         ),
     )
-    parser.add_argument(
-        "--version",
-        action="store_true",
-        help=(
-            "Print this app's version, the installed one, the shared workspace's, "
-            "and whether a restart is required. Needs no project."
-        ),
+    models = parser.add_argument_group(
+        "Models and retrieval",
+        "A new generation is built with these. A search reads the generation\n"
+        "that is already built.",
     )
-    parser.add_argument(
-        "--project",
-        default=os.environ.get("RESEARCH_RAG_PROJECT"),
-        help=(
-            "Name or id of a project this installation registered, in place of "
-            "--project-root. `research-rag projects` lists them."
-        ),
-    )
-    parser.add_argument(
-        "--runtime-root",
-        default=os.environ.get("RESEARCH_RAG_RUNTIME_ROOT"),
-        help=(
-            "Absolute directory for derived state, when the project itself is on "
-            "slow storage. Omit to keep it under .research-rag."
-        ),
-    )
-    parser.add_argument(
+    models.add_argument(
         "--model-cache-root",
+        metavar="DIR",
         default=None,
-        help="Shared model cache (default: the user cache for this application).",
+        help=(
+            "Directory the pinned models are cached in, shared by every project. "
+            "Default: the `research-rag` directory in this account's cache, under "
+            "`models`."
+        ),
     )
-    parser.add_argument(
+    models.add_argument(
         "--offline",
         action="store_true",
         default=None,
-        help="Require the vanilla runtime and every model to be cached already.",
+        help=(
+            "Refuse the network and require the pinned runtime and every model to "
+            "be cached already. `doctor --prefetch-models` caches them."
+        ),
     )
-    parser.add_argument(
+    models.add_argument(
         "--embedding-threads",
+        metavar="COUNT",
         type=int,
         default=None,
         help="ONNX Runtime threads for the embedding model; unset lets the runtime decide.",
     )
-    parser.add_argument(
+    models.add_argument(
         "--dense-backend",
         choices=("auto", "exact", "qdrant"),
         default=None,
         help="Dense index backend for a new generation (default: auto).",
     )
-    parser.add_argument(
+    models.add_argument(
         "--reranker-model",
+        metavar="MODEL",
         choices=RERANKER_MODEL_CHOICES,
         default=None,
-        help="Cross-encoder the engine loads for a reranked search.",
+        help=(
+            "Cross-encoder the engine loads for a reranked search. Default: the "
+            "one this project's settings name. The pinned models are: "
+            f"{', '.join(RERANKER_MODEL_CHOICES)}."
+        ),
     )
-    parser.add_argument(
+    layers = parser.add_argument_group(
+        "Settings for this command",
+        "Both are recorded nowhere: they last exactly as long as this command.",
+    )
+    layers.add_argument(
         "--config",
-        default=os.environ.get("RESEARCH_RAG_CONFIG"),
-        help="Extra settings file, layered above the per-user and project files.",
+        metavar="PATH",
+        default=os.environ.get(CONFIG_ENV),
+        help=(
+            "Extra settings file, layered above the per-user and project files. "
+            f"Read from {CONFIG_ENV} in the environment. `help settings` names "
+            "every layer and what a change costs."
+        ),
     )
-    parser.add_argument(
+    layers.add_argument(
         "--set",
         dest="set_overrides",
         action="append",
@@ -469,48 +588,85 @@ def _parser() -> argparse.ArgumentParser:
             "resolves settings in this process."
         ),
     )
+    installation = parser.add_argument_group("This installation")
+    installation.add_argument(
+        "--version",
+        action="store_true",
+        help=(
+            "Print this app's version, the installed one, the shared workspace's, "
+            "and whether a restart is required. Needs no project."
+        ),
+    )
     # Not `required=True`, because `--version` is an answer of its own and asks
     # for no command. A call with neither prints the same refusal argparse would.
-    commands = parser.add_subparsers(dest="command", metavar="COMMAND")
+    commands = parser.add_subparsers(
+        dest="command",
+        metavar="COMMAND",
+        title="Commands",
+        description=(
+            "The menu `research-rag help` prints groups these by the work they do."
+        ),
+    )
 
-    create = commands.add_parser(
+    def add(name: str, **kwargs: Any) -> argparse.ArgumentParser:
+        """Add one subcommand whose `--help` line is its menu entry's first sentence."""
+
+        return commands.add_parser(name, help=_HELP_SUMMARIES[name], **kwargs)
+
+    create = add(
         "init",
-        help="Create a project, or add .research-rag to a directory you already have.",
+        description=(
+            "Give a directory its project record. This creates `.research-rag`, "
+            "creates the source directory, and records the project in this "
+            "installation's register, so `--project NAME` can name it later. It "
+            "never overwrites a file it did not write, and running it on an "
+            "existing project reports that project again rather than resetting it."
+        ),
     )
     create.add_argument(
         "--name",
+        metavar="NAME",
         default=None,
         help=(
             "Name to record for this project. An existing project is renamed only "
-            "when this is given; the stable project id never changes."
+            "when this is given; the stable project id never changes. An agent's "
+            "client entry carries this name, so choose one that will mean the same "
+            "thing on every machine."
         ),
     )
     create.add_argument(
         "--sources",
+        metavar="DIR",
         default=None,
-        help="Project-relative source directory to create (default: sources).",
+        help=(
+            "Project-relative directory to create for the originals. Default: "
+            "`sources`. An existing project keeps the directory it recorded and "
+            "refuses a different one."
+        ),
     )
 
-    commands.add_parser(
+    add(
         "projects",
-        help=(
-            "List every project this installation registered, and whether its app "
-            "is up."
+        description=(
+            "List every project this installation registered, with each one's "
+            "directory and whether its app is up. This needs no project, because "
+            "it is the command that finds them."
         ),
     )
     # A command name is a valid topic, so the choices are every registered
     # command beside the subject pages. They come from the menu rather than
     # being typed out, so a command added to the parser and the menu is one
     # change, and the drift test below notices one added to neither.
-    help_command = commands.add_parser(
+    help_command = add(
         "help",
-        help=(
-            "Print the menu, or one page of it: a subject, or a command's own "
-            "usage. Needs no project."
+        description=(
+            "Print the whole menu, one subject page, or one command's own usage. "
+            "Every form works before you have a project."
         ),
     )
     help_command.add_argument(
         "topic",
+        metavar="TOPIC",
         nargs="?",
         choices=sorted(
             set(HELP_TOPICS)
@@ -522,8 +678,13 @@ def _parser() -> argparse.ArgumentParser:
         ),
     )
 
-    status = commands.add_parser(
-        "status", help="Report readiness and what changed since the generation."
+    status = add(
+        "status",
+        description=(
+            "Answer whether this project's corpus is ready, is current, and what "
+            "changed since the generation search reads. Without `--verbose` this "
+            "is the same bounded answer an agent gets."
+        ),
     )
     status.add_argument(
         "--verbose",
@@ -535,84 +696,157 @@ def _parser() -> argparse.ArgumentParser:
         ),
     )
 
-    refresh = commands.add_parser(
-        "ingest", help="Build or refresh the searchable generation."
+    refresh = add(
+        "ingest",
+        description=(
+            "Build the searchable generation from the PDFs and EPUBs in the "
+            "source directory: extract, chunk, embed, and index them. A build that "
+            "fails or is cancelled leaves the generation search reads in place, "
+            "and calling this again resumes the checkpoint."
+        ),
     )
     refresh.add_argument(
         "--force-recompute",
         action="store_true",
-        help="Rebuild every document, chunk, and vector instead of reusing compatible ones.",
+        help=(
+            "Rebuild every document, chunk, and vector instead of reusing the "
+            "compatible ones, and write a new generation beside them."
+        ),
     )
 
-    find = commands.add_parser(
-        "search", help="Retrieve evidence passages for a question."
+    find = add(
+        "search",
+        description=(
+            "Answer a question with evidence passages from the selected "
+            "generation. Every search is hybrid and reranked. A passage carries "
+            "the source path, where it sits in the original, and its cleaned "
+            "text, which is never a transcript: open the original for a "
+            "quotation. `help filters` names the filter layers."
+        ),
     )
     find.add_argument(
-        "query", help="Research question, exact phrase, name, or concept."
+        "query",
+        metavar="QUERY",
+        help=(
+            "Research question, exact phrase, name, or concept. Quote it when it "
+            "carries spaces."
+        ),
     )
     find.add_argument(
         "--top-k",
+        metavar="COUNT",
         type=int,
         default=DEFAULT_DEPTH,
-        help=f"Maximum ranked passages to return (default: {DEFAULT_DEPTH}).",
+        help=(
+            f"Maximum ranked passages to return, 1 to 50 (default: {DEFAULT_DEPTH}). "
+            "A filter is applied after the ranking, so a filtered answer is often "
+            "shorter than this."
+        ),
     )
     find.add_argument(
         "--method",
         choices=sorted(RETRIEVAL_METHODS),
         default=DEFAULT_RETRIEVAL_METHOD,
-        help="Retrieval half to rank with (default: hybrid, the tool's method).",
+        help=(
+            "Retrieval half to rank with (default: hybrid, what every reader and "
+            "every agent gets). This exists to reproduce a retrieval comparison; "
+            "no reader-facing surface offers the choice."
+        ),
     )
     find.add_argument(
         "--no-rerank",
         action="store_true",
-        help="Skip the cross-encoder, which is on by default and is what search costs.",
+        help=(
+            "Skip the cross-encoder, which is on by default and is what a search "
+            "costs. Diagnostic, like --method."
+        ),
     )
-    find.add_argument(
+    filters = find.add_argument_group(
+        "Filters",
+        "Each is repeatable, each reads the reviewed metadata at query time, and\n"
+        "none is applied when given nothing. A filter decides what the answer\n"
+        "may contain; it does not change the ranking.",
+    )
+    filters.add_argument(
         "--category",
+        metavar="CATEGORY",
         action="append",
         help="Keep results carrying any of these categories.",
     )
-    find.add_argument(
+    filters.add_argument(
         "--project",
+        metavar="TAG",
         action="append",
-        help="Keep results carrying any of these project tags.",
+        help=(
+            "Keep results carrying any of these project tags from the reviewed "
+            "metadata. This filters the answer; the global --project chose which "
+            "project to search."
+        ),
     )
-    find.add_argument(
+    filters.add_argument(
         "--keyword",
+        metavar="KEYWORD",
         action="append",
         help="Keep results carrying every one of these keywords.",
     )
-    find.add_argument(
+    filters.add_argument(
         "--language",
+        metavar="CODE",
         action="append",
         help="Keep results written in any of these ISO 639 codes.",
     )
-    find.add_argument(
+    filters.add_argument(
         "--author",
+        metavar="NAME",
         action="append",
-        help="Keep results whose source has one of these names among its authors.",
+        help=(
+            "Keep results whose source has one of these names among its authors, "
+            "matched as a case-insensitive substring."
+        ),
     )
-    find.add_argument(
+    filters.add_argument(
         "--title",
+        metavar="PHRASE",
         action="append",
-        help="Keep results whose source title contains one of these phrases.",
+        help=(
+            "Keep results whose source title contains one of these phrases, "
+            "matched as a case-insensitive substring."
+        ),
     )
-    find.add_argument(
-        "--source-id", action="append", help="Search only these stable source ids."
+    filters.add_argument(
+        "--source-id",
+        metavar="SOURCE_ID",
+        action="append",
+        help=(
+            "Search only these stable source ids, as `sources` reports them. "
+            "Repeatable."
+        ),
     )
-    find.add_argument(
+    filters.add_argument(
         "--exclude-source-id",
+        metavar="SOURCE_ID",
         action="append",
-        help="Search everything except these source ids.",
+        help="Search everything except these stable source ids. Repeatable.",
     )
 
-    commands.add_parser(
-        "sources", help="List the project's sources and their review state."
+    add(
+        "sources",
+        description=(
+            "List this project's source files: which are indexed, which are not "
+            "indexed and why, what each one's reviewed metadata says, and what has "
+            "been decided about it. This is the inventory the workspace's Sources "
+            "view reads, and it is not on the agent surface."
+        ),
     )
 
-    generations = commands.add_parser(
+    generations = add(
         "generations",
-        help="List the retained generations, or search one instead of the current one.",
+        description=(
+            "List the generations on disk with their size, and which one search "
+            "reads. A rebuild writes a new one and switches to it only when every "
+            "index is complete, so the earlier ones stay here to be searched "
+            "instead or to be removed."
+        ),
     )
     generations.add_argument(
         "--use",
@@ -620,16 +854,23 @@ def _parser() -> argparse.ArgumentParser:
         metavar="GENERATION_ID",
         help=(
             "Point the project at this retained generation, after validating its "
-            "artifacts and both indexes. Search reads it from the next call."
+            "artifacts and both indexes. Search reads it from the next call. One "
+            "id is enough here; `remove-generation` asks for it twice."
         ),
     )
 
-    remove = commands.add_parser(
+    remove = add(
         "remove-generation",
-        help="Delete a retained generation that is not the one search reads.",
+        description=(
+            "Delete a retained generation that search is not reading. Removal is "
+            "permanent: the space comes back only from a rebuild. A generation "
+            "search reads, and one pending activation, are both refused."
+        ),
     )
     remove.add_argument(
-        "generation_id", metavar="GENERATION_ID", help="The directory name to remove."
+        "generation_id",
+        metavar="GENERATION_ID",
+        help="The directory name to remove, as `generations` reports it.",
     )
     remove.add_argument(
         "--confirm",
@@ -641,89 +882,200 @@ def _parser() -> argparse.ArgumentParser:
         ),
     )
 
-    context = commands.add_parser(
-        "passage", help="Read one passage and its immediate neighbours."
+    context = add(
+        "passage",
+        description=(
+            "Read one passage and the passages around it, from the selected "
+            "generation. Use it to read around a search hit, and to reach a "
+            "neighbouring passage's own text before asking about it."
+        ),
     )
-    context.add_argument("chunk_id", help="Exact chunk id from a search result.")
+    context.add_argument(
+        "chunk_id",
+        metavar="CHUNK_ID",
+        help=(
+            "Exact chunk id from a search result. A chunk id belongs to the "
+            "generation that returned it, so a rebuild can replace it."
+        ),
+    )
     context.add_argument(
         "--context-chunks",
+        metavar="COUNT",
         type=int,
         default=1,
-        help="Neighbours to include on each side (0-5, default: 1).",
+        help=(
+            "Neighbours to include on each side, 0 to 5 (default: 1). 0 returns "
+            "the passage alone."
+        ),
     )
 
     for verb, reason_required in (("include", False), ("exclude", True)):
-        change = commands.add_parser(
+        # Two sentences shared by both verbs, so the difference is the decision
+        # and nothing else: `include` puts a decision back, `exclude` records it.
+        shared = (
+            "The file is never edited: the decision is recorded beside it, every "
+            "surface applies it at once, and it holds for the generation on "
+            "screen and for every one built after it."
+        )
+        change = add(
             verb,
-            help=(
-                f"{verb.capitalize()} one source or one passage in retrieval "
-                "without touching the file."
-            ),
+            description=(
+                "Take one source, or one passage, out of retrieval."
+                if verb == "exclude"
+                else "Put an excluded source or passage back into retrieval."
+            )
+            + f" {shared}",
         )
         change.add_argument(
             "source",
+            metavar="SOURCE",
             nargs="?",
-            help="Source path relative to the source directory.",
+            help=(
+                "Source path relative to the source directory, exactly as "
+                "`sources` reports it. Quote it when it carries spaces. Omit it "
+                "to name the source with --source-id."
+            ),
         )
         change.add_argument(
-            "--source-id", help="The stable source id, instead of a path."
+            "--source-id",
+            metavar="SOURCE_ID",
+            help=(
+                "The stable source id, instead of a path. It survives replacing "
+                "the file's bytes, where a path changes when the file is renamed."
+            ),
         )
         change.add_argument(
             "--chunk",
             metavar="CHUNK_ID",
-            help="The chunk id of one passage, instead of a whole source.",
+            help=(
+                "The chunk id of one passage, instead of a whole source. It "
+                "cannot be combined with a path or --source-id."
+            ),
         )
         change.add_argument(
             "--reason",
+            metavar="TEXT",
             required=reason_required,
             help=(
-                "Why the decision was made."
+                "Why the decision was made. Required to exclude, optional to "
+                "include, and recorded in the file that holds the decision."
                 if reason_required
-                else "Why the decision was made, when it is worth recording."
+                else "Why the decision was made, when it is worth recording. Recorded "
+                "in the file that holds the decision."
             ),
         )
 
-    review = commands.add_parser(
+    review = add(
         "metadata",
-        help="Save reviewed bibliographic metadata for one source.",
+        description=(
+            "Record the bibliography a person checked for one source. The review "
+            "applies at the next read, so no ingestion is needed, and it survives "
+            "a rebuild.\n"
+            "\n"
+            "The saved review replaces this source's whole entry, so name every "
+            "field you want kept: a field left out stops being reviewed and the "
+            "automatic value applies again. An empty string, or an empty repeated "
+            "list, drops that field on purpose."
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     review.add_argument(
-        "source", nargs="?", help="Source path relative to the source directory."
-    )
-    review.add_argument("--source-id", help="The stable source id, instead of a path.")
-    review.add_argument("--title", help="Reviewed title.")
-    review.add_argument(
-        "--author", action="append", help="An author, in the order to list them."
-    )
-    review.add_argument("--year", type=int, help="Reviewed year of publication.")
-    review.add_argument("--doi", help="Reviewed DOI.")
-    review.add_argument(
-        "--category", action="append", help="A category the work belongs to."
+        "source",
+        metavar="SOURCE",
+        nargs="?",
+        help=(
+            "Source path relative to the source directory, exactly as `sources` "
+            "reports it. Quote it when it carries spaces. Omit it to name the "
+            "source with --source-id."
+        ),
     )
     review.add_argument(
-        "--keyword", action="append", help="A keyword the work carries."
+        "--source-id",
+        metavar="SOURCE_ID",
+        help=(
+            "The stable source id, instead of a path. It survives replacing the "
+            "file's bytes, where a path changes when the file is renamed."
+        ),
     )
-    review.add_argument(
-        "--language",
+    reviewed = review.add_argument_group("Reviewed fields")
+    reviewed.add_argument(
+        "--title", metavar="TEXT", help="Reviewed title. An empty string drops it."
+    )
+    reviewed.add_argument(
+        "--author",
+        metavar="NAME",
         action="append",
-        help="A language the work is written in, as an ISO 639 code.",
+        help=(
+            "An author, in the order to list them. Repeatable; blanks and repeats "
+            "are dropped, so an empty one drops the whole list."
+        ),
     )
-    review.add_argument("--project", help="The project tag to file the work under.")
-    review.add_argument(
+    reviewed.add_argument(
+        "--year",
+        metavar="YEAR",
+        type=int,
+        help="Reviewed year of publication, 1 to 9999.",
+    )
+    reviewed.add_argument(
+        "--doi", metavar="TEXT", help="Reviewed DOI. An empty string drops it."
+    )
+    reviewed.add_argument(
+        "--category",
+        metavar="CATEGORY",
+        action="append",
+        help=(
+            "A category the work belongs to, and a layer `--category` filters on. "
+            "Repeatable."
+        ),
+    )
+    reviewed.add_argument(
+        "--keyword",
+        metavar="KEYWORD",
+        action="append",
+        help=(
+            "A keyword the work carries, and a layer `--keyword` filters on. "
+            "Repeatable."
+        ),
+    )
+    reviewed.add_argument(
+        "--language",
+        metavar="CODE",
+        action="append",
+        help=(
+            "A language the work is written in, as a lowercase ISO 639 code, and "
+            "a layer `--language` filters on. Repeatable."
+        ),
+    )
+    reviewed.add_argument(
+        "--project",
+        metavar="TAG",
+        help="The project tag to file the work under, and a layer --project filters on.",
+    )
+    reviewed.add_argument(
         "--clear",
         action="store_true",
-        help="Remove the review instead, so automatic metadata applies again.",
-    )
-
-    commands.add_parser(
-        "config", help="Print the merged settings and where each value came from."
-    )
-
-    examine = commands.add_parser(
-        "doctor",
         help=(
-            "Report what is wrong with this installation: one line per "
-            "dependency, with the command that fixes it."
+            "Remove the review instead, so automatic metadata applies again. It "
+            "cannot be combined with a field."
+        ),
+    )
+
+    add(
+        "config",
+        description=(
+            "Print every effective setting with the layer it came from, what the "
+            "key does, and what a change to it costs. This never writes: the "
+            "browser workspace writes this project's own config.toml, and a hand "
+            "edit there is read as it is. `help settings` names the layers."
+        ),
+    )
+
+    examine = add(
+        "doctor",
+        description=(
+            "Report what is wrong with this installation, one line per "
+            "dependency, each with the command that fixes it. A default run "
+            "reads and writes nothing, so it is always safe to run."
         ),
     )
     examine.add_argument(
@@ -732,7 +1084,8 @@ def _parser() -> argparse.ArgumentParser:
         help=(
             "Print the MCP client entries for the resolved configuration: the "
             "URL entry for a client that can open a socket, and the stdio entry "
-            "for one that cannot."
+            "for one that cannot. Print it from the machine it will run on, "
+            "because the port is chosen at start."
         ),
     )
     examine.add_argument(
@@ -744,80 +1097,153 @@ def _parser() -> argparse.ArgumentParser:
     examine.add_argument(
         "--prefetch-models",
         action="store_true",
-        help="Download the pinned embedding and reranker models into the cache.",
+        help=(
+            "Download the pinned embedding and reranker models into the cache. "
+            "The only other thing that reaches the network is --repair-runtime."
+        ),
     )
     examine.add_argument(
         "--repair-runtime",
         action="store_true",
         help=(
             "Move a mismatched UltraRAG runtime aside, install the pinned one, "
-            "and validate it."
+            "and validate it. Evidence it discards is moved aside, not deleted."
         ),
     )
 
-    browser = commands.add_parser(
-        "start", help="Serve this project's app from this terminal, and say where."
+    browser = add(
+        "start",
+        description=(
+            "Serve this project's app from this terminal and report the address. "
+            "Ctrl-C, a closed window, and `kill` all end it, so the terminal is "
+            "where the app lives: this never leaves one running in the "
+            "background, and it never opens a browser unless --start-ui was "
+            "passed. An app already up for this project is reported and left "
+            "alone rather than started a second time."
+        ),
     )
-    browser.add_argument("--port", type=int, help="Serve on a different port.")
-
-    commands.add_parser(
-        "clients", help="List the MCP clients attached to this project's app."
-    )
-
-    drop = commands.add_parser(
-        "disconnect", help="Disconnect one attached MCP client, ending its session."
-    )
-    drop.add_argument("session_id", help="The session id reported by `clients`.")
-    drop.add_argument("--reason", default=None, help="Why it is being dropped.")
-
-    bridge_command = commands.add_parser(
-        "mcp",
+    browser.add_argument(
+        "--port",
+        metavar="PORT",
+        type=int,
         help=(
-            "Serve the agent surface on stdio for the project named by "
-            "--project-name, proxied to that project's app."
+            f"Serve on this port. A port you name is never moved: one that is "
+            f"taken fails and says so. Default: the first free port at or above "
+            f"{DEFAULT_UI_PORT}."
         ),
+    )
+
+    add(
+        "clients",
+        description=(
+            "List the MCP clients attached to this project's app, by the name each "
+            "one declared and the program it runs in. One agent is one row however "
+            "many sessions it opened. A client that has said nothing for a quarter "
+            "of an hour is forgotten, so this lists the clients that are here "
+            "rather than every session the machine has run. The workspace's MCP "
+            "tab shows the same list and can end one there."
+        ),
+    )
+
+    drop = add(
+        "disconnect",
+        description=(
+            "End one attached client's session, before its requests reach the "
+            "tools. This is the same decision the workspace's MCP tab makes, so "
+            "an agent ended in the browser is gone from the terminal too."
+        ),
+    )
+    drop.add_argument(
+        "session_id",
+        metavar="ID",
+        help=(
+            "The session id `clients` reports. A connection that has not opened a "
+            "session yet carries none and cannot be named here."
+        ),
+    )
+    drop.add_argument(
+        "--reason",
+        metavar="TEXT",
+        default=None,
+        help="Why it is being dropped. Reported with the client.",
+    )
+
+    bridge_command = add(
+        "mcp",
+        description=(
+            "Serve the agent surface on stdio for one project and proxy it to that "
+            "project's app.\n"
+            "\n"
+            "Keep `mcp` before its own options: an option in front of it is read "
+            "as the command name and the server closes the connection instead of "
+            "answering. This names a project, never a directory, so one entry "
+            "works on every machine where that project was initialised, and "
+            "--project-root and --project are refused here. It starts no app: an "
+            "app belongs to a terminal, so this either proxies to one or answers "
+            "with the command that starts it."
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     bridge_command.add_argument(
         "--project-name",
+        metavar="NAME",
         default=os.environ.get(PROJECT_NAME_ENV),
         help=(
             "Name this project was initialised under, which the app on this "
-            "machine resolves to a directory. `help agents` has the client entry."
+            f"machine resolves to a directory. Read from {PROJECT_NAME_ENV} in "
+            "the client's environment when this is omitted. `help agents` has "
+            "the client entry."
         ),
     )
     bridge_command.add_argument(
         "--client-name",
+        metavar="NAME",
         default=None,
         help=(
             "Name this bridge reports itself under, so an app's client list can "
-            "tell agents apart."
+            "tell agents apart. A client that sets nothing appears as "
+            "`stdio-bridge`."
         ),
     )
 
-    stop = commands.add_parser(
+    stop = add(
         "stop",
-        help="Stop this project's app, and optionally its processes.",
+        description=(
+            "Stop this project's app, from any terminal, and report which terminal "
+            "owned it. It never starts one afterwards: an app belongs to the "
+            "terminal that started it and ends there."
+        ),
     )
     stop.add_argument(
         "--servers",
         action="store_true",
         help=(
             "Also stop every process of this app serving this project, including "
-            "a build that is still running."
+            "a build that is still running. A build interrupted this way resumes "
+            "from its checkpoint on the next `ingest`."
         ),
     )
 
-    setup = commands.add_parser(
+    setup = add(
         "install",
-        help=(
-            "Put this command on the account's PATH, and --desktop give this "
-            "installation one menu entry that serves a project in a window."
+        description=(
+            "Make this installation reachable by name, or take back what it made "
+            "reachable. One command with two selectors rather than two commands, "
+            "because an uninstall has to know which of the two was meant.\n"
+            "\n"
+            "This writes only under this account's own directories and touches no "
+            "project's state. It writes no serving process: the app is started by "
+            "`start`, or by clicking the menu entry."
         ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     setup.add_argument(
         "--uninstall",
         action="store_true",
-        help="Remove what `install` wrote for the same selector, and nothing else.",
+        help=(
+            "Remove what `install` wrote for the same selector, and nothing else. "
+            "A file it did not write is reported and left alone."
+        ),
     )
     setup.add_argument(
         "--desktop",
@@ -825,7 +1251,8 @@ def _parser() -> argparse.ArgumentParser:
         help=(
             "Write the one freedesktop entry for this installation instead of the "
             "command on PATH. It opens a terminal window and serves whichever "
-            "project you choose there, so no project is named in the entry."
+            "project you choose there, so no project is named in the entry, and "
+            "closing the window stops the app it started."
         ),
     )
     setup.add_argument(
@@ -837,19 +1264,40 @@ def _parser() -> argparse.ArgumentParser:
         ),
     )
 
-    refresh_install = commands.add_parser(
+    refresh_install = add(
         "update",
-        help=(
-            "Compare this installation with the latest published release, and "
-            "--apply move to it."
+        description=(
+            "Compare this installation with the latest published release, show the "
+            "changelog that release was published with, and say what applying "
+            "would do. The comparison is against a release tag, not a branch "
+            "head, so a checkout ahead of the latest release reports unreleased "
+            "work and changes nothing. In a terminal it asks once whether to "
+            "install the release it previewed, and no is the answer; nothing is "
+            "installed without that answer. Without a terminal it only reports, "
+            "so a script reads the JSON and nothing changes. Needs no project."
         ),
     )
     refresh_install.add_argument(
         "--apply",
         action="store_true",
         help=(
-            "Perform the update. Without it nothing is written and the command "
-            "only reports."
+            "Perform the update: refuse while a build holds a project lock or the "
+            "checkout has uncommitted work, naming both, then stop every app this "
+            "installation serves, move to the release, and print the command that "
+            "starts each app again. It does not start them for you. In a "
+            "terminal it asks first and installs only on yes; without a terminal "
+            "it refuses unless --yes says the approval was given already."
+        ),
+    )
+    refresh_install.add_argument(
+        "--yes",
+        action="store_true",
+        help=(
+            "Say that the approval was given already, for an unattended run that "
+            "must not be asked. With --apply it installs the release the check "
+            "previewed without asking; without --apply it reports and changes "
+            "nothing. It is never a yes nobody was asked for: the question is "
+            "asked at most once, and any answer other than yes declines."
         ),
     )
     return parser
@@ -956,16 +1404,6 @@ def _init(args: argparse.Namespace) -> dict[str, Any]:
     }
 
 
-def _project_argument(arguments: list[str]) -> str | None:
-
-    for index, argument in enumerate(arguments):
-        if argument == "--project-root" and index + 1 < len(arguments):
-            return arguments[index + 1]
-        if argument.startswith("--project-root="):
-            return argument.split("=", 1)[1]
-    return None
-
-
 def _service_processes(
     project_root: Path,
     proc_root: Path = Path("/proc"),
@@ -998,71 +1436,30 @@ def _service_processes(
         arguments = [
             part for part in raw.decode("utf-8", "replace").split("\0") if part
         ]
-        if not _invokes_this_app(arguments, project_root):
+        if not ownership.invokes_this_app(arguments, project_root):
             continue
-        if _project_argument(arguments) != str(project_root):
+        if ownership.project_argument(arguments) != str(project_root):
             continue
         found.append((pid, " ".join(arguments)))
     return found
 
 
-def _invokes_this_app(arguments: Sequence[str], project_root: Path) -> bool:
-    """Whether one argument names this app as the program being run.
+def _terminate(project_root: Path, pids: list[int]) -> list[int]:
+    """Ask these processes to stop and then insist; return the ones killed outright.
 
-    A console script passes its own path, ``python -m research_rag`` passes the
-    module, and either may be a relative name resolved against the other
-    process's working directory. A project path under ``.research-rag`` carries
-    the product name in its directory and is a value, not a program.
+    Each signal goes through `ownership`, so the sweep only reaches a process it
+    has proved is this project's app, and never one it descends from.
     """
 
-    inside = project_root.resolve()
-    for index, argument in enumerate(arguments):
-        if argument == "-m":
-            if index + 1 < len(arguments) and arguments[index + 1] in SERVICE_MARKERS:
-                return True
-            continue
-        if argument in SERVICE_MARKERS:
-            return True
-        if Path(argument).name not in SERVICE_MARKERS:
-            continue
-        try:
-            resolved = Path(argument).resolve()
-        except OSError:
-            continue
-        if resolved == inside or inside in resolved.parents:
-            continue
-        return True
-    return False
-
-
-def _terminate(pids: list[int]) -> list[int]:
-    """Ask these processes to stop and then insist; return the ones killed outright."""
-
     for pid in pids:
-        try:
-            os.kill(pid, signal.SIGTERM)
-        except OSError:
-            continue
+        ownership.ask_to_stop(pid, project_root)
     deadline = time.monotonic() + STOP_GRACE_SECONDS
     while time.monotonic() < deadline and any(alive(pid) for pid in pids):
         time.sleep(0.1)
     forced = [pid for pid in pids if alive(pid)]
     for pid in forced:
-        try:
-            os.kill(pid, signal.SIGKILL)
-        except OSError:
-            continue
+        ownership.ask_to_stop(pid, project_root, number=signal.SIGKILL)
     return forced
-
-
-def _ask_to_stop(pid: int) -> OSError | None:
-    """Ask one app to stop, and report why it could not be asked."""
-
-    try:
-        os.kill(pid, signal.SIGTERM)
-    except OSError as exc:
-        return exc
-    return None
 
 
 def _stop_notes(detached: bool) -> list[str]:
@@ -1106,19 +1503,23 @@ def _stop(args: argparse.Namespace, config: ResearchConfig) -> dict[str, Any]:
         "detached": app_state.get("detached"),
         "url": app_state.get("url"),
     }
-    # The app is asked to stop, never killed: it closes its own gateway and releases
-    # its own lock on the way out, and a terminal that is still there says so.
+    # Asked, never killed: the app closes its own gateway and releases its own lock
+    # on the way out. A pid record names a number, so `ownership` establishes that
+    # the process behind it is this project's app before anything is signalled.
     pid = recorded_pid(config)
     report["stopped"] = False
+    report["stop_refusal"] = None
     if pid is not None:
-        report["stopped"] = _ask_to_stop(pid) is None
+        outcome = ownership.ask_to_stop(pid, config.project_root)
+        report["stopped"] = outcome.asked
+        report["stop_refusal"] = None if outcome.asked else outcome.reason
         report["pid"] = pid
     if not args.servers:
         report["notes"] = _stop_notes(bool(app_state.get("detached")))
         return report
     found = _service_processes(config.project_root)
     report["servers"] = [{"pid": pid, "command": command} for pid, command in found]
-    report["forced_pids"] = _terminate([pid for pid, _ in found])
+    report["forced_pids"] = _terminate(config.project_root, [pid for pid, _ in found])
     report["notes"] = [
         "An app you started in another terminal belongs to that terminal: this command stops it and does not start it again.",
         "A build interrupted this way resumes from its checkpoint on the next ingest call.",
@@ -1348,6 +1749,8 @@ async def _operate(
         # The terminal is an agent's second bounded reader: the same projection,
         # so the two cannot answer differently. `--verbose` is where a person
         # goes for the complete payload the workspace reads.
+        from ..core.tool_views import lean_status
+
         return dict(payload) if args.verbose else lean_status(payload)
     if command == "ingest":
         return await operations.ingest(force_recompute=args.force_recompute)
@@ -1795,19 +2198,87 @@ def _install(args: argparse.Namespace) -> dict[str, Any]:
     return {"command": "install", "console": report.as_dict()}
 
 
+def _interactive_terminal() -> bool:
+    """Whether a reader can be asked here, rather than a pipe or a log read.
+
+    Both ends matter. The question is written to stderr and the answer is read
+    from stdin, so one terminal and one file is a prompt in a log rather than a
+    reader, and that is a check that prints and installs nothing.
+    """
+
+    try:
+        return bool(sys.stdin.isatty() and sys.stderr.isatty())
+    except (AttributeError, ValueError):
+        return False
+
+
+def _fetch_published_release(url: str, timeout: float) -> str:
+    """The one network request this command makes, named so a test can replace it.
+
+    It reads the published release of this app's public repository and carries no
+    token, key, or header that could. `--offline` never reaches it, and nothing is
+    installed because of what it returns: it is the changelog a reader approves.
+    """
+
+    from ..runtime.release import fetch_text
+
+    return fetch_text(url, timeout)
+
+
+def _ask_to_install(
+    published: PublishedRelease,
+    notes: Sequence[str],
+    *,
+    target: str,
+    stdin: Any = None,
+    stderr: Any = None,
+) -> bool:
+    """Show the published changelog and ask once, with no as the answer.
+
+    Everything is written to stderr, so stdout stays the machine-readable report
+    the other flags promise, and the answer is one line. Anything that is not
+    `y` or `yes` declines: an empty line, EOF, and Ctrl-C are the same no.
+    Declining is an answer, not a failure, so it changes nothing and returns.
+    """
+
+    from ..runtime import release as release_module
+
+    source = sys.stdin if stdin is None else stdin
+    sink = sys.stderr if stderr is None else stderr
+    lines = [f"A published release is available: {target}."]
+    if published.found and published.release is not None:
+        lines.extend(release_module.changelog_lines(published.release))
+    else:
+        lines.append(f"No changelog was published with it. {published.detail}.")
+    lines.extend(("", *notes))
+    sink.write("\n".join(lines) + "\nInstall this release? [y/N]: ")
+    sink.flush()
+    try:
+        answer = source.readline()
+    except (EOFError, KeyboardInterrupt, OSError):
+        answer = ""
+    return answer.strip().lower() in {"y", "yes"}
+
+
 async def _update(args: argparse.Namespace) -> dict[str, Any]:
-    """Report what a newer version means, and with ``--apply`` put it in place.
+    """Report what a newer version means, preview its changelog, install it approved.
 
     The check is the default and writes nothing. The comparison is against the
     latest published release, so the version in the answer and the version
-    `research-rag --version` prints are the same number. Applying refuses while a
-    project lock is held, refuses a checkout with uncommitted work, stops every app
+    `research-rag --version` prints are the same number, and the changelog shown
+    beside that answer is the body the maintainer published with the release.
+
+    An install is the one thing here a reader approves: a terminal is asked once
+    with the changelog in front of it and no as the default, `--apply` asks the
+    same question, and `--yes` says the approval was given already. A terminal
+    that cannot be asked is refused rather than assumed, and an answer that is not
+    yes stops nothing and writes nothing. Applying also refuses a build that holds
+    a project lock, refuses a checkout with uncommitted work, stops every app
     through that project's own recorded pid, and prints the command that starts
     each one again.
     """
 
     from ..project.registry import load as load_registered
-    from ..runtime import release as release_module
     from ..runtime import update as update_module
     from ..runtime.version import version_block
 
@@ -1819,6 +2290,12 @@ async def _update(args: argparse.Namespace) -> dict[str, Any]:
     payload: dict[str, Any] = {
         "command": "update",
         "applied": False,
+        # The two keys a caller reads instead of deriving: whether a release is
+        # waiting to be installed, and where this installation stands against
+        # what the remote publishes. A branch head is never either of them.
+        "available": plan.available,
+        "decision": plan.release_position,
+        "notes": list(plan.notes),
         # The same four numbers `research-rag --version` prints, from the same
         # functions, so an answer cannot carry one version and the flag another.
         "version": version_block(),
@@ -1829,6 +2306,8 @@ async def _update(args: argparse.Namespace) -> dict[str, Any]:
     if not args.apply and local.is_checkout and local.checkout is not None:
         # On the reporting path only: an applied update moves the checkout, and a
         # tag it read a moment before may be one commit from being irrelevant.
+        from ..runtime import release as release_module
+
         payload["declared_version_problems"] = list(
             release_module.release_consistency(
                 local.checkout, local.declared or local.version, runner
@@ -1836,28 +2315,78 @@ async def _update(args: argparse.Namespace) -> dict[str, Any]:
         )
     if plan.blocked:
         raise ResearchError(plan.blocked)
-    if not args.apply:
-        return payload
-    if offline:
+    if args.apply and offline:
         raise ResearchError(
             "--offline cannot update: nothing on the remote was asked. Nothing "
             "was changed. Run this again without --offline."
         )
-    if not plan.available:
+    if args.apply and not plan.available:
         # Stopping an app is not free, so a run with nothing to apply changes
         # nothing at all, and says why.
         raise ResearchError("Nothing to apply. " + " ".join(plan.notes))
+
+    # What the reader would approve, read before anything is asked or changed.
+    published = update_module.published_release_for(
+        local, runner, offline=offline, fetch=_fetch_published_release
+    )
+    notes = list(update_module.preview_notes(plan, published))
+    payload["published"] = published.as_dict()
+    payload["notes"] = notes
+    target = (
+        f"release {plan.release_version}, tagged {plan.release_tag}"
+        if local.is_checkout
+        else f"version {plan.remote_revision}"
+    )
     projects = [
         update_module.ProjectState(entry.project_root, entry.project_name)
         for entry in load_registered()
         if (entry.project_root / ".research-rag").is_dir()
     ]
     held = update_module.held_projects(projects)
+    interactive = _interactive_terminal()
+    # A terminal that shows a preview is offered the install once; `--yes` is not
+    # an answer to a question nobody asked, so it never asks and never offers.
+    apply_requested = bool(args.apply) or (
+        interactive and plan.available and not args.yes
+    )
+    refusal = "Nothing was changed. " + " ".join(one.refusal() for one in held)
+    if args.apply and held:
+        raise ResearchError(refusal)
     if held:
-        raise ResearchError(
-            "Nothing was changed. " + " ".join(one.refusal() for one in held)
+        payload["projects"] = [project.as_dict() for project in projects]
+        payload["held"] = [one.as_dict() for one in held]
+        notes.append(
+            f"{len(held)} project(s) are being worked on, so an update would have "
+            "to stop them first."
         )
+    approval = update_module.approval_for(
+        apply_requested=apply_requested,
+        preselected=bool(args.yes),
+        interactive=interactive,
+    )
+    payload["approval"] = approval.as_dict()
+    if approval.method == update_module.UNAVAILABLE:
+        raise ResearchError(update_module.approval_refusal())
+    if approval.asked and plan.available:
+        # The question goes to stderr with the changelog above it, and stdout
+        # carries the report either way.
+        approval = update_module.answered(
+            approval, _ask_to_install(published, notes, target=target)
+        )
+        payload["approval"] = approval.as_dict()
+    if not apply_requested:
+        return payload
+    if not approval.granted:
+        payload["notes"] = [*notes, "Declined, so nothing was changed."]
+        return payload
+    # An approved release is the one previewed, not whatever is newest by now.
+    moved = update_module.target_moved(local, plan, runner, offline=offline)
+    if moved:
+        raise ResearchError(moved)
+    if held:
+        raise ResearchError(refusal)
     payload["projects"] = [project.as_dict() for project in projects]
+    payload["previewed_version"] = plan.release_version or plan.remote_revision
 
     def digests() -> dict[str, dict[str, tuple[int, int]]]:
         return {
@@ -1916,9 +2445,19 @@ async def _doctor(args: argparse.Namespace, config: ResearchConfig) -> CommandRe
     # makes, so the two surfaces cannot disagree about this project. A check of
     # one entry file needs no project state, so it fetches none.
     status: dict[str, Any] = {}
+    unavailable: str | None = None
     if entry_check is None:
-        async with _operations(config) as operations:
-            status = await operations.status()
+        try:
+            async with _operations(config) as operations:
+                status = await operations.status()
+        except ImportError as exc:
+            # Without the retrieval stack there is no corpus answer to report, so
+            # the report is told which of its checks that leaves unknown.
+            unavailable = (
+                f"{exc.name or exc} is not importable, so this project's corpus "
+                "cannot be read. Install this project's dependencies to answer "
+                "anything about its evidence."
+            )
     result = run_doctor(
         config,
         status,
@@ -1926,6 +2465,7 @@ async def _doctor(args: argparse.Namespace, config: ResearchConfig) -> CommandRe
         entry=entry_check,
         prefetch=args.prefetch_models,
         repair=args.repair_runtime,
+        status_unavailable=unavailable,
     )
     return CommandResult(text=result.text(), exit_code=result.exit_code)
 
@@ -1977,9 +2517,10 @@ def _help_menu() -> str:
         "Each command takes --project-root DIR or --project NAME, except `mcp`,\n"
         "which takes --project-name NAME so a client entry carries no path.\n"
         "`install`, `update`, `help`, and `--version` need no project at all.\n"
-        "No command at all opens the workspace in a browser and serves it from\n"
-        "this terminal, so Ctrl-C or closing the terminal stops it. It asks\n"
-        "which project when this installation holds more than one.\n"
+        "Given no command at all, it serves the workspace from this terminal, so\n"
+        "Ctrl-C or closing the terminal stops it, and it asks which project when\n"
+        "this installation holds more than one. Serving never opens a browser:\n"
+        "--start-ui is what asks for one.\n"
         "One command's own options: `{name} COMMAND --help`.\n"
         "A subject: `{name} help {topics}`.".format(
             name=CLI_NAME, topics=", ".join(sorted(HELP_TOPICS))
@@ -2115,6 +2656,8 @@ def main(argv: Sequence[str] | None = None) -> None:
             project_name = _bridge_project_name(args)
         except (ConfigurationError, ResearchError) as exc:
             raise SystemExit(f"{CLI_NAME}: {exc}") from exc
+        from . import bridge
+
         bridge.main(project_name, settings=_config_kwargs(args), name=args.client_name)
         return
     try:

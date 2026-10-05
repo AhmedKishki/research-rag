@@ -31,18 +31,22 @@ from ..corpus.sources import (
     sha256_file,
 )
 from ..corpus.text_quality import text_corruption_reasons, text_health_reasons
+from ..project.policy import (
+    DEFAULT_RETRIEVAL_METHOD,
+    RETRIEVAL_METHODS,
+    ResearchError,
+    _utc_now,
+    value_fingerprint,
+)
 from ..project.settings import SETTINGS_BY_KEY
 from ..project.support import (
     ARTIFACT_POLICY_VERSION,
     CLEANING_POLICY_VERSION,
-    DEFAULT_RETRIEVAL_METHOD,
     EXTRACTION_POLICY_VERSION,
     GENERATION_ID_PATTERN,
     INGESTION_IDENTITY_POLICY_VERSION,
     METADATA_STORAGE_POLICY,
-    RETRIEVAL_METHODS,
     SCHEMA_VERSION,
-    ResearchError,
     _atomic_to_thread,
     _checkpoint_identity,
     _chunk_text,
@@ -56,7 +60,6 @@ from ..project.support import (
     _source_inventory,
     _source_stat_identity,
     _source_work_key,
-    _utc_now,
 )
 from ..retrieval.artifact_lookup import (
     LOOKUP_RELATIVE_PATH,
@@ -81,7 +84,6 @@ from .generation import (
     generation_artifacts_are_valid,
     load_reuse_snapshot,
     source_set_matches,
-    value_fingerprint,
 )
 
 INGESTION_CHECKPOINT_VERSION = 1
@@ -1985,7 +1987,8 @@ class IngestionWorkflow:
                         "available_methods": sorted(RETRIEVAL_METHODS),
                         "bm25": {
                             "backend": "UltraRAG BM25",
-                            "language": "en",
+                            # The setting the index was built with, not a constant.
+                            "language": self.config.settings.bm25_stopwords_language,
                             "tokenizer": "default",
                         },
                         "dense": dense_metadata,

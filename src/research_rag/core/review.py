@@ -19,8 +19,8 @@ from pathlib import Path
 from typing import Any
 
 from ..corpus.sources import SourcePolicyError, SourceScan, scan_sources
+from ..project.policy import ResearchError
 from ..project.support import (
-    ResearchError,
     _effective_documents,
     _normalized_filter,
     _public_document,

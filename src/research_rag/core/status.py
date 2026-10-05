@@ -28,17 +28,19 @@ from ..corpus.sources import (
     scan_sources,
     sha256_file,
 )
-from ..generations.generation import value_fingerprint
 from ..generations.generation_inventory import generation_inventory
 from ..project.config import ResearchConfig
+from ..project.policy import (
+    DEFAULT_RETRIEVAL_METHOD,
+    ResearchError,
+    value_fingerprint,
+)
 from ..project.support import (
     ARTIFACT_POLICY_VERSION,
     CLEANING_POLICY_VERSION,
-    DEFAULT_RETRIEVAL_METHOD,
     EXTRACTION_POLICY_VERSION,
     METADATA_STORAGE_POLICY,
     SCHEMA_VERSION,
-    ResearchError,
     _effective_documents,
     _metadata_inventory,
     _metadata_snapshot_changed,

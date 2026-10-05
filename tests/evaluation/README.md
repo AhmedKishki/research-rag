@@ -25,11 +25,8 @@
   checked for one target per query, and `no_answer_support` is checked to report
   that abstention is unmeasured rather than to invent a label.
 - `tests/retrieval/test_search_evaluation_trace.py` holds the engine-side payload
-  contract, because it is the engine's payload: the eight named stages, the
-  bounded identifier lists, the gate's denominator and conservation, the
-  candidate-depth and rerank-window formulas, a BM25 payload reporting no dense
-  counts, an unavailable reranker traced as not applied, and the proof that a
-  traced search returns an answer otherwise identical to an untraced one.
+  contract, because it is the engine's payload; `tests/retrieval/README.md` lists
+  what it checks.
 
 ## Running them
 

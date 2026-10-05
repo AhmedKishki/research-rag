@@ -43,7 +43,7 @@ from ..project.config import (
     initialise_command,
     resolve_config,
 )
-from ..project.support import ResearchError
+from ..project.policy import ResearchError
 from ..runtime.app import (
     CLIENT_IDENTITY_HEADER,
     CLIENT_NAME_ENV,

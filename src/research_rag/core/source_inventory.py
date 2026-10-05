@@ -28,7 +28,8 @@ from ..corpus.sources import (
     stable_source_id,
 )
 from ..project.config import ResearchConfig, resolve_source_reference
-from ..project.support import ResearchError, _document_matches_metadata
+from ..project.policy import ResearchError
+from ..project.support import _document_matches_metadata
 from ..storage.records import write_source_catalog
 
 
