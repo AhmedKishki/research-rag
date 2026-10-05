@@ -364,11 +364,13 @@
             </label>
           </div>
 
-          <div id="source-list" class="source-list" aria-labelledby="source-list-heading" aria-live="polite"></div>
+          <p id="source-range" class="form-note source-range" aria-live="polite" hidden></p>
+          <div id="source-list" class="source-list" aria-labelledby="source-list-heading"></div>
+          <nav id="source-pager" class="pager" aria-label="Source pages" hidden></nav>
 
           <section id="excluded-section" class="excluded-section" hidden>
             <div class="section-heading-row">
-              <h3>Excluded sources</h3>
+              <h3 id="excluded-heading">Excluded sources</h3>
               <span id="excluded-count" class="count-badge">0</span>
             </div>
             <p class="form-note measure">
@@ -377,6 +379,7 @@
               deleted or edited.
             </p>
             <div id="excluded-list" class="excluded-list"></div>
+            <nav id="excluded-pager" class="pager" aria-label="Excluded source pages" hidden></nav>
           </section>
         </section>
 

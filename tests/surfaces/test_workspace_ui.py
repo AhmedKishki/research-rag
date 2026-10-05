@@ -2493,3 +2493,106 @@ def test_a_source_card_names_the_reach_of_each_exclusion() -> None:
     assert ".source-card-actions .action-button:last-child" not in css
     assert "<h2>Exclude this source from the project?</h2>" in page
     assert ">Exclude from project</button>" in page
+
+
+def test_the_sources_view_shows_ten_sources_a_page(tmp_path: Path) -> None:
+    """A collection is read a page at a time, and the filter reads all of it.
+
+    Every source was drawn at once, one card under another, so a 106-source
+    project was one column a reader scrolled through to find one source. The
+    list now holds ten a page with a pager under it; the filter still matches
+    across every source and starts its matches from their first page, and a
+    refresh returns the reader to the page they were on.
+    """
+
+    result = _drive_page(
+        tmp_path,
+        """
+state.profile = { capabilities: {} };
+const sources = Array.from({ length: 23 }, (_, index) => ({
+  title: `Source ${index + 1}`,
+  authors: index === 22 ? ["Needle"] : ["Author"],
+  source_relative_path: `s${index + 1}.pdf`,
+  source_id: `src_${index}`,
+  document_id: `doc_${index}`,
+}));
+const excluded = Array.from({ length: 12 }, (_, index) => ({
+  source_relative_path: `x${index + 1}.pdf`,
+  reason: "duplicate",
+}));
+const list = document.getElementById("source-list");
+const range = document.getElementById("source-range");
+const pager = document.getElementById("source-pager");
+const labels = () => pager.children.map((item) => item.textContent);
+const read = () => ({ cards: list.children.length, range: range.textContent, pages: labels() });
+
+renderSources({ ready: true, sources, excluded_sources: excluded });
+result.first = {
+  ...read(),
+  pagerHidden: pager.hidden,
+  previousDisabled: pager.children[0].disabled,
+  current: pager.children.find((item) => item.dataset.value === "1").dataset.list,
+};
+goToSourcePage("sources", 3);
+result.last = { ...read(), nextDisabled: pager.children[pager.children.length - 1].disabled };
+
+document.getElementById("source-filter").value = "needle";
+filterSources();
+result.filtered = { ...read(), pagerHidden: pager.hidden, page: state.sourcePages.sources };
+document.getElementById("source-filter").value = "nothing like it";
+filterSources();
+result.unmatched = { text: text(list), rangeHidden: range.hidden };
+
+document.getElementById("source-filter").value = "";
+goToSourcePage("sources", 2);
+renderSources({ ready: true, sources, excluded_sources: excluded });
+result.refreshed = read().range;
+renderSources({ ready: true, sources: sources.slice(0, 5), excluded_sources: [] });
+result.shrunk = { ...read(), pagerHidden: pager.hidden, page: state.sourcePages.sources };
+
+renderSources({ ready: true, sources, excluded_sources: excluded });
+result.excluded = {
+  cards: document.getElementById("excluded-list").children.length,
+  pagerHidden: document.getElementById("excluded-pager").hidden,
+};
+result.window = pagerNumbers(6, 11);
+result.short = pagerNumbers(1, 3);
+""",
+    )
+
+    assert result["first"] == {
+        "cards": 10,
+        "range": "Showing 1–10 of 23 sources",
+        "pages": ["Previous", "1", "2", "3", "Next"],
+        "pagerHidden": False,
+        "previousDisabled": True,
+        "current": "sources",
+    }
+    assert result["last"] == {
+        "cards": 3,
+        "range": "Showing 21–23 of 23 sources",
+        "pages": ["Previous", "1", "2", "3", "Next"],
+        "nextDisabled": True,
+    }
+    # The filter matches across every page and starts its own matches at one.
+    assert result["filtered"] == {
+        "cards": 1,
+        "range": "Showing 1 of 1 matching source, 23 in all",
+        "pages": [],
+        "pagerHidden": True,
+        "page": 1,
+    }
+    assert result["unmatched"] == {
+        "text": "No source matches this filter.",
+        "rangeHidden": True,
+    }
+    # A refresh keeps the page, and a page that no longer exists is clamped.
+    assert result["refreshed"] == "Showing 11–20 of 23 sources"
+    assert result["shrunk"]["cards"] == 5
+    assert result["shrunk"]["pagerHidden"] is True
+    assert result["shrunk"]["page"] == 1
+    # The excluded list pages the same way.
+    assert result["excluded"] == {"cards": 10, "pagerHidden": False}
+    # A long pager shows its ends and the current page's neighbours.
+    assert result["window"] == [1, None, 5, 6, 7, None, 11]
+    assert result["short"] == [1, 2, 3]
