@@ -815,8 +815,10 @@ def test_the_sidebar_navigates_without_a_tab_strip() -> None:
     # The item the markup marks active is the item the profile loop looks for, so
     # the first view is the one the column shows rather than no view at all.
     assert 'class="sidebar-item is-active" data-view="search"' in page
+    # A view the fragment names comes first, and the marked item is the fallback.
+    assert "visibleNavItems.find((item) => item.dataset.view === routed)" in script
     assert (
-        'const activeItem = visibleNavItems.find((item) => item.classList.contains("is-active"));'
+        '|| visibleNavItems.find((item) => item.classList.contains("is-active"));'
         in script
     )
     # An icon is inline SVG rather than an icon font or a fetched file, so the
@@ -2072,6 +2074,7 @@ const scenario = readFileSync(process.argv[3], "utf8");
 function element(tagName = "div") {
   const lookups = new Map();
   const parents = new Map();
+  const classes = new Set();
   return {
     tagName,
     textContent: "",
@@ -2084,7 +2087,17 @@ function element(tagName = "div") {
     style: {},
     children: [],
     opened: false,
-    classList: { add() {}, remove() {}, toggle() {}, contains() { return false; } },
+    classList: {
+      add(...names) { names.forEach((name) => classes.add(name)); },
+      remove(...names) { names.forEach((name) => classes.delete(name)); },
+      toggle(name, force) {
+        const on = force === undefined ? !classes.has(name) : Boolean(force);
+        if (on) classes.add(name);
+        else classes.delete(name);
+        return on;
+      },
+      contains(name) { return classes.has(name); },
+    },
     append(...kids) { this.children.push(...kids); },
     replaceChildren(...kids) { this.children = kids; },
     addEventListener() {},
@@ -2111,6 +2124,13 @@ function element(tagName = "div") {
 const registry = new Map();
 const radio = element("input");
 radio.value = "hybrid";
+// The sidebar's views, so navigation and routes have items to mark.
+const navItems = ["search", "sources", "status", "config", "mcp", "updates"].map((view) => {
+  const item = element("li");
+  item.dataset.view = view;
+  return item;
+});
+navItems[0].classList.add("is-active");
 const document = {
   getElementById(id) {
     if (!registry.has(id)) registry.set(id, element());
@@ -2119,7 +2139,11 @@ const document = {
   createElement: element,
   createDocumentFragment: () => element("fragment"),
   createTextNode: (text) => ({ textContent: text, children: [] }),
-  querySelectorAll(selector) { return selector.includes("retrieval_method") ? [radio] : []; },
+  querySelectorAll(selector) {
+    if (selector.includes("retrieval_method")) return [radio];
+    if (selector === ".sidebar-item") return navItems;
+    return [];
+  },
   querySelector() { return null; },
   addEventListener() {},
   title: "",
@@ -2138,17 +2162,31 @@ function find(node, predicate) {
   return null;
 }
 
+const requests = [];
+const entries = [];
+const location = { hash: "" };
 const context = {
   document,
   text,
   find,
+  requests,
   navigator: { clipboard: { writeText: async () => {} } },
-  fetch: async () => ({ ok: true, status: 200, json: async () => ({}) }),
+  fetch: async (path, options = {}) => {
+    requests.push({ path, method: options.method || "GET", body: options.body || null });
+    return { ok: true, status: 200, json: async () => ({}) };
+  },
   Intl,
   URL,
+  URLSearchParams,
   setTimeout: () => 0,
   window: {
     innerHeight: 900,
+    location,
+    history: {
+      entries,
+      pushState(_state, _title, hash) { entries.push(["push", hash]); location.hash = hash; },
+      replaceState(_state, _title, hash) { entries.push(["replace", hash]); location.hash = hash; },
+    },
     setTimeout: () => 0,
     open() {},
     matchMedia: () => ({ addEventListener() {} }),
@@ -2158,7 +2196,7 @@ const context = {
 context.globalThis = context;
 vm.createContext(context);
 vm.runInContext(script, context);
-vm.runInContext(scenario, context);
+await vm.runInContext(scenario, context);
 process.stdout.write(JSON.stringify(context.result));
 """
 
@@ -2778,3 +2816,108 @@ def test_a_section_opens_with_at_most_one_sentence() -> None:
     assert len(intros) >= 12
     for intro in intros:
         assert len(re.findall(r"[.!?](?:\s|$)", intro)) <= 1, intro
+
+
+def test_each_view_is_a_page_that_back_forward_and_reload_return_to(
+    tmp_path: Path,
+) -> None:
+    """A reload lost the search, and Back left the workspace.
+
+    The view and what it shows now live in the fragment: a submitted search and
+    a page of sources each add a history entry, a reload draws what the
+    fragment names, and returning to a search already on screen does not run
+    it again.
+    """
+
+    result = _drive_page(
+        tmp_path,
+        """
+(async () => {
+state.profile = {
+  application_name: "Research RAG",
+  capabilities: { sources: true, documents: true, category_partitions: true },
+};
+const topK = document.getElementById("top-k");
+topK.options = ["5", "8", "12", "20"].map((value) => ({ value }));
+topK.value = "8";
+const searches = () => requests.filter((request) => request.path === "/api/search");
+const sources = Array.from({ length: 23 }, (_, index) => ({
+  title: `Source ${index + 1}`,
+  source_relative_path: `s${index + 1}.pdf`,
+  source_id: `src_${index}`,
+  document_id: `doc_${index}`,
+}));
+renderSources({ ready: true, sources, excluded_sources: [] });
+
+window.location.hash = "#/sources?page=2&filter=source";
+await applyRoute();
+result.sources = {
+  view: activeView(),
+  page: state.sourcePages.sources,
+  filter: document.getElementById("source-filter").value,
+  range: document.getElementById("source-range").textContent,
+  hash: window.location.hash,
+  title: document.title,
+};
+
+window.location.hash = "#/sources?page=9";
+await applyRoute();
+result.clamped = window.location.hash;
+
+window.location.hash = "#/search?q=labour&k=12&categories_any=marxism";
+await applyRoute();
+result.reloaded = {
+  view: activeView(),
+  query: document.getElementById("query").value,
+  requests: searches().map((request) => JSON.parse(request.body)),
+  title: document.title,
+};
+
+switchView("status");
+recordRoute();
+result.statusHash = window.location.hash;
+window.location.hash = "#/search?q=labour&k=12&categories_any=marxism";
+await applyRoute();
+result.searchesAfterBack = searches().length;
+
+document.getElementById("query").value = "automation";
+await search({ preventDefault() {} });
+result.submitted = window.location.hash;
+result.searchesAfterSubmit = searches().length;
+
+window.location.hash = "#/<script>";
+await applyRoute();
+result.unknown = window.location.hash;
+result.history = window.history.entries;
+})()
+""",
+    )
+
+    assert result["sources"] == {
+        "view": "sources",
+        "page": 2,
+        "filter": "source",
+        "range": "Showing 11–20 of 23 sources",
+        "hash": "#/sources?page=2&filter=source",
+        "title": "sources · page 2 · Research RAG",
+    }
+    # A page past the end is drawn as the last page, and the fragment says so.
+    assert result["clamped"] == "#/sources?page=3"
+    # A reload of a search runs it once, with what the fragment carries.
+    reloaded = result["reloaded"]
+    assert reloaded["view"] == "search"
+    assert reloaded["query"] == "labour"
+    assert reloaded["requests"] == [
+        {"query": "labour", "top_k": 12, "categories_any": ["marxism"]}
+    ]
+    assert reloaded["title"] == "search “labour” · Research RAG"
+    # Leaving and coming back to the search on screen costs no second search.
+    assert result["statusHash"] == "#/status"
+    assert result["searchesAfterBack"] == 1
+    # A submitted search is a history entry of its own.
+    assert result["submitted"] == "#/search?q=automation&k=12&categories_any=marxism"
+    assert result["searchesAfterSubmit"] == 2
+    assert ["push", "#/status"] in result["history"]
+    assert ["push", result["submitted"]] in result["history"]
+    # A fragment that names no view is replaced by the view drawn.
+    assert result["unknown"] == "#/search"
