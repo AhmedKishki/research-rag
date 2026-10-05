@@ -1347,3 +1347,34 @@ def test_the_preview_reports_an_unreachable_release_as_a_normal_answer(
     assert preview["published"]["state"] == "skipped"
     assert "--offline" in preview["published"]["detail"]
     assert preview["published"].get("body") is None
+
+
+@pytest.mark.parametrize(
+    "published",
+    [
+        PublishedRelease(update_module.UNREADABLE_RELEASE, detail="GitHub unavailable"),
+        _published_release(),
+    ],
+)
+def test_approval_cannot_install_without_the_matching_github_changelog(
+    monkeypatch: pytest.MonkeyPatch, published: PublishedRelease
+) -> None:
+    run = Recorder()
+    monkeypatch.setattr(
+        update_module, "probe_local", lambda **_: _local(None, tool="pipx")
+    )
+    monkeypatch.setattr(
+        update_module,
+        "probe_remote",
+        lambda *_, **__: update_module.RemoteState(
+            reachable=True, available_version="0.2.0"
+        ),
+    )
+    monkeypatch.setattr(
+        update_module, "published_release_for", lambda *_, **__: published
+    )
+    monkeypatch.setattr(registry, "load", list)
+    monkeypatch.setattr(process_module, "subprocess_runner", run)
+    with pytest.raises(ResearchError, match="GitHub release and changelog"):
+        _run("update", "--apply", "--yes")
+    assert not run.ran("pipx", "upgrade", "research-rag")

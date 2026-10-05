@@ -77,6 +77,12 @@ research-rag --project-root "/path/to/project" doctor --mcp-entry
 - HTTP clients use the app's `/mcp` endpoint; stdio clients use `research-rag mcp --project-name "My project"`.
   - The bridge names a registered project and does not start its app.
 
+## Updates
+
+- The browser's **Updates** view shows GitHub release notes; **Not now** declines without changing the installation.
+- Run `research-rag update` in a terminal to review the changelog and approve or decline an update.
+  - Installation requires explicit approval. Use `research-rag update --help` for unattended updates and offline checks.
+
 ## Help and details
 
 - `research-rag --help` or `research-rag help`: command reference, without a project.
