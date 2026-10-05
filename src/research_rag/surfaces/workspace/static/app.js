@@ -63,6 +63,9 @@ function applyProfile(profile) {
   document.querySelectorAll("[data-capability]").forEach((element) => {
     element.hidden = !hasCapability(element.dataset.capability);
   });
+  // The build button names the build the corpus needs, so it waits for the
+  // status that says which one that is.
+  byId("ingest-button").hidden = true;
   const visibleNavItems = [...document.querySelectorAll(".sidebar-item")].filter(
     (item) => !item.hidden,
   );
@@ -187,10 +190,28 @@ function sourceForDocument(documentId) {
   return state.sources.find((source) => source.document_id === documentId) || null;
 }
 
-function setConnection(kind, label) {
+function setConnection(kind, label, detail = "") {
   const element = byId("connection-state");
   element.dataset.state = kind;
   element.lastElementChild.textContent = label;
+  element.title = detail;
+}
+
+// The header says whether the app answers and whether its own checks found
+// anything to act on. A degraded project still answers, so "ready" alone hid a
+// warning the status payload carried; the count sends the reader to Status.
+function connectionHealth(status) {
+  const blocked = (status?.blocked_by || []).length;
+  const warnings = (status?.degraded || []).length;
+  const reasons = [...(status?.blocked_by || []), ...(status?.degraded || [])]
+    .map((entry) => inlineText(entry.reason))
+    .filter(Boolean)
+    .join("\n");
+  if (blocked) return ["blocked", `Local · ${blocked} blocked`, reasons];
+  if (warnings) {
+    return ["warn", `Local · ${warnings} warning${warnings === 1 ? "" : "s"}`, reasons];
+  }
+  return ["ready", "Local · ready", ""];
 }
 
 function setBusy(active, message = "Working…") {
@@ -202,6 +223,7 @@ function setBusy(active, message = "Working…") {
   });
   byId("refresh-button").disabled = active;
   byId("ingest-button").disabled = active || !hasCapability("ingestion");
+  byId("rebuild-button").disabled = active || !hasCapability("force_recompute");
   byId("export-button").disabled = active || !hasCapability("bundle_export");
   byId("import-button").disabled = active || !hasCapability("bundle_import");
   // The run button is a submit, so re-enabling every submit above would leave it
@@ -519,6 +541,158 @@ function renderStatusFacts(status) {
   byId("status-facts").replaceChildren(factList(rows, "fact-list"));
 }
 
+// The build a reader is offered is decided by the corpus, not by the button. An
+// ingestion reuses everything whose bytes, policies, and model are unchanged, so
+// it is the right build for a new, changed, or outdated corpus and does nothing
+// to a current one. A current corpus is offered no build in the header: the
+// only one left is a build that reuses nothing, and that is named for its cost
+// on the Status view rather than placed in every view as the primary action.
+//
+// A build that saved a checkpoint resumes only under the parameters it started
+// with, so its own force flag is sent back rather than one read off the corpus.
+function ingestPlan(status) {
+  const progress = status.ingestion_progress;
+  if (progress) {
+    return { label: "Resume build", force: Boolean(progress.parameters?.force_recompute) };
+  }
+  if (!status.ready) return { label: "Create generation", force: false };
+  if (status.generation_upgrade_required) return { label: "Upgrade generation", force: false };
+  if (status.stale) return { label: "Ingest changes", force: false };
+  return null;
+}
+
+const REBUILD_PLAN = { label: "Rebuild from scratch", force: true };
+
+// The cost of a build that reuses nothing, stated from the counts the server
+// reported rather than estimated from them.
+function rebuildCost(status) {
+  const sources = formatNumber(status?.indexed_source_count ?? status?.selected_source_count);
+  const sentences = [
+    `Nothing is reused: all ${sources} sources are extracted again and every passage is embedded again.`,
+  ];
+  const metrics = status?.last_build_metrics || {};
+  if (Number.isFinite(metrics.reused_vector_count) && Number.isFinite(metrics.created_vector_count)) {
+    sentences.push(
+      `The last ingestion reused ${formatNumber(metrics.reused_vector_count)} vectors and created ${formatNumber(metrics.created_vector_count)}.`,
+    );
+  }
+  sentences.push("An ordinary ingestion already rebuilds whatever changed.");
+  return sentences.join(" ");
+}
+
+function progressSummary(status) {
+  const progress = status.ingestion_progress || {};
+  const phase = String(progress.phase || "unknown").replaceAll("_", " ");
+  const counts = progress.progress || {};
+  const reached = Number.isFinite(counts.total) && counts.total > 0
+    ? ` at ${formatNumber(counts.completed)} of ${formatNumber(counts.total)} ${String(counts.unit || "").replaceAll("_", " ")}`
+    : "";
+  const sentences = [
+    `It reached the ${phase} phase${reached}.`,
+    "Resuming continues from that checkpoint.",
+  ];
+  if (status.ready) sentences.push("The generation in use stays searchable until the build succeeds.");
+  return sentences.join(" ");
+}
+
+function openIngest(plan) {
+  if (!plan) return;
+  state.forceRecompute = plan.force;
+  byId("ingest-dialog").querySelector("h2").textContent = plan.label;
+  byId("ingest-submit").textContent = plan.label;
+  const cost = byId("ingest-cost");
+  cost.textContent = plan.force ? rebuildCost(state.status) : "";
+  cost.hidden = !plan.force;
+  byId("ingest-dialog").showModal();
+}
+
+const HEALTH_LABELS = { ok: "Passed", warn: "Warning", blocked: "Blocked", unknown: "Not checked" };
+
+// The two badges a reader must act on are coloured; a passed or unchecked check
+// stays grey, as every other badge that says nothing alarming does.
+const HEALTH_BADGES = {
+  warn: "state-badge state-badge-warning",
+  blocked: "state-badge state-badge-blocked",
+};
+
+function checkLabel(check) {
+  const words = String(check || "check").replaceAll(/[_.]+/g, " ").trim();
+  return words.charAt(0).toUpperCase() + words.slice(1);
+}
+
+function healthBadge(stateName) {
+  return node(
+    "span",
+    HEALTH_BADGES[stateName] || "state-badge",
+    HEALTH_LABELS[stateName] || HEALTH_LABELS.unknown,
+  );
+}
+
+// A condition carries its reason and the command that clears it. The command is
+// the server's own, shown whole and copied exactly, because a reader pastes it
+// into a terminal; the page never composes one.
+function healthCondition(entry) {
+  const item = node("article", `health-condition health-condition-${entry.state}`);
+  const head = node("div", "health-condition-head");
+  head.append(healthBadge(entry.state), node("strong", "", checkLabel(entry.check)));
+  item.append(head);
+  if (entry.reason) item.append(node("p", "health-reason", inlineText(entry.reason)));
+  const remedy = entry.remedy || entry.remedy_command;
+  if (remedy) {
+    const row = node("div", "update-command-row");
+    row.append(node("code", "update-command", remedy));
+    row.append(button("Copy command", "copy-remedy", remedy, "button"));
+    item.append(row);
+  }
+  return item;
+}
+
+// The server's checks are read-only and run on every status read, so the page
+// shows what they found: first what needs action, from `blocked_by` and
+// `degraded`, then every check behind a disclosure. A host whose status carries
+// no checks shows no section.
+function renderHealth(status) {
+  const section = byId("health-section");
+  const checks = Array.isArray(status.checks) ? status.checks : [];
+  const conditions = [
+    ...(status.blocked_by || []).map((entry) => ({ ...entry, state: "blocked" })),
+    ...(status.degraded || []).map((entry) => ({ ...entry, state: "warn" })),
+  ];
+  const notChecked = (status.not_checked || []).map((entry) =>
+    typeof entry === "string" ? { check: entry, state: "unknown" } : { ...entry, state: "unknown" },
+  );
+  section.hidden = !checks.length && !conditions.length && !notChecked.length;
+  if (section.hidden) return;
+
+  byId("health-summary").textContent = conditions.length
+    ? `${conditions.length} to act on`
+    : "All passed";
+  const list = byId("health-conditions");
+  list.replaceChildren();
+  conditions.forEach((entry) => list.append(healthCondition(entry)));
+  if (!conditions.length) {
+    list.append(node("p", "form-note", "Every check passed."));
+  }
+
+  const rows = [
+    ...checks.map((entry) => ({ ...entry, state: entry.state || "unknown" })),
+    ...notChecked,
+  ];
+  const passed = rows.filter((entry) => entry.state === "ok").length;
+  byId("health-check-note").textContent = `${passed} of ${rows.length} passed`;
+  const all = byId("health-checks");
+  all.replaceChildren();
+  rows.forEach((entry) => {
+    const row = node("li", "health-check");
+    row.append(healthBadge(entry.state));
+    const body = node("div", "health-check-body");
+    body.append(node("strong", "", checkLabel(entry.check)));
+    if (entry.reason) body.append(node("p", "health-reason", inlineText(entry.reason)));
+    row.append(body);
+    all.append(row);
+  });
+}
+
 function renderStatus(status) {
   state.status = status;
   const projectPath = status.project_root || "";
@@ -546,16 +720,15 @@ function renderStatus(status) {
     ? `Built ${formatDate(status.created_at)}`
     : "Not yet created";
 
-  let generationAction = "Regenerate";
-  if (!status.ready) generationAction = "Create generation";
-  else if (status.generation_upgrade_required) generationAction = "Regenerate";
-  else if (status.stale) generationAction = "Re-ingest changes";
-  state.forceRecompute = Boolean(
-    status.ready && (!status.stale || status.generation_upgrade_required),
-  );
-  byId("ingest-button").textContent = generationAction;
-  byId("ingest-dialog").querySelector("h2").textContent = generationAction;
-  byId("ingest-submit").textContent = generationAction;
+  const plan = ingestPlan(status);
+  state.ingestPlan = plan;
+  const ingestButton = byId("ingest-button");
+  ingestButton.hidden = !hasCapability("ingestion") || !plan;
+  ingestButton.textContent = plan ? plan.label : "";
+  // A rebuild replaces a generation, so there is none to offer before the first
+  // build, nor while a checkpointed build is waiting to be resumed.
+  byId("rebuild-button").hidden =
+    !hasCapability("force_recompute") || !status.ready || Boolean(status.ingestion_progress);
 
   let indexState = "Not built";
   if (status.ready && status.stale) indexState = "Stale";
@@ -568,30 +741,30 @@ function renderStatus(status) {
 
   const notice = byId("status-notice");
   const noticeAction = byId("notice-action");
-  if (!status.ready) {
+  // Every notice that asks for a build offers the build the header offers, so
+  // the two controls cannot name different work.
+  noticeAction.hidden = !hasCapability("ingestion") || !plan;
+  noticeAction.textContent = plan ? plan.label : "";
+  noticeAction.dataset.action = "ingest";
+  if (status.ingestion_progress) {
+    notice.hidden = false;
+    byId("status-notice-title").textContent = "A build has a saved checkpoint";
+    byId("status-notice-text").textContent = progressSummary(status);
+  } else if (!status.ready) {
     notice.hidden = false;
     byId("status-notice-title").textContent = "No generation exists";
     byId("status-notice-text").textContent = status.message || "Create the first knowledge-base generation.";
-    noticeAction.hidden = !hasCapability("ingestion");
-    noticeAction.textContent = "Create generation";
-    noticeAction.dataset.action = "ingest";
   } else if (status.generation_upgrade_required) {
     notice.hidden = false;
     byId("status-notice-title").textContent = "This generation needs an upgrade";
     const reasons = (status.upgrade_reasons || []).join(", ").replaceAll("_", " ");
     byId("status-notice-text").textContent = reasons
-      ? `Regenerate to apply: ${reasons}. The existing generation remains searchable.`
-      : "Regenerate to apply the current extraction and retrieval policies.";
-    noticeAction.hidden = !hasCapability("ingestion");
-    noticeAction.textContent = "Regenerate";
-    noticeAction.dataset.action = "ingest";
+      ? `Upgrade to apply: ${reasons}. The existing generation remains searchable.`
+      : "Upgrade to apply the current extraction and retrieval policies.";
   } else if (status.stale) {
     notice.hidden = false;
     byId("status-notice-title").textContent = "The current generation is stale";
     byId("status-notice-text").textContent = changeSummary(status.changes);
-    noticeAction.hidden = !hasCapability("ingestion");
-    noticeAction.textContent = "Create fresh generation";
-    noticeAction.dataset.action = "ingest";
   } else {
     notice.hidden = true;
   }
@@ -602,11 +775,13 @@ function renderStatus(status) {
   const message = byId("status-message");
   message.textContent = status.message || "";
   message.hidden = !status.message;
+  renderHealth(status);
   renderStatusFacts(status);
   configureRetrieval(status);
   renderPartitions(status);
   renderProjectTags(status);
   renderLanguages(status);
+  syncFilterPicks();
   renderAgentEndpoint(status);
   if (hasCapability("generations")) renderGenerations(status.generations || []);
   if (hasCapability("sql_console")) renderSqlConsole(status);
@@ -651,7 +826,7 @@ function revealFilterField(field) {
   if (group) group.dataset.filled = "true";
 }
 
-function addSearchFilter(field, value) {
+function addSearchFilter(field, value, label = value) {
   const input = byId(field);
   if (!input || !value) return;
   const values = listValue(input.value);
@@ -660,16 +835,36 @@ function addSearchFilter(field, value) {
   revealFilterField(field);
   syncFilterSummary();
   input.focus();
-  toast(`Added to the search filter: ${value}`);
+  toast(`Added to the search filter: ${label}`);
+}
+
+// A source chosen on the Sources view narrows a search, so the reader is taken
+// to the search with the filter in view. A toast on a view the filter is not on
+// told the reader about a change they could not see.
+function searchWithSource(field, sourceId) {
+  const source = state.sources.find((entry) => entry.source_id === sourceId);
+  switchView("search", { moveFocus: true });
+  addSearchFilter(field, sourceId, inlineText(source?.title) || sourceId);
+}
+
+// A list offers a choice only when picking from it narrows the search. One value
+// every searchable source carries narrows nothing, and a list of none offers
+// nothing, so neither is drawn: a heading over a list that cannot change a
+// result is a heading a reader stops on.
+function inventoryNarrows(entries) {
+  if (entries.length !== 1) return entries.length > 1;
+  const total = Number(state.status?.searchable_source_count ?? state.status?.selected_source_count);
+  const carrying = Number(entries[0].searchable_source_count);
+  return !Number.isFinite(total) || !Number.isFinite(carrying) || carrying < total;
 }
 
 function renderInventory(containerId, entries, key, action) {
   const container = byId(containerId);
   if (!container) return;
   container.replaceChildren();
-  if (!entries.length) {
-    container.append(node("span", "form-note", "None recorded yet."));
-    return;
+  const group = container.closest(".pick-group");
+  if (group) {
+    group.hidden = !hasCapability(group.dataset.capability) || !inventoryNarrows(entries);
   }
   entries.forEach((item) => {
     const control = button(item[key], action, item[key], "pick-button");
@@ -679,6 +874,13 @@ function renderInventory(containerId, entries, key, action) {
     control.title = `Search ${item[key]}`;
     container.append(control);
   });
+}
+
+// The lists sit at the foot of the filter drawer under a rule of their own, so
+// the rule goes when the last list goes.
+function syncFilterPicks() {
+  const picks = byId("filter-picks");
+  picks.hidden = ![...picks.querySelectorAll(".pick-group")].some((group) => !group.hidden);
 }
 
 function renderPartitions(status) {
@@ -1013,12 +1215,23 @@ function sourceCard(source) {
   if (hasCapability("metadata")) {
     actions.append(button("Edit metadata", "edit-metadata", source.document_id));
   }
-  if (hasCapability("source_inclusion")) {
-    actions.append(button("Exclude", "exclude-source", source.document_id));
-  }
+  // Two different decisions sit here, and their names keep them apart. The
+  // search pair fills a filter for the next query and opens the search; the
+  // project exclusion is recorded, read by every surface and agent, and kept
+  // until it is restored, so it is named for its reach and coloured for it.
   if (hasCapability("source_selection")) {
-    actions.append(button("Only this source", "only-source", source.source_id));
-    actions.append(button("Exclude from search", "exclude-from-search", source.source_id));
+    actions.append(button("Search only this source", "only-source", source.source_id));
+    actions.append(button("Search without this source", "exclude-from-search", source.source_id));
+  }
+  if (hasCapability("source_inclusion")) {
+    actions.append(
+      button(
+        "Exclude from project…",
+        "exclude-source",
+        source.document_id,
+        "action-button action-button-danger",
+      ),
+    );
   }
   if (actions.childElementCount) card.append(actions);
   return card;
@@ -1112,7 +1325,7 @@ async function loadWorkspace({ announce = false } = {}) {
         toast(error.message, true);
       }
     }
-    setConnection("ready", "Local · ready");
+    setConnection(...connectionHealth(state.status));
     // The update check runs after the workspace has drawn and is never awaited,
     // so a slow or unreachable release feed cannot hold up a search. It asks one
     // question and downloads nothing.
@@ -1319,7 +1532,13 @@ async function search(event) {
   try {
     state.hits = new Map();
     renderResults(await api("/api/search", { method: "POST", body: JSON.stringify(payload) }));
-    byId("search-summary").scrollIntoView({ behavior: "smooth", block: "start" });
+    // The results sit under the query, so the page moves only when an open
+    // filter drawer has pushed them out of sight. Moving it otherwise took the
+    // query off the screen for no gain.
+    const summary = byId("search-summary");
+    if (summary.getBoundingClientRect().top > window.innerHeight * 0.75) {
+      summary.scrollIntoView({ behavior: "smooth", block: "start" });
+    }
   } catch (error) {
     toast(error.message, true);
   } finally {
@@ -2409,12 +2628,13 @@ function handleAction(event) {
   } else if (action === "copy-citation") {
     const hit = state.hits.get(value);
     if (hit) copyText(inlineText(hit.citation), "Citation copied.");
-  } else if (action === "ingest") byId("ingest-dialog").showModal();
+  } else if (action === "ingest") openIngest(state.ingestPlan);
+  else if (action === "copy-remedy") copyText(value, "Command copied.");
   else if (action === "partition-filter") addSearchFilter("category-any-filter", value);
   else if (action === "project-filter") addSearchFilter("project-any-filter", value);
   else if (action === "language-filter") addSearchFilter("language-filter", value);
-  else if (action === "only-source") addSearchFilter("include-source-filter", value);
-  else if (action === "exclude-from-search") addSearchFilter("exclude-source-filter", value);
+  else if (action === "only-source") searchWithSource("include-source-filter", value);
+  else if (action === "exclude-from-search") searchWithSource("exclude-source-filter", value);
   else if (action === "copy-standing" || action === "edit-standing") {
     const scope = target.closest(".memory-scope")?.dataset.scope;
     if (!scope) return;
@@ -2465,7 +2685,9 @@ function initialize() {
     control.addEventListener("click", () => control.closest("dialog").close());
   });
   byId("refresh-button").addEventListener("click", () => loadWorkspace({ announce: true }));
-  byId("ingest-button").addEventListener("click", () => byId("ingest-dialog").showModal());
+  byId("ingest-button").addEventListener("click", () => openIngest(state.ingestPlan));
+  byId("rebuild-button").addEventListener("click", () => openIngest(REBUILD_PLAN));
+  byId("health-section").addEventListener("click", handleAction);
   byId("export-button").addEventListener("click", exportBundle);
   byId("import-button").addEventListener("click", () => byId("bundle-dialog").showModal());
   byId("notice-action").addEventListener("click", handleAction);
