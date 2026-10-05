@@ -20,7 +20,7 @@ import research_rag.surfaces.bridge as bridge_module
 from research_rag.core.blocked_answers import not_served_status, uninitialised_status
 from research_rag.project import registry
 from research_rag.project.config import resolve_config
-from research_rag.project.support import ResearchError
+from research_rag.project.policy import ResearchError
 from research_rag.surfaces import bridge
 from research_rag.surfaces.cli import main
 from research_rag.surfaces.mcp import create_blocked_mcp

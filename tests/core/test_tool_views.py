@@ -11,7 +11,11 @@ from research_rag.core.tool_views import present_tool_response
 from research_rag.project.config import ConfigurationError, resolve_config
 from research_rag.project.settings import FULL_TOOL_DETAIL, LEAN_TOOL_DETAIL
 
-# Keys the service builds for ranking, extraction, and storage diagnostics.
+# Keys the service builds for ranking, extraction, and storage diagnostics. Two are
+# absent because a lean answer now carries them as conditions rather than
+# diagnostics: `dense_truncated`, which qualifies a passage the embedder could only
+# read in part, and `relevance_limited`, which qualifies a short answer. `title` is
+# absent because a reader citing a passage has to name the work it came from.
 DIAGNOSTIC_KEYS = {
     "annotations",
     "available_retrieval_methods",
@@ -23,10 +27,8 @@ DIAGNOSTIC_KEYS = {
     "content_kind",
     "dense_fidelity",
     "dense_gate",
-    "dense_truncated",
-    "distinct_reference_count",
-    "doi",
     "document_id",
+    "doi",
     "embedding_model",
     "embedding_model_revision",
     "embedding_token_count",
@@ -48,8 +50,6 @@ DIAGNOSTIC_KEYS = {
     "rank",
     "rejected_candidate_examples",
     "rejected_candidates",
-    "relevance_limited",
-    "relevance_policy",
     "rerank_requested",
     "rerank_score",
     "reranker_model",
@@ -73,29 +73,76 @@ def test_lean_passage_shape() -> None:
     assert lean["hits"] == [
         {
             "chunk_id": "chk_one",
+            "source_id": "src_one",
             "source_relative_path": "evidence.pdf",
+            "title": "Citable Evidence",
             "authors": ["A. Researcher"],
             "locator": {"page": 3},
             "text": "cleaned semantic text",
+            "direct_quote_safe": False,
         },
         {
             "chunk_id": "chk_two",
+            "source_id": "src_two",
             "source_relative_path": "anonymous.pdf",
+            "title": "anonymous",
             "locator": {"section": "chapter.xhtml"},
             "text": "second passage",
+            "direct_quote_safe": False,
         },
     ]
 
-    # The reference is deliberately not citation-ready, and neither the quote-safety rule nor
-    # the advisory script note is repeated on every passage.
+    # Every handle a follow-up call takes is here, so an agent never looks a hit up
+    # again, and the reference is deliberately not citation-ready. The advisory script
+    # note and the ranking stay in the full payload.
     for key in (
         "citation",
-        "direct_quote_safe",
-        "source_id",
+        "document_id",
+        "doi",
         "text_notes",
-        "title",
+        "year",
     ):
         assert key not in json.dumps(lean)
+
+
+def test_every_passage_carries_the_quotation_safeguard() -> None:
+    """`direct_quote_safe: false` is the one place the rule appears per passage.
+
+    The flag is the machine-readable form of the rule that a quotation is taken from
+    the original, so it belongs on a hit and on every context passage alike, and a
+    passage that arrives without it must not be projected as quote-safe.
+    """
+
+    hit = present_tool_response("search", _search_payload(), detail=LEAN_TOOL_DETAIL)
+    assert {passage["direct_quote_safe"] for passage in hit["hits"]} == {False}
+
+    context = present_tool_response(
+        "get_passage",
+        {
+            "generation_id": "20260101T000000Z-abcdef",
+            "requested_chunk_id": "chk_one",
+            "context": [{"chunk_id": "chk_one", "text": "cleaned semantic text"}],
+        },
+        detail=LEAN_TOOL_DETAIL,
+    )
+    assert context["context"][0]["direct_quote_safe"] is False
+
+
+def test_a_passage_the_embedder_could_only_read_in_part_says_so() -> None:
+    """Its text is whole and its semantic match was partial, which is a condition."""
+
+    ordinary = present_tool_response(
+        "search", _search_payload(), detail=LEAN_TOOL_DETAIL
+    )
+    assert all("dense_truncated" not in hit for hit in ordinary["hits"])
+
+    partial = present_tool_response(
+        "search",
+        _search_payload(hits=[{**_hit(), "dense_truncated": True}, _anonymous_hit()]),
+        detail=LEAN_TOOL_DETAIL,
+    )
+    assert partial["hits"][0]["dense_truncated"] is True
+    assert "dense_truncated" not in partial["hits"][1]
 
 
 def test_lean_response_never_contains_a_diagnostic_key() -> None:
@@ -128,8 +175,12 @@ def test_search_reports_rerank_state_and_unknown_ids() -> None:
     assert "unresolved_exclude_source_ids" not in lean
 
 
-def test_search_reports_an_applied_bibliographic_filter() -> None:
-    """A filtered answer says which filter it applied, so an empty one explains itself."""
+def test_search_reports_every_filter_it_applied() -> None:
+    """A filtered answer says which filter it applied, so an empty one explains itself.
+
+    The names are the tool's own parameter names, because an agent that read
+    `keywords` has to be able to pass `keywords` back.
+    """
 
     unfiltered = present_tool_response(
         "search", _search_payload(), detail=LEAN_TOOL_DETAIL
@@ -138,14 +189,28 @@ def test_search_reports_an_applied_bibliographic_filter() -> None:
 
     filtered = present_tool_response(
         "search",
-        _search_payload(authors_any=["Crawford"], titles_any=["Atlas of AI"]),
+        _search_payload(
+            authors_any=["Crawford"],
+            titles_any=["Atlas of AI"],
+            source_ids=["src_one"],
+            exclude_source_ids=["src_two"],
+        ),
         detail=LEAN_TOOL_DETAIL,
     )
     assert filtered["applied_filters"] == {
         "authors_any": ["Crawford"],
         "titles_any": ["Atlas of AI"],
+        "source_ids": ["src_one"],
+        "exclude_source_ids": ["src_two"],
     }
     assert "categories_any" not in filtered
+
+    keywords = present_tool_response(
+        "search",
+        _search_payload(filters_keywords=["heron"]),
+        detail=LEAN_TOOL_DETAIL,
+    )
+    assert keywords["applied_filters"] == {"keywords": ["heron"]}
 
 
 def test_search_omits_an_upgrade_note_that_is_not_required() -> None:
@@ -172,7 +237,81 @@ def test_passage_context_is_lean_and_keeps_no_rank() -> None:
 
     assert set(lean) == {"generation_id", "context"}
     assert "rank" not in lean["context"][0]
-    assert "direct_quote_safe" not in lean["context"][0]
+    assert lean["context"][0]["source_id"] == "src_one"
+    assert lean["context"][0]["direct_quote_safe"] is False
+
+
+def test_an_empty_search_answer_says_which_finding_it_is() -> None:
+    """An empty answer is four different findings, and each says so in its own field.
+
+    A filter emptied it, the reranker did not run, the ranking never reached the
+    whole corpus, or the corpus holds nothing the query reached. The fourth is the
+    only one no field names, which is what makes the other three necessary.
+    """
+
+    def _empty(**overrides: object) -> dict[str, object]:
+        return present_tool_response(
+            "search",
+            _search_payload(hits=[], **overrides),
+            detail=LEAN_TOOL_DETAIL,
+        )
+
+    filtered = _empty(titles_any=["A Work No Source Carries"])
+    assert filtered["hits"] == []
+    assert filtered["applied_filters"] == {"titles_any": ["A Work No Source Carries"]}
+
+    fallback = _empty(
+        reranked=False,
+        rerank_fallback={
+            "reason": "reranker_model_unavailable",
+            "effect": "unranked_candidate_order_returned",
+        },
+    )
+    assert fallback["reranked"] is False
+    assert fallback["rerank_fallback"]["reason"] == "reranker_model_unavailable"
+    assert "applied_filters" not in fallback
+
+    partial = _empty(window_is_whole_corpus=False)
+    assert partial["search_window_partial"] is True
+
+    silence = _empty()
+    for absent in (
+        "applied_filters",
+        "search_window_partial",
+        "rerank_fallback",
+        "reranked",
+        "stale",
+        "generation_upgrade_required",
+    ):
+        assert absent not in silence
+
+
+def test_a_thin_or_partial_search_answer_is_never_hid() -> None:
+    lean = present_tool_response(
+        "search",
+        _search_payload(
+            relevance_limited=True,
+            collapsed_repetitions={
+                "repetitions_collapsed": 2,
+                "pairs": [{"chunk_id": "chk_two", "collapsed_by": "same_words"}],
+            },
+        ),
+        detail=LEAN_TOOL_DETAIL,
+    )
+
+    assert lean["relevance_limited"] is True
+    # The count, not the pairs: an overlap a caller must account for is named, and
+    # the pairs belong to the full payload.
+    assert lean["repetitions_collapsed"] == 2
+    assert "pairs" not in json.dumps(lean)
+
+
+def test_a_whole_corpus_window_is_left_unsaid() -> None:
+    lean = present_tool_response("search", _search_payload(), detail=LEAN_TOOL_DETAIL)
+
+    assert "search_window_partial" not in lean
+    assert "relevance_limited" not in lean
+    assert "repetitions_collapsed" not in lean
 
 
 def test_status_names_a_blocker_and_its_remedy() -> None:
@@ -264,6 +403,47 @@ def test_status_keeps_dependencies_out_of_the_answer_when_there_are_none() -> No
     assert "degraded" not in lean
 
 
+def test_status_carries_its_sentence_only_while_there_is_a_reason() -> None:
+    """A verdict with nothing to fix gets no sentence; one with a condition keeps it."""
+
+    healthy = present_tool_response(
+        "status", _status_payload(), detail=LEAN_TOOL_DETAIL
+    )
+    assert "message" not in healthy
+
+    for overrides in (
+        {
+            "ready": False,
+            "message": "No knowledge-base generation exists; call ingest.",
+        },
+        {"stale": True, "message": "The source directory moved on; call ingest."},
+        {
+            "blocked_by": [
+                {
+                    "check": "vanilla_runtime",
+                    "reason": "The tree differs at servers/stray.pyc.",
+                    "remedy": "research-rag doctor --repair-runtime",
+                }
+            ],
+            "message": "The installed gateway tree differs from the shipped one.",
+        },
+        {
+            "degraded": [
+                {
+                    "check": "lock",
+                    "reason": "Process 4321 has held the project since 09:00:00Z.",
+                    "remedy": "research-rag --project-root /project stop --servers",
+                }
+            ],
+            "message": "Another build holds the project lock.",
+        },
+    ):
+        lean = present_tool_response(
+            "status", _status_payload(**overrides), detail=LEAN_TOOL_DETAIL
+        )
+        assert lean["message"] == overrides["message"]
+
+
 def test_status_discloses_nothing_the_payload_did_not_say() -> None:
     """Every string in the lean answer comes from the payload it projects."""
 
@@ -300,9 +480,10 @@ def test_status_lean_states_the_verdict_and_nothing_else() -> None:
     payload = _status_payload()
     lean = present_tool_response("status", payload, detail=LEAN_TOOL_DETAIL)
 
-    # Two booleans the caller can act on, the generation they describe, and the sentence
-    # that explains them.
-    assert set(lean) == {"ready", "stale", "generation_id", "message"}
+    # Two booleans the caller can act on and the generation they describe. A ready,
+    # current project with nothing required has nothing to explain, so its own
+    # sentence is left out rather than restating them.
+    assert set(lean) == {"ready", "stale", "generation_id"}
     assert lean["ready"] is True
     assert lean["stale"] is False
     assert lean["generation_id"] == "20260101T000000Z-abcdef"
@@ -494,11 +675,15 @@ def test_find_source_lean_keeps_handles_and_availability() -> None:
         "find_source", _find_source_payload(), detail=LEAN_TOOL_DETAIL
     )
 
-    # `included` and `exists` appear only where they withhold the source.
-    assert lean["query"] == "crawford"
+    # The query is the caller's own and does not travel back; `included` and
+    # `exists` appear only where they withhold the source.
     assert lean["generation_id"] == "20260101T000000Z-abcdef"
     assert lean["match_count"] == 2
+    assert "query" not in lean
     assert "truncated" not in lean
+    # The aggregate is the rows' own `indexed_in_current_generation`, so the
+    # sentence that restates it in a second place is not carried.
+    assert "message" not in lean
     assert lean["matches"] == [
         {
             "source_id": "src_one",
@@ -544,9 +729,43 @@ def test_find_source_lean_states_an_empty_lookup() -> None:
         detail=LEAN_TOOL_DETAIL,
     )
 
-    assert set(lean) == {"generation_id", "query", "message", "matches"}
+    # An empty lookup has no rows to speak for it, so its reason travels.
+    assert set(lean) == {"generation_id", "message", "matches"}
     assert lean["matches"] == []
+    assert lean["message"] == "No source matches 'nobody'."
     assert "match_count" not in lean
+    assert "query" not in lean
+
+
+def test_a_lookup_with_nothing_searchable_keeps_its_reason() -> None:
+    """Rows that are all unsearchable still need the sentence that says why."""
+
+    lean = present_tool_response(
+        "find_source",
+        _find_source_payload(
+            searchable_match_count=0,
+            matches=[
+                {
+                    "source_id": "src_two",
+                    "source_relative_path": "archive/duplicate.pdf",
+                    "source_path": "sources/archive/duplicate.pdf",
+                    "title": "Citable Evidence",
+                    "authors": [],
+                    "exists": True,
+                    "included": False,
+                    "indexed_in_current_generation": True,
+                    "has_reviewed_metadata": False,
+                    "searchable": False,
+                }
+            ],
+            message="1 source matches 'crawford' and none is searchable: each needs "
+            "ingesting, or a reviewed exclusion is in force.",
+        ),
+        detail=LEAN_TOOL_DETAIL,
+    )
+
+    assert lean["matches"][0]["included"] is False
+    assert lean["message"].startswith("1 source matches 'crawford' and none is")
 
 
 def test_ingest_lean_discloses_anomalies_only_when_they_happened() -> None:
@@ -642,13 +861,38 @@ def test_inclusion_response_is_lean() -> None:
         "included",
         "reason",
         "generation_rebuild_recommended",
-        "message",
     }
     assert inclusion["included"] is False
     assert inclusion["reason"] == "Reviewed duplicate."
+    # The decision is in force now and the fields say so; the sentence that says
+    # the same thing again is what an agent would otherwise repeat verbatim.
+    assert "message" not in inclusion
     assert "effective_immediately" not in inclusion
     assert "source_file_changed" not in inclusion
     assert "source_path" not in inclusion
+
+
+def test_a_decision_that_waits_for_a_rebuild_keeps_its_sentence() -> None:
+    """`effective_immediately: false` is the condition the sentence explains."""
+
+    deferred = present_tool_response(
+        "set_source_inclusion",
+        {
+            "status": "changed",
+            "source_id": "src_two",
+            "source_relative_path": "duplicate.pdf",
+            "included": False,
+            "reason": "Reviewed duplicate.",
+            "effective_immediately": False,
+            "generation_rebuild_recommended": False,
+            "message": "Source inclusion saved. Run ingest before it can appear in "
+            "search because the source is absent from the current generation.",
+        },
+        detail=LEAN_TOOL_DETAIL,
+    )
+
+    assert deferred["effective_immediately"] is False
+    assert deferred["message"].startswith("Source inclusion saved. Run ingest")
 
 
 def test_a_chunk_decision_is_lean_and_says_whether_it_withholds_anything() -> None:
@@ -710,6 +954,7 @@ def test_a_chunk_decision_is_lean_and_says_whether_it_withholds_anything() -> No
     )
     assert "in_current_generation" not in present
     assert "effective_immediately" not in present
+    assert "message" not in present
 
 
 def test_every_public_tool_has_a_lean_projection() -> None:
@@ -824,17 +1069,23 @@ def _search_payload(**overrides: object) -> dict[str, object]:
         "categories_any": [],
         "projects_all": [],
         "projects_any": [],
-        "keywords_all": [],
+        "keywords_all": list(overrides.pop("filters_keywords", [])),
+        "languages_any": [],
         "authors_any": list(overrides.pop("authors_any", [])),
         "titles_any": list(overrides.pop("titles_any", [])),
         "document_ids": [],
-        "source_ids": [],
-        "exclude_source_ids": [],
+        "source_ids": list(overrides.pop("source_ids", [])),
+        "exclude_source_ids": list(overrides.pop("exclude_source_ids", [])),
         "unknown_source_ids": list(overrides.pop("unknown_source_ids", [])),
         "unknown_exclude_source_ids": [],
         "active_document_count": 2,
+        "corpus_chunk_count": 1412,
+        "window_chunk_count": 1412,
+        "window_is_whole_corpus": True,
         "note": "Filters narrow the corpus before ranking.",
     }
+    if "window_is_whole_corpus" in overrides:
+        filters["window_is_whole_corpus"] = overrides.pop("window_is_whole_corpus")
     payload: dict[str, object] = {
         "query": "cobalt heron amber marsh",
         "generation_id": "20260101T000000Z-abcdef",
@@ -867,6 +1118,7 @@ def _search_payload(**overrides: object) -> dict[str, object]:
         "result_count": 2,
         "distinct_reference_count": 2,
         "relevance_limited": False,
+        "collapsed_repetitions": {"repetitions_collapsed": 0, "pairs": []},
         "hits": [_hit(), _anonymous_hit()],
     }
     payload.update(overrides)
@@ -1093,8 +1345,72 @@ def test_metadata_response_is_lean() -> None:
         "source_id",
         "source_relative_path",
         "metadata",
-        "message",
     }
     assert metadata["metadata"] == {"title": "Reviewed", "keywords": ["theory"]}
-    assert metadata["message"].startswith("Reviewed metadata saved")
+    assert "message" not in metadata
     assert "source_file_changed" not in metadata
+
+    # A cleared review is a whole-review replace with nothing in it, so the answer
+    # says the entry is empty and why it is not in force yet.
+    cleared = present_tool_response(
+        "set_source_metadata",
+        {
+            "status": "changed",
+            "source_id": "src_one",
+            "source_relative_path": "evidence.pdf",
+            "metadata": {},
+            "effective_immediately": False,
+            "generation_rebuild_recommended": False,
+            "message": "Reviewed metadata cleared for this source; automatic "
+            "metadata applies again.",
+        },
+        detail=LEAN_TOOL_DETAIL,
+    )
+    assert cleared["metadata"] == {}
+    assert cleared["effective_immediately"] is False
+    assert cleared["message"].startswith("Reviewed metadata cleared")
+
+
+def test_a_recovered_activation_is_never_reported_as_a_call_the_caller_made() -> None:
+    lean = present_tool_response(
+        "ingest",
+        _ingest_payload(
+            activation_recovered=True,
+            message="Recovered and selected the completed generation.",
+        ),
+        detail=LEAN_TOOL_DETAIL,
+    )
+
+    assert lean["activation_recovered"] is True
+    assert lean["message"] == "Recovered and selected the completed generation."
+
+
+def test_a_routine_build_says_nothing_the_fields_do_not() -> None:
+    lean = present_tool_response(
+        "ingest",
+        _ingest_payload(message="Indexed 59 documents and 14072 chunks."),
+        detail=LEAN_TOOL_DETAIL,
+    )
+
+    assert lean["status"] == "ready"
+    assert lean["document_count"] == 59
+    assert "message" not in lean
+
+
+def test_the_lean_answer_is_a_small_share_of_the_payload_it_projects() -> None:
+    """The bound that keeps the projection a projection.
+
+    Measured on synthetic payloads rather than a corpus, so this is a size guard
+    and not a retrieval-quality claim.
+    """
+
+    for operation, payload in _every_tool_payload().items():
+        lean = present_tool_response(operation, payload, detail=LEAN_TOOL_DETAIL)
+        full = present_tool_response(operation, payload, detail=FULL_TOOL_DETAIL)
+        lean_bytes = len(json.dumps(lean, ensure_ascii=False).encode("utf-8"))
+        full_bytes = len(json.dumps(full, ensure_ascii=False).encode("utf-8"))
+        assert lean_bytes < full_bytes, operation
+        if operation in {"search", "status", "ingest"}:
+            assert lean_bytes < 0.25 * full_bytes, (
+                f"{operation} answered {lean_bytes} of {full_bytes} bytes"
+            )

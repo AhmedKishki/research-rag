@@ -35,9 +35,9 @@ from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
-from ..generations.generation import value_fingerprint
 from ..storage.records import fsync_directory
 from .config import project_command
+from .policy import ResearchError, retrieval_policy_fingerprint, value_fingerprint
 from .settings import (
     SETTINGS,
     SETTINGS_BY_KEY,
@@ -55,7 +55,6 @@ from .settings_layers import (
     SettingsError,
     read_config_document,
 )
-from .support import ResearchError, retrieval_policy_fingerprint
 
 #: The three costs a change can carry.
 COST_NONE = "none"
@@ -157,8 +156,30 @@ def _toml_value(value: Any, key: str) -> str:
             return "-inf"
         return repr(value)
     if isinstance(value, str):
+        if not _encodable_as_utf8(value):
+            raise SettingsError(
+                f"{key} carries text that is not a character, so the file cannot "
+                "hold it: a lone surrogate is not valid UTF-8. Write the character "
+                "it stands for instead."
+            )
         return _toml_string(value)
     raise SettingsError(f"{key} is not a value this writer can write: {value!r}")
+
+
+def _encodable_as_utf8(value: str) -> bool:
+    """Whether this string is text a UTF-8 file can carry.
+
+    A JSON body can carry a lone surrogate, which names a code point rather than
+    a character: no UTF-8 encoding of it exists. The writer asks here rather than
+    letting the encoder fail mid-write, because a failure there is a traceback
+    where the reader is owed a reason.
+    """
+
+    try:
+        value.encode("utf-8")
+    except UnicodeEncodeError:
+        return False
+    return True
 
 
 def read_project_document(path: Path) -> dict[str, Any]:

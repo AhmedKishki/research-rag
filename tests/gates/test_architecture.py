@@ -32,6 +32,7 @@ WEB_MODULES = frozenset(
         "runtime/app.py",
         "surfaces/bridge.py",
         "runtime/control.py",
+        "surfaces/workspace/write_guard.py",
         "gateway/server.py",
         "surfaces/mcp.py",
         "surfaces/ui.py",

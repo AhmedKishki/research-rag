@@ -12,7 +12,7 @@ The file builds a `ReuseSnapshot` over a temporary generation directory and read
 .venv/bin/python -m pytest tests/generations -q
 ```
 
-This is the right scope when the reuse rule itself changes, because the rule is one predicate and this folder tests it directly rather than through an ingestion that would also assert half a dozen unrelated answers.
+A change to the reuse rule itself belongs here, because the rule is one predicate and this folder tests it directly rather than through an ingestion that would also assert half a dozen unrelated answers.
 
 ## What it mirrors
 

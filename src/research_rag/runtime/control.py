@@ -13,9 +13,7 @@ it changes what the project's next build records.
 from __future__ import annotations
 
 import asyncio
-import ipaddress
 from typing import TYPE_CHECKING, Any
-from urllib.parse import urlsplit
 
 import httpx
 from starlette.requests import Request
@@ -23,8 +21,9 @@ from starlette.responses import JSONResponse
 from starlette.routing import Route
 
 from ..project.config import ResearchConfig
+from ..project.policy import ResearchError
 from ..project.registry import account_projects
-from ..project.support import ResearchError
+from . import write_guard
 from .app import CONTROL_PREFIX, ClientError, running_url
 from .doctor import mcp_entry_block
 
@@ -38,58 +37,30 @@ class ControlError(Exception):
     """A control call the app refused, or could not be delivered to one."""
 
 
-LOOPBACK_HOSTS = frozenset({"127.0.0.1", "localhost", "::1"})
+# The bounds a control request may not exceed. They are the engine's own, and the
+# command line's `--help` states the same two ranges, so a request outside one is
+# refused here rather than answered differently per surface.
+MAXIMUM_TOP_K = 50
+MAXIMUM_CONTEXT_CHUNKS = 5
 
 
 def _json(payload: Any, status_code: int = 200) -> JSONResponse:
     return JSONResponse(payload, status_code=status_code)
 
 
-def _is_loopback(request: Request) -> bool:
-    """Whether the request arrived from this machine.
-
-    The app binds a loopback port, so a request from anywhere else reached it
-    through something that chose to forward it, and that something is not this
-    machine's own browser.
-    """
-
-    client = request.client
-    if client is None:
-        return False
-    host = (client.host or "").casefold()
-    if host in LOOPBACK_HOSTS:
-        return True
-    try:
-        return ipaddress.ip_address(host).is_loopback
-    except ValueError:
-        return False
-
-
 def _write_refusal(request: Request) -> JSONResponse | None:
-    """Refuse a write that did not come from this machine's own page.
+    """Refuse a write this app cannot show came from its own page on this machine.
 
-    A settings write changes what a project's next build records, so it takes the
-    same three gates as the workspace's own writes: same-origin, JSON only, and
-    loopback only. The shared package holds the browser copy of these; the control
-    router cannot use them, because a terminal has no origin to compare.
+    Every control write changes what the project holds: a build, an exclusion, a
+    removed generation, or a settings file, so each takes the gates
+    `write_guard` holds, which are the workspace's own.
     """
 
-    if not _is_loopback(request):
-        return _json(
-            {"error": "Control writes are refused from another host"}, status_code=403
-        )
-    if request.headers.get("sec-fetch-site", "").casefold() == "cross-site":
-        return _json({"error": "Cross-origin writes are blocked"}, status_code=403)
-    origin = request.headers.get("origin")
-    if origin:
-        parsed = urlsplit(origin)
-        if parsed.scheme not in {
-            "http",
-            "https",
-        } or parsed.netloc != request.headers.get("host", ""):
-            return _json({"error": "Cross-origin writes are blocked"}, status_code=403)
-    content_type = request.headers.get("content-type", "").split(";", 1)[0]
-    if content_type.casefold() != "application/json":
+    refusal = write_guard.write_refusal(request)
+    if refusal is not None:
+        status, reason = refusal
+        return _json({"error": reason}, status_code=status)
+    if not write_guard.json_content_type(request):
         return _json(
             {"error": "Write requests require application/json"}, status_code=415
         )
@@ -122,14 +93,46 @@ def _string_list(value: Any, name: str) -> list[str] | None:
     return [item.strip() for item in value]
 
 
-def _bounded(value: Any, *, default: int, maximum: int, name: str) -> int:
+def _bounded(
+    value: Any,
+    *,
+    default: int,
+    maximum: int,
+    name: str,
+    minimum: int = 1,
+) -> int:
     if value is None:
         return default
     if isinstance(value, bool) or not isinstance(value, int):
         raise ResearchError(f"{name} must be an integer")
-    if not 1 <= value <= maximum:
-        raise ResearchError(f"{name} must be between 1 and {maximum}")
+    if not minimum <= value <= maximum:
+        raise ResearchError(f"{name} must be between {minimum} and {maximum}")
     return value
+
+
+def _query_int(
+    request: Request,
+    name: str,
+    *,
+    default: int,
+    maximum: int,
+    minimum: int = 1,
+) -> int:
+    """Read one bounded integer out of a query string, where every value is text.
+
+    A query parameter arrives as a string, so the integer it names is read here
+    rather than refused for not being one: the command line sends `1` and means
+    one neighbour, and a bound that rejects the text rejects the command.
+    """
+
+    raw = request.query_params.get(name)
+    if raw is None or not raw.strip():
+        return default
+    try:
+        value = int(raw)
+    except ValueError as exc:
+        raise ResearchError(f"{name} must be an integer") from exc
+    return _bounded(value, default=default, maximum=maximum, name=name, minimum=minimum)
 
 
 async def _status(app: App, request: Request) -> JSONResponse:
@@ -177,7 +180,12 @@ async def _search(app: App, request: Request) -> JSONResponse:
     return _json(
         await app.service.search(
             query,
-            top_k=_bounded(body.get("top_k"), default=10, maximum=50, name="top_k"),
+            top_k=_bounded(
+                body.get("top_k"),
+                default=10,
+                maximum=MAXIMUM_TOP_K,
+                name="top_k",
+            ),
             categories_any=_string_list(body.get("categories_any"), "categories_any"),
             projects_any=_string_list(body.get("projects_any"), "projects_any"),
             keywords=_string_list(body.get("keywords"), "keywords"),
@@ -201,11 +209,15 @@ async def _sources(app: App, request: Request) -> JSONResponse:
 
 async def _passage(app: App, request: Request) -> JSONResponse:
     chunk_id = request.path_params["chunk_id"]
-    context_chunks = _bounded(
-        request.query_params.get("context_chunks"),
+    # The engine reads this bound, and the command line documents the same range,
+    # so the route takes the engine's rather than narrowing one of the three
+    # surfaces on its own.
+    context_chunks = _query_int(
+        request,
+        "context_chunks",
         default=1,
-        maximum=5,
-        name="context_chunks",
+        maximum=MAXIMUM_CONTEXT_CHUNKS,
+        minimum=0,
     )
     return _json(await app.service.get_passage(chunk_id, context_chunks=context_chunks))
 
@@ -309,9 +321,6 @@ async def _settings_read(app: App, _request: Request) -> JSONResponse:
 
 
 async def _settings_write(app: App, request: Request) -> JSONResponse:
-    refusal = _write_refusal(request)
-    if refusal is not None:
-        return refusal
     body = await _body(request)
     # The body names settings and nothing else. A path would move the file a
     # write lands in, so one is refused rather than ignored.
@@ -377,11 +386,18 @@ def control_routes(app: App) -> list[Route]:
     """The routes the command line talks to, on the app's own port.
 
     They are declared before the workspace mount, so a URL under `/control` is
-    answered here.
+    answered here. A route that does not accept GET changes what the project
+    holds, so it carries the loopback, same-origin, and JSON gates before its body
+    is read: the gate is one implementation here rather than a line each write
+    endpoint remembers to copy.
     """
 
     def route(path: str, endpoint: Any, methods: list[str]) -> Route:
         async def bound(request: Request) -> JSONResponse:
+            if "GET" not in methods:
+                refusal = _write_refusal(request)
+                if refusal is not None:
+                    return refusal
             return await _handle(app, endpoint, request)
 
         bound.__name__ = getattr(endpoint, "__name__", "control")

@@ -2,9 +2,20 @@
 
 The command checks by default and writes nothing: it compares what is installed
 with the latest published release, reports the branch head beside that answer,
-and says whether anything has to stop first. `--apply` performs the update. The
-release a remote publishes is read from its tags by `release.py`, which needs no
-token and no API key.
+previews the changelog the release was published with, and says whether anything
+has to stop first. `--apply` performs the update, and only after a reader approves
+it. The release a remote publishes is read from its tags by `release.py`, which
+needs no token and no API key, and the changelog that describes it is read from
+the same repository's published release, which needs no credential either.
+
+Nothing is installed without an approval that names the version it approves. A
+terminal is asked once, with the changelog in front of it and no as the default
+answer; a terminal that cannot be asked is refused, and `--yes` is how automation
+says the approval was given already. An answer that is not yes — nothing typed,
+EOF, Ctrl-C, or a plain no — is a declined update and nothing else: no process is
+stopped, no checkout moves, and no file is written. What the reader approved is
+the version the preview showed, and an installation whose target has changed
+since is refused rather than moved to a different release than the one previewed.
 
 Two install shapes exist and neither is assumed. A git checkout is updated by
 detaching it onto the release tag and syncing its environment, and the answer
@@ -19,7 +30,14 @@ report and not a reason to change anything. Every decision is a pure function of
 the two states it is handed, and every subprocess call arrives through an
 injected runner, so the behaviour is testable with no remote and no network. An
 unreachable remote is a normal answer rather than an error: the report says so,
-changes nothing, and names what to try.
+changes nothing, and names what to try. The same holds for a changelog that could
+not be read, which is reported beside the release answer rather than in place of
+it.
+
+`read_preview` is the one helper another surface calls. It answers the same
+question read-only: it fetches nothing, writes nothing, stops nothing, and returns
+plain JSON, so a browser can ask what is published and show the changelog without
+installing anything itself.
 
 What left this module, and why. `tool_ownership.py` took the `uv` and `pipx`
 vocabulary: the detection that asks each tool whether it claims this
@@ -27,7 +45,8 @@ distribution, the commands each takes to report and to perform an upgrade, the
 install commands a refusal names, and that refusal's prose. `state_files.py` took
 the on-disk names, `ProjectState`, and `resident_build`, so the two questions
 this module asked about a project it has not resolved are answered beside the
-paths they walk. What remains is the decision and the two states it is made from.
+paths they walk. What remains is the decision, the two states it is made from,
+and the approval that stands between the decision and the install.
 
 It imports no retrieval module, and must not begin to: `research-rag update` is
 one of the commands that has to answer on a machine where the retrieval stack is
@@ -38,13 +57,12 @@ pays for the import that one exception needs and the reporting path does not.
 from __future__ import annotations
 
 import os
-import signal
 from collections.abc import Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from ..project.config import project_command
+from ..project.config import CLI_COMMAND, project_command
 from ..project.state_files import (
     LOCK_FILE,
     PORTABLE_DIRECTORY,
@@ -54,14 +72,19 @@ from ..project.state_files import (
     recorded_pid,
     resident_build,
 )
-from .process import Runner
+from . import ownership
+from .process import Runner, subprocess_runner
 from .release import (
     NONE,
+    Fetch,
+    PublishedRelease,
     ReleaseSet,
     compare_versions,
     declared_version,
     is_release_version,
+    published_release,
     remote_release,
+    skipped_published_release,
 )
 from .tool_ownership import (
     available_version,
@@ -70,7 +93,12 @@ from .tool_ownership import (
     unowned_refusal,
     upgrade_arguments,
 )
-from .version import DISTRIBUTION_NAME, installed_version, nearest_checkout
+from .version import (
+    DISTRIBUTION_NAME,
+    installed_version,
+    nearest_checkout,
+    version_block,
+)
 
 CHECKOUT = "checkout"
 DISTRIBUTION = "distribution"
@@ -82,9 +110,25 @@ BEHIND_RELEASE = "behind_release"
 AHEAD_OF_RELEASE = "ahead_of_release"
 NO_RELEASE = "no_release"
 UNREADABLE_RELEASE = "unreadable_release"
+# A distribution stands against its release the same way, and one installation no
+# tool claims has no position at all: there is nothing to compare and nothing that
+# could install it.
+UNOWNED_INSTALL = "unowned_install"
 # The two files that decide what the environment installs. A commit that touches
 # neither cannot move a pin, so `uv lock` has nothing to resolve and is skipped.
 PIN_FILES = ("pyproject.toml", "uv.lock")
+
+# How an approval was reached. `not_requested` is a check that changes nothing;
+# `offered` is a check in a terminal that will ask once a release is previewed;
+# `prompt` is `--apply` in a terminal; `yes_flag` is `--apply --yes`, where the
+# approval was given before the command ran; `declined` is an answer that was not
+# yes; and `approval_unavailable` is `--apply` where no question can be asked.
+NOT_REQUESTED = "not_requested"
+OFFERED = "offered"
+PROMPT = "prompt"
+YES_FLAG = "yes_flag"
+DECLINED = "declined"
+UNAVAILABLE = "approval_unavailable"
 
 
 @dataclass(frozen=True, slots=True)
@@ -151,6 +195,8 @@ class UpdatePlan:
     remote_revision: str | None = None
     blocked: str | None = None
     release_version: str | None = None
+    release_tag: str | None = None
+    release_commit: str | None = None
     release_position: str = ""
 
     def labels(self) -> tuple[str, ...]:
@@ -171,6 +217,7 @@ class UpdatePlan:
         # position, which is a fact about unreleased work and never the decision.
         if self.release_position:
             report["release_version"] = self.release_version
+            report["release_tag"] = self.release_tag
             report["release_position"] = self.release_position
         if self.behind is not None:
             report["commits_behind_branch"] = self.behind
@@ -192,7 +239,7 @@ def _failure(message: str) -> Exception:
     failure path pays for the import and every other path does not.
     """
 
-    from ..project.support import ResearchError
+    from ..project.policy import ResearchError
 
     return ResearchError(message)
 
@@ -259,7 +306,25 @@ def probe_local(*, run: Runner) -> LocalState:
     )
 
 
-def _checkout_remote(local: LocalState, run: Runner, *, offline: bool) -> RemoteState:
+def origin_url(root: Path | None, run: Runner) -> str | None:
+    """The URL this checkout's `origin` names, or None when it names none.
+
+    Read for one reason: a published changelog is this app's, and a remote that
+    names another repository publishes notes that are not. A checkout with no
+    remote, and an installed distribution, both name none.
+    """
+
+    if root is None:
+        return None
+    result = run(["git", "-C", str(root), "remote", "get-url", "origin"])
+    if not result.ok:
+        return None
+    return result.stdout.strip() or None
+
+
+def _checkout_remote(
+    local: LocalState, run: Runner, *, offline: bool, refresh: bool = True
+) -> RemoteState:
     """What this checkout's remote publishes: its release tags and its branch head.
 
     The release tags are asked for over `git ls-remote`, which needs no token and
@@ -267,6 +332,11 @@ def _checkout_remote(local: LocalState, run: Runner, *, offline: bool) -> Remote
     reported, and neither is derived from the other: the branch head says what
     unreleased work this checkout carries, and the release tags say what a reader
     may install.
+
+    `refresh=False` fetches nothing and reads the branch position from the refs
+    this checkout already holds, which is what a preview that must write nothing
+    needs. The release answer stays a live one: `ls-remote` asks the remote and
+    stores nothing.
     """
 
     root = local.checkout
@@ -286,12 +356,16 @@ def _checkout_remote(local: LocalState, run: Runner, *, offline: bool) -> Remote
                 "read. Name one with `git branch --set-upstream-to`."
             ),
         )
-    fetched = run(["git", "-C", str(root), "fetch", "--quiet", "--prune", "--tags"])
-    if not fetched.ok:
-        return RemoteState(
-            reachable=False,
-            detail=f"`git fetch` failed: {_first_line(fetched.stderr or fetched.stdout)}",
-        )
+    if refresh:
+        fetched = run(["git", "-C", str(root), "fetch", "--quiet", "--prune", "--tags"])
+        if not fetched.ok:
+            return RemoteState(
+                reachable=False,
+                detail=(
+                    f"`git fetch` failed: "
+                    f"{_first_line(fetched.stderr or fetched.stdout)}"
+                ),
+            )
     range_expression = f"HEAD..{local.upstream}"
     behind = _text(
         ["git", "-C", str(root), "rev-list", "--count", range_expression], run
@@ -339,11 +413,33 @@ def _distribution_remote(
 
 
 def probe_remote(
-    local: LocalState, run: Runner, *, offline: bool = False
+    local: LocalState, run: Runner, *, offline: bool = False, refresh: bool = True
 ) -> RemoteState:
     if local.is_checkout:
-        return _checkout_remote(local, run, offline=offline)
+        return _checkout_remote(local, run, offline=offline, refresh=refresh)
     return _distribution_remote(local, run, offline=offline)
+
+
+def published_release_for(
+    local: LocalState,
+    run: Runner,
+    *,
+    offline: bool = False,
+    fetch: Fetch | None = None,
+) -> PublishedRelease:
+    """The changelog a reader would approve, read from where the release was published.
+
+    `offline` is answered rather than attempted, and the answer says that nothing
+    was asked of the network. The fetch is injected so a test reads a recorded
+    payload and never reaches the API.
+    """
+
+    if offline:
+        return skipped_published_release(
+            "the published release was not asked because --offline was given, so "
+            "there is no changelog to show"
+        )
+    return published_release(remote_url=origin_url(local.checkout, run), fetch=fetch)
 
 
 def _where_sentence(local: LocalState, revision: str) -> str:
@@ -445,6 +541,7 @@ def _checkout_plan(local: LocalState, remote: RemoteState) -> UpdatePlan:
                     "state above as the answer."
                 ),
             ),
+            release_position=UNREADABLE_RELEASE,
             **report,
         )
     releases = remote.releases
@@ -491,6 +588,8 @@ def _checkout_plan(local: LocalState, remote: RemoteState) -> UpdatePlan:
                 "Nothing was changed.",
             ),
             release_version=release.version,
+            release_tag=release.tag,
+            release_commit=release.commit,
             release_position=UNREADABLE_RELEASE,
             **report,
         )
@@ -516,6 +615,8 @@ def _checkout_plan(local: LocalState, remote: RemoteState) -> UpdatePlan:
                 "Nothing was changed.",
             ),
             release_version=release.version,
+            release_tag=release.tag,
+            release_commit=release.commit,
             release_position=AT_RELEASE,
             **report,
         )
@@ -534,6 +635,8 @@ def _checkout_plan(local: LocalState, remote: RemoteState) -> UpdatePlan:
                 "Nothing was changed.",
             ),
             release_version=release.version,
+            release_tag=release.tag,
+            release_commit=release.commit,
             release_position=AHEAD_OF_RELEASE,
             **report,
         )
@@ -556,6 +659,8 @@ def _checkout_plan(local: LocalState, remote: RemoteState) -> UpdatePlan:
             commands=(),
             blocked=_dirty_refusal(root, local.dirty),
             release_version=release.version,
+            release_tag=release.tag,
+            release_commit=release.commit,
             release_position=BEHIND_RELEASE,
             **report,
         )
@@ -564,6 +669,8 @@ def _checkout_plan(local: LocalState, remote: RemoteState) -> UpdatePlan:
         notes=tuple(notes),
         commands=_release_commands(local, remote),
         release_version=release.version,
+        release_tag=release.tag,
+        release_commit=release.commit,
         release_position=BEHIND_RELEASE,
         **report,
     )
@@ -585,6 +692,7 @@ def _distribution_plan(local: LocalState, remote: RemoteState) -> UpdatePlan:
                 ),
             ),
             blocked=unowned_refusal(),
+            release_position=UNOWNED_INSTALL,
         )
     if not remote.reachable:
         return UpdatePlan(
@@ -604,6 +712,7 @@ def _distribution_plan(local: LocalState, remote: RemoteState) -> UpdatePlan:
                 "Nothing was changed. Retry with a network.",
             ),
             local_revision=local.version,
+            release_position=UNREADABLE_RELEASE,
         )
     if remote.available_version is None:
         return UpdatePlan(
@@ -615,6 +724,7 @@ def _distribution_plan(local: LocalState, remote: RemoteState) -> UpdatePlan:
                 "Nothing was changed.",
             ),
             local_revision=local.version,
+            release_position=UNREADABLE_RELEASE,
         )
     if remote.available_version == local.version:
         return UpdatePlan(
@@ -628,6 +738,7 @@ def _distribution_plan(local: LocalState, remote: RemoteState) -> UpdatePlan:
             ),
             local_revision=local.version,
             remote_revision=remote.available_version,
+            release_position=AT_RELEASE,
         )
     return UpdatePlan(
         shape=DISTRIBUTION,
@@ -641,6 +752,7 @@ def _distribution_plan(local: LocalState, remote: RemoteState) -> UpdatePlan:
         commands=((local.tool, *upgrade_arguments(local.tool)),),
         local_revision=local.version,
         remote_revision=remote.available_version,
+        release_position=BEHIND_RELEASE,
     )
 
 
@@ -648,6 +760,158 @@ def plan_update(local: LocalState, remote: RemoteState) -> UpdatePlan:
     if local.is_checkout:
         return _checkout_plan(local, remote)
     return _distribution_plan(local, remote)
+
+
+@dataclass(frozen=True, slots=True)
+class Approval:
+    """How this call reached an install, and whether it may do one.
+
+    An approval is never inferred. It is either given before the command ran
+    (`--yes`), or read from a reader, or it is absent — and an absent approval
+    installs nothing.
+    """
+
+    method: str
+    granted: bool = False
+
+    @property
+    def asked(self) -> bool:
+        """Whether a reader is waiting to be asked, so a prompt is owed."""
+
+        return self.method in {OFFERED, PROMPT}
+
+    def as_dict(self) -> dict[str, Any]:
+        return {"method": self.method, "granted": self.granted}
+
+
+def approval_for(
+    *, apply_requested: bool, preselected: bool, interactive: bool
+) -> Approval:
+    """The approval this call needs, from three facts and nothing else.
+
+    `preselected` is `--yes`, which is how automation says the approval was given
+    already. `interactive` is whether a reader can be asked at all. A call that
+    asked for an install and can be asked nothing is refused rather than assumed.
+    """
+
+    if not apply_requested:
+        return Approval(OFFERED if interactive else NOT_REQUESTED)
+    if preselected:
+        return Approval(YES_FLAG, granted=True)
+    return Approval(PROMPT if interactive else UNAVAILABLE)
+
+
+def answered(approval: Approval, answer: bool) -> Approval:
+    """The approval a reader gave: yes, or anything else, which is no.
+
+    An answer that is not yes needs no test for which key it was: empty, EOF,
+    Ctrl-C, and every other spelling are the same declined update.
+    """
+
+    if not approval.asked:
+        return approval
+    return Approval(PROMPT if answer else DECLINED, granted=answer)
+
+
+def approval_refusal() -> str:
+    """What an `--apply` in a terminal that cannot answer is told.
+
+    Refused rather than assumed, because installing code is the one thing this
+    command does that a reader cannot undo by reading the answer afterwards.
+    """
+
+    return (
+        "Nothing was changed. --apply installs only what a reader approves, and "
+        "this terminal cannot be asked. Pass --yes to say the approval is already "
+        f"given, or run `{CLI_COMMAND} update` without --apply to read the "
+        "changelog first."
+    )
+
+
+def target_moved(
+    local: LocalState, plan: UpdatePlan, run: Runner, *, offline: bool = False
+) -> str | None:
+    """A refusal when installing would move somewhere other than the preview.
+
+    A checkout is detached onto one tag, decided when the plan was built, so the
+    commit the preview named is the commit it lands on. An installed distribution
+    is upgraded by the tool that owns it, and that tool picks whatever is newest
+    at the moment it runs, so its answer is asked once more and a changed answer
+    refuses the install rather than delivering a release nobody approved.
+    """
+
+    if local.is_checkout:
+        return None
+    previewed = plan.remote_revision
+    remote = probe_remote(local, run, offline=offline)
+    if not remote.reachable:
+        return (
+            "Nothing was changed. The version to install was read as "
+            f"{previewed}, and it could not be read again: {remote.detail}. Run "
+            "this again once it can be."
+        )
+    if remote.available_version != previewed:
+        return (
+            "Nothing was changed. The version to install was previewed as "
+            f"{previewed}, and `{local.tool}` now offers "
+            f"{remote.available_version or 'no version'}. Read the new changelog "
+            f"and approve that one: `{CLI_COMMAND} update`."
+        )
+    return None
+
+
+def preview_notes(plan: UpdatePlan, published: PublishedRelease) -> tuple[str, ...]:
+    """The report beside the preview: what was compared, and what was read."""
+
+    return (*plan.notes, f"Changelog: {published.detail}")
+
+
+def read_preview(
+    *,
+    run: Runner | None = None,
+    offline: bool = False,
+    fetch: Fetch | None = None,
+) -> dict[str, Any]:
+    """What is installed, what is published, and the changelog to approve.
+
+    The one helper a surface other than this command line calls, and it answers
+    without touching anything: no fetch of the checkout, no tag checkout, no
+    process signal, no file written, no model downloaded. What it returns is
+    plain JSON, so a caller may cache it and render the body as text.
+
+    A browser asks for this when a reader opens it, off the event loop that serves
+    the workspace, and never to install anything: an install needs a terminal the
+    reader answers in, which is what the command line is. `install_command` names
+    that terminal command, and it takes the reader's own approval.
+    """
+
+    runner = run if run is not None else subprocess_runner
+    local = probe_local(run=runner)
+    remote = probe_remote(local, runner, offline=offline, refresh=False)
+    plan = plan_update(local, remote)
+    published = published_release_for(local, runner, offline=offline, fetch=fetch)
+    return {
+        "command": "update",
+        # An approval is never carried across into another surface, so a preview
+        # grants nothing and reports `applied: false` whatever it finds.
+        "applied": False,
+        "available": plan.available,
+        "decision": plan.release_position,
+        "version": version_block(),
+        "install": local.as_dict(),
+        "release": {
+            "version": plan.release_version,
+            "tag": plan.release_tag,
+            "commit": plan.release_commit,
+            "position": plan.release_position,
+            "detail": remote.releases.detail,
+        },
+        "published": published.as_dict(),
+        "would_run": list(plan.labels()),
+        "notes": list(preview_notes(plan, published)),
+        "blocked": plan.blocked,
+        "install_command": f"{CLI_COMMAND} update --apply",
+    }
 
 
 def apply_plan(
@@ -739,25 +1003,18 @@ class StoppedProject:
 def stop_app(project: ProjectState, run: Runner) -> StoppedProject:
     """Ask one project's app to stop, the way its own terminal would.
 
-    The app records its own pid, so this command signals that pid and nothing
-    else. A project with no live app is left alone.
+    The app records its own pid, so that number is where this looks. A number is
+    not a process, so `ownership` proves the process behind it runs this app for
+    this project before any signal is sent, and a record that has been reused
+    since it was written leaves its process running and says why.
     """
 
     pid = recorded_pid(project.state_root)
     if pid is None:
         return StoppedProject(project, False, "no app was running for this project")
-    # The app belongs to the terminal that started it, so it is asked to stop the
-    # way that terminal would ask it. An app that ignores the request is named
-    # rather than killed, because this command does not own a terminal the reader
-    # is watching.
-    try:
-        os.kill(pid, signal.SIGTERM)
-    except OSError as exc:
-        return StoppedProject(
-            project,
-            False,
-            f"pid {pid} could not be asked to stop: {exc.strerror or exc}",
-        )
+    outcome = ownership.ask_to_stop(pid, project.project_root)
+    if not outcome.asked:
+        return StoppedProject(project, False, outcome.reason)
     return StoppedProject(
         project,
         True,
@@ -809,23 +1066,39 @@ __all__ = [
     "AT_RELEASE",
     "BEHIND_RELEASE",
     "CHECKOUT",
+    "DECLINED",
     "DISTRIBUTION",
+    "NOT_REQUESTED",
     "NO_RELEASE",
+    "OFFERED",
     "PIN_FILES",
+    "PROMPT",
+    "UNAVAILABLE",
+    "UNOWNED_INSTALL",
     "UNREADABLE_RELEASE",
+    "YES_FLAG",
+    "Approval",
     "HeldProject",
     "LocalState",
     "ProjectState",
     "RemoteState",
     "StoppedProject",
     "UpdatePlan",
+    "answered",
     "apply_plan",
+    "approval_for",
+    "approval_refusal",
     "dirty_files",
     "held_projects",
+    "origin_url",
     "plan_update",
     "portable_state_digest",
+    "preview_notes",
     "probe_local",
     "probe_remote",
+    "published_release_for",
+    "read_preview",
     "state_changes",
     "stop_app",
+    "target_moved",
 ]

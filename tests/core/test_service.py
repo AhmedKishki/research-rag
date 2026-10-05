@@ -35,8 +35,8 @@ from research_rag.project.config import (
     ResearchConfig,
     resolve_config,
 )
+from research_rag.project.policy import DEFAULT_RETRIEVAL_METHOD
 from research_rag.project.settings import resolve_gate_stopwords
-from research_rag.project.support import DEFAULT_RETRIEVAL_METHOD
 from research_rag.retrieval.dense import (
     DenseSearchHit,
     DenseTokenAuditUnavailable,
@@ -76,6 +76,7 @@ class FakeUltraRAG:
         self.initialized: tuple[Path, Path] | None = None
         self.chunk_calls = 0
         self.bm25_build_calls = 0
+        self.bm25_language = ""
 
     async def chunk(
         self,
@@ -1873,6 +1874,46 @@ def test_ingest_records_the_exact_backend_and_its_index_path(project: Path) -> N
         assert status["retrieval"]["dense"]["dense_backend"] == (
             "portable-exact-vectors"
         )
+
+    asyncio.run(exercise())
+
+
+def test_the_manifest_records_the_bm25_language_the_index_was_built_with(
+    project: Path,
+) -> None:
+    """A manifest names the artifact it describes, and this one is the BM25 index.
+
+    The stopword language is a setting, so a corpus that is not English records
+    the language it filtered with rather than a constant that would make a German
+    index read as an English one.
+    """
+
+    async def exercise() -> None:
+        write_pdf(project / "sources" / "article.pdf", ["Stable cobalt evidence."])
+        config = resolve_config(
+            project,
+            vanilla_executable=sys.executable,
+            settings_overrides=["language.corpus=de", "language.bm25_stopwords=de"],
+        )
+        ultrarag = FakeUltraRAG()
+        service = ResearchService(  # type: ignore[arg-type]
+            config,
+            ultrarag,
+            dense=FakeDenseBackend(),
+        )
+        assert config.settings.bm25_stopwords_language == "de"
+
+        result = await service.ingest(chunk_size=50, chunk_overlap=10)
+
+        manifest = json.loads(
+            (Path(result["generation_root"]) / "manifest.json").read_text(
+                encoding="utf-8"
+            )
+        )
+        assert manifest["retrieval"]["bm25"]["language"] == "de"
+        assert manifest["retrieval"]["bm25"]["language"] == (ultrarag.bm25_language)
+        status = await service.status()
+        assert status["retrieval"]["bm25"]["language"] == "de"
 
     asyncio.run(exercise())
 

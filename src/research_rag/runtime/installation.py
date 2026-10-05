@@ -277,6 +277,12 @@ def install_desktop_entry(
             state = "replaced"
         elif existing == document:
             state = "unchanged"
+        else:
+            # This app's own entry that no longer matches what it writes, which is
+            # what an update that moved the command leaves behind. It is replaced,
+            # and saying so is the difference between a reader who knows the entry
+            # moved and one who reads "created" over a file that already existed.
+            state = "replaced"
     icon_report = write_icon(icon_path, force=force)
     if state in {"created", "replaced"}:
         entry_path.parent.mkdir(parents=True, exist_ok=True)

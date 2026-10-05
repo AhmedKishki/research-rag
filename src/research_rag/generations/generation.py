@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-import hashlib
-import json
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
@@ -20,16 +18,6 @@ from ..retrieval.artifact_lookup import (
 )
 from ..retrieval.embeddings import EmbeddingModel
 from ..storage.records import StorageError, iter_jsonl
-
-
-def value_fingerprint(value: Any) -> str:
-    encoded = json.dumps(
-        value,
-        ensure_ascii=False,
-        sort_keys=True,
-        separators=(",", ":"),
-    ).encode("utf-8")
-    return hashlib.sha256(encoded).hexdigest()
 
 
 def generation_is_reusable(

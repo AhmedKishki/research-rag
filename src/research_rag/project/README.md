@@ -1,4 +1,4 @@
-# What this project is
+# `project`
 
 What one project is, how it is configured, and the names its state is found by.
 
@@ -12,7 +12,8 @@ What one project is, how it is configured, and the names its state is found by.
 | `state_files.py` | The on-disk names every module agrees on, and the readers for a pid and a running build |
 | `normalized_paths.py` | The one rule a path stored in a file must satisfy |
 | `instructions.py` | What an agent is told before it calls a tool |
-| `support.py` | The vocabulary every layer shares, and still the one module that does not import what it names |
+| `policy.py` | Error type, retrieval-method names, policy fingerprints, and UTC time helpers without retrieval imports |
+| `support.py` | Shared corpus and generation helpers; still coupled to the retrieval stack |
 
 ## Rules
 
@@ -21,13 +22,12 @@ What one project is, how it is configured, and the names its state is found by.
 - `settings.py` declares this app's keys; `settings_layers/` holds no key, no
   default file, and no directory name of its own. `tests/project/` fails a change
   that moves either.
-- `normalized_paths.py` exists because five readers had drifted copies of one
-  predicate. A new copy is the defect this module was written to remove.
-- `support.py` imports `dense`, so a module that wants only `ResearchError` still
-  pulls the retrieval stack in with it. `TODO.md` records the split that fixes it,
-  and `runtime/update.py` is the test of it.
+- `normalized_paths.py` owns stored-path validation; import it rather than copy it.
+- Import `ResearchError` and policy primitives from `policy.py`, not `support.py`.
+  - `support.py` still imports retrieval dependencies; `TODO.md` tracks its remaining split.
+  - `tests/gates/test_lightweight_imports.py` guards commands that must run without the stack.
 
-## What lives elsewhere now
+## What lives elsewhere
 
 The durable writes these records are made through are in `../storage/`. The
 process that resolves a config and holds it is in `../runtime/app.py`.

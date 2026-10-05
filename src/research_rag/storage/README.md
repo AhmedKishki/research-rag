@@ -1,4 +1,4 @@
-# What this project is
+# `storage`
 
 Durable writes, and the record schemas they write.
 
@@ -14,11 +14,10 @@ Durable writes, and the record schemas they write.
   durability operations rather than the size of a payload.
 - `records.py` validates and never does I/O of its own. Every read refuses a file
   written for a later version and names the field it could not read.
-- The durable primitives are re-exported by `records.py` for now. That re-export
-  is transitional: a module that imports `records` for `atomic_write_json` alone
-  should import `durable_io` instead, and `TODO.md` holds that sweep.
+- The durable primitives are re-exported by `records.py`. That re-export is
+  transitional: a module that imports `records` for `atomic_write_json` alone
+  should import `durable_io` instead, and no document records that sweep.
 
-## What lives elsewhere now
+## What lives elsewhere
 
-The rule a stored path must satisfy is in `../project/normalized_paths.py`,
-because five modules in three folders had a copy of it.
+The rule a stored path must satisfy is in `../project/normalized_paths.py`.

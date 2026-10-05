@@ -7,9 +7,13 @@ the listing `git ls-remote --tags` would print.
 
 from __future__ import annotations
 
+import json
 import subprocess
 import tomllib
+import urllib.error
+import urllib.request
 from pathlib import Path
+from typing import Any, Self
 
 import pytest
 
@@ -304,3 +308,248 @@ def test_this_repository_declares_a_version_a_release_tag_may_carry() -> None:
 
     assert release_module.is_release_version(declared)
     assert release_module.declared_version(root) == declared
+
+
+PUBLISHED_DOCUMENT = {
+    "tag_name": "v1.1.0",
+    "html_url": "https://github.com/AhmedKishki/research-rag/releases/tag/v1.1.0",
+    "published_at": "2026-10-04T09:30:00Z",
+    "body": "## 1.1.0\n\n- The changelog a reader approves.",
+    "name": "research-rag 1.1.0",
+    "draft": False,
+    "prerelease": False,
+}
+
+
+def _answer(document: object, asked: list[tuple[str, float]] | None = None) -> Any:
+    """The one request, answered from a recorded document instead of the network."""
+
+    def fetch(url: str, timeout: float) -> str:
+        if asked is not None:
+            asked.append((url, timeout))
+        if isinstance(document, Exception):
+            raise document
+        return json.dumps(document)
+
+    return fetch
+
+
+@pytest.mark.parametrize(
+    ("url", "expected"),
+    [
+        ("https://github.com/AhmedKishki/research-rag.git", "AhmedKishki/research-rag"),
+        ("https://github.com/AhmedKishki/research-rag", "AhmedKishki/research-rag"),
+        ("git@github.com:AhmedKishki/research-rag.git", "AhmedKishki/research-rag"),
+        (
+            "ssh://git@github.com/AhmedKishki/research-rag.git",
+            "AhmedKishki/research-rag",
+        ),
+        (
+            "https://user@github.com/AhmedKishki/research-rag/",
+            "AhmedKishki/research-rag",
+        ),
+        ("git@github.com:ahmedkishki/research-rag.git", "ahmedkishki/research-rag"),
+        ("https://gitlab.com/owner/repository.git", None),
+        ("https://example.invalid/research-rag", None),
+        ("/srv/mirrors/research-rag", None),
+        ("research-rag", None),
+        ("", None),
+        (None, None),
+    ],
+)
+def test_only_a_github_remote_names_a_repository(
+    url: str | None, expected: str | None
+) -> None:
+    """A release body read from the wrong repository is a changelog for another app."""
+
+    assert release_module.github_repository(url) == expected
+
+
+def test_the_published_release_is_read_without_a_credential() -> None:
+    asked: list[tuple[str, float]] = []
+
+    found = release_module.published_release(fetch=_answer(PUBLISHED_DOCUMENT, asked))
+
+    assert found.state == FOUND
+    assert found.release is not None
+    assert found.version == "1.1.0"
+    assert found.tag == "v1.1.0"
+    assert found.url.endswith("/releases/tag/v1.1.0")
+    assert found.published == "2026-10-04", "the date is a date, not a timestamp"
+    assert "changelog a reader approves" in found.body
+    assert asked == [
+        (
+            "https://api.github.com/repos/AhmedKishki/research-rag/releases/latest",
+            release_module.FETCH_TIMEOUT_SECONDS,
+        )
+    ]
+
+
+def test_a_remote_that_is_not_this_repository_is_never_asked() -> None:
+    def unreachable(url: str, timeout: float) -> str:
+        raise AssertionError("a foreign repository must not be read")
+
+    found = release_module.published_release(
+        remote_url="https://github.com/someone/research-rag.git", fetch=unreachable
+    )
+
+    assert found.state == UNREADABLE
+    assert found.repository == "someone/research-rag"
+    assert "not AhmedKishki/research-rag" in found.detail
+
+
+def test_a_remote_that_is_not_on_github_gets_no_changelog() -> None:
+    found = release_module.published_release(
+        remote_url="/srv/mirrors/research-rag",
+        fetch=_answer(PUBLISHED_DOCUMENT),
+    )
+
+    assert found.state == UNREADABLE
+    assert "not a GitHub repository" in found.detail
+
+
+def test_this_installations_own_remote_is_read_normally() -> None:
+    found = release_module.published_release(
+        remote_url="https://github.com/AhmedKishki/research-rag.git",
+        fetch=_answer(PUBLISHED_DOCUMENT),
+    )
+
+    assert found.state == FOUND
+
+
+@pytest.mark.parametrize("field", ["draft", "prerelease"])
+def test_a_draft_or_a_prerelease_is_never_answered_as_a_release(field: str) -> None:
+    document = {**PUBLISHED_DOCUMENT, field: True}
+
+    found = release_module.published_release(fetch=_answer(document))
+
+    assert found.state == UNREADABLE
+    assert "draft or a pre-release" in found.detail
+
+
+def test_a_release_tag_that_names_no_version_is_refused() -> None:
+    document = {**PUBLISHED_DOCUMENT, "tag_name": "v1.1.0-rc1"}
+
+    found = release_module.published_release(fetch=_answer(document))
+
+    assert found.state == UNREADABLE
+    assert "no release version" in found.detail
+
+
+def test_a_release_page_naming_another_repository_is_refused() -> None:
+    document = {
+        **PUBLISHED_DOCUMENT,
+        "html_url": "https://github.com/someone/research-rag/releases/tag/v1.1.0",
+    }
+
+    found = release_module.published_release(fetch=_answer(document))
+
+    assert found.state == UNREADABLE
+    assert "not a page of AhmedKishki/research-rag" in found.detail
+
+
+def test_a_repository_publishing_no_stable_release_is_a_normal_answer() -> None:
+    missing = urllib.error.HTTPError(
+        "https://api.github.com/repos/AhmedKishki/research-rag/releases/latest",
+        404,
+        "Not Found",
+        None,
+        None,
+    )
+
+    found = release_module.published_release(fetch=_answer(missing))
+
+    assert found.state == NONE
+    assert "publishes no stable release" in found.detail
+
+
+def test_a_network_failure_is_a_normal_answer_and_names_what_failed() -> None:
+    found = release_module.published_release(
+        fetch=_answer(urllib.error.URLError("Name or service not known"))
+    )
+
+    assert found.state == UNREADABLE
+    assert "could not be read" in found.detail
+    assert "Name or service not known" in found.detail
+
+
+def test_an_answer_that_is_not_a_release_document_is_refused() -> None:
+    for document in ([], {"tag_name": "v1.1.0"}, {"published_at": "yesterday"}):
+        found = release_module.published_release(fetch=_answer(document))
+
+        assert found.state == UNREADABLE, document
+        assert "could not be read" in found.detail
+
+
+def test_the_fetch_stops_at_the_size_limit_and_the_timeout(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """One bounded request: no unbounded read, and the timeout reaches the call."""
+
+    read: list[int] = []
+    asked: list[float] = []
+
+    class Response:
+        def __enter__(self) -> Self:
+            return self
+
+        def __exit__(self, *exception: object) -> bool:
+            return False
+
+        def read(self, size: int = -1) -> bytes:
+            read.append(size)
+            return b"x" * size
+
+    def urlopen(request: object, timeout: float) -> Response:
+        asked.append(timeout)
+        return Response()
+
+    monkeypatch.setattr(release_module.urllib.request, "urlopen", urlopen)
+
+    with pytest.raises(ValueError, match="larger than"):
+        release_module.fetch_text("https://api.github.com/repos/o/r/releases/latest")
+
+    assert read == [release_module.RESPONSE_LIMIT_BYTES + 1]
+    assert asked == [release_module.FETCH_TIMEOUT_SECONDS]
+
+
+def test_the_changelog_is_the_release_then_its_own_words() -> None:
+    found = release_module.published_release(fetch=_answer(PUBLISHED_DOCUMENT))
+
+    assert found.release is not None
+    lines = release_module.changelog_lines(found.release)
+
+    assert lines[0] == "Release 1.1.0, published 2026-10-04."
+    assert lines[1] == found.url
+    assert lines[2] == ""
+    assert lines[3:] == tuple(PUBLISHED_DOCUMENT["body"].splitlines())
+
+
+def test_a_release_with_no_body_is_previewed_from_what_it_has() -> None:
+    document = {**PUBLISHED_DOCUMENT, "body": ""}
+    found = release_module.published_release(fetch=_answer(document))
+
+    assert found.release is not None
+    assert found.body == ""
+    lines = release_module.changelog_lines(found.release)
+
+    assert lines == (
+        "Release 1.1.0, published 2026-10-04.",
+        PUBLISHED_DOCUMENT["html_url"],
+        "",
+    )
+
+
+def test_the_published_release_answers_as_plain_json() -> None:
+    found = release_module.published_release(fetch=_answer(PUBLISHED_DOCUMENT))
+    report = found.as_dict()
+
+    assert json.loads(json.dumps(report)) == report
+    assert report["state"] == FOUND
+    assert report["repository"] == "AhmedKishki/research-rag"
+    assert report["version"] == "1.1.0"
+    assert report["tag"] == "v1.1.0"
+    assert report["published"] == "2026-10-04"
+    assert report["body"] == PUBLISHED_DOCUMENT["body"]
+    assert report["name"] == "research-rag 1.1.0"
+    assert "1.1.0" in report["detail"]

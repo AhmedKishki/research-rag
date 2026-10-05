@@ -13,12 +13,13 @@ import os
 import socket
 import sys
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import pytest
 from fastmcp import Client
 from fastmcp.client.transports import StreamableHttpTransport
 
+from research_rag.core.service import ResearchService
 from research_rag.project.config import resolve_config
 from research_rag.runtime.app import (
     CLIENT_IDENTITY_HEADER,
@@ -103,6 +104,30 @@ def post_ordered(
         connection.close()
 
 
+def post_bytes(url: str, path: str, body: bytes) -> tuple[int, dict[str, Any]]:
+    """POST a body the test encoded itself, so a value JSON can carry is sent raw.
+
+    `json.dumps` on a Python string holding a lone surrogate raises on the encode,
+    which is the same refusal the writer now makes itself. Sending the bytes keeps
+    the test about what the app answers, not about what Python will encode.
+    """
+
+    connection = http.client.HTTPConnection(
+        "127.0.0.1", int(url.rpartition(":")[2]), timeout=30
+    )
+    try:
+        connection.request(
+            "POST",
+            path,
+            body=body,
+            headers={"Content-Type": "application/json"},
+        )
+        response = connection.getresponse()
+        return response.status, json.loads(response.read().decode("utf-8"))
+    finally:
+        connection.close()
+
+
 async def wait_until_ready(app: App) -> None:
     for _ in range(400):
         if app.ready:
@@ -153,6 +178,9 @@ class FakeService:
     async def set_source_inclusion(self, **arguments: Any) -> dict[str, Any]:
         return self._record("set_source_inclusion", arguments)
 
+    async def set_chunk_inclusion(self, **arguments: Any) -> dict[str, Any]:
+        return self._record("set_chunk_inclusion", arguments)
+
     async def set_source_metadata(self, **arguments: Any) -> dict[str, Any]:
         return self._record("set_source_metadata", arguments)
 
@@ -200,7 +228,8 @@ async def test_the_agent_surface_answers_on_the_workspaces_port(project: Path) -
             # The app's own state travels with the project's, so an agent knows
             # where the workspace is.
             assert answer.data["ui_url"] == app.url
-            assert answer.data["mcp_url"].endswith("/mcp")
+            assert "mcp_url" not in answer.data
+            assert app.mcp_url == f"{app.url}/mcp"
     finally:
         await app.stop()
     assert app.ready is False
@@ -549,6 +578,310 @@ async def test_the_control_api_refuses_a_search_it_cannot_serve(project: Path) -
         await app.stop()
 
 
+async def test_the_control_api_reads_a_passage_with_the_neighbours_it_was_asked_for(
+    project: Path,
+) -> None:
+    """A query parameter arrives as text, and the command line sends one.
+
+    `research-rag passage ID --context-chunks N` reaches the running app as
+    `?context_chunks=N`. Refusing that string refused the command itself, and the
+    engine accepts 0 neighbours, so the route takes the engine's range.
+    """
+
+    config = resolve_config(project, vanilla_executable=sys.executable)
+    app = App(config, port=free_port())
+    fake = FakeService()
+    app.service = fake  # type: ignore[assignment]
+    await app.start()
+    try:
+        await wait_until_ready(app)
+        for query, expected in (
+            ("", 1),
+            ("?context_chunks=0", 0),
+            ("?context_chunks=2", 2),
+            ("?context_chunks=5", 5),
+            ("?context_chunks=%202%20", 2),
+        ):
+            code, body = await asyncio.to_thread(
+                get, app.url, f"/control/passages/chunk-1{query}"
+            )
+            assert code == 200, query
+            assert body["arguments"]["context_chunks"] == expected, query
+        for query in ("?context_chunks=6", "?context_chunks=-1", "?context_chunks=two"):
+            code, body = await asyncio.to_thread(
+                get, app.url, f"/control/passages/chunk-1{query}"
+            )
+            assert code == 400, query
+            assert "context_chunks" in body["error"], query
+    finally:
+        await app.stop()
+    assert "get_passage" in [name for name, _ in fake.calls]
+
+
+async def test_the_command_line_reads_a_passage_through_the_control_api(
+    project: Path,
+) -> None:
+    """The command line and the workspace ask the same question the same way."""
+
+    config = resolve_config(project, vanilla_executable=sys.executable)
+    app = App(config, port=free_port())
+    fake = FakeService()
+    app.service = fake  # type: ignore[assignment]
+    await app.start()
+    try:
+        await wait_until_ready(app)
+
+        def through_control() -> dict[str, Any]:
+            from research_rag.runtime.control import Control
+
+            with Control(app.url, timeout=30) as handle:
+                return handle.passage("chunk-1", context_chunks=2)
+
+        answer = await asyncio.to_thread(through_control)
+        assert answer["arguments"] == {"chunk_id": "chunk-1", "context_chunks": 2}
+    finally:
+        await app.stop()
+    assert ("get_passage", {"chunk_id": "chunk-1", "context_chunks": 2}) in fake.calls
+
+
+async def test_a_rebound_name_cannot_drive_this_app(project: Path) -> None:
+    """A name that resolved here from elsewhere is refused, whatever it claims.
+
+    DNS rebinding points `attacker.example` at 127.0.0.1. The browser then treats
+    the app as its own site: it sends `Host: attacker.example:PORT` with
+    `Origin: http://attacker.example:PORT`, the two agree, and `Sec-Fetch-Site` is
+    `same-origin`. Comparing the origin with the host therefore proves nothing;
+    only requiring a loopback name refuses it.
+    """
+
+    config = resolve_config(project, vanilla_executable=sys.executable)
+    app = App(config, port=free_port())
+    fake = FakeService()
+    app.service = fake  # type: ignore[assignment]
+    await app.start()
+    generation = "20260930T191235Z-45608dc5"
+    port = int(app.url.rpartition(":")[2])
+    try:
+        await wait_until_ready(app)
+        for path, payload in (
+            ("/control/chunk-inclusion", {"chunk_id": "c-1", "included": False}),
+            ("/control/source-inclusion", {"source_path": "a.pdf", "included": False}),
+            (
+                "/control/source-metadata",
+                {"source_path": "a.pdf", "metadata": {"y": 1}},
+            ),
+            ("/control/ingest", {"force_recompute": False}),
+            (
+                "/control/generations/remove",
+                {"generation_id": generation, "confirm": generation},
+            ),
+            (
+                "/control/settings",
+                {"values": {"retrieval.rrf_k": 40}, "expected_revision": "r"},
+            ),
+        ):
+            for headers in (
+                {
+                    "Host": f"attacker.example:{port}",
+                    "Origin": f"http://attacker.example:{port}",
+                },
+                {
+                    "Host": f"attacker.example:{port}",
+                    "Sec-Fetch-Site": "same-origin",
+                },
+                {
+                    "Host": f"127.0.0.1:{port}",
+                    "Origin": f"http://attacker.example:{port}",
+                },
+            ):
+                headers["Content-Type"] = "application/json"
+                code, body = await asyncio.to_thread(
+                    post_ordered, app.url, path, payload, headers
+                )
+                assert code == 403, (path, headers, code, body)
+                assert body["error"], path
+        assert fake.calls == []
+    finally:
+        await app.stop()
+
+
+async def test_a_malformed_origin_is_a_refusal_and_not_a_failure(project: Path) -> None:
+    """A header the client controls cannot be the thing that raises.
+
+    `urlsplit` rejects an unbalanced bracket or a non-numeric port, and a client
+    is free to send either. The answer is a bounded 403 either way.
+    """
+
+    config = resolve_config(project, vanilla_executable=sys.executable)
+    app = App(config, port=free_port())
+    fake = FakeService()
+    app.service = fake  # type: ignore[assignment]
+    await app.start()
+    port = int(app.url.rpartition(":")[2])
+    try:
+        await wait_until_ready(app)
+        for origin in (
+            "http://[::1",
+            "http://127.0.0.1:not-a-port",
+            "://127.0.0.1",
+            "ht tp://127.0.0.1",
+            "\\\\127.0.0.1",
+        ):
+            code, body = await asyncio.to_thread(
+                post_ordered,
+                app.url,
+                "/control/ingest",
+                {"force_recompute": False},
+                {
+                    "Host": f"127.0.0.1:{port}",
+                    "Origin": origin,
+                    "Content-Type": "application/json",
+                },
+            )
+            assert code == 403, (origin, code, body)
+        assert fake.calls == []
+    finally:
+        await app.stop()
+
+
+async def test_every_control_write_is_refused_from_another_site(project: Path) -> None:
+    """A page on another site must not be able to drive this app.
+
+    The gates are what separate a terminal on this machine from a browser that
+    reached a loopback port, and every write needs them: a removal, an exclusion,
+    and a build each change what the project holds.
+    """
+
+    config = resolve_config(project, vanilla_executable=sys.executable)
+    app = App(config, port=free_port())
+    fake = FakeService()
+    app.service = fake  # type: ignore[assignment]
+    await app.start()
+    generation = "20260930T191235Z-45608dc5"
+    writes = (
+        ("/control/ingest", {"force_recompute": False}),
+        ("/control/search", {"query": "heron"}),
+        ("/control/source-inclusion", {"source_path": "a.pdf", "included": False}),
+        ("/control/chunk-inclusion", {"chunk_id": "c-1", "included": False}),
+        ("/control/source-metadata", {"source_path": "a.pdf", "metadata": {"year": 1}}),
+        ("/control/generations/use", {"generation_id": generation}),
+        (
+            "/control/generations/remove",
+            {"generation_id": generation, "confirm": generation},
+        ),
+        ("/control/clients/nope/disconnect", {"reason": "because"}),
+        (
+            "/control/settings",
+            {"values": {"retrieval.rrf_k": 40}, "expected_revision": "r"},
+        ),
+    )
+    try:
+        await wait_until_ready(app)
+        for path, payload in writes:
+            # `text/plain` is what a cross-origin simple request carries, and it is
+            # the one content type a browser may send to this port without a
+            # preflight the app would have to answer.
+            code, body = await asyncio.to_thread(
+                post_ordered,
+                app.url,
+                path,
+                payload,
+                {"Content-Type": "text/plain", "Sec-Fetch-Site": "cross-site"},
+            )
+            assert code == 403, path
+            assert body["error"], path
+            assert fake.calls == [], path
+    finally:
+        await app.stop()
+
+
+async def test_a_control_write_from_a_terminal_is_answered(project: Path) -> None:
+    """The gate is a browser's gate: a terminal sends a JSON body and no origin."""
+
+    config = resolve_config(project, vanilla_executable=sys.executable)
+    app = App(config, port=free_port())
+    fake = FakeService()
+    app.service = fake  # type: ignore[assignment]
+    await app.start()
+    generation = "20260930T191235Z-45608dc5"
+    try:
+        await wait_until_ready(app)
+        for path, payload in (
+            ("/control/ingest", {"force_recompute": False}),
+            ("/control/search", {"query": "heron"}),
+            (
+                "/control/source-inclusion",
+                {"source_path": "a.pdf", "included": False, "reason": "duplicate"},
+            ),
+            (
+                "/control/chunk-inclusion",
+                {"chunk_id": "c-1", "included": False, "reason": "duplicate"},
+            ),
+            (
+                "/control/source-metadata",
+                {"source_path": "a.pdf", "metadata": {"year": 2001}},
+            ),
+            ("/control/generations/use", {"generation_id": generation}),
+            (
+                "/control/generations/remove",
+                {"generation_id": generation, "confirm": generation},
+            ),
+        ):
+            code, body = await asyncio.to_thread(post, app.url, path, payload)
+            assert code == 200, (path, body)
+    finally:
+        await app.stop()
+    assert {name for name, _ in fake.calls} == {
+        "ingest",
+        "search",
+        "set_source_inclusion",
+        "set_chunk_inclusion",
+        "set_source_metadata",
+        "use_generation",
+        "remove_generation",
+    }
+
+
+async def test_a_hostile_settings_value_is_answered_with_a_refusal_naming_the_key(
+    project: Path,
+) -> None:
+    """A JSON body can carry a code point that no UTF-8 file can hold.
+
+    The answer is a 400 naming the key, and nothing is written. This pins the
+    shape of that answer: the settings registry refuses every string key it ships
+    with a message of its own, so what matters at the router is that a hostile body
+    is a refusal a reader can act on rather than a failed request.
+    """
+
+    config = resolve_config(project, vanilla_executable=sys.executable)
+    app = App(config, port=free_port())
+    # A settings answer reads no corpus and opens no gateway, so the retrieval
+    # stack stands in as two objects this test never calls.
+    app.service = ResearchService(  # type: ignore[assignment]
+        config, cast(Any, object()), dense=cast(Any, object())
+    )
+    revision = await app.service.settings_read()
+    await app.start()
+    try:
+        await wait_until_ready(app)
+        body = json.dumps(
+            {
+                "values": {"language.bm25_stopwords": "\ud800"},
+                "expected_revision": revision["revision"],
+            }
+        ).encode("utf-8", errors="surrogatepass")
+
+        code, answer = await asyncio.to_thread(
+            post_bytes, app.url, "/control/settings", body
+        )
+    finally:
+        await app.stop()
+
+    assert code == 400, answer
+    assert "language.bm25_stopwords" in answer["error"]
+    assert not (project / ".research-rag" / "config.toml").exists()
+
+
 async def test_the_control_api_names_a_client_it_does_not_have(project: Path) -> None:
     config = resolve_config(project, vanilla_executable=sys.executable)
     app = App(config, port=free_port())
@@ -640,7 +973,7 @@ async def test_a_named_client_is_listed_once_and_can_be_disconnected(
             answer = await client.call_tool("status", {})
             # The MCP SDK opens a notification stream before the session exists, so a
             # sighting is recorded too; it is a connection, not a client.
-            assert answer.data["mcp_clients"] == 1
+            assert "mcp_clients" not in answer.data
 
             code, listing = await asyncio.to_thread(get, app.url, "/control/clients")
             assert code == 200

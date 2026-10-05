@@ -1,3 +1,8 @@
+---
+name: STORAGE.md
+description: The state format: every file, every field, portability, and hand edits.
+---
+
 # Storage contract
 
 - This document names every file the app writes, what each one means, and which ones are worth backing up.
@@ -40,14 +45,14 @@ my-research-project/
 
 - `~/.config/research-rag/config.toml` is the user settings file.
 - `~/.config/research-rag/projects.json` is the account's project register, beside those settings.
+- `projects.lock` beside that register serializes read-modify-write operations across processes.
+  - Readers use atomic snapshots without taking the lock.
 - `~/.cache/research-rag/models/` holds the embedding and reranker binaries, about 150 MB in total, and is the only cross-project shared state, because those binaries are immutable once downloaded.
-- `tests/test_data_roots.py` asserts both roots and states why each is named for this app.
+- `tests/project/test_data_roots.py` asserts both roots and states why each is named for this app.
 
 ## Portable state
 
-- These six files are your decisions about the project.
-  - They are the part worth backing up.
-  - They are the part that survives a rebuild.
+- These six files are your decisions about the project: the part worth backing up, and the part that survives a rebuild.
 
 | File | What it holds | Keyed by |
 |---|---|---|
@@ -58,7 +63,7 @@ my-research-project/
 | `source-exclusions.json` | each exclusion decision and its reason | normalized source-relative path |
 | `chunk-exclusions.json` | each passage exclusion, its reason, and the generation it was recorded in | `chunk_id` |
 
-- Only `research-rag sources` writes `source-catalog.json`, and no hand edits it.
+- No hand edit is kept here: `src/research_rag/core/source_inventory.py` rewrites `source-catalog.json` from the current scan whenever it is stale, which is the price of remembering a source the project has seen and no longer holds.
 
 ### project.json
 
@@ -106,7 +111,7 @@ my-research-project/
   - It returns the space only through a rebuild, which costs one ingestion.
   - It does not touch the original files.
 - A running app can still hold a generation: the retrieval gateway keeps a live index against whichever generation it last loaded, and the exact dense backend memory-maps a generation's vector file for the process's lifetime.
-- Nothing refuses a delete loudly: an unlinked mapping keeps reading the old bytes until its last reference drops, and a later open returns a missing-file error rather than a failure at the delete. Both commands therefore take the project lock and refuse the current generation rather than merely warning about it.
+- Nothing refuses a delete loudly: an unlinked mapping keeps reading the old bytes until its last reference drops, and a later open returns a missing-file error rather than a failure at the delete. Both generation commands therefore take the project lock and refuse the current generation rather than merely warning about it.
 
 ### Generation layout
 
@@ -123,6 +128,7 @@ generations/<generation-id>/
 
 - `manifest.json` decides what a generation is.
   - It carries the schema version, the extraction policy, the chunking configuration, the retrieval-policy fingerprint, the model and revision that produced the vectors, the dense backend, and the file map.
+  - `retrieval.bm25.language` records the stopword list the BM25 index was built with, which is `language.bm25_stopwords` and may differ from `language.corpus` on a mixed corpus.
 - Two generations are interchangeable only when their manifests agree, and that is what makes reuse safe.
 - A generation whose policy fingerprint does not match the current settings is reported as requiring a new ingestion.
 - The directory names under `indexes/` vary by backend, and the manifest records which one a generation uses.
@@ -140,13 +146,10 @@ generations/<generation-id>/
 
 - `ingest` hashes every source.
 - An exact input match returns the selected generation unchanged.
-- Otherwise `ingest` reuses compatible unchanged documents, chunks, and exact-text vectors and builds complete new BM25 and dense indexes.
-- Work is checkpointed between bounded units, so an interrupted build resumes.
-- `status.ingestion_progress` reports an unfinished build.
-- `current.json` changes only after both indexes succeed.
-- A cancelled or timed-out build keeps its checkpoint.
-- A build whose inputs no longer match supersedes the checkpoint with a small diagnostic.
-- A build that cannot resume leaves only a small record under `failures/` and removes its heavy staging data.
+- Otherwise `ingest` reuses compatible unchanged documents, chunks, and exact-text vectors, and builds complete new BM25 and dense indexes.
+- Work is checkpointed between bounded units, so an interrupted build resumes and `status.ingestion_progress` reports one.
+- `current.json` changes only after both indexes succeed, so a build that fails or is cancelled leaves the selected generation in place.
+- A cancelled or timed-out build keeps its checkpoint; a build whose inputs no longer match supersedes it with a small diagnostic; a build that cannot resume leaves only a small record under `failures/` and removes its heavy staging data.
 - Raw coordinate extraction is not generated.
 - UltraRAG raw chunks are staging data only and do not survive activation.
 
@@ -163,6 +166,7 @@ generations/<generation-id>/
 - Cleaned semantic text is what a search returns and what is indexed.
   - It is never a transcript, so `text` is not quotable.
   - `direct_quote_safe` is `false` on every passage the app builds.
+  - In passage context, `excluded_from_search: true` marks a reviewed excluded neighbour; it is context, not an eligible search hit.
 - The untouched original at `source_relative_path` and `locator` is the quote authority.
 
 ## Review state
@@ -313,12 +317,13 @@ research-rag \
 
 ## Outside the project
 
+- `research-rag install` puts its launcher in `~/.local/bin`.
+  - `--desktop` writes a menu entry in `~/.local/share/applications` and its icon in `~/.local/share/icons/hicolor/scalable/apps`.
 - One account's project register lives beside its settings, at `~/.config/research-rag/projects.json`.
 - That register holds one entry per project, and each entry holds its `project_id`, `project_name`, `project_root`, and `registered_at`.
 - The register sits outside the project directory on purpose, because a register that travelled inside a project could not list the projects that had none.
 - The register holds no corpus, no index, no review, and no derived state.
-- A deleted project costs only its name in that file.
-- Deleting the register is always safe: a deleted register costs only the names, and `research-rag init` restores them.
+- A deleted project costs only its name in that file, and deleting the register is always safe: `research-rag init` restores the names.
 - A damaged register is reported rather than guessed at.
 - An entry that is not a pointer is skipped, so one unreadable project cannot hide the rest.
 
@@ -331,7 +336,5 @@ research-rag \
 
 ## Moving a project
 
-- Copy the project directory.
-- `sources/` plus `.research-rag/` is a complete project on another disk or another machine.
-- `runtime/` is disposable and rebuilds on the next ingestion.
+- Copy the project directory: `sources/` plus `.research-rag/` is a complete project on another disk or another machine.
 - A relocated runtime root stays claimed by its owning project marker, so never point a second project at one.

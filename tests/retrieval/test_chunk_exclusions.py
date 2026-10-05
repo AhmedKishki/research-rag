@@ -15,6 +15,7 @@ from pathlib import Path
 import pytest
 
 from research_rag.core.service import ResearchError, ResearchService
+from research_rag.core.tool_views import lean_passage_context
 from research_rag.project.config import resolve_config
 from research_rag.storage.records import (
     StorageError,
@@ -123,8 +124,24 @@ def test_an_excluded_passage_is_refused_by_name_and_kept_as_a_neighbour(
 
         context = await service.get_passage(reader, context_chunks=1)
         assert target in [passage["chunk_id"] for passage in context["context"]]
+        marked = {passage["chunk_id"]: passage for passage in context["context"]}
+        assert marked[target]["excluded_from_search"] is True
+        assert "excluded_from_search" not in marked[reader]
+        lean = lean_passage_context(context)
+        assert (
+            next(
+                passage for passage in lean["context"] if passage["chunk_id"] == target
+            )["excluded_from_search"]
+            is True
+        )
         # The passage the reader asked for is still the passage it named.
         assert context["requested_chunk_id"] == reader
+
+        await service.set_chunk_inclusion(target, included=True)
+        restored = await service.get_passage(reader, context_chunks=1)
+        assert all(
+            "excluded_from_search" not in passage for passage in restored["context"]
+        )
 
     asyncio.run(exercise())
 

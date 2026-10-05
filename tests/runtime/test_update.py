@@ -1,31 +1,42 @@
 """The decision under test is the release one: whether this checkout is at, behind, or
 ahead of the latest published release.
 
-The branch head is reported beside that answer and never decides it.
+The branch head is reported beside that answer and never decides it, and nothing is
+installed without an approval that names the version it approves.
 
 Nothing here reaches a network: every external command goes through an injected runner
-that answers from a recorded table, so a test can put the remote anywhere it likes.
+that answers from a recorded table, and the one published-release request answers from a
+recorded document, so a test can put the remote and the release anywhere it likes.
 """
 
 from __future__ import annotations
 
 import asyncio
+import io
 import json
 import os
-import signal
 import subprocess
+from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
 
 import pytest
 
 import research_rag.project.config as config_module
+import research_rag.runtime.ownership as ownership_module
 import research_rag.runtime.process as process_module
 import research_rag.runtime.update as update_module
 import research_rag.surfaces.cli as cli_module
 from research_rag.project import registry
-from research_rag.project.support import ResearchError
-from research_rag.runtime.release import FOUND, NONE, Release, ReleaseSet
+from research_rag.project.policy import ResearchError
+from research_rag.runtime.release import (
+    FOUND,
+    NONE,
+    GitHubRelease,
+    PublishedRelease,
+    Release,
+    ReleaseSet,
+)
 from research_rag.runtime.version import version_block
 from research_rag.surfaces.cli import _parser
 
@@ -34,6 +45,60 @@ DISTRIBUTION = update_module.DISTRIBUTION
 COMMIT = "a" * 40
 REMOTE_HEAD = "b" * 40
 RELEASE_COMMIT = "c" * 40
+# The published release the stubbed fetch returns, in the shape the API answers in.
+PUBLISHED = {
+    "tag_name": "v0.2.0",
+    "html_url": "https://github.com/AhmedKishki/research-rag/releases/tag/v0.2.0",
+    "published_at": "2026-10-01T12:00:00Z",
+    "body": "## 0.2.0\n\n- The changelog a reader approves before installing.",
+    "name": "research-rag 0.2.0",
+    "draft": False,
+    "prerelease": False,
+}
+ANSWERED = "Install this release? [y/N]:"
+
+
+def _fetch(document: dict[str, Any]) -> Any:
+    """The one request this command makes, answered from a recorded document."""
+
+    def request(url: str, timeout: float) -> str:
+        return json.dumps(document)
+
+    return request
+
+
+@pytest.fixture(autouse=True)
+def no_network(monkeypatch: pytest.MonkeyPatch) -> None:
+    """No test in this file reaches GitHub, whatever it asks for."""
+
+    monkeypatch.setattr(cli_module, "_fetch_published_release", _fetch(PUBLISHED))
+
+
+class Question:
+    """A reader in a terminal, and the questions this command put to them.
+
+    The question is recorded rather than answered twice, so a test can read what
+    was shown before it decides what the answer was.
+    """
+
+    def __init__(self, monkeypatch: pytest.MonkeyPatch, answer: str) -> None:
+        self.asked: list[tuple[str, tuple[str, ...]]] = []
+        monkeypatch.setattr(cli_module, "_interactive_terminal", lambda: True)
+        monkeypatch.setattr(cli_module, "_ask_to_install", self._ask(answer))
+
+    def _ask(self, answer: str) -> Any:
+        def ask(
+            published: PublishedRelease,
+            notes: Sequence[str],
+            *,
+            target: str,
+            stdin: Any = None,
+            stderr: Any = None,
+        ) -> bool:
+            self.asked.append((target, tuple(notes)))
+            return answer.strip().lower() in {"y", "yes"}
+
+        return ask
 
 
 class Recorder:
@@ -603,49 +668,67 @@ def test_a_lock_nobody_holds_is_not_a_refusal(tmp_path: Path) -> None:
     assert update_module.held_projects([project]) == ()
 
 
-def test_stopping_an_app_signals_the_pid_the_app_recorded(
+def test_stopping_an_app_asks_the_process_behind_the_pid_the_app_recorded(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """An app is asked to stop the way its own terminal would ask it."""
+    """An app is asked to stop the way its own terminal would ask it.
+
+    The request now goes through the ownership proof, so this watches that seam:
+    the pid is still the one the app recorded, and the proof is what is asked.
+    """
 
     project = update_module.ProjectState(tmp_path / "thesis", "thesis")
     project.state_root.mkdir(parents=True)
     (project.state_root / "research-rag-ui.pid").write_text(
         str(os.getpid()), encoding="utf-8"
     )
-    sent: list[tuple[int, int]] = []
+    asked: list[tuple[int, Path]] = []
     monkeypatch.setattr(
-        update_module.os, "kill", lambda pid, sig: sent.append((pid, sig))
+        update_module.ownership,
+        "ask_to_stop",
+        lambda pid, root, *args, **kwargs: (
+            asked.append((pid, root))
+            or ownership_module.Outcome(True, f"pid {pid} was asked to stop")
+        ),
     )
     run = Recorder()
 
     stopped = update_module.stop_app(project, run)
 
     assert run.calls == []
-    # Signal 0 is the liveness probe that found the pid; only the TERM is the request.
-    assert [entry for entry in sent if entry[1] != 0] == [(os.getpid(), signal.SIGTERM)]
+    assert asked == [(os.getpid(), project.project_root)]
     assert stopped.stopped is True
     assert str(os.getpid()) in stopped.detail
 
 
-def test_a_pid_that_cannot_be_asked_to_stop_is_reported(
+def test_a_pid_the_proof_refuses_is_reported_and_left_running(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    """A refusal is reported with its reason, because a number is not a process."""
+
     project = update_module.ProjectState(tmp_path / "thesis", "thesis")
     project.state_root.mkdir(parents=True)
+    # This process is alive and therefore passes the record's liveness probe, and
+    # it is not this project's app. Nothing is signalled: the proof refuses first.
     (project.state_root / "research-rag-ui.pid").write_text(
         str(os.getpid()), encoding="utf-8"
     )
+    asked: list[int] = []
+    real = ownership_module.ask_to_stop
 
-    def _refuse(_pid: int, _sig: int) -> None:
-        raise PermissionError(13, "Operation not permitted")
+    def _watch(
+        pid: int, root: Path, *args: Any, **kwargs: Any
+    ) -> ownership_module.Outcome:
+        asked.append(pid)
+        return real(pid, root, *args, **kwargs)
 
-    monkeypatch.setattr(update_module.os, "kill", _refuse)
+    monkeypatch.setattr(update_module.ownership, "ask_to_stop", _watch)
 
     stopped = update_module.stop_app(project, Recorder())
 
+    assert asked == [os.getpid()]
     assert stopped.stopped is False
-    assert "not permitted" in stopped.detail
+    assert "this process" in stopped.detail
 
 
 def test_a_project_with_no_app_is_left_alone(tmp_path: Path) -> None:
@@ -716,14 +799,21 @@ def test_the_command_refuses_an_update_while_a_build_holds_the_lock(
 def test_applying_stops_every_app_and_prints_the_command_that_starts_it_again(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    """`--apply --yes` is the unattended run: the approval was given already."""
+
     project = update_module.ProjectState(tmp_path / "thesis", "thesis")
     project.state_root.mkdir(parents=True)
     (project.state_root / "research-rag-ui.pid").write_text(
         str(os.getpid()), encoding="utf-8"
     )
-    sent: list[tuple[int, int]] = []
+    asked: list[int] = []
     monkeypatch.setattr(
-        update_module.os, "kill", lambda pid, sig: sent.append((pid, sig))
+        update_module.ownership,
+        "ask_to_stop",
+        lambda pid, root, *args, **kwargs: (
+            asked.append(pid)
+            or ownership_module.Outcome(True, f"pid {pid} was asked to stop")
+        ),
     )
     monkeypatch.setattr(
         registry,
@@ -757,12 +847,19 @@ def test_applying_stops_every_app_and_prints_the_command_that_starts_it_again(
         update_module, "probe_local", lambda **_kwargs: _local(tmp_path)
     )
 
-    payload = _run("update", "--apply").payload
+    payload = _run("update", "--apply", "--yes").payload
 
     assert payload is not None
-    assert stopped.calls == []
-    assert [entry for entry in sent if entry[1] != 0] == [(os.getpid(), signal.SIGTERM)]
+    # The app was asked through the pid it recorded, and no command that changes
+    # anything was run: the update itself is stubbed below.
+    assert not stopped.ran("git", "checkout", "--detach", "v0.2.0")
+    assert not stopped.ran("uv", "sync")
+    assert asked == [os.getpid()]
     assert payload["applied"] is True
+    # What was approved is what was installed, named in the report beside it.
+    assert payload["approval"] == {"method": "yes_flag", "granted": True}
+    assert payload["previewed_version"] == "0.2.0"
+    assert payload["plan"]["release_tag"] == "v0.2.0"
     assert payload["stopped"][0]["stopped"] is True
     assert payload["start_again"] == [
         f"research-rag --project-root {project.project_root} start"
@@ -859,3 +956,394 @@ def test_offline_with_apply_is_refused_rather_than_reported_as_empty() -> None:
 
     assert "--offline cannot update" in str(refused.value)
     assert "Nothing was changed" in str(refused.value)
+
+
+def _behind_a_release(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Recorder:
+    """A checkout one release behind, with every probe answered and nothing fetched."""
+
+    monkeypatch.setattr(
+        update_module, "probe_local", lambda **_kwargs: _local(tmp_path)
+    )
+    monkeypatch.setattr(
+        update_module,
+        "probe_remote",
+        lambda *_args, **_kwargs: update_module.RemoteState(
+            reachable=True,
+            behind=1,
+            pins_moving=True,
+            releases=_published("0.1.0", "0.2.0"),
+        ),
+    )
+    monkeypatch.setattr(registry, "load", list)
+    run = Recorder()
+    monkeypatch.setattr(process_module, "subprocess_runner", run)
+    return run
+
+
+def test_the_check_previews_the_published_changelog_and_changes_nothing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A script reads the report; it is never asked and never installs anything."""
+
+    run = _behind_a_release(monkeypatch, tmp_path)
+
+    payload = _run("update").payload
+
+    assert payload is not None
+    assert payload["applied"] is False
+    assert payload["available"] is True
+    assert payload["decision"] == update_module.BEHIND_RELEASE
+    assert payload["approval"] == {"method": "not_requested", "granted": False}
+    published = payload["published"]
+    assert published["state"] == FOUND
+    assert published["version"] == "0.2.0"
+    assert published["tag"] == "v0.2.0"
+    assert published["published"] == "2026-10-01"
+    assert published["url"].endswith("/releases/tag/v0.2.0")
+    assert "changelog a reader approves" in published["body"]
+    assert payload["notes"][-1].startswith("Changelog:")
+    assert not run.ran("git", "checkout", "--detach", "v0.2.0")
+    assert not run.ran("uv", "sync")
+    assert not run.ran("uv", "lock")
+
+
+def test_apply_where_no_reader_can_be_asked_is_refused_until_yes_is_given(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    run = _behind_a_release(monkeypatch, tmp_path)
+
+    with pytest.raises(ResearchError) as refused:
+        _run("update", "--apply")
+
+    said = str(refused.value)
+    assert "cannot be asked" in said
+    assert "--yes" in said
+    assert "Nothing was changed" in said
+    assert not run.ran("git", "checkout", "--detach", "v0.2.0")
+    assert not run.ran("uv", "sync")
+
+
+def test_a_terminal_is_asked_once_and_a_yes_installs_the_release_it_previewed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The whole feature in one call: detect, show, ask, install only on yes."""
+
+    _behind_a_release(monkeypatch, tmp_path)
+    question = Question(monkeypatch, "y")
+    performed: list[str] = []
+    monkeypatch.setattr(
+        update_module,
+        "apply_plan",
+        lambda plan, **_kwargs: [
+            performed.extend(plan.labels()) or {"command": "done", "returncode": 0}
+        ],
+    )
+
+    payload = _run("update").payload
+
+    assert payload is not None
+    assert len(question.asked) == 1, "the reader is asked once"
+    target, notes = question.asked[0]
+    assert "release 0.2.0" in target and "v0.2.0" in target
+    assert any("Applying detaches this checkout onto v0.2.0" in note for note in notes)
+    assert payload["applied"] is True
+    assert payload["approval"] == {"method": "prompt", "granted": True}
+    # The version approved is the version installed, named in both places.
+    assert payload["previewed_version"] == "0.2.0"
+    assert performed == ["git checkout --detach v0.2.0", "uv lock", "uv sync"]
+
+
+@pytest.mark.parametrize("answer", ["", "\n", "n\n", "no\n", "later\n", "1\n"])
+def test_anything_other_than_yes_declines_and_stops_nothing(
+    answer: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _behind_a_release(monkeypatch, tmp_path)
+    Question(monkeypatch, answer)
+    stopped: list[Any] = []
+    monkeypatch.setattr(
+        update_module, "stop_app", lambda *args, **kwargs: stopped.append(args)
+    )
+    monkeypatch.setattr(
+        update_module,
+        "apply_plan",
+        lambda plan, **_kwargs: pytest.fail("a declined update installs nothing"),
+    )
+
+    payload = _run("update").payload
+
+    assert payload is not None
+    assert payload["applied"] is False
+    assert payload["approval"] == {"method": "declined", "granted": False}
+    assert payload["notes"][-1] == "Declined, so nothing was changed."
+    assert stopped == []
+    assert "steps" not in payload
+
+
+def test_nothing_is_asked_when_there_is_no_release_to_install(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(
+        update_module, "probe_local", lambda **_kwargs: _local(tmp_path)
+    )
+    monkeypatch.setattr(
+        update_module,
+        "probe_remote",
+        lambda *_args, **_kwargs: update_module.RemoteState(
+            reachable=True, behind=0, releases=_published("0.1.0")
+        ),
+    )
+    monkeypatch.setattr(registry, "load", list)
+    monkeypatch.setattr(process_module, "subprocess_runner", Recorder())
+    question = Question(monkeypatch, "y")
+
+    payload = _run("update").payload
+
+    assert payload is not None
+    assert question.asked == []
+    assert payload["decision"] == update_module.AT_RELEASE
+    assert payload["applied"] is False
+
+
+def test_apply_asks_the_same_question_the_bare_command_would(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _behind_a_release(monkeypatch, tmp_path)
+    question = Question(monkeypatch, "yes")
+    monkeypatch.setattr(update_module, "apply_plan", lambda plan, **_kwargs: [])
+
+    payload = _run("update", "--apply").payload
+
+    assert payload is not None
+    assert len(question.asked) == 1
+    assert payload["applied"] is True
+
+
+def test_a_distribution_that_moves_after_the_preview_is_refused(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A tool decides the version at install time, so it is asked once more."""
+
+    offered = iter(["0.2.0", "0.3.0"])
+    monkeypatch.setattr(
+        update_module, "probe_local", lambda **_kwargs: _local(None, tool="uv")
+    )
+    monkeypatch.setattr(
+        update_module,
+        "probe_remote",
+        lambda *_args, **_kwargs: update_module.RemoteState(
+            reachable=True, available_version=next(offered)
+        ),
+    )
+    monkeypatch.setattr(registry, "load", list)
+    monkeypatch.setattr(process_module, "subprocess_runner", Recorder())
+
+    with pytest.raises(ResearchError) as refused:
+        _run("update", "--apply", "--yes")
+
+    said = str(refused.value)
+    assert "previewed as 0.2.0" in said
+    assert "0.3.0" in said
+    assert "Nothing was changed" in said
+
+
+def test_a_distribution_whose_version_cannot_be_reread_is_not_installed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    answers = iter(
+        [
+            update_module.RemoteState(reachable=True, available_version="0.2.0"),
+            update_module.RemoteState(reachable=False, detail="network is unreachable"),
+        ]
+    )
+    monkeypatch.setattr(
+        update_module, "probe_local", lambda **_kwargs: _local(None, tool="pipx")
+    )
+    monkeypatch.setattr(
+        update_module,
+        "probe_remote",
+        lambda *_args, **_kwargs: next(answers),
+    )
+    monkeypatch.setattr(registry, "load", list)
+    monkeypatch.setattr(process_module, "subprocess_runner", Recorder())
+
+    with pytest.raises(ResearchError) as refused:
+        _run("update", "--apply", "--yes")
+
+    said = str(refused.value)
+    assert "could not be read again" in said
+    assert "network is unreachable" in said
+    assert "Nothing was changed" in said
+
+
+def _published_release(body: str = "## 1.1.0\n\n- approved change") -> PublishedRelease:
+    return PublishedRelease(
+        FOUND,
+        GitHubRelease(
+            version="1.1.0",
+            tag="v1.1.0",
+            url="https://github.com/AhmedKishki/research-rag/releases/tag/v1.1.0",
+            published="2026-10-04",
+            body=body,
+        ),
+    )
+
+
+def test_the_changelog_is_shown_on_stderr_and_the_answer_comes_from_stdin(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    shown = io.StringIO()
+
+    asked = cli_module._ask_to_install(
+        _published_release(),
+        ("What applying does.",),
+        target="release 1.1.0, tagged v1.1.0",
+        stdin=io.StringIO("y\n"),
+        stderr=shown,
+    )
+
+    said = shown.getvalue()
+    assert asked is True
+    assert "release 1.1.0, tagged v1.1.0" in said
+    assert "## 1.1.0" in said and "- approved change" in said
+    assert "https://github.com/AhmedKishki/research-rag/releases/tag/v1.1.0" in said
+    assert "What applying does." in said
+    assert said.rstrip().endswith(ANSWERED)
+    # stdout carries the report, so the question may not put anything there.
+    assert capsys.readouterr().out == ""
+
+
+def test_a_release_with_no_body_is_still_previewed_and_named() -> None:
+    shown = io.StringIO()
+
+    cli_module._ask_to_install(
+        _published_release(body=""),
+        (),
+        target="release 1.1.0, tagged v1.1.0",
+        stdin=io.StringIO(""),
+        stderr=shown,
+    )
+
+    said = shown.getvalue()
+    assert "release 1.1.0, tagged v1.1.0" in said
+    assert "releases/tag/v1.1.0" in said
+
+
+def test_a_changelog_that_was_not_read_is_said_so_rather_than_invented() -> None:
+    shown = io.StringIO()
+
+    cli_module._ask_to_install(
+        PublishedRelease(
+            update_module.UNREADABLE_RELEASE,
+            detail="the published release could not be read: timed out",
+        ),
+        (),
+        target="release 1.1.0, tagged v1.1.0",
+        stdin=io.StringIO(""),
+        stderr=shown,
+    )
+
+    assert "timed out" in shown.getvalue()
+    assert "No changelog was published with it." in shown.getvalue()
+
+
+@pytest.mark.parametrize("answer", ["y\n", "Y\n", "yes\n", "  yes  \n"])
+def test_a_yes_installs_and_nothing_else_does(answer: str) -> None:
+    asked = cli_module._ask_to_install(
+        _published_release(),
+        (),
+        target="release 1.1.0, tagged v1.1.0",
+        stdin=io.StringIO(answer),
+        stderr=io.StringIO(),
+    )
+
+    assert asked is True
+
+
+@pytest.mark.parametrize("answer", ["\n", "n\n", "no\n", "sure\n", "", "yes please\n"])
+def test_every_other_answer_declines(answer: str) -> None:
+    asked = cli_module._ask_to_install(
+        _published_release(),
+        (),
+        target="release 1.1.0, tagged v1.1.0",
+        stdin=io.StringIO(answer),
+        stderr=io.StringIO(),
+    )
+
+    assert asked is False
+
+
+def test_ctrl_c_at_the_question_is_a_decline_and_not_a_failure() -> None:
+    class Interrupted:
+        def readline(self) -> str:
+            raise KeyboardInterrupt
+
+    asked = cli_module._ask_to_install(
+        _published_release(),
+        (),
+        target="release 1.1.0, tagged v1.1.0",
+        stdin=Interrupted(),
+        stderr=io.StringIO(),
+    )
+
+    assert asked is False
+
+
+def test_read_preview_answers_without_fetching_stopping_or_writing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """What the browser asks: a read-only report, cached by the caller."""
+
+    root = tmp_path / "checkout"
+    root.mkdir()
+    (root / "pyproject.toml").write_text(
+        '[project]\nversion = "0.1.0"\n', encoding="utf-8"
+    )
+    run = _checkout(
+        root, behind="2", changed="pyproject.toml", versions=("0.1.0", "0.2.0")
+    )
+    # The preview compares the release range, not the branch range, so that is the
+    # answer it needs for the pin question.
+    run.answers[("git", "-C", str(root), "diff", "--name-only", "HEAD..v0.2.0")] = (
+        "pyproject.toml\n"
+    )
+    monkeypatch.setattr(update_module, "nearest_checkout", lambda: root)
+    monkeypatch.setattr(update_module, "installed_version", lambda: "0.1.0")
+
+    preview = update_module.read_preview(run=run, fetch=_fetch(PUBLISHED))
+
+    assert preview["applied"] is False
+    assert preview["available"] is True
+    assert preview["decision"] == update_module.BEHIND_RELEASE
+    assert preview["release"]["version"] == "0.2.0"
+    assert preview["release"]["tag"] == "v0.2.0"
+    assert preview["published"]["body"] == PUBLISHED["body"]
+    assert preview["would_run"] == [
+        "git checkout --detach v0.2.0",
+        "uv lock",
+        "uv sync",
+    ]
+    assert preview["install_command"] == "research-rag update --apply"
+    assert "approval" not in preview, "a preview grants nothing"
+    json.dumps(preview)
+    # A preview writes nothing: no fetch of the checkout, no tag checkout, no sync.
+    assert not run.ran("git", "-C", str(root), "fetch", "--quiet", "--prune", "--tags")
+    assert not run.ran("git", "-C", str(root), "checkout", "--detach", "v0.2.0")
+    assert not run.ran("uv", "sync")
+
+
+def test_the_preview_reports_an_unreachable_release_as_a_normal_answer(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def unreachable(url: str, timeout: float) -> str:
+        pytest.fail("an offline preview must not reach the network")
+
+    monkeypatch.setattr(update_module, "nearest_checkout", lambda: None)
+
+    preview = update_module.read_preview(
+        run=Recorder(), offline=True, fetch=unreachable
+    )
+
+    assert preview["available"] is False
+    assert preview["published"]["state"] == "skipped"
+    assert "--offline" in preview["published"]["detail"]
+    assert preview["published"].get("body") is None

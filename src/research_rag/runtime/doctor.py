@@ -669,6 +669,7 @@ def run_doctor(
     entry: str | Path | None = None,
     prefetch: bool = False,
     repair: bool = False,
+    status_unavailable: str | None = None,
 ) -> DoctorResult:
     if prefetch and repair:
         raise DoctorError(
@@ -691,7 +692,9 @@ def run_doctor(
         lines.extend(repair_runtime(config))
     if prefetch:
         lines.extend(prefetch_models(config))
-    report: HealthReport = health_report(config, status)
+    report: HealthReport = health_report(
+        config, status, status_unavailable=status_unavailable
+    )
     lines.extend(_check_line(check) for check in report.checks)
     if report.not_checked:
         lines.append(

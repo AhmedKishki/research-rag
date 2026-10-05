@@ -1,4 +1,4 @@
-# What this project is
+# `core`
 
 The service the three surfaces call, and the answers it gives when it cannot.
 
@@ -19,13 +19,11 @@ The service the three surfaces call, and the answers it gives when it cannot.
   service can use them without one.
 - No module here imports a surface. A status reader that needed `surfaces/mcp.py`
   would be reading a front end to describe the engine.
-- `source_inventory.known_sources` is allowed to rewrite `source-catalog.json`,
-  and that is the price of remembering a source the project has seen and no longer
-  holds. It is not an accident: the catalog is the only memory of it.
+- `source_inventory.known_sources` is allowed to rewrite `source-catalog.json`, and that is the price of the catalog being the only memory of a source the project has seen and no longer holds.
 - `tool_views.py` is the one place a payload is projected for a reader. A second
   projection is a second answer to the same question.
 
-## What lives elsewhere now
+## What lives elsewhere
 
 Building the generation this service reads is `../generations/`, and answering a
 query against it is `../retrieval/`.

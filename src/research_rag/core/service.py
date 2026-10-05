@@ -20,9 +20,16 @@ from ..corpus.sources import (  # noqa: F401
 # calls them lives in the workflow modules, so a patch intercepting a call targets
 # that module, not this one.
 # Read by tests through this module; the ingestion workflow imports it separately.
-from ..generations.generation import value_fingerprint  # noqa: F401
 from ..generations.ingestion import IngestionWorkflow
 from ..project.config import ResearchConfig
+
+# Re-exported on the same terms as the helpers below: the tests read the digest
+# from this module, and one definition of it lives in `policy.py`.
+from ..project.policy import (
+    ResearchError,
+    retrieval_policy_fingerprint,
+    value_fingerprint,  # noqa: F401
+)
 from ..project.settings_document import SettingsWorkflow
 from ..project.state_files import LOCK_FILE
 
@@ -32,13 +39,10 @@ from ..project.support import (  # noqa: F401
     _WORD,
     ARTIFACT_POLICY_VERSION,
     CLEANING_POLICY_VERSION,
-    DEFAULT_RETRIEVAL_METHOD,
     EXTRACTION_POLICY_VERSION,
     INGESTION_IDENTITY_POLICY_VERSION,
     METADATA_STORAGE_POLICY,
-    RETRIEVAL_METHODS,
     SCHEMA_VERSION,
-    ResearchError,
     _atomic_to_thread,
     _candidate_flags,
     _canonical_metadata_override,
@@ -70,9 +74,7 @@ from ..project.support import (  # noqa: F401
     _source_inventory,
     _source_stat_identity,
     _source_work_key,
-    _utc_now,
     document_frequencies,
-    retrieval_policy_fingerprint,
 )
 from ..retrieval.dense import (
     DENSE_INDEX_PATHS,

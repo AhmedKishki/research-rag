@@ -1,4 +1,4 @@
-# What this project is
+# `generations`
 
 Building a generation, and what is inside the one in use.
 
@@ -22,7 +22,7 @@ Building a generation, and what is inside the one in use.
 - `generation_inventory.py` walks the filesystem and knows nothing about a status
   payload, so a reader of the inventory cannot grow a dependency on one.
 
-## What lives elsewhere now
+## What lives elsewhere
 
 What a chunk and a document are is decided by `../corpus/` and indexed by
 `../retrieval/`; this folder is the order those happen in.

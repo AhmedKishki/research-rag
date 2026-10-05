@@ -1,8 +1,13 @@
+---
+name: README.md
+description: The judged query set, the harness commands, and what each judgement class does and does not establish.
+---
+
 # Reference retrieval evaluation
 
 This directory holds the judged query set behind the retrieval-quality findings in `MEASUREMENTS.md`, and `scripts/evaluate_retrieval.py` is the harness that produces them.
 
-The set is deliberately small, honest, and reproducible: 32 queries over 19 passages of one real research corpus, judged by inspection of the extracted text, measured through `ResearchService.search`. It is a starting point that can answer "is hybrid better than BM25 here?", not a benchmark suite.
+The set is small, honest, and reproducible: 32 queries over 19 passages of one real research corpus, judged by inspection of the extracted text, measured through `ResearchService.search`. It is a starting point that can answer "is hybrid better than BM25 here?", not a benchmark suite.
 
 ## The judged set
 
@@ -104,7 +109,7 @@ uv run python scripts/evaluate_retrieval.py --project /path/to/project --deep-to
     --reranker-model jinaai/jina-reranker-v1-turbo-en
 ```
 
-Defaults: modes `bm25,dense,hybrid,hybrid+rerank` at `top_k=10`, plus a deep pass for `hybrid` at `top_k=50`, all 32 queries. `--deep-top-k 0` skips the deep pass. `--reranker-model NAME` may be repeated, and the reranked row is then measured once per model over the same queries in one run — which is how `MEASUREMENTS.md` compares the shipped default against the alternative. Without the option the row measures the model the app is configured with (`--reranker-model` or `RESEARCH_ULTRARAG_RERANKER_MODEL`, default `Xenova/ms-marco-MiniLM-L-6-v2`). `--offline` works when the runtime and both model caches are already present. Every mode passes `rerank` explicitly, so these numbers do not depend on the app's default; reranking is the default, so the `hybrid+rerank` row is what an ordinary search returns.
+Defaults: modes `bm25,dense,hybrid,hybrid+rerank` at `top_k=10`, plus a deep pass for `hybrid` at `top_k=50`, all 32 queries. `--deep-top-k 0` skips the deep pass. `--reranker-model NAME` may be repeated, and the reranked row is then measured once per model over the same queries in one run — which is how `MEASUREMENTS.md` compares the shipped default against the alternative. Without the option the row measures the model the app is configured with (`--reranker-model` or `RESEARCH_RAG_RERANKER_MODEL`, default `Xenova/ms-marco-MiniLM-L-6-v2`). `--offline` works when the runtime and both model caches are already present. Every mode passes `rerank` explicitly, so these numbers do not depend on the app's default; reranking is the default, so the `hybrid+rerank` row is what an ordinary search returns.
 
 Target resolution attempts every target the run did not skip and records every
 failure before reporting any: one run names each target that did not resolve

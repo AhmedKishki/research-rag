@@ -1,13 +1,21 @@
 """A command that no longer exists, documented, is invisible to the suite and visible
-to the first reader who follows the manual.
+to the first reader who follows the quickstart.
 
-The same holds for a capability removed with its description still in the manual, a
-project file left undocumented, and a document naming a path that has moved.
+The same holds for a capability removed with its description still in the quickstart,
+a project file left undocumented, and a document naming a path that has moved.
+
+The command reference is `research-rag help`: one menu holding every registered
+command exactly once, one page per subject, and each command's own usage. The
+README is the way in, so its examples are parsed against the same parser rather
+than compared as prose.
 """
 
 from __future__ import annotations
 
+import argparse
 import ast
+import re
+import shlex
 import subprocess
 import tomllib
 from pathlib import Path
@@ -23,12 +31,19 @@ CLI_HELP = subprocess.run(
     check=True,
     cwd=ROOT,
 ).stdout
+BASH_BLOCK = re.compile(r"```bash\n(.*?)```", re.DOTALL)
+# A global option that takes a value, so the value is not read as the command.
+_GLOBAL_VALUE_OPTIONS = (
+    "--project-root",
+    "--project",
+    "--runtime-root",
+    "--model-cache-root",
+    "--config",
+)
 
 
 def _installed_commands() -> set[str]:
     """Every subcommand the one console command registers."""
-
-    import argparse
 
     from research_rag.surfaces.cli import _parser
 
@@ -40,11 +55,124 @@ def _installed_commands() -> set[str]:
     }
 
 
-def test_the_readme_documents_every_installed_command() -> None:
-    """A manual that omits a command, or names a removed one, misleads everyone."""
+def _readme_command_lines() -> list[list[str]]:
+    """Every `research-rag ...` line the README's own examples show a reader running."""
 
-    for command in _installed_commands():
-        assert command in README, f"{command!r} is installed but undocumented"
+    lines: list[list[str]] = []
+    for block in BASH_BLOCK.findall(README):
+        for line in block.splitlines():
+            words = shlex.split(line, comments=True)
+            if not words or words[0] != "research-rag":
+                continue
+            lines.append(words[1:])
+    return lines
+
+
+def _named_command(words: list[str]) -> str | None:
+    """The subcommand one example names, or None for a bare invocation."""
+
+    index = 0
+    while index < len(words):
+        word = words[index]
+        if word in _GLOBAL_VALUE_OPTIONS:
+            index += 2
+            continue
+        if word.startswith("-"):
+            index += 1
+            continue
+        return word
+    return None
+
+
+def test_the_help_is_the_command_reference_and_holds_every_command() -> None:
+    """Every installed command is in the menu exactly once, so the reference is whole.
+
+    A command the menu omits is a command a reader cannot find, and a command in
+    the menu twice is a menu that has drifted from the parser.
+    """
+
+    from research_rag.surfaces.cli import HELP_GROUPS
+
+    listed = [name for _, entries in HELP_GROUPS for name, _ in entries]
+    # `help` is reached by name and cannot list itself in a group it is the contents of.
+    assert set(listed) | {"help"} == _installed_commands()
+    assert len(listed) == len(set(listed)), "a command is in the menu twice"
+
+
+def test_every_command_the_readme_shows_is_one_the_parser_accepts() -> None:
+    """An example a reader can copy but not run is the quickstart's only real defect."""
+
+    from research_rag.surfaces.cli import _parser
+
+    parser = _parser()
+    commands: set[str | None] = set()
+    for words in _readme_command_lines():
+        try:
+            parser.parse_args(words)
+        except SystemExit as refusal:
+            # argparse refuses a line by exiting rather than by raising.
+            pytest.fail(f"{' '.join(words)} does not parse: exit {refusal.code}")
+        commands.add(_named_command(words))
+
+    assert commands, "the quickstart shows no command at all"
+    for command in commands - {None}:
+        assert command in _installed_commands(), f"{command!r} is not a command"
+
+
+def test_the_readme_points_at_the_help_reference_for_the_rest() -> None:
+    """The README is a way in; the reference is where every other command lives."""
+
+    from research_rag.surfaces.cli import CLI_NAME, HELP_TOPICS
+
+    assert f"{CLI_NAME} help" in README
+    assert f"{CLI_NAME} COMMAND --help" in README
+    assert f"{CLI_NAME} help TOPIC" in README
+    for topic in HELP_TOPICS:
+        assert topic in README, topic
+
+
+def test_the_readme_states_what_this_app_needs_before_it_runs() -> None:
+    """Requirements a reader discovers by failing are not requirements."""
+
+    project = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
+    low, _, high = project["project"]["requires-python"].partition(",")
+
+    def _minor(bound: str) -> int:
+        return int(bound.lstrip("><=").split(".")[1])
+
+    # Both bounds are minor versions of one minor series, and the upper one is
+    # exclusive: `>=3.11,<3.13` supports 3.11 and 3.12.
+    for version in range(_minor(low), _minor(high)):
+        assert f"3.{version}" in README, f"Python 3.{version} is supported but unstated"
+    for requirement in ("uv", "git", "--offline"):
+        assert requirement in README.lower(), requirement
+    assert "download" in README.lower()
+    assert "internet" in README.lower() or "network" in README.lower()
+
+
+def test_the_readme_offers_the_three_front_ends_to_one_app() -> None:
+    """A browser, an agent, and a terminal reach one process, and all three are shown."""
+
+    for front_end in (
+        "start",  # the app, and the workspace it serves
+        "--start-ui",  # that workspace in a browser
+        "search",  # the command line
+        "mcp",  # the agent surface
+    ):
+        assert front_end in README, front_end
+    assert "stdio" in README
+    # The workspace is served from the terminal that started it, so the reader is
+    # told to keep that terminal open rather than to look for a daemon.
+    assert "terminal" in README
+
+
+def test_the_readme_keeps_the_original_the_quote_authority() -> None:
+    """Cleaned text is not a transcript, and a reader must be sent to the source."""
+
+    assert "direct_quote_safe" in README
+    assert "locator" in README
+    assert "sources" in README
+    assert "cleaned" in README
 
 
 def test_the_cli_help_lists_every_installed_command() -> None:
@@ -72,13 +200,11 @@ def test_the_distribution_installs_nothing_named_for_another_product() -> None:
 
 
 def test_the_product_is_described_as_a_server_with_three_front_ends() -> None:
-    """It is a server product that also has a browser, and the manual must say so."""
+    """It is a server product that also has a browser, and the quickstart says so."""
 
     assert "research-rag" in README
-    for front_end in ("start", "clients", "disconnect", "mcp", "ui"):
-        assert front_end in README, front_end
-    assert "mcp" in README.lower()
     # Configuring an agent is a capability a workspace-only product cannot document.
+    assert "mcp" in README.lower()
     assert "stdio" in README
 
 

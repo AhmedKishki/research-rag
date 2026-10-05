@@ -13,10 +13,8 @@ from ..corpus.text_quality import (
     CHUNK_FLAG_EXTRACTION_ARTIFACT,
     text_corruption_reasons,
 )
+from ..project.policy import DEFAULT_RETRIEVAL_METHOD, RETRIEVAL_METHODS, ResearchError
 from ..project.support import (
-    DEFAULT_RETRIEVAL_METHOD,
-    RETRIEVAL_METHODS,
-    ResearchError,
     _atomic_to_thread,
     _candidate_flags,
     _chunk_text,
@@ -1630,7 +1628,8 @@ class SearchWorkflow:
                     "The source for this chunk is currently excluded from retrieval; "
                     "include the source before requesting its passage"
                 )
-            if chunk_id in self._chunk_exclusions():
+            excluded_chunk_ids = set(self._chunk_exclusions())
+            if chunk_id in excluded_chunk_ids:
                 raise ResearchError(
                     "The requested chunk is currently excluded from retrieval; "
                     "include the chunk before requesting its passage"
@@ -1665,7 +1664,10 @@ class SearchWorkflow:
             context = []
             document = _document_for_chunk(target, documents_by_id)
             for item in same_document[start:end]:
-                context.append(_public_passage(item, document))
+                passage = _public_passage(item, document)
+                if item["chunk_id"] in excluded_chunk_ids:
+                    passage["excluded_from_search"] = True
+                context.append(passage)
             return {
                 "generation_id": manifest["generation_id"],
                 "requested_chunk_id": chunk_id,

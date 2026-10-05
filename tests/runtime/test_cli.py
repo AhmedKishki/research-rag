@@ -17,10 +17,11 @@ import pytest
 
 import research_rag.retrieval.ultrarag as ultrarag_module
 import research_rag.runtime.app as app_module
+import research_rag.runtime.ownership as ownership_module
 import research_rag.surfaces.cli as cli_module
 from research_rag.project import registry
 from research_rag.project.config import GATEWAY_EXECUTABLE, ConfigurationError
-from research_rag.project.support import ResearchError
+from research_rag.project.policy import ResearchError
 from research_rag.retrieval.ultrarag import LazyGateway
 from research_rag.surfaces.cli import (
     _init,
@@ -411,12 +412,16 @@ def test_the_command_line_routes_each_command_to_its_service_operation() -> None
     service = Operations()
 
     status = asyncio.run(_operate(_args("status"), service))
+    # `message` is absent rather than null: the projection carries a sentence only
+    # when it explains something, and "nothing has changed" needs none. Asserting
+    # the absence is the contract, so a future `message: None` cannot creep back
+    # in as a field every reader of `status` has to ignore.
     assert status == {
         "ready": False,
         "stale": False,
         "requires": ["ingest"],
-        "message": None,
     }
+    assert "message" not in status
     verbose = asyncio.run(_operate(_args("status", "--verbose"), service))
     assert verbose["operation"] == "status"
 
@@ -692,20 +697,20 @@ def test_the_stop_sweep_reads_a_path_as_a_path_not_as_a_program(tmp_path: Path) 
     argument or the sweep's second half is undone by its first.
     """
 
-    from research_rag.surfaces.cli import _invokes_this_app
+    from research_rag.runtime.ownership import invokes_this_app
 
     project = tmp_path / "research-rag"
     state = project / ".research-rag" / "runtime"
 
-    assert not _invokes_this_app(
+    assert not invokes_this_app(
         ["--project-root", str(project), "--runtime-root", str(state)], project
     )
-    assert _invokes_this_app(
+    assert invokes_this_app(
         ["/srv/research-rag/.venv/bin/research-rag", "--project-root", str(project)],
         project,
     )
-    assert _invokes_this_app(["python", "-m", "research_rag"], project)
-    assert not _invokes_this_app(["python", "-m", "some_other_package"], project)
+    assert invokes_this_app(["python", "-m", "research_rag"], project)
+    assert not invokes_this_app(["python", "-m", "some_other_package"], project)
 
 
 def test_the_stop_sweep_leaves_the_other_products_processes_alone(
@@ -771,21 +776,60 @@ def test_the_stop_sweep_accepts_the_equals_form_of_the_option(tmp_path: Path) ->
 
 
 def test_stopping_asks_first_and_kills_only_the_survivors(
-    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    sent: list[tuple[int, int]] = []
+    """A sweep asks, waits, and insists only on what survived the asking.
+
+    The sweep signals through the ownership proof rather than through a bare
+    number, so this watches the proof's own view: a target it cannot prove is
+    asked for twice and forced never.
+    """
+
+    asked: list[tuple[int, int]] = []
     still_running = {2}
 
     monkeypatch.setattr(cli_module, "STOP_GRACE_SECONDS", 0)
     monkeypatch.setattr(
-        cli_module.os, "kill", lambda pid, number: sent.append((pid, number))
+        cli_module.ownership,
+        "ask_to_stop",
+        lambda pid, _root, number=signal.SIGTERM: (
+            asked.append((pid, number)) or ownership_module.Outcome(True, "")
+        ),
     )
     monkeypatch.setattr(cli_module, "alive", lambda pid: pid in still_running)
 
-    forced = _terminate([1, 2])
+    forced = _terminate(tmp_path / "project", [1, 2])
 
-    assert sent == [(1, signal.SIGTERM), (2, signal.SIGTERM), (2, signal.SIGKILL)]
+    assert asked == [(1, signal.SIGTERM), (2, signal.SIGTERM), (2, signal.SIGKILL)]
     assert forced == [2]
+
+
+def test_a_pid_the_proof_refuses_is_never_signalled_at_all(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The sweep's escalation is bounded by the same proof as its asking.
+
+    A number the proof refuses would still be a candidate for the second, harder
+    signal, so the refusal has to hold through both rounds rather than only the
+    first.
+    """
+
+    attempted: list[tuple[int, int]] = []
+    monkeypatch.setattr(cli_module, "STOP_GRACE_SECONDS", 0)
+    monkeypatch.setattr(cli_module, "alive", lambda pid: True)
+    monkeypatch.setattr(
+        cli_module.ownership,
+        "ask_to_stop",
+        lambda pid, _root, number=signal.SIGTERM: (
+            attempted.append((pid, number))
+            or ownership_module.Outcome(False, "not this project's app")
+        ),
+    )
+
+    forced = _terminate(tmp_path / "project", [4242])
+
+    assert attempted == [(4242, signal.SIGTERM), (4242, signal.SIGKILL)]
+    assert forced == [4242]
 
 
 def test_stop_without_servers_reports_the_app_and_starts_nothing(

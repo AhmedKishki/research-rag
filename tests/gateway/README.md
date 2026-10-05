@@ -13,7 +13,7 @@ The PDF writer comes from `tests/conftest.py`. The integration file needs the re
 .venv/bin/python -m pytest tests/gateway -q
 ```
 
-This is the right scope for a change to the gateway, the managed runtime, or the end-to-end path. It is also the only folder that launches the real gateway, so it is the one to run before a retrieval-quality measurement.
+A change to the gateway, the managed runtime, or the end-to-end path belongs here. This is also the only folder that launches the real gateway, so it is the one to run before a retrieval-quality measurement.
 
 ## What it mirrors
 

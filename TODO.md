@@ -1,6 +1,11 @@
+---
+name: TODO.md
+description: Open work, grouped by the problem each item solves.
+---
+
 # TODO
 
-- Open work, grouped by the problem each item solves. Behaviour is in `README.md`, capabilities in `FEATURES.md`, the measurement protocol and the decisions it justified in `MEASUREMENTS.md`, deferred ideas in `ROADMAP.md`, the state format in `STORAGE.md`.
+- Open work, grouped by the problem each item solves. Behaviour is in `README.md`, capabilities in `FEATURES.md`, the measurement protocol and the decisions it justified in `MEASUREMENTS.md`, deferred ideas in `ROADMAP.md`, and the state format in `STORAGE.md`.
 
 ## The app and its front ends
 
@@ -15,7 +20,7 @@
   - `stop` refuses to kill what it cannot prove it owns, so a detached app needs the same proof plus the flag, and a plain `stop` must never end one by accident.
   - Anything that reads the pid file has to learn that a detached app outlives its terminal, including `doctor` and the workspace's project selector.
 - [ ] **A connection an unnamed client opened cannot be dropped.** Limit. A client that declared nothing is one client per MCP session, and a disconnect folds its connections onto the session by the name it declared, so a hand-written HTTP client has only its sessions refused. `RESEARCH_RAG_CLIENT_NAME` is the fix, and the stdio bridge always sets it.
-- [ ] **Measure the payload difference the app makes.** Missing number. Nothing states the lean and full search sizes since the repackaging retired them. Measure them against the running app, and add the workspace, agent, and control surfaces' own overhead, because one process now serves all three and the claim that they cannot disagree is only as good as the evidence that they are one service.
+- [ ] **Measure the payload difference the app makes.** Missing number. Nothing states the lean and full search sizes. Measure them against the running app, and add the workspace, agent, and control surfaces' own overhead, because one process now serves all three and the claim that they cannot disagree is only as good as the evidence that they are one service.
 
 ## A report that is true
 
@@ -23,14 +28,14 @@
 - [ ] **Report activation failures as structured values**, not one all-or-nothing message. Feature. A failed activation says that it failed rather than which step failed and what it left on disk.
 - [ ] **Decide whether `search --method` and `--no-rerank` stay.** Decision. They exist so a row of `MEASUREMENTS.md` can be reproduced on demand, and no reader-facing surface offers either. `AGENTS.md` records the exception; removing them is a deliberate simplification, not a cleanup.
 - [ ] **Decide how the source inventory exposes the keyword vocabulary.** Feature. The keyword layer is all-of and its vocabulary only exists across sources, so nothing lets a reader discover which keywords exist; report counts in `status` or reduce the list to handles.
-- [ ] **Reads should not queue behind a build.** Problem. Every operation takes the project lock, so `status`, `sources`, `search`, and `passage` are refused while a build runs. A build never mutates the selected generation in place: activation swaps `current.json` atomically and leaves the old generation root intact, so reads should resolve the selected generation without the lock and answer during the build.
+- [ ] **Reads should not queue behind a build.** Problem. Every operation takes the project lock, so `status`, `sources`, `search`, and `passage` are refused while a build runs. A build never mutates the selected generation in place, because activation swaps `current.json` atomically and leaves the old generation root intact, so reads should resolve the selected generation without the lock.
 - [ ] **Let one `ingest` call name its own budget.** Feature. The budget is a runtime setting, so a reader cannot raise it for a build that needs longer: the call still needs repeating, and a reader who stops repeating identical calls still cannot finish it. An argument would let the caller say how long it is willing to wait.
 - [ ] **Refuse to measure while a build is running.** Feature. `scripts/evaluate_retrieval.py` started alongside an ingestion does not fail, it starves: it sat with 66 ONNX threads at zero CPU time for ten minutes while the build held eleven cores. Notice a staging build under the project's runtime root and stop with a message.
 
 ## The corpus and the machine holding it
 
 - Work that protects the data, or that stops a build from costing more than it should.
-  - [ ] **Narrow the two broad `except Exception` handlers.** Feature. At durability boundaries, so a storage fault cannot be swallowed.
+  - [ ] **Narrow the two broad `except Exception` handlers.** Feature. Both are at durability boundaries, so a storage fault is swallowed rather than raised.
   - [ ] **Refuse to start a build that cannot fit.** Feature. `status` and `doctor` report free space against the size of the generations already on disk, and `ingest` does not read that verdict: a build that runs out of room partway leaves a staging directory and no generation, on the machine least able to afford the retry.
   - [ ] **An `ingest` dry run** that reports what would change and what would be reused, and writes nothing. Feature.
   - [ ] **A CPU reserve, so a build leaves cores free.** Feature.
@@ -51,12 +56,12 @@
 
 ## Keeping the code changeable
 
-- [ ] **Decide which of the suite's tests earn their place.** Problem. 636 tests run in 2m50s, and the five slowest account for 156s of that: two start the real vanilla gateway, two hold the project lock against a real second process, and one runs the update script. The remaining 631 cost about 14s together, so the suite is not slow by volume.
-  - The `integration` marker is registered and nothing selects on it, and `-m "not integration"` saves 54s rather than the 120s the slowest five suggest, because two of them carry no marker.
-  - Nothing has read the suite for duplication. Start with `test_service.py`, where thin repetition is most likely, and either delete what a stronger test already covers or mark what is genuinely slow so an ordinary change can run the fast subset.
+- [ ] **Decide which of the suite's tests earn their place.** Problem. The suite runs in minutes and the five slowest tests account for most of that: two start the real vanilla gateway, two hold the project lock against a real second process, and one runs the update script. The rest cost seconds together, so the suite is not slow by volume.
+  - The `integration` marker is registered and nothing selects on it, and `-m "not integration"` saves far less than the slowest five suggest, because two of them carry no marker.
+  - Nothing has read the suite for duplication. Start with `test_service.py`, where thin repetition is most likely, and either delete what a stronger test already covers or mark what is genuinely slow, so an ordinary change can run the fast subset.
 
-- [ ] **Give `ResearchError` and the policy constants a leaf home, so `support` stops being the leaf it claims to be.** Feature. `support.py` is 978 lines and sixteen unrelated concerns, and it imports `dense`, `extraction`, `artifact_lookup`, `embeddings`, `rerankers`, `generation`, `settings`, and `sources`. Every module that needs the error type or a schema version therefore imports the retrieval stack with it: `registry`, `settings_document`, `tool_views`, and `update` each pull fastembed, qdrant_client, and pymupdf to raise one exception. Move the error, the schema and policy versions, the retrieval-policy fingerprint, the metadata overlay, the chunk records, the IR statistics, the citations, the source identity, and the tokenizer cache into modules of their own, and `support.py` is gone. Accept when `research_rag.update` imports with neither fastembed nor qdrant_client in `sys.modules`, and when the modules that must answer without the retrieval stack are named in `AGENTS.md` with a test that fails if one of them grows an import of it.
+- [ ] **Split the remaining concerns in `project/support.py`.** Metadata overlays, chunk records, IR statistics, citations, source identity, and tokenizer caching need separate owners. `project/policy.py` owns lightweight errors and policy primitives; do not route those through `support.py`. Acceptance: shared definitions have one owner and `tests/gates/test_lightweight_imports.py` prevents diagnostic commands from loading retrieval dependencies.
 
-- [ ] **Split the resumable ingestion loop into per-phase handlers, then enable `C901`.** Feature. `_advance_ingestion` is 1,341 lines at complexity 107 against 35 for the next worst function in the package; three of its phase blocks call closures defined inside it and eight read loop-local state, so the split is an ingestion state object that handlers take and return. Accept on a green suite and a re-ingest that reuses every chunk and vector.
+- [ ] **Split the resumable ingestion loop into per-phase handlers, then enable `C901`.** Feature. `generations/ingestion.py::_advance_ingestion` holds the whole resumable loop, and it is the worst offender in the package for cyclomatic complexity: three of its phase blocks call closures defined inside it and eight read loop-local state, so the split is an ingestion state object that handlers take and return. Accept on a green suite, a re-ingest that reuses every chunk and vector, and `C901` enabled at the level the rest of the package already meets.
 
-- An item is done when the harness has produced its measurement, and the validation in `AGENTS.md` is clean.
+- An item is done when the harness has produced its measurement and the validation in `AGENTS.md` is clean.

@@ -417,12 +417,35 @@ def _code_currency_check() -> Check:
     )
 
 
+def _service_check(config: ResearchConfig, reason: str) -> Check:
+    """The check that says this project's own state could not be read.
+
+    The corpus, the generation, and the models are all unknown until it can be, so
+    the report says that rather than reporting the empty project this run did not
+    observe.
+    """
+
+    return Check(
+        "service",
+        BLOCKED,
+        f"This project's own state could not be read, so nothing about its "
+        f"corpus, its generation, or its indexes is known: {reason}",
+        _command(config, "doctor"),
+    )
+
+
 def health_report(
     config: ResearchConfig,
     status: Mapping[str, Any],
+    *,
+    status_unavailable: str | None = None,
 ) -> HealthReport:
     """`status` is the payload the caller already produced, so the dependency and
     status answers describe one state.
+
+    `status_unavailable` is why the caller could not produce one. An empty status
+    is an answer about a project holding nothing; this is the other case, and the
+    report must not present it as the first.
     """
 
     embedding = resolve_embedding_model(config.settings.embedding_model)
@@ -476,6 +499,11 @@ def health_report(
         )
     return HealthReport(
         checks=(
+            *(
+                (_service_check(config, status_unavailable),)
+                if status_unavailable
+                else ()
+            ),
             identity,
             runtime_root,
             _vanilla_runtime_check(config),
@@ -498,7 +526,17 @@ def health_report(
                 offline_state=OK,
             ),
             _lock_check(config),
-            _generation_check(config, status),
+            (
+                Check(
+                    "generation",
+                    BLOCKED,
+                    "This project's generation is unknown because its state could "
+                    "not be read.",
+                    _command(config, "ingest"),
+                )
+                if status_unavailable is not None
+                else _generation_check(config, status)
+            ),
             _capacity_check(config, status),
             _code_currency_check(),
         )
