@@ -84,7 +84,7 @@ description: Research app boundaries, evidence contracts, and validation rules.
   - Refuse `mcp --project-root` and `mcp --project`.
 - For an uninitialized project, open the session with only `status`, an `init` remedy in `blocked_by`, and no corpus tools.
   - `tests/surfaces/test_bridge.py` covers this surface in `surfaces/mcp.py`.
-- Generation of an answer is out of scope. `ROADMAP.md` holds it and the API, citation contract, and tests it would need.
+- Generation of an answer is out of scope. `ROADMAP.md` holds the design and `TODO.md` the open work, including the API, citation contract, and tests it would need.
 - No bundle operations exist: `export_bundle` and `import_bundle` are not available.
 
 ### The state a reader must be able to trust
