@@ -15,7 +15,7 @@ description: Product ideas deliberately not being built yet.
 
 ## Answers
 
-- **A generation stage, through a local model or a hosted API.** The app returns evidence and stops there: `search` answers with passages, their sources, and their locators, and the reader writes whatever the evidence supports. This is the one gap between it and a general-purpose RAG server, and it is a change of contract rather than a missing feature, so it is listed here rather than promised.
+- **A generation stage, through a local model or a hosted API.** The app returns evidence and stops there: `search` answers with passages, their sources, and their locators, and the reader writes whatever the evidence supports. This is the one gap between it and a general-purpose RAG server, and it is a change of contract rather than a missing feature, so it is listed here rather than promised. `TODO.md` tracks the open work.
   - What it would need:
     - A provider behind a setting rather than a hard-coded client, since the CPU-only, offline, credential-free rule that governs retrieval does not survive a network call or a GPU.
     - An explicit statement of what leaves the machine, because a query and the passages it retrieved would.
