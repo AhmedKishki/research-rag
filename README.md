@@ -1,8 +1,3 @@
----
-name: README.md
-description: Basic capabilities, installation, and first use of research-rag.
----
-
 # research-rag
 
 - Search a project's PDFs and EPUBs locally on CPU, without an account or hosted model service.
@@ -13,7 +8,7 @@ description: Basic capabilities, installation, and first use of research-rag.
 ## Requirements
 
 - Linux, Python 3.11 or 3.12, [uv](https://docs.astral.sh/uv/), and Git.
-- Internet access for the initial runtime and model downloads; cached installations can use `--offline`.
+- Internet access for the initial runtime and model downloads. Cached installations can use `--offline`.
 
 ## Install
 
@@ -46,7 +41,7 @@ research-rag --project-root "/path/to/project" init --name "My project"
 research-rag --project-root "/path/to/project" ingest
 ```
 
-- The first build can take time; repeat `ingest` if it reports an unfinished build.
+- The first build can take time. Repeat `ingest` if it reports an unfinished build.
 
 ## Read the evidence
 
@@ -55,7 +50,7 @@ research-rag --project-root "/path/to/project" search "How is evidence interpret
 ```
 
 - Search combines lexical and semantic retrieval with reranking.
-- Passages are cleaned text (`direct_quote_safe: false`); check the original at the locator before quoting.
+- Passages are cleaned text (`direct_quote_safe: false`). Check the original at the locator before quoting.
 
 ## Open the workspace
 
@@ -63,7 +58,7 @@ research-rag --project-root "/path/to/project" search "How is evidence interpret
 research-rag --project-root "/path/to/project" --start-ui start
 ```
 
-- Keep the terminal open; Ctrl-C or closing it stops the app.
+- Keep the terminal open. Ctrl-C or closing it stops the app.
 - The workspace has no authentication beyond its loopback boundary. Use a trusted machine.
 
 ## Connect an agent
@@ -74,21 +69,20 @@ research-rag --project-root "/path/to/project" --start-ui start
 research-rag --project-root "/path/to/project" doctor --mcp-entry
 ```
 
-- HTTP clients use the app's `/mcp` endpoint; stdio clients use `research-rag mcp --project-name "My project"`.
+- HTTP clients use the app's `/mcp` endpoint. stdio clients use `research-rag mcp --project-name "My project"`.
   - The bridge names a registered project and does not start its app.
 
 ## Updates
 
-- The browser's **Updates** view shows GitHub release notes; **Not now** declines without changing the installation.
-- Run `research-rag update` in a terminal to review the changelog and approve or decline an update.
-  - Installation requires explicit approval. Use `research-rag update --help` for unattended updates and offline checks.
+- The browser's **Updates** view shows GitHub release notes. **Not now** declines without changing the installation.
+- `research-rag update` in a terminal shows the changelog and asks for approval. Installation needs explicit approval. `research-rag update --help` covers unattended updates and offline checks.
 
 ## Help and details
 
-- `research-rag --help` or `research-rag help`: command reference, without a project.
+- `research-rag --help` or `research-rag help`: the command reference, without a project.
 - `research-rag COMMAND --help`: arguments and examples for one command.
 - `research-rag help TOPIC`: workflow guidance for `agents`, `filters`, or `settings`.
-- No OCR is performed. A PDF that already carries an OCR text layer is indexed as the text it is; one with no text layer is refused. Password-protected PDFs are rejected.
+- No OCR is performed. A PDF with an OCR text layer is indexed as that text. A PDF with no text layer or a password is refused.
 - [Features and limits](FEATURES.md), [storage and portability](STORAGE.md), [measurement protocols](MEASUREMENTS.md).
 
 ## UltraRAG credit and licensing
@@ -96,4 +90,4 @@ research-rag --project-root "/path/to/project" doctor --mcp-entry
 - Built on [UltraRAG](https://github.com/OpenBMB/UltraRAG)'s MCP architecture, corpus chunker, and BM25 retriever.
   - UltraRAG credits THUNLP at Tsinghua University, NEUIR at Northeastern University, OpenBMB, AI9stars, and its contributors.
 - This is an independent project, not an official UltraRAG release, and is not affiliated with or endorsed by those organizations or contributors.
-- This code uses the [Apache License 2.0](LICENSE). Extraction components have AGPL obligations; [NOTICE](NOTICE) records their terms, model licences, and upstream revisions.
+- This code uses the [Apache License 2.0](LICENSE). Extraction components have AGPL obligations. [NOTICE](NOTICE) records their terms, model licences, and upstream revisions.

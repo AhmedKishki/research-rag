@@ -1,49 +1,54 @@
----
-name: ROADMAP.md
-description: Product ideas deliberately not being built yet.
----
-
 # Roadmap
 
-- Product ideas that are deliberately not being built yet. Nothing here is scheduled, and each would need a decision before it was started. Work that is already in scope is in `TODO.md`, current behaviour is in `README.md`, and current facts and limits are in `MEASUREMENTS.md`.
-- The app targets the envelope `MEASUREMENTS.md` states. Anything outside it — other-language corpora, OCR'd or scanned material, handwriting, formula-heavy documents — is a different product rather than a roadmap step, so it is not listed here as scheduled work. The one such gap that keeps being reported is at the end of this file, so the decision is visible rather than forgotten.
+- Nothing here is scheduled. Each idea needs a decision before work starts.
+- Work outside the envelope in `MEASUREMENTS.md` is a different product, not a roadmap step.
 
 ## Upstream reuse
 
-- Re-evaluate adopting UltraRAG's dense index backends (`retriever_init(index_backend="faiss"|"qdrant"|"milvus")`) and its reranking components once an upstream release returns identifiers and scores under query-time metadata filters, and offers a reranker that is CPU-only, offline, revision-pinned, and free of any service or credential.
-  - If those criteria are met, the work is a component swap behind the `DenseBackend` boundary plus a new manifest backend name, and the source and retrieval integration coverage in `AGENTS.md` must accept it before any generation selects it.
+- Re-evaluate UltraRAG's dense index backends (`faiss`, `qdrant`, `milvus`) and its reranking components when an upstream release does all of the following:
+  - Returns identifiers and scores under query-time metadata filters.
+  - Offers a reranker that is CPU-only, offline, revision-pinned, and free of services and credentials.
+- Adoption would be a component swap behind the `DenseBackend` boundary plus a new manifest backend name.
+  - The source and retrieval integration tests in `AGENTS.md` must accept it before any generation selects it.
 
 ## Answers
 
-- **A generation stage, through a local model or a hosted API.** The app returns evidence and stops there: `search` answers with passages, their sources, and their locators, and the reader writes whatever the evidence supports. This is the one gap between it and a general-purpose RAG server, and it is a change of contract rather than a missing feature, so it is listed here rather than promised. `TODO.md` tracks the open work.
-  - What it would need:
-    - A provider behind a setting rather than a hard-coded client, since the CPU-only, offline, credential-free rule that governs retrieval does not survive a network call or a GPU.
-    - An explicit statement of what leaves the machine, because a query and the passages it retrieved would.
-    - A citation contract, so a generated sentence names the passages it rests on and a reader can check each one.
-  - What a local model changes: it preserves the offline rule, and it costs a GPU and a serving surface the app does not have today.
-  - What it must not do: replace the passage in the answer. The evidence stays in the payload with its locators and `direct_quote_safe: false`, a generation is labelled as one, and a request that asks for a generated answer without evidence is refused rather than answered from the model's own memory.
-  - What would have to be decided first:
-    - Whether the app still returns evidence only and offers generation as a separate operation.
-    - What an answer looks like when the reranker found nothing. A model asked to write from a thin result set will write from its own knowledge, which is the failure the whole retrieval contract exists to prevent.
+- Add a generation stage, through a local model or a hosted API.
+  - Today `search` returns passages, sources, and locators, and the reader writes the answer.
+  - This is a change of contract, not a missing feature.
+- Requirements:
+  - A provider behind a setting, because the CPU-only, offline, credential-free rule does not survive a network call or a GPU.
+  - An explicit statement of what leaves the machine: the query and the passages it retrieved.
+  - A citation contract, so a generated sentence names the passages it rests on.
+- A local model keeps retrieval offline but needs a GPU and a serving surface.
+- Constraints:
+  - The evidence stays in the payload with its locators and `direct_quote_safe: false`.
+  - A generation is labelled as one.
+  - A request for an answer without evidence is refused, not answered from the model's memory.
+- Decisions first:
+  - Whether the app keeps returning evidence only and offers generation as a separate operation.
+  - What an answer looks like when the reranker found nothing. A model writing from a thin result set writes from its own knowledge.
 
 ## Citations and quotation
 
-- Character offsets inside extraction units, so a hit can point at a span instead of a whole unit.
-- The printed page label distinguished from the physical page, wherever a document carries both.
-- An exact-quote verification tool: the missing piece between cleaned semantic text and text that is safe to quote.
-- Citation export in common bibliographic styles, without inventing any metadata.
+- Character offsets inside extraction units, so a hit points at a span.
+- The printed page label distinguished from the physical page wherever a document carries both.
+- An exact-quote verification tool.
+- Citation export in common bibliographic styles, without inventing metadata.
 
 ## Scale and operations
 
-- A persistent document-metadata index, which a corpus of tens of thousands of sources would need before per-process caches of the document map or of the staleness verdict are worth their invalidation risk.
-- Pushing category and keyword filtering into the embedded dense index, which matters only above the threshold at which that backend is selected.
-- Incremental dense-index construction for large collections, where the embedded backend currently rebuilds its index for every changed generation.
+- A persistent document-metadata index, for tens of thousands of sources.
+- Category and keyword filtering inside the embedded dense index, which matters only above the threshold that selects that backend.
+- Incremental dense-index construction for large collections. The embedded backend rebuilds its index for every changed generation.
 
 ## Other
 
-- Optional backup profiles that exclude originals, for readers who already store their PDFs elsewhere.
-- Optional cross-project search that keeps each project's boundary explicit rather than merging indexes into one.
+- Backup profiles that exclude originals, for readers who store their PDFs elsewhere.
+- Cross-project search that keeps each project's boundary explicit.
 
 ## Outside the documented envelope
 
-- **OCR before ingestion, so a scanned source could be indexed.** Scanned material sits outside the workload this app is built for, so this is a change of product envelope rather than a step. It would need its own accuracy expectations, its own tests, and an answer to whether an OCR'd source can share a project with a digital one, since the two have different evidence quality.
+- OCR before ingestion, so scanned sources can be indexed.
+  - It needs its own accuracy expectations and tests.
+  - It needs an answer on whether an OCR'd source can share a project with a digital one, since their evidence quality differs.

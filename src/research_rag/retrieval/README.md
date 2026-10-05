@@ -24,8 +24,3 @@ Answering a query against a built generation.
   the index path being written. One backend instance serves one process, so a
   second build in the same instance must not inherit the first one's rows.
 - `ultrarag.py` speaks MCP to a child process. It does not know what a chunk is.
-
-## What lives elsewhere
-
-The gateway it speaks to is `../gateway/`, and the records it reads were written
-by `../generations/`.

@@ -1,19 +1,7 @@
-# The generation reuse decision
+# Generation reuse tests
 
-These tests hold the question a no-op `ingest` answers: whether the selected generation already describes the sources as they are now. A reviewed-metadata revision is not part of the answer, because that overlay is applied at read time and a hand edit must not force a rebuild. A changed exclusion revision, a changed retrieval-policy fingerprint, a changed source digest, a missing index directory, or the legacy metadata storage policy all refuse the match.
-
-- `test_generation.py` — `source_set_matches` and the four conditions that end it.
-
-The file builds a `ReuseSnapshot` over a temporary generation directory and reads no index, so it runs without a project, a gateway, or a model. The rest of `src/research_rag/generations/` is exercised by `tests/core/test_service.py`, where a build is run rather than described.
-
-## Running these
-
-```bash
-.venv/bin/python -m pytest tests/generations -q
-```
-
-A change to the reuse rule itself belongs here, because the rule is one predicate and this folder tests it directly rather than through an ingestion that would also assert half a dozen unrelated answers.
-
-## What it mirrors
-
-`src/research_rag/generations/`.
+- `test_generation.py`: `source_set_matches`, the predicate a no-op `ingest` uses to decide whether the selected generation describes the sources as they are.
+  - A reviewed-metadata revision does not break the match, because that overlay applies at read time.
+  - A changed exclusion revision, retrieval-policy fingerprint, or source digest, a missing index directory, or the legacy metadata storage policy refuses it.
+- It builds a `ReuseSnapshot` over a temporary directory and needs no project, gateway, or model.
+- `tests/core/test_service.py` exercises the rest of `src/research_rag/generations/` by running a build.
