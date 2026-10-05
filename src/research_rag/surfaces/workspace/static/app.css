@@ -368,8 +368,19 @@ code {
   background: var(--ready);
 }
 
-.connection-state[data-state="error"] .status-dot {
+.connection-state[data-state="error"] .status-dot,
+.connection-state[data-state="blocked"] .status-dot {
   background: var(--danger);
+}
+
+/* A degraded project still answers, so the dot alone would read as loading; the
+   label carries the count and takes the warning colour with it. */
+.connection-state[data-state="warn"] {
+  color: var(--warning);
+}
+
+.connection-state[data-state="blocked"] {
+  color: var(--danger);
 }
 
 .nav-toggle {
@@ -712,7 +723,18 @@ h3 {
   font-size: var(--text-xs);
 }
 
-.filter-drawer > .filter-groups {
+/* The drawer is the whole filter section, so the search results follow the query
+   directly and the explanation, the fields, and the lists to pick from all open
+   together. Each part below the summary starts under its own rule. */
+.filter-drawer > .filter-intro {
+  margin: 0;
+  padding: var(--space-xs) var(--space-xs) 0;
+  border-top: 1px solid var(--border-subtle);
+}
+
+.filter-drawer > .filter-picks {
+  margin-top: 0;
+  padding: var(--space-sm) var(--space-xs);
   border-top: 1px solid var(--border-subtle);
 }
 
@@ -1167,11 +1189,13 @@ textarea:disabled {
   color: var(--danger);
 }
 
-/* ---------------------------------------------------------------- filters -- */
-
-.filter-section > .section-heading-row {
-  align-items: center;
+.state-badge-warning {
+  border-color: var(--warning-border);
+  background: var(--warning-soft);
+  color: var(--warning);
 }
+
+/* ---------------------------------------------------------------- filters -- */
 
 .filter-groups {
   display: grid;
@@ -1788,8 +1812,19 @@ textarea:disabled {
   border-top: 1px solid var(--border-subtle);
 }
 
-.source-card-actions .action-button:last-child {
+/* The colour marks the action whose reach is the project, not the action that
+   happens to come last, and the row sets it apart from the actions beside it
+   because the danger red and the accent are close at link size. */
+.action-button-danger {
   color: var(--danger);
+}
+
+.source-card-actions .action-button-danger {
+  margin-left: auto;
+}
+
+.action-button-danger:hover {
+  color: var(--danger-strong);
 }
 
 .excluded-section {
@@ -1906,6 +1941,82 @@ textarea:disabled {
 
 .notice p {
   margin: var(--space-3xs) 0 0;
+}
+
+/* --------------------------------------------------------------- health -- */
+
+/* A condition the server asks a reader to act on is set like the notice above
+   it, in the colour of its state, with the command that clears it beside a
+   button that copies it. */
+.health-conditions {
+  display: grid;
+  gap: var(--space-2xs);
+}
+
+.health-condition {
+  display: grid;
+  gap: var(--space-2xs);
+  padding: var(--space-sm) var(--space-md);
+  border: 1px solid var(--warning-border);
+  border-radius: var(--radius-md);
+  background: var(--warning-soft);
+  color: var(--warning);
+  font-size: var(--text-sm);
+  line-height: var(--leading-prose);
+}
+
+.health-condition-blocked {
+  border-color: var(--danger-border);
+  background: var(--danger-soft);
+  color: var(--danger);
+}
+
+.health-condition-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2xs);
+}
+
+.health-reason {
+  max-width: var(--measure);
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.health-condition .update-command {
+  color: var(--text-primary);
+}
+
+.health-check-list {
+  display: grid;
+  gap: var(--space-xs);
+  margin: 0;
+  padding: var(--space-xs);
+  list-style: none;
+}
+
+.health-check {
+  display: grid;
+  grid-template-columns: 6.5rem minmax(0, 1fr);
+  align-items: start;
+  gap: var(--space-xs);
+  font-size: var(--text-sm);
+}
+
+.health-check > .state-badge {
+  justify-self: start;
+}
+
+.health-check-body .health-reason {
+  color: var(--text-secondary);
+  line-height: var(--leading-prose);
+}
+
+.rebuild-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2xs);
 }
 
 .site-footer {

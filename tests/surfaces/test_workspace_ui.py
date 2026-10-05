@@ -1304,7 +1304,9 @@ def test_a_panel_holds_only_the_blocks_that_belong_to_it() -> None:
         'id="status-cards"',
         'id="status-message"',
         'id="status-facts"',
+        'id="health-section"',
         'id="generation-summary"',
+        'id="rebuild-button"',
         'id="chunk-exclusion-summary"',
         'id="sql-console"',
     ):
@@ -2055,3 +2057,439 @@ process.stdout.write(JSON.stringify({
     assert result["releaseUrlRow"] == [
         "https://github.com/AhmedKishki/research-rag/releases/tag/v1.2.0"
     ]
+
+
+# A stub document the page script runs in. Each element answers a selector with a
+# child of its own and a `closest` with a parent of its own, so a function under
+# test can reach the nodes it writes to and the test can read them back.
+_PAGE_HARNESS = r"""
+import { readFileSync } from "node:fs";
+import vm from "node:vm";
+
+const script = readFileSync(process.argv[2], "utf8");
+const scenario = readFileSync(process.argv[3], "utf8");
+
+function element(tagName = "div") {
+  const lookups = new Map();
+  const parents = new Map();
+  return {
+    tagName,
+    textContent: "",
+    hidden: false,
+    disabled: false,
+    title: "",
+    value: "",
+    className: "",
+    dataset: {},
+    style: {},
+    children: [],
+    opened: false,
+    classList: { add() {}, remove() {}, toggle() {}, contains() { return false; } },
+    append(...kids) { this.children.push(...kids); },
+    replaceChildren(...kids) { this.children = kids; },
+    addEventListener() {},
+    removeEventListener() {},
+    setAttribute() {},
+    removeAttribute() {},
+    focus() {},
+    scrollIntoView() {},
+    getBoundingClientRect() { return { top: 0 }; },
+    showModal() { this.opened = true; },
+    close() { this.opened = false; },
+    querySelector(selector) {
+      if (!lookups.has(selector)) lookups.set(selector, element());
+      return lookups.get(selector);
+    },
+    querySelectorAll() { return []; },
+    closest(selector) {
+      if (!parents.has(selector)) parents.set(selector, element());
+      return parents.get(selector);
+    },
+  };
+}
+
+const registry = new Map();
+const radio = element("input");
+radio.value = "hybrid";
+const document = {
+  getElementById(id) {
+    if (!registry.has(id)) registry.set(id, element());
+    return registry.get(id);
+  },
+  createElement: element,
+  createDocumentFragment: () => element("fragment"),
+  createTextNode: (text) => ({ textContent: text, children: [] }),
+  querySelectorAll(selector) { return selector.includes("retrieval_method") ? [radio] : []; },
+  querySelector() { return null; },
+  addEventListener() {},
+  title: "",
+};
+
+function text(node) {
+  return [node.textContent || "", ...(node.children || []).map(text)].join(" ").trim();
+}
+
+function find(node, predicate) {
+  if (predicate(node)) return node;
+  for (const child of node.children || []) {
+    const found = find(child, predicate);
+    if (found) return found;
+  }
+  return null;
+}
+
+const context = {
+  document,
+  text,
+  find,
+  navigator: { clipboard: { writeText: async () => {} } },
+  fetch: async () => ({ ok: true, status: 200, json: async () => ({}) }),
+  Intl,
+  URL,
+  setTimeout: () => 0,
+  window: {
+    innerHeight: 900,
+    setTimeout: () => 0,
+    open() {},
+    matchMedia: () => ({ addEventListener() {} }),
+  },
+  result: {},
+};
+context.globalThis = context;
+vm.createContext(context);
+vm.runInContext(script, context);
+vm.runInContext(scenario, context);
+process.stdout.write(JSON.stringify(context.result));
+"""
+
+
+def _drive_page(tmp_path: Path, scenario: str) -> dict[str, Any]:
+    """Run the page script under the stub document, then one scenario after it."""
+
+    if shutil.which("node") is None:
+        pytest.skip("node is not installed, so the page cannot be driven here.")
+    harness = tmp_path / "harness.mjs"
+    harness.write_text(_PAGE_HARNESS, encoding="utf-8")
+    steps = tmp_path / "scenario.js"
+    steps.write_text(scenario, encoding="utf-8")
+    asset = (
+        Path(__file__).parents[2] / "src/research_rag/surfaces/workspace/static/app.js"
+    )
+    completed = subprocess.run(
+        ["node", str(harness), str(asset), str(steps)],
+        capture_output=True,
+        text=True,
+        timeout=60,
+        check=False,
+    )
+    if completed.returncode != 0:
+        pytest.fail(f"the page harness failed: {completed.stderr.strip()[:600]}")
+    return json.loads(completed.stdout)
+
+
+_CURRENT_STATUS = """
+const base = {
+  ready: true,
+  stale: false,
+  generation_upgrade_required: false,
+  hybrid_ready: true,
+  indexed_source_count: 106,
+  selected_source_count: 106,
+  searchable_source_count: 106,
+  chunk_count: 24829,
+  available_retrieval_methods: ["hybrid"],
+  last_build_metrics: { reused_vector_count: 24089, created_vector_count: 740 },
+};
+"""
+
+
+def test_the_build_button_offers_the_build_the_corpus_needs(tmp_path: Path) -> None:
+    """A current corpus is offered no build in the header, and nothing it is
+    offered there reuses nothing.
+
+    The header button used to read "Regenerate" on a current corpus and send
+    `force_recompute`, which discards every reusable extraction and vector: the
+    most expensive build was the most prominent control on every view. An
+    ingestion already reuses only what is unchanged, so a stale, outdated, or
+    empty corpus is served by an ordinary one, and a checkpointed build is resumed
+    with the flag it started under.
+    """
+
+    result = _drive_page(
+        tmp_path,
+        _CURRENT_STATUS
+        + """
+state.profile = { capabilities: { ingestion: true, force_recompute: true, documents: true } };
+const plans = {};
+const cases = {
+  current: base,
+  stale: { ...base, stale: true },
+  upgrade: { ...base, generation_upgrade_required: true, upgrade_reasons: ["layout_extraction"] },
+  empty: { ...base, ready: false },
+  checkpoint: {
+    ...base,
+    ingestion_progress: {
+      phase: "embedding",
+      progress: { completed: 10, total: 20, unit: "chunks" },
+      parameters: { force_recompute: true },
+    },
+  },
+};
+for (const [name, status] of Object.entries(cases)) {
+  renderStatus(status);
+  const header = document.getElementById("ingest-button");
+  plans[name] = {
+    hidden: header.hidden,
+    label: header.textContent,
+    force: state.ingestPlan ? state.ingestPlan.force : null,
+    rebuildHidden: document.getElementById("rebuild-button").hidden,
+    noticeHidden: document.getElementById("status-notice").hidden,
+    noticeAction: document.getElementById("notice-action").textContent,
+    notice: document.getElementById("status-notice-text").textContent,
+  };
+}
+renderStatus({ ...base, stale: true });
+openIngest(state.ingestPlan);
+const dialog = document.getElementById("ingest-dialog");
+const cost = document.getElementById("ingest-cost");
+result.ordinary = {
+  force: state.forceRecompute,
+  costHidden: cost.hidden,
+  title: dialog.querySelector("h2").textContent,
+};
+openIngest(REBUILD_PLAN);
+result.rebuild = {
+  force: state.forceRecompute,
+  costHidden: cost.hidden,
+  cost: cost.textContent,
+  title: dialog.querySelector("h2").textContent,
+  opened: dialog.opened,
+};
+result.plans = plans;
+""",
+    )
+
+    plans = result["plans"]
+    # A current corpus has nothing for an ingestion to do, so the header offers
+    # nothing; the rebuild is on the Status view, named for what it costs.
+    assert plans["current"]["hidden"] is True
+    assert plans["current"]["force"] is None
+    assert plans["current"]["rebuildHidden"] is False
+    assert plans["current"]["noticeHidden"] is True
+    # Every other state is an ordinary ingestion, which reuses what is unchanged.
+    for name, label in (
+        ("stale", "Ingest changes"),
+        ("upgrade", "Upgrade generation"),
+        ("empty", "Create generation"),
+    ):
+        assert plans[name]["hidden"] is False
+        assert plans[name]["label"] == label
+        assert plans[name]["force"] is False
+        # The notice offers the same build the header does.
+        assert plans[name]["noticeAction"] == label
+    # Nothing to rebuild before the first build, nor while a build can resume.
+    assert plans["empty"]["rebuildHidden"] is True
+    assert plans["checkpoint"]["rebuildHidden"] is True
+    # A checkpointed build resumes under the flag it started with, and says where
+    # it stopped.
+    assert plans["checkpoint"]["label"] == "Resume build"
+    assert plans["checkpoint"]["force"] is True
+    assert "embedding phase at 10 of 20 chunks" in plans["checkpoint"]["notice"]
+    assert "Regenerate" not in plans["upgrade"]["notice"]
+
+    assert result["ordinary"] == {
+        "force": False,
+        "costHidden": True,
+        "title": "Ingest changes",
+    }
+    # Only the named rebuild sends the flag, and its dialog states the cost from
+    # the counts the server reported.
+    rebuild = result["rebuild"]
+    assert rebuild["force"] is True
+    assert rebuild["opened"] is True
+    assert rebuild["title"] == "Rebuild from scratch"
+    assert rebuild["costHidden"] is False
+    assert "all 106 sources are extracted again" in rebuild["cost"]
+    assert "reused 24,089 vectors and created 740" in rebuild["cost"]
+
+
+def test_the_status_view_shows_what_the_health_checks_found(tmp_path: Path) -> None:
+    """A degraded project is not reported as ready.
+
+    The status payload carried `checks`, `degraded`, and `blocked_by`, and the
+    page drew none of them while the header said "ready". A condition now shows
+    its reason and the server's own remedy with a button that copies it exactly,
+    every check sits behind one disclosure, and the header counts what needs
+    action.
+    """
+
+    result = _drive_page(
+        tmp_path,
+        """
+state.profile = { capabilities: {} };
+const remedy = "research-rag --project-root /p doctor --prefetch-models";
+const warning = { check: "embedding_model", reason: "The pinned model is not cached.", remedy };
+renderHealth({
+  checks: [
+    { check: "lock", state: "ok", reason: "The lock is free.", remedy_command: null },
+    { check: "embedding_model", state: "warn", reason: "The pinned model is not cached.", remedy_command: remedy },
+  ],
+  degraded: [warning],
+  blocked_by: [],
+});
+const section = document.getElementById("health-section");
+const conditions = document.getElementById("health-conditions").children;
+const copy = find(conditions[0], (node) => node.dataset && node.dataset.action === "copy-remedy");
+result.degraded = {
+  hidden: section.hidden,
+  summary: document.getElementById("health-summary").textContent,
+  conditions: conditions.length,
+  condition: text(conditions[0]),
+  conditionClass: conditions[0].className,
+  copied: copy ? copy.dataset.value : null,
+  note: document.getElementById("health-check-note").textContent,
+  rows: document.getElementById("health-checks").children.length,
+};
+result.pill = connectionHealth({ degraded: [warning], blocked_by: [] });
+result.blockedPill = connectionHealth({
+  degraded: [],
+  blocked_by: [{ check: "app.serving", reason: "No app is serving.", remedy: "research-rag start" }],
+}).slice(0, 2);
+result.healthyPill = connectionHealth({ degraded: [], blocked_by: [] });
+
+renderHealth({ checks: [{ check: "lock", state: "ok", reason: "free" }] });
+result.healthy = {
+  hidden: section.hidden,
+  summary: document.getElementById("health-summary").textContent,
+  text: text(document.getElementById("health-conditions")),
+};
+renderHealth({ ready: true });
+result.absent = section.hidden;
+""",
+    )
+
+    degraded = result["degraded"]
+    assert degraded["hidden"] is False
+    assert degraded["summary"] == "1 to act on"
+    assert degraded["conditions"] == 1
+    assert "Warning" in degraded["condition"]
+    assert "Embedding model" in degraded["condition"]
+    assert "The pinned model is not cached." in degraded["condition"]
+    assert "health-condition-warn" in degraded["conditionClass"]
+    # The copy button carries the server's command exactly.
+    assert (
+        degraded["copied"] == "research-rag --project-root /p doctor --prefetch-models"
+    )
+    assert degraded["note"] == "1 of 2 passed"
+    assert degraded["rows"] == 2
+    assert result["pill"] == [
+        "warn",
+        "Local · 1 warning",
+        "The pinned model is not cached.",
+    ]
+    assert result["blockedPill"] == ["blocked", "Local · 1 blocked"]
+    assert result["healthyPill"] == ["ready", "Local · ready", ""]
+    # A healthy project says so in one line; a host with no checks shows nothing.
+    assert result["healthy"]["hidden"] is False
+    assert result["healthy"]["summary"] == "All passed"
+    assert result["healthy"]["text"] == "Every check passed."
+    assert result["absent"] is True
+
+
+def test_a_list_that_cannot_narrow_a_search_is_not_drawn(tmp_path: Path) -> None:
+    """One value every searchable source carries filters nothing.
+
+    A project tag on all 106 sources and a single language were drawn as lists to
+    pick from, above the results. A list now appears only when choosing from it
+    changes what a search reads.
+    """
+
+    result = _drive_page(
+        tmp_path,
+        """
+state.profile = { capabilities: { category_partitions: true, project_metadata: true } };
+state.status = { searchable_source_count: 106 };
+const group = (id) => document.getElementById(id).closest(".pick-group");
+group("partition-chips").dataset.capability = "category_partitions";
+group("project-chips").dataset.capability = "project_metadata";
+renderInventory("project-chips", [{ project: "all", searchable_source_count: 106 }], "project", "project-filter");
+result.everySource = group("project-chips").hidden;
+renderInventory("partition-chips", [{ category: "some", searchable_source_count: 40 }], "category", "partition-filter");
+result.someSources = group("partition-chips").hidden;
+renderInventory("partition-chips", [], "category", "partition-filter");
+result.none = group("partition-chips").hidden;
+state.profile = { capabilities: {} };
+renderInventory("partition-chips", [
+  { category: "a", searchable_source_count: 4 },
+  { category: "b", searchable_source_count: 5 },
+], "category", "partition-filter");
+result.capabilityOff = group("partition-chips").hidden;
+""",
+    )
+
+    assert result == {
+        "everySource": True,
+        "someSources": False,
+        "none": True,
+        "capabilityOff": True,
+    }
+
+
+def test_the_results_follow_the_query_and_the_filters_fold_into_one_drawer() -> None:
+    """A search's results start under its query, not under the filter lists.
+
+    The explanation, the fields, and the lists a reader picks from were stacked
+    between the query and the results, so 22 category buttons stood above the
+    first passage. All three now live inside the one filter drawer.
+    """
+
+    with _panel_host() as client:
+        page = client.get("/").text
+        script = client.get("/assets/app.js").text
+
+    search = page.split('id="search-view"', 1)[1].split("</main>", 1)[0]
+    drawer = search.split('id="filter-fields"', 1)[1].split("</details>", 1)[0]
+    for element in (
+        'class="form-note measure filter-intro"',
+        'id="filter-count"',
+        'id="filter-picks"',
+        'id="partition-chips"',
+        'id="project-chips"',
+        'id="language-chips"',
+    ):
+        assert element in drawer
+    # Nothing but the closed drawer stands between the query and the results.
+    between = search.split("</form>", 1)[1].split('id="search-summary"', 1)[0]
+    assert between.count("<details") == 1
+    assert "<h2" not in between.split('id="filter-fields"', 1)[0]
+    # The page scrolls to the results only when they are out of sight.
+    assert "window.innerHeight * 0.75" in script
+
+
+def test_a_source_card_names_the_reach_of_each_exclusion() -> None:
+    """Two adjacent links said "Exclude" and "Exclude from search".
+
+    One recorded a project-wide exclusion that every surface reads; the other
+    filled a filter for one search on another view. The second was the one
+    painted red, because the rule coloured whichever link came last.
+    """
+
+    with _panel_host() as client:
+        page = client.get("/").text
+        script = client.get("/assets/app.js").text
+        css = client.get("/assets/app.css").text
+
+    assert '"Exclude from project…",' in script
+    assert '"action-button action-button-danger",' in script
+    assert 'button("Search only this source", "only-source"' in script
+    assert 'button("Search without this source", "exclude-from-search"' in script
+    assert 'button("Exclude", "exclude-source"' not in script
+    assert 'button("Exclude from search"' not in script
+    # A filter chosen on Sources opens the search it filters.
+    assert 'searchWithSource("include-source-filter", value)' in script
+    assert 'switchView("search", { moveFocus: true });' in script
+    # The colour follows the class, never the position.
+    assert ".action-button-danger {" in css
+    assert ".source-card-actions .action-button:last-child" not in css
+    assert "<h2>Exclude this source from the project?</h2>" in page
+    assert ">Exclude from project</button>" in page

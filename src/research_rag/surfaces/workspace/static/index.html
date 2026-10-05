@@ -49,8 +49,8 @@
         <button id="import-button" class="button button-quiet" type="button" data-capability="bundle_import">
           Import
         </button>
-        <button id="ingest-button" class="button button-primary" type="button" data-capability="ingestion">
-          New generation
+        <button id="ingest-button" class="button button-primary" type="button" data-capability="ingestion" hidden>
+          Ingest changes
         </button>
       </div>
     </header>
@@ -207,21 +207,17 @@
           </form>
 
           <section id="filter-section" class="panel-section filter-section">
-            <div class="section-heading-row">
-              <h2 id="filter-heading">Filters</h2>
-              <span id="filter-count" class="count-badge">0</span>
-            </div>
-            <p class="form-note measure">
-              A filter narrows the passages a search reads. A field left empty
-              matches everything, and every value here applies to the next search
-              without rebuilding anything.
-            </p>
-
             <details id="filter-fields" class="filter-drawer">
               <summary>
-                <span class="drawer-title">Filter fields</span>
+                <span id="filter-heading" class="drawer-title">Filters</span>
+                <span id="filter-count" class="count-badge">0</span>
                 <span id="filter-summary-note" class="drawer-note">No filter set</span>
               </summary>
+              <p class="form-note measure filter-intro">
+                A filter narrows the passages a search reads. A field left empty
+                matches everything, and every value here applies to the next search
+                without rebuilding anything.
+              </p>
               <div class="filter-groups">
                 <fieldset class="filter-group" data-capability="metadata_filters">
                   <legend>Reviewed metadata</legend>
@@ -309,36 +305,36 @@
                   </label>
                 </fieldset>
               </div>
+
+              <div id="filter-picks" class="filter-picks">
+                <div id="partition-summary" class="pick-group" data-capability="category_partitions" hidden>
+                  <h3>Corpus partitions</h3>
+                  <p class="form-note measure">
+                    Reviewed categories with the number of searchable sources
+                    carrying each. Select one to add it to the filter above.
+                  </p>
+                  <div id="partition-chips" class="pick-list"></div>
+                </div>
+
+                <div id="project-summary" class="pick-group" data-capability="project_metadata" hidden>
+                  <h3>Projects</h3>
+                  <p class="form-note measure">
+                    Reviewed project tags with the number of searchable sources
+                    gathered for each. Select one to add it to the filter above.
+                  </p>
+                  <div id="project-chips" class="pick-list"></div>
+                </div>
+
+                <div id="language-summary" class="pick-group" data-capability="bibliographic_filters" hidden>
+                  <h3>Languages</h3>
+                  <p class="form-note measure">
+                    The language recorded for each searchable source. Select one to
+                    add it to the filter above.
+                  </p>
+                  <div id="language-chips" class="pick-list"></div>
+                </div>
+              </div>
             </details>
-
-            <div class="filter-picks">
-              <div id="partition-summary" class="pick-group" data-capability="category_partitions" hidden>
-                <h3>Corpus partitions</h3>
-                <p class="form-note measure">
-                  Reviewed categories with the number of searchable sources
-                  carrying each. Select one to add it to the filter above.
-                </p>
-                <div id="partition-chips" class="pick-list"></div>
-              </div>
-
-              <div id="project-summary" class="pick-group" data-capability="project_metadata" hidden>
-                <h3>Projects</h3>
-                <p class="form-note measure">
-                  Reviewed project tags with the number of searchable sources
-                  gathered for each. Select one to add it to the filter above.
-                </p>
-                <div id="project-chips" class="pick-list"></div>
-              </div>
-
-              <div id="language-summary" class="pick-group" data-capability="bibliographic_filters" hidden>
-                <h3>Languages</h3>
-                <p class="form-note measure">
-                  The language recorded for each searchable source. Select one to
-                  add it to the filter above.
-                </p>
-                <div id="language-chips" class="pick-list"></div>
-              </div>
-            </div>
           </section>
 
           <div id="search-summary" class="result-summary" hidden>
@@ -418,6 +414,21 @@
             </article>
           </div>
 
+          <div id="health-section" class="panel-section health-section" aria-labelledby="health-heading" hidden>
+            <div class="section-heading-row">
+              <h3 id="health-heading">Health</h3>
+              <span id="health-summary" class="count-badge">0</span>
+            </div>
+            <div id="health-conditions" class="health-conditions" aria-live="polite"></div>
+            <details id="health-details" class="detail-drawer">
+              <summary>
+                <span class="drawer-title">Every check</span>
+                <span id="health-check-note" class="drawer-note"></span>
+              </summary>
+              <ul id="health-checks" class="health-check-list"></ul>
+            </details>
+          </div>
+
           <p id="status-message" class="status-message" hidden></p>
 
           <details id="status-details" class="detail-drawer">
@@ -439,6 +450,11 @@
               original sources are not touched, and rebuilding costs one
               ingestion.
             </p>
+            <div class="rebuild-row" data-capability="force_recompute">
+              <button id="rebuild-button" class="button button-quiet" type="button" hidden>
+                Rebuild from scratch…
+              </button>
+            </div>
             <div id="generation-chips" class="record-list"></div>
           </div>
 
@@ -609,6 +625,7 @@
           remains active unless the complete build succeeds.
         </p>
         <p id="ingest-note" class="form-note dialog-note" hidden></p>
+        <p id="ingest-cost" class="notice-inline" hidden></p>
         <div class="two-column-fields" data-capability="chunk_settings">
           <label for="chunk-size">
             <span class="field-label">Chunk size</span>
@@ -679,7 +696,7 @@
     <dialog id="exclusion-dialog" class="dialog">
       <form id="exclusion-form" method="dialog">
         <div class="dialog-header">
-          <h2>Exclude this source?</h2>
+          <h2>Exclude this source from the project?</h2>
           <button class="icon-button dialog-close" type="button" aria-label="Close">×</button>
         </div>
         <input id="exclusion-source-path" type="hidden">
@@ -689,11 +706,13 @@
           <textarea id="exclusion-reason" rows="4" required placeholder="For example: duplicate representation; preferred copy is …"></textarea>
         </label>
         <p class="form-note">
-          Retrieval changes immediately. The original file is not deleted or edited.
+          Every search and every agent stops reading this source immediately. The
+          original file is not deleted or edited, and the Excluded sources list
+          restores it.
         </p>
         <div class="dialog-actions">
           <button class="button button-quiet dialog-close" type="button">Cancel</button>
-          <button id="exclusion-submit" class="button button-danger" type="submit">Exclude source</button>
+          <button id="exclusion-submit" class="button button-danger" type="submit">Exclude from project</button>
         </div>
       </form>
     </dialog>
