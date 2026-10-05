@@ -765,6 +765,38 @@ h3 {
   margin: var(--space-lg) 0 var(--space-sm);
 }
 
+.source-range {
+  margin: 0 0 var(--space-xs);
+}
+
+/* A list longer than one page ends in its pager: the steps either side and the
+   page numbers between, the current one marked in the accent it is selected
+   with elsewhere. */
+.pager {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-3xs);
+  margin-top: var(--space-md);
+}
+
+.pager .button {
+  min-width: var(--control-height);
+  padding: var(--space-2xs) var(--space-xs);
+}
+
+.pager .button[aria-current="page"] {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+  color: var(--accent-ink);
+}
+
+.pager-gap {
+  padding: 0 var(--space-3xs);
+  color: var(--text-secondary);
+}
+
 .empty-state,
 .no-records,
 .loading-row {
@@ -2557,6 +2589,7 @@ textarea:disabled {
   .sources-toolbar .source-filter,
   .result-actions,
   .source-card-actions,
+  .pager,
   .excluded-section,
   .system-summary,
   .filter-section,

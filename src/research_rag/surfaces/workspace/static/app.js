@@ -5,6 +5,8 @@ const state = {
   status: null,
   sources: [],
   excludedSources: [],
+  sourcesReady: false,
+  sourcePages: { sources: 1, excluded: 1 },
   projects: [],
   currentProject: "",
   agentEntry: "",
@@ -1161,9 +1163,8 @@ function filterRounds(list, value) {
   });
 }
 
-function sourceCard(source) {
-  const card = node("article", "source-card");
-  card.dataset.searchText = [
+function sourceSearchText(source) {
+  return [
     inlineText(source.title),
     ...(source.authors || []),
     ...(source.categories || []),
@@ -1171,7 +1172,10 @@ function sourceCard(source) {
     ...(source.project || []),
     source.source_relative_path,
   ].join(" ").toLocaleLowerCase();
+}
 
+function sourceCard(source) {
+  const card = node("article", "source-card");
   const body = node("div", "source-card-body");
   const titleRow = node("div", "source-title-row");
   titleRow.append(node("span", "format-badge", source.format || "source"));
@@ -1255,25 +1259,131 @@ function excludedCard(source) {
   return card;
 }
 
+// A page of sources holds ten. A collection drawn whole was one column of every
+// card, so a reader looking for one source scrolled past all the others. The
+// filter still reads every source, and the pages divide what it matched.
+const SOURCES_PER_PAGE = 10;
+
+function pageCount(total) {
+  return Math.max(1, Math.ceil(total / SOURCES_PER_PAGE));
+}
+
+// The page numbers a pager shows: the first, the last, and the current page
+// with its neighbours, with a gap where numbers are left out, so a pager over a
+// thousand sources is as wide as one over thirty.
+function pagerNumbers(page, pages) {
+  const shown = [...new Set([1, page - 1, page, page + 1, pages])]
+    .filter((number) => number >= 1 && number <= pages)
+    .sort((left, right) => left - right);
+  const items = [];
+  shown.forEach((number, index) => {
+    if (index && number - shown[index - 1] > 1) items.push(null);
+    items.push(number);
+  });
+  return items;
+}
+
+function pagerButton(label, list, page, className) {
+  const control = button(label, "source-page", String(page), `button button-quiet ${className}`);
+  control.dataset.list = list;
+  return control;
+}
+
+function renderPager(pagerId, list, page, pages) {
+  const pager = byId(pagerId);
+  pager.replaceChildren();
+  pager.hidden = pages <= 1;
+  if (pager.hidden) return;
+  const previous = pagerButton("Previous", list, page - 1, "pager-step");
+  previous.disabled = page <= 1;
+  pager.append(previous);
+  pagerNumbers(page, pages).forEach((number) => {
+    if (number === null) {
+      pager.append(node("span", "pager-gap", "…"));
+      return;
+    }
+    const control = pagerButton(String(number), list, number, "pager-number");
+    control.setAttribute("aria-label", `Page ${number} of ${pages}`);
+    if (number === page) control.setAttribute("aria-current", "page");
+    pager.append(control);
+  });
+  const next = pagerButton("Next", list, page + 1, "pager-step");
+  next.disabled = page >= pages;
+  pager.append(next);
+}
+
+// The page a reader is on survives a refresh, so a metadata edit on page five
+// returns to page five; it is clamped because an exclusion can remove the last
+// page.
+function currentPage(list, total) {
+  const pages = pageCount(total);
+  const page = Math.min(Math.max(1, state.sourcePages[list] || 1), pages);
+  state.sourcePages[list] = page;
+  return [page, pages];
+}
+
+function renderSourcePage() {
+  const list = byId("source-list");
+  list.replaceChildren();
+  const query = byId("source-filter").value.trim().toLocaleLowerCase();
+  const matched = query
+    ? state.sources.filter((source) => sourceSearchText(source).includes(query))
+    : state.sources;
+  const [page, pages] = currentPage("sources", matched.length);
+  const start = (page - 1) * SOURCES_PER_PAGE;
+  const shown = matched.slice(start, start + SOURCES_PER_PAGE);
+  shown.forEach((source) => list.append(sourceCard(source)));
+
+  const range = byId("source-range");
+  range.hidden = !shown.length;
+  if (!state.sources.length) {
+    list.append(node("div", "no-records", state.sourcesReady ? "No sources match this collection." : "Create a generation to inspect indexed sources."));
+  } else if (!shown.length) {
+    list.append(node("div", "no-records", "No source matches this filter."));
+  } else {
+    const span = shown.length === 1
+      ? formatNumber(start + 1)
+      : `${formatNumber(start + 1)}–${formatNumber(start + shown.length)}`;
+    const plural = matched.length === 1 ? "" : "s";
+    range.textContent = matched.length === state.sources.length
+      ? `Showing ${span} of ${formatNumber(matched.length)} source${plural}`
+      : `Showing ${span} of ${formatNumber(matched.length)} matching source${plural}, ${formatNumber(state.sources.length)} in all`;
+  }
+  renderPager("source-pager", "sources", page, pages);
+}
+
+function renderExcludedPage() {
+  const list = byId("excluded-list");
+  list.replaceChildren();
+  const [page, pages] = currentPage("excluded", state.excludedSources.length);
+  const start = (page - 1) * SOURCES_PER_PAGE;
+  state.excludedSources
+    .slice(start, start + SOURCES_PER_PAGE)
+    .forEach((source) => list.append(excludedCard(source)));
+  renderPager("excluded-pager", "excluded", page, pages);
+}
+
+// A new page starts where its list starts, and a keyboard reader lands on the
+// list's heading rather than on a pager button that may have moved.
+function goToSourcePage(list, page) {
+  state.sourcePages[list] = page;
+  if (list === "excluded") renderExcludedPage();
+  else renderSourcePage();
+  const heading = byId(list === "excluded" ? "excluded-heading" : "source-list-heading");
+  heading.tabIndex = -1;
+  heading.focus({ preventScroll: true });
+  heading.scrollIntoView({ block: "start", behavior: "smooth" });
+}
+
 function renderSources(payload) {
   state.sources = payload.sources || [];
   state.excludedSources = payload.excluded_sources || [];
+  state.sourcesReady = Boolean(payload.ready);
   byId("source-nav-count").textContent = String(state.sources.length);
   byId("excluded-count").textContent = String(state.excludedSources.length);
-
-  const list = byId("source-list");
-  list.replaceChildren();
-  if (!state.sources.length) {
-    list.append(node("div", "no-records", payload.ready ? "No sources match this collection." : "Create a generation to inspect indexed sources."));
-  } else {
-    state.sources.forEach((source) => list.append(sourceCard(source)));
-  }
-
-  const excludedSection = byId("excluded-section");
-  excludedSection.hidden = !state.excludedSources.length;
-  const excludedList = byId("excluded-list");
-  excludedList.replaceChildren();
-  state.excludedSources.forEach((source) => excludedList.append(excludedCard(source)));
+  renderSourcePage();
+  byId("excluded-section").hidden = !state.excludedSources.length;
+  renderExcludedPage();
 }
 
 async function loadWorkspace({ announce = false } = {}) {
@@ -2630,6 +2740,7 @@ function handleAction(event) {
     if (hit) copyText(inlineText(hit.citation), "Citation copied.");
   } else if (action === "ingest") openIngest(state.ingestPlan);
   else if (action === "copy-remedy") copyText(value, "Command copied.");
+  else if (action === "source-page") goToSourcePage(target.dataset.list, Number(value));
   else if (action === "partition-filter") addSearchFilter("category-any-filter", value);
   else if (action === "project-filter") addSearchFilter("project-any-filter", value);
   else if (action === "language-filter") addSearchFilter("language-filter", value);
@@ -2654,11 +2765,11 @@ function handleAction(event) {
   }
 }
 
-function filterSources(event) {
-  const query = event.target.value.trim().toLocaleLowerCase();
-  document.querySelectorAll(".source-card").forEach((card) => {
-    card.hidden = Boolean(query) && !card.dataset.searchText.includes(query);
-  });
+// A changed filter matches a different set, so it starts from that set's first
+// page.
+function filterSources() {
+  state.sourcePages.sources = 1;
+  renderSourcePage();
 }
 
 function initialize() {
@@ -2718,6 +2829,8 @@ function initialize() {
   byId("memory-standing-form").addEventListener("submit", saveStanding);
   byId("results").addEventListener("click", handleAction);
   byId("source-list").addEventListener("click", handleAction);
+  byId("source-pager").addEventListener("click", handleAction);
+  byId("excluded-pager").addEventListener("click", handleAction);
   byId("partition-chips").addEventListener("click", handleAction);
   byId("project-chips").addEventListener("click", handleAction);
   // The language list fills the language box beside it, so selecting from it is
