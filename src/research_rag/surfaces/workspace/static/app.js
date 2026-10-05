@@ -6,6 +6,9 @@ const state = {
   sources: [],
   excludedSources: [],
   sourcesReady: false,
+  searchedQuery: "",
+  searchKey: "",
+  restoringRoute: false,
   sourcePages: { sources: 1, excluded: 1 },
   projects: [],
   currentProject: "",
@@ -84,7 +87,11 @@ function applyProfile(profile) {
   // rather than the panel of an item that is gone.
   byId("workspace-nav").hidden = !visibleNavItems.length;
   byId("nav-toggle").hidden = !visibleNavItems.length;
-  const activeItem = visibleNavItems.find((item) => item.classList.contains("is-active"));
+  // The view a link or a reload names is drawn first, so the page does not show
+  // the search for a moment before the route is applied.
+  const routed = parseRoute(window.location.hash).view;
+  const activeItem = visibleNavItems.find((item) => item.dataset.view === routed)
+    || visibleNavItems.find((item) => item.classList.contains("is-active"));
   switchView(activeItem ? activeItem.dataset.view : null);
 }
 
@@ -842,6 +849,7 @@ function addSearchFilter(field, value, label = value) {
   input.value = values.join(", ");
   revealFilterField(field);
   syncFilterSummary();
+  recordRoute({ replace: true });
   input.focus();
   toast(`Added to the search filter: ${label}`);
 }
@@ -852,6 +860,7 @@ function addSearchFilter(field, value, label = value) {
 function searchWithSource(field, sourceId) {
   const source = state.sources.find((entry) => entry.source_id === sourceId);
   switchView("search", { moveFocus: true });
+  recordRoute();
   addSearchFilter(field, sourceId, inlineText(source?.title) || sourceId);
 }
 
@@ -1375,6 +1384,7 @@ function goToSourcePage(list, page) {
   state.sourcePages[list] = page;
   if (list === "excluded") renderExcludedPage();
   else renderSourcePage();
+  recordRoute();
   const heading = byId(list === "excluded" ? "excluded-heading" : "source-list-heading");
   heading.tabIndex = -1;
   heading.focus({ preventScroll: true });
@@ -1456,6 +1466,148 @@ async function loadWorkspace({ announce = false } = {}) {
     setBusy(false);
     if (state.status) configureRetrieval(state.status);
   }
+}
+
+// ------------------------------------------------------------------ routes --
+//
+// Each view is a page in the browser's history, addressed by the fragment:
+// `#/search?q=…&k=…` with the search's filters, `#/sources?page=3&filter=…`,
+// and `#/status` and the rest bare. Back, Forward, and a reload return a reader
+// to the view, the search, and the page of sources they were on. The fragment
+// is never sent to the server, so a query stays in this browser.
+
+const DEFAULT_TOP_K = "8";
+
+// The search filters by the names the search operation takes, each holding the
+// text of its field as typed.
+const FILTER_PARAMS = [
+  ["categories", "category-filter"],
+  ["keywords", "keyword-filter"],
+  ["categories_any", "category-any-filter"],
+  ["projects_any", "project-any-filter"],
+  ["authors_any", "author-filter"],
+  ["titles_any", "title-filter"],
+  ["languages_any", "language-filter"],
+  ["source_ids", "include-source-filter"],
+  ["exclude_source_ids", "exclude-source-filter"],
+];
+
+function parseRoute(hash) {
+  const text = String(hash || "").replace(/^#\/?/, "");
+  const split = text.indexOf("?");
+  const view = split < 0 ? text : text.slice(0, split);
+  return {
+    // A view name is a plain word; anything else names no view.
+    view: /^[a-z]+$/.test(view) ? view : "",
+    params: new URLSearchParams(split < 0 ? "" : text.slice(split + 1)),
+  };
+}
+
+function navItems() {
+  return [...document.querySelectorAll(".sidebar-item")].filter((item) => !item.hidden);
+}
+
+function activeView() {
+  return navItems().find((item) => item.classList.contains("is-active"))?.dataset.view || "search";
+}
+
+function routeHash(view = activeView()) {
+  const params = new URLSearchParams();
+  if (view === "search") {
+    if (state.searchedQuery) params.set("q", state.searchedQuery);
+    const topK = byId("top-k").value;
+    if (topK && topK !== DEFAULT_TOP_K) params.set("k", topK);
+    FILTER_PARAMS.forEach(([name, field]) => {
+      const value = byId(field).value.trim();
+      if (value) params.set(name, value);
+    });
+  } else if (view === "sources") {
+    if (state.sourcePages.sources > 1) params.set("page", String(state.sourcePages.sources));
+    const filter = byId("source-filter").value.trim();
+    if (filter) params.set("filter", filter);
+    if (state.sourcePages.excluded > 1) params.set("excluded", String(state.sourcePages.excluded));
+  }
+  const query = params.toString();
+  return `#/${view}${query ? `?${query}` : ""}`;
+}
+
+// The page title names the view, the query, or the page of sources, so the
+// browser's history list tells its entries apart.
+function routeTitle(view) {
+  const name = state.profile?.application_name || document.title;
+  const item = navItems().find((entry) => entry.dataset.view === view);
+  const label = [...(item?.querySelector(".nav-item-name")?.childNodes || [])]
+    .map((child) => child.textContent.trim())
+    .find(Boolean) || view;
+  let detail = "";
+  if (view === "search" && state.searchedQuery) detail = ` “${state.searchedQuery}”`;
+  if (view === "sources" && state.sourcePages.sources > 1) detail = ` · page ${state.sourcePages.sources}`;
+  return `${label}${detail} · ${name}`;
+}
+
+function recordRoute({ replace = false } = {}) {
+  if (state.restoringRoute) return;
+  const view = activeView();
+  const hash = routeHash(view);
+  document.title = routeTitle(view);
+  if (hash === window.location.hash) return;
+  if (replace) window.history.replaceState(null, "", hash);
+  else window.history.pushState(null, "", hash);
+}
+
+function searchKey() {
+  return JSON.stringify([
+    byId("query").value.trim(),
+    byId("top-k").value,
+    FILTER_PARAMS.map(([, field]) => byId(field).value.trim()),
+  ]);
+}
+
+function pageParam(value) {
+  const page = Number.parseInt(value || "1", 10);
+  return Number.isFinite(page) && page > 0 ? page : 1;
+}
+
+// Draw the page the fragment names. A search runs again only when what the
+// fragment asks for differs from the results already on screen, so returning
+// from the sources to the search costs nothing.
+async function applyRoute() {
+  const { view, params } = parseRoute(window.location.hash);
+  const available = navItems();
+  const target = available.some((item) => item.dataset.view === view)
+    ? view
+    : available[0]?.dataset.view || "search";
+  let rerun = false;
+  state.restoringRoute = true;
+  try {
+    if (target === "search") {
+      const query = params.get("q") || "";
+      byId("query").value = query;
+      const topK = byId("top-k");
+      const wanted = params.get("k") || DEFAULT_TOP_K;
+      if ([...(topK.options || [])].some((option) => option.value === wanted)) topK.value = wanted;
+      FILTER_PARAMS.forEach(([name, field]) => {
+        byId(field).value = params.get(name) || "";
+      });
+      syncFilterSummary();
+      state.searchedQuery = query;
+      if (!query) clearResults();
+      else rerun = searchKey() !== state.searchKey;
+    } else if (target === "sources") {
+      byId("source-filter").value = params.get("filter") || "";
+      state.sourcePages.sources = pageParam(params.get("page"));
+      state.sourcePages.excluded = pageParam(params.get("excluded"));
+      renderSourcePage();
+      renderExcludedPage();
+    }
+    switchView(target);
+  } finally {
+    state.restoringRoute = false;
+  }
+  // A fragment that named no view, a hidden one, or a page past the end is
+  // replaced by the page actually drawn.
+  recordRoute({ replace: true });
+  if (rerun) await runSearch();
 }
 
 function switchView(name, { moveFocus = false } = {}) {
@@ -1613,15 +1765,27 @@ function renderResults(payload) {
 
 function clearResults() {
   state.hits = new Map();
+  state.searchKey = "";
   byId("results").replaceChildren();
   byId("search-summary").hidden = true;
   byId("search-empty").hidden = false;
 }
 
+// A submitted search is a page of its own in the browser's history, so Back
+// returns to the search before it and a reload runs this one again.
 async function search(event) {
   event.preventDefault();
   const query = byId("query").value.trim();
   if (!query) return;
+  state.searchedQuery = query;
+  recordRoute();
+  await runSearch();
+}
+
+async function runSearch() {
+  const query = byId("query").value.trim();
+  if (!query) return;
+  const key = searchKey();
   const method = document.querySelector("input[name='retrieval_method']:checked")?.value || "hybrid";
   const payload = {
     query,
@@ -1648,6 +1812,7 @@ async function search(event) {
   try {
     state.hits = new Map();
     renderResults(await api("/api/search", { method: "POST", body: JSON.stringify(payload) }));
+    state.searchKey = key;
     // The results sit under the query, so the page moves only when an open
     // filter drawer has pushed them out of sight. Moving it otherwise took the
     // query off the screen for no gain.
@@ -2819,6 +2984,8 @@ function handleAction(event) {
 function filterSources() {
   state.sourcePages.sources = 1;
   renderSourcePage();
+  // Each keystroke refines one page rather than adding one to the history.
+  recordRoute({ replace: true });
 }
 
 function initialize() {
@@ -2826,6 +2993,7 @@ function initialize() {
   document.querySelectorAll(".sidebar-item").forEach((item) => {
     item.querySelector(".nav-item")?.addEventListener("click", () => {
       switchView(item.dataset.view, { moveFocus: true });
+      recordRoute();
     });
   });
   byId("nav-toggle").addEventListener("click", toggleNav);
@@ -2934,7 +3102,16 @@ function initialize() {
   byId("agent-entry-copy").addEventListener("click", () => {
     copyText(state.agentEntry, "Client entry copied.");
   });
-  loadWorkspace();
+  FILTER_FIELDS.forEach((field) => {
+    byId(field).addEventListener("change", () => recordRoute({ replace: true }));
+  });
+  // Back and Forward move between the pages this workspace recorded. An open
+  // dialog belongs to the page being left, so it closes.
+  window.addEventListener("popstate", () => {
+    document.querySelectorAll("dialog[open]").forEach((dialog) => dialog.close());
+    void applyRoute();
+  });
+  loadWorkspace().then(() => applyRoute());
 }
 
 document.addEventListener("DOMContentLoaded", initialize);
