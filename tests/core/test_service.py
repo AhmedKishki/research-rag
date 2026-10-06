@@ -5201,7 +5201,7 @@ def test_a_call_behind_this_apps_own_build_is_refused_rather_than_held(
             with pytest.raises(ResearchError, match="already working on this project"):
                 await service.ingest(chunk_size=50, chunk_overlap=10)
         assert time.perf_counter() - started < 5
-        assert not service._lock.locked()
+        assert service._writes.free == 1
 
     asyncio.run(exercise())
 
@@ -5232,28 +5232,22 @@ def test_reads_answer_while_a_build_holds_the_project(
         await service.ingest(chunk_size=100, chunk_overlap=10)
 
         holder = AsyncFileLock(config.state_root / "project.lock", timeout=1)
-        async with holder:
-            await service._lock.acquire()
+        async with holder, service._writes.slot():
+            started = time.perf_counter()
+            status = await service.status()
+            sources = await service.list_sources()
+            found = await service.search("cobalt labour", top_k=1)
+            passage = await service.get_passage(found["hits"][0]["chunk_id"])
+            exclusions = await service.list_chunk_exclusions()
+            elapsed = time.perf_counter() - started
+            # The BM25 phase of a build holds the retriever, and a search
+            # behind it is told so rather than held.
+            await service._retriever_lock.acquire()
             try:
-                started = time.perf_counter()
-                status = await service.status()
-                sources = await service.list_sources()
-                found = await service.search("cobalt labour", top_k=1)
-                passage = await service.get_passage(found["hits"][0]["chunk_id"])
-                exclusions = await service.list_chunk_exclusions()
-                elapsed = time.perf_counter() - started
-                # The BM25 phase of a build holds the retriever, and a search
-                # behind it is told so rather than held.
-                await service._retriever_lock.acquire()
-                try:
-                    with pytest.raises(
-                        ResearchError, match="writing the lexical index"
-                    ):
-                        await service.search("cobalt", top_k=1)
-                finally:
-                    service._retriever_lock.release()
+                with pytest.raises(ResearchError, match="writing the lexical index"):
+                    await service.search("cobalt", top_k=1)
             finally:
-                service._lock.release()
+                service._retriever_lock.release()
 
         assert status["ready"] is True
         assert sources["source_count"] == 1

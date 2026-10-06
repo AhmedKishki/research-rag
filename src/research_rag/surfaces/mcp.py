@@ -18,11 +18,13 @@ from fastmcp import FastMCP
 from fastmcp.exceptions import ToolError
 from pydantic import Field
 
+from ..core.admission import as_caller
 from ..core.blocked_answers import not_served_status, uninitialised_status
 from ..core.review import DEFAULT_FIND_SOURCE_LIMIT
 from ..core.tool_views import present_tool_response
 from ..project.config import ResearchConfig
 from ..project.instructions import AGENT_INSTRUCTIONS
+from ..project.policy import ResearchError
 from ..project.settings import LEAN_TOOL_DETAIL
 from ..runtime.version import APP_VERSION
 
@@ -236,9 +238,33 @@ MetadataReview: TypeAlias = Annotated[
 ]
 
 
-async def _tool_call(operation: Callable[[], Awaitable[T]]) -> T:
-    from ..project.policy import ResearchError
+class NotServed(ResearchError):
+    """The app is not serving this project, with the answer `status` gives for it.
 
+    Raised by the stand-in service the bridge uses while no app answers. Every
+    tool reports it as the error it is, with the command that fixes it, and
+    `status` returns the structured answer instead.
+    """
+
+    def __init__(self, reason: str, payload: dict[str, Any]) -> None:
+        remedy = next(
+            (
+                str(entry["remedy"])
+                for entry in payload.get("blocked_by", [])
+                if entry.get("remedy")
+            ),
+            "",
+        )
+        super().__init__(
+            f"{reason} Run `{remedy}` in a terminal, then call this tool again; "
+            "this entry needs no change."
+            if remedy
+            else reason
+        )
+        self.payload = payload
+
+
+async def _tool_call(operation: Callable[[], Awaitable[T]]) -> T:
     try:
         return await operation()
     except ResearchError as exc:
@@ -344,13 +370,34 @@ def create_blocked_mcp(
     return app
 
 
+def create_unserved_mcp(config: ResearchConfig, reason: str) -> FastMCP[Any]:
+    """The same eight tools, answering for a project no app is serving.
+
+    The bridge uses it while the app is down, so an agent that connected before
+    the app started still holds the whole tool list and finds each call working
+    once the app is up. The tools are the ones `create_mcp` declares, so the two
+    cannot differ: only the service behind them does.
+    """
+
+    payload = not_served_status(config, reason)
+
+    async def connect() -> ResearchService:
+        raise NotServed(reason, payload)
+
+    return create_mcp(config, connect=connect, app_state=dict)
+
+
 def create_mcp(
     config: ResearchConfig,
     *,
     connect: Callable[[], Awaitable[ResearchService]],
     app_state: Callable[[], Mapping[str, Any]],
+    caller: Callable[[], str] | None = None,
 ) -> FastMCP[Any]:
     """Build the agent surface over the app's one service.
+
+    `caller` names who the request in hand came from, so the service can take its
+    waiting callers in rounds; it is empty when the surface cannot tell.
 
     `connect` opens the gateway on the first call, so a client that only lists
     tools never starts a process. A client waits for the handshake before it calls
@@ -378,11 +425,10 @@ def create_mcp(
         async def run() -> T:
             return await operation(await service())
 
-        return await _tool_call(run)
+        with as_caller(caller() if caller is not None else ""):
+            return await _tool_call(run)
 
     def _present(operation: str, payload: dict[str, Any]) -> dict[str, Any]:
-        from ..project.policy import ResearchError
-
         try:
             return present_tool_response(
                 operation,
@@ -402,9 +448,15 @@ def create_mcp(
         is merged into an agent's answer wholesale.
         """
 
-        payload = _present(
-            "status", await _service_call(lambda instance: instance.status())
-        )
+        try:
+            payload = _present(
+                "status", await _service_call(lambda instance: instance.status())
+            )
+        except ToolError as error:
+            # No app is answering: the status of that is the answer, not an error.
+            if isinstance(error.__cause__, NotServed):
+                return _present("status", error.__cause__.payload)
+            raise
         state = app_state()
         return {**payload, **_agent_app_state(state)}
 

@@ -9,21 +9,24 @@ from __future__ import annotations
 
 import json
 import os
-from contextlib import nullcontext
+import sys
 from pathlib import Path
-from types import SimpleNamespace
+from typing import Self
 
 import pytest
 from fastmcp import Client
+from fastmcp.exceptions import ToolError
+from fastmcp.server.providers.proxy import ProxyClient
 
 import research_rag.surfaces.bridge as bridge_module
-from research_rag.core.blocked_answers import not_served_status, uninitialised_status
+from research_rag.core.blocked_answers import uninitialised_status
 from research_rag.project import registry
 from research_rag.project.config import resolve_config
 from research_rag.project.policy import ResearchError
 from research_rag.surfaces import bridge
 from research_rag.surfaces.cli import main
-from research_rag.surfaces.mcp import create_blocked_mcp
+from research_rag.surfaces.mcp import create_blocked_mcp, create_mcp
+from tests.surfaces.test_mcp_tools import _Service
 
 pytestmark = pytest.mark.anyio
 
@@ -146,103 +149,121 @@ async def test_the_uninitialised_surface_serves_the_status_resource() -> None:
     assert "ai-and-fetishism" in answer[0].text
 
 
-def test_the_bridge_proxies_a_project_an_app_is_serving(
-    account: Path, project: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    _initialised(project, "AI and fetishism")
-    served: dict[str, object] = {}
+class _Switch:
+    """The app, as the bridge sees it: up or down, and who it answers as."""
 
-    class _Proxy:
-        """Stands in for the transport, so no socket is opened here."""
+    def __init__(self, project: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        self.up = False
+        self.drops = 0
+        self.calls: list[str] = []
+        config = resolve_config(project, vanilla_executable=sys.executable)
+        service = _Service()
+        outer = self
 
-        def run(self, **kwargs: object) -> None:
-            served["run"] = kwargs
+        async def connect() -> _Service:
+            outer.calls.append("served")
+            return service
 
-    monkeypatch.setattr(bridge, "is_serving", lambda config: True)
-    monkeypatch.setattr(
-        bridge,
-        "connect",
-        lambda config, **_: nullcontext(
-            SimpleNamespace(base_url="http://127.0.0.1:5051")
-        ),
-    )
-    monkeypatch.setattr(
-        bridge,
-        "build_proxy",
-        lambda url, *, name, identity: (
-            served.update(url=url, name=name, identity=identity) or _Proxy()
-        ),
-    )
+        class _Flaky(ProxyClient):  # type: ignore[type-arg]
+            """A session that the app closes under the caller."""
 
-    bridge.run("AI and fetishism", name="an-agent")
+            async def __aenter__(self) -> Self:
+                if outer.drops:
+                    outer.drops -= 1
+                    raise ConnectionResetError("the app went away mid-call")
+                return await super().__aenter__()
 
-    assert served["url"] == "http://127.0.0.1:5051/mcp"
-    assert served["name"] == "an-agent"
-    # The app cannot read the client that started the bridge, so the bridge sends
-    # what it inherited: the project it was asked for and the process it is.
-    assert served["identity"]["project"] == "AI and fetishism"
-    assert served["identity"]["pid"] == os.getpid()
-    assert served["run"] == {"transport": "stdio", "show_banner": False}
+        self.server = create_mcp(config, connect=connect, app_state=dict)
+        monkeypatch.setattr(
+            bridge_module.Backends,
+            "_serving_url",
+            lambda _backends, _config: "http://127.0.0.1:5051/mcp" if self.up else None,
+        )
+        monkeypatch.setattr(
+            bridge_module.Backends,
+            "_upstream",
+            lambda _backends, _url, _config: _Flaky(self.server),
+        )
 
 
-def test_the_bridge_answers_instead_of_refusing_a_missing_project(
-    account: Path, project: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    _initialised(project, "Something Else")
-    served: dict[str, object] = {}
-
-    monkeypatch.setattr(
-        bridge_module,
-        "serve_blocked",
-        lambda name, reason, *, config: served.update(
-            name=name, reason=reason, config=config
-        ),
+def _bridge(project: Path) -> object:
+    return bridge.build_bridge(
+        "AI and fetishism",
+        name="an-agent",
+        identity={"project": "AI and fetishism", "pid": os.getpid()},
     )
 
-    bridge.run("ai and fetishism")
 
-    assert served["name"] == "ai and fetishism"
-    assert "init" in str(served["reason"])
-    assert served["config"] is None
-
-
-def test_the_bridge_answers_a_project_no_app_is_serving_and_starts_nothing(
+async def test_the_bridge_holds_every_tool_whether_or_not_an_app_is_up(
     account: Path, project: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """An app belongs to a terminal, so a client that finds none is told where."""
+    """The order the agent and the app start in decides nothing.
+
+    The bridge used to choose once, at launch: an app that was not up then left a
+    stub with one tool for the life of the process, whatever started afterwards.
+    """
 
     _initialised(project, "AI and fetishism")
-    served: dict[str, object] = {}
+    switch = _Switch(project, monkeypatch)
 
-    monkeypatch.setattr(bridge, "is_serving", lambda config: False)
-    monkeypatch.setattr(
-        bridge_module,
-        "serve_blocked",
-        lambda name, reason, *, config: served.update(
-            name=name, reason=reason, config=config
-        ),
-    )
-    monkeypatch.setattr(
-        bridge,
-        "build_proxy",
-        lambda url, *, name, identity: pytest.fail(
-            "no proxy may be built with no app serving"
-        ),
-    )
+    async with Client(_bridge(project)) as client:
+        down = {tool.name for tool in await client.list_tools()}
+        blocked = (await client.call_tool("status")).data
+        with pytest.raises(ToolError, match="start"):
+            await client.call_tool("search", {"query": "labour"})
+        assert switch.calls == []
 
-    bridge.run("AI and fetishism")
+        switch.up = True
+        up = {tool.name for tool in await client.list_tools()}
+        answered = (await client.call_tool("search", {"query": "labour"})).data
+        status = (await client.call_tool("status")).data
 
-    assert served["name"] == "AI and fetishism"
-    assert served["config"] is not None
-    payload = not_served_status(
-        served["config"],
-        "An app runs in a terminal and ends when that terminal closes.",
-    )
-    assert payload["project_initialised"] is True
-    assert payload["blocked_by"][0]["check"] == "app.serving"
-    # The remedy names the project, so no machine's directory reaches an agent.
-    assert "start" in payload["blocked_by"][0]["remedy"]
-    assert "AI and fetishism" in payload["blocked_by"][0]["remedy"]
+        switch.up = False
+        with pytest.raises(ToolError, match="start"):
+            await client.call_tool("get_passage", {"chunk_id": "chk_one"})
+
+    assert down == up and len(down) == 8
+    assert blocked["blocked_by"][0]["check"] == "app.serving"
+    assert "AI and fetishism" in blocked["blocked_by"][0]["remedy"]
+    assert answered["hits"][0]["chunk_id"] == "chk_one"
+    assert status["ready"] is True
+
+
+async def test_a_read_dropped_mid_call_is_repeated_and_a_write_is_not(
+    account: Path, project: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A connection that closed is named, and only a read is tried again."""
+
+    _initialised(project, "AI and fetishism")
+    switch = _Switch(project, monkeypatch)
+    switch.up = True
+
+    async with Client(_bridge(project)) as client:
+        switch.drops = 1
+        repeated = (await client.call_tool("search", {"query": "labour"})).data
+        switch.drops = 1
+        with pytest.raises(ToolError, match="still up") as write:
+            await client.call_tool(
+                "set_source_inclusion",
+                {"source_path": "a.pdf", "included": False},
+            )
+        assert "status" in str(write.value)
+
+    assert repeated["hits"][0]["chunk_id"] == "chk_one"
+
+
+async def test_a_project_initialised_after_the_bridge_started_is_found(
+    account: Path, project: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`init` run after the agent connected needs no reconnect to be seen."""
+
+    async with Client(_bridge(project)) as client:
+        before = (await client.call_tool("status")).data
+        _initialised(project, "AI and fetishism")
+        after = (await client.call_tool("status")).data
+
+    assert before["blocked_by"][0]["check"] == "project.initialised"
+    assert after["blocked_by"][0]["check"] == "app.serving"
 
 
 @pytest.mark.parametrize(

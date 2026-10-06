@@ -8,7 +8,7 @@ The three front ends, and the transport that reaches the app.
 | `mcp.py` | The agent surface: the tools and the resource, declared once |
 | `ui.py` | This app's adapter over the workspace, and the capability profile that says what a browser may do |
 | `workspace/` | The browser workspace itself: the Starlette host, the contracts it and an adapter share, and its assets |
-| `bridge.py` | `research-rag mcp`: resolve a project by name, then proxy stdio to the app or answer why it cannot |
+| `bridge.py` | `research-rag mcp`: resolve a project by name on every call, proxy stdio to the app when it answers, and answer with the start command when it does not |
 
 ## Rules
 

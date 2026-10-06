@@ -49,6 +49,9 @@ embedding_threads = 0
 # while a build saturates every core and costs a build no throughput on an idle
 # machine; 0 leaves priority unchanged.
 nice = 10
+# Searches that run at once. More only slows each one while it reranks; the rest
+# wait their turn, one caller after another in rounds.
+search_concurrency = 2
 # Shared FastEmbed model cache; empty means this user's cache.
 model_cache_root = ""
 
