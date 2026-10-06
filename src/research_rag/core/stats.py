@@ -44,7 +44,7 @@ from .admission import current_caller
 LOGGER = logging.getLogger(__name__)
 
 # What the largest sources are ranked by.
-LARGEST_BY = ("passages", "pages")
+LARGEST_BY = ("passages", "size")
 
 # How much of a passage a list of them shows; the whole is `get_passage`.
 PREVIEW_CHARACTERS = 420
@@ -139,7 +139,7 @@ class StatsWorkflow:
 
         `since_days` bounds the counts to recent searches and `top` the length of
         the ranked lists, including the largest sources, which `largest_by` ranks by
-        `passages` or `pages`. The corpus and build facts are the generation's own
+        `passages` or `size` (the extracted text, which every format has). The corpus and build facts are the generation's own
         and do not move with the time window.
         """
 
@@ -210,6 +210,7 @@ class StatsWorkflow:
             passages_by_document = await asyncio.to_thread(
                 lookup.chunk_counts_by_document
             )
+            text_bytes = await asyncio.to_thread(lookup.text_bytes_by_document)
             ranked_chunks = await asyncio.to_thread(
                 lookup.chunks_by_ids,
                 [entry["chunk_id"] for entry in counts["passages"]],
@@ -258,7 +259,11 @@ class StatsWorkflow:
             else []
         )
         answer["corpus"] = self._corpus_facts(
-            searchable, passages_by_document, top=top, largest_by=largest_by
+            searchable,
+            passages_by_document,
+            text_bytes=text_bytes,
+            top=top,
+            largest_by=largest_by,
         )
         answer["last_build"] = self._build_facts(manifest)
         return answer
@@ -445,6 +450,7 @@ class StatsWorkflow:
         documents: list[dict[str, Any]],
         passages_by_document: dict[str, int],
         *,
+        text_bytes: dict[str, int] | None = None,
         top: int = TOP_ENTRIES,
         largest_by: str = "passages",
     ) -> dict[str, Any]:
@@ -483,11 +489,13 @@ class StatsWorkflow:
                 )
             )
         counts = sorted(count for count, _ in sizes)
-        if largest_by == "pages":
-            ranked = sorted(
-                sizes,
-                key=lambda item: (-int(item[1].get("physical_pages") or 0), -item[0]),
-            )
+        sizes_in_bytes = text_bytes or {}
+
+        def stored(item: tuple[int, dict[str, Any]]) -> int:
+            return sizes_in_bytes.get(str(item[1].get("document_id")), 0)
+
+        if largest_by == "size":
+            ranked = sorted(sizes, key=lambda item: (-stored(item), -item[0]))
         else:
             ranked = sorted(sizes, key=lambda item: -item[0])
         largest = ranked[:top]
@@ -504,6 +512,7 @@ class StatsWorkflow:
             "largest_sources": [
                 {
                     "passage_count": count,
+                    "text_bytes": stored((count, document)),
                     "physical_pages": document.get("physical_pages"),
                     **StatsWorkflow._source_label(document),
                 }

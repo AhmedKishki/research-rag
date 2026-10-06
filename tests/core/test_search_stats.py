@@ -18,7 +18,7 @@ from research_rag.storage.search_stats import (
     read_search_stats,
     record_search,
 )
-from tests.conftest import write_pdf, write_reviewed_metadata
+from tests.conftest import write_epub, write_pdf, write_reviewed_metadata
 from tests.core.test_service import FakeDenseBackend, FakeUltraRAG
 
 
@@ -322,6 +322,11 @@ def test_the_largest_sources_are_ranked_by_what_the_reader_asks(project: Path) -
                 ],
                 title=name.title(),
             )
+        write_epub(
+            project / "sources" / "book.epub",
+            "A whole book of argument about labour and its fetishism. " * 400,
+            title="Book",
+        )
         service = _service(project)
         write_reviewed_metadata(
             service.config,
@@ -332,23 +337,31 @@ def test_the_largest_sources_are_ranked_by_what_the_reader_asks(project: Path) -
             service.config, "short.pdf", {"authors": ["Ada"], "categories": ["labour"]}
         )
         await service.ingest(chunk_size=60, chunk_overlap=10)
-        by_pages = await service.search_stats(largest_by="pages", top=2)
+        by_size = await service.search_stats(largest_by="size", top=2)
         by_passages = await service.search_stats(largest_by="passages", top=3)
         with pytest.raises(ResearchError, match="largest_by"):
             await service.search_stats(largest_by="words")
-        return {"pages": by_pages, "passages": by_passages}
+        return {"size": by_size, "passages": by_passages}
 
     answered = asyncio.run(exercise())
-    pages, passages = answered["pages"], answered["passages"]  # type: ignore[assignment]
+    by_size, passages = answered["size"], answered["passages"]  # type: ignore[assignment]
 
-    assert pages["corpus"]["largest_by"] == "pages"
-    assert [entry["title"] for entry in pages["corpus"]["largest_sources"]] == [
-        "long",
-        "middle",
+    # An EPUB has no pages, so size is the measure every format shares: the book
+    # ranks first on its text, with no page count to put it last.
+    largest = by_size["corpus"]["largest_sources"]
+    assert by_size["corpus"]["largest_by"] == "size"
+    assert [entry["source_relative_path"] for entry in largest] == [
+        "book.epub",
+        "long.pdf",
     ]
-    assert pages["corpus"]["largest_sources"][0]["physical_pages"] == 3
-    assert all(entry["source_id"] for entry in pages["corpus"]["largest_sources"])
+    assert largest[0]["physical_pages"] is None
+    assert largest[0]["text_bytes"] > largest[1]["text_bytes"] > 0
+    assert all(entry["source_id"] for entry in largest)
     assert len(passages["corpus"]["largest_sources"]) == 3
     counts = passages["corpus"]
     assert counts["categories"][0] == {"value": "labour", "count": 2}
     assert {"value": "Ada", "count": 2} in counts["authors"]
+    assert counts["formats"] == [
+        {"value": "pdf", "count": 3},
+        {"value": "epub", "count": 1},
+    ]

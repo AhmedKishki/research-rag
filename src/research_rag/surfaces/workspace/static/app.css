@@ -2188,6 +2188,12 @@ textarea:disabled {
 
 /* In a column of the corpus and build groups the label wraps instead, so the
    bar stays inside the column rather than scrolling out of it. */
+/* A card that shares its row has no room for a label column wider than its
+   text, or the bar scrolls out of view. */
+.stat-panel:not(.stat-panel-wide) .stats-table .stat-row-label {
+  min-width: 0;
+}
+
 .stats-group .stats-table .stat-row-label {
   min-width: 0;
 }
@@ -2214,9 +2220,20 @@ textarea:disabled {
 
 .stats-groups {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(min(22rem, 100%), 1fr));
-  gap: var(--space-md) var(--space-lg);
+  grid-template-columns: repeat(auto-fit, minmax(min(11rem, 100%), 1fr));
+  gap: var(--space-sm) var(--space-md);
   margin-top: var(--space-2xs);
+}
+
+/* A group sits in a column of its own, so its label stacks over its value
+   rather than squeezing the value into what a label leaves. */
+.stats-group .fact-list {
+  grid-template-columns: minmax(0, 1fr);
+  gap: var(--space-3xs);
+}
+
+.stats-group .fact-label + .fact-value {
+  margin-bottom: var(--space-3xs);
 }
 
 .stats-group {
@@ -2241,33 +2258,29 @@ textarea:disabled {
   line-height: var(--leading-normal);
 }
 
-/* Every statistic is a card with its own scope: the headline numbers sit in a
-   row, and the lists and tables under them each take the full width. */
+/* Every statistic is a card with its own scope. The cards share a grid with a
+   small gap and stretch to the height of their row, so neighbours end together
+   and no card leaves a hole beside it. */
 .stats-board {
   display: grid;
-  gap: var(--space-md);
-  margin-top: var(--space-sm);
-}
-
-.stats-numbers {
-  grid-template-columns: repeat(auto-fit, minmax(13rem, 1fr));
+  margin-top: var(--space-xs);
 }
 
 .stats-lists {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(min(26rem, 100%), 1fr));
-  gap: var(--space-md);
-  align-items: start;
+  grid-template-columns: repeat(auto-fit, minmax(min(28rem, 100%), 1fr));
+  gap: var(--space-xs);
+  align-items: stretch;
 }
 
-/* A table that needs the width takes the whole row; a short list shares it. */
+/* A table that needs the width takes the whole row; the rest share it. */
 .stat-panel-wide {
   grid-column: 1 / -1;
 }
 
 .stat-panel {
   min-width: 0;
-  padding: var(--space-md);
+  padding: var(--space-sm) var(--space-md) var(--space-md);
   border: 1px solid var(--border-subtle);
   border-radius: var(--radius-md);
   background: var(--bg-card);
@@ -2279,34 +2292,27 @@ textarea:disabled {
   flex-wrap: wrap;
   align-items: center;
   gap: var(--space-2xs) var(--space-xs);
-  margin-bottom: var(--space-xs);
+  margin-bottom: var(--space-2xs);
 }
 
 .stat-panel-title {
   font-size: var(--text-md);
 }
 
-.stat-panel-number .stat-panel-title {
-  color: var(--text-secondary);
-  font-size: var(--text-xs);
-  font-weight: 600;
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
+/* The headline figures of the searches, side by side. */
+.stat-figures {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(11rem, 1fr));
+  gap: var(--space-sm) var(--space-md);
 }
 
-.stat-panel-number .stat-panel-body {
+.stat-figure {
   display: grid;
+  align-content: start;
   gap: var(--space-3xs);
 }
 
-/* A headline number keeps its title on one line and its scope on the next, so the
-   four cards line up whatever their titles' lengths. */
-.stat-panel-number .stat-panel-head {
-  display: grid;
-  gap: var(--space-2xs);
-}
-
-.stat-panel-number .stat-scope {
+.stat-scope {
   margin-left: 0;
 }
 

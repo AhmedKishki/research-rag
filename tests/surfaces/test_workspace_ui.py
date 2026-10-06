@@ -3283,8 +3283,8 @@ const stats = {
     passages_per_source: { minimum: 20, median: 100, maximum: 280 },
     largest_by: "passages",
     largest_sources: [
-      { source_id: "src_2", title: "Capital", passage_count: 280, physical_pages: 410, in_corpus: true },
-      { source_id: "src_1", title: "Atlas of AI", passage_count: 90, physical_pages: 300, in_corpus: true },
+      { source_id: "src_2", title: "Capital", passage_count: 280, text_bytes: 910000, physical_pages: 410, in_corpus: true },
+      { source_id: "src_1", title: "Atlas of AI", passage_count: 90, text_bytes: 2400000, physical_pages: null, in_corpus: true },
     ],
     formats: [{ value: "pdf", count: 3 }], languages: [{ value: "en", count: 3 }],
     decades: [{ value: "2020s", count: 2 }, { value: "2010s", count: 1 }],
@@ -3316,19 +3316,17 @@ const collect = (node, found = []) => {
   (node.children || []).forEach((child) => collect(child, found));
   return found;
 };
-result.cards = ["searches", "no-results", "search-time", "unreached"].map((id) => text(body(id)));
+result.figures = text(body("searches"));
 result.sources = text(body("sources"));
 result.sourceLinks = collect(body("sources"));
 result.passageLinks = collect(body("passages"));
 result.historyLinks = collect(body("history"));
-result.unreachedLinks = collect(body("unreached-list"));
-result.corpus = text(body("corpus-size"));
-result.missing = text(body("missing-metadata"));
+result.hasUnreachedCard = state.statPanels.has("unreached-list");
+result.corpus = text(body("corpus"));
 result.largest = text(body("largest"));
 result.largestLinks = collect(body("largest"));
-result.formats = text(body("formats"));
-result.categories = text(body("categories"));
-result.decades = text(body("decades"));
+result.people = text(body("people"));
+result.cardIds = [...state.statPanels.keys()];
 result.passageColumns = body("passages").children[0].children[0].children[0].children[0].children.map((cell) => cell.textContent);
 result.build = text(body("build"));
 result.counts = ["sources", "passages", "history"].map((id) => state.statPanels.get(id).count.textContent);
@@ -3339,13 +3337,11 @@ state.statScopes.sources = { days: 7, top: 5 };
 await refreshCard(STAT_CARDS.find((card) => card.id === "sources"));
 state.statScopes.history = { days: 1, top: 20 };
 await refreshCard(STAT_CARDS.find((card) => card.id === "history"));
-state.statScopes.largest = { days: null, top: 5, by: "pages" };
+state.statScopes.largest = { days: null, top: 5, by: "size" };
 await refreshCard(STAT_CARDS.find((card) => card.id === "largest"));
-state.statScopes.decades = { days: null, top: 5 };
-await refreshCard(STAT_CARDS.find((card) => card.id === "decades"));
+state.statScopes.corpus = { days: null, top: 5 };
+await refreshCard(STAT_CARDS.find((card) => card.id === "corpus"));
 result.scoped = [...asked];
-state.statScopes.decades = { days: null, top: 5 };
-state.statScopes.categories = { days: null, top: 5 };
 
 asked.length = 0;
 await clearHistory();
@@ -3354,12 +3350,27 @@ result.cleared = [...asked];
 """,
     )
 
-    assert (
-        "12" in result["cards"][0] and "7.5 passages on average" in result["cards"][0]
-    )
-    assert "25% of searches" in result["cards"][1]
-    assert "840 ms" in result["cards"][2] and "2.4 s" in result["cards"][2]
-    assert "of 3 searchable sources" in result["cards"][3]
+    # The four headline figures share one card and one scope.
+    for fact in (
+        "7.5 passages on average",
+        "25% of searches",
+        "840 ms",
+        "95th percentile 2.4 s",
+        "of 3 searchable sources",
+    ):
+        assert fact in result["figures"]
+    assert result["cardIds"] == [
+        "searches",
+        "sources",
+        "passages",
+        "history",
+        "days",
+        "largest",
+        "people",
+        "corpus",
+        "build",
+    ]
+    assert result["hasUnreachedCard"] is False
     assert "Atlas of AI" in result["sources"]
     assert ["Atlas of AI", "#/source?id=src_1"] in result["sourceLinks"]
     assert ["Page 7", "#/passage?id=chk_1"] in result["passageLinks"]
@@ -3372,7 +3383,6 @@ result.cleared = [...asked];
         "Rank one",
         "",
     ]
-    assert ["Unread Book", "#/source?id=src_9"] in result["unreachedLinks"]
     # A kept search is run again from its own address, filters and size included.
     assert result["historyLinks"] == [
         [
@@ -3381,11 +3391,13 @@ result.cleared = [...asked];
         ]
     ]
     assert "20 fewest · 100 median · 280 most" in result["corpus"]
-    assert "1 sources" in result["missing"] and "2 sources" in result["missing"]
+    assert "1 sources" in result["corpus"] and "2 sources" in result["corpus"]
+    assert "2020s" in result["corpus"] and "pdf" in result["corpus"]
     assert ["Capital", "#/source?id=src_2"] in result["largestLinks"]
+    # Text size is shown for every source, and an EPUB has no pages to show.
     assert "280" in result["largest"] and "410" in result["largest"]
-    assert "2020s" in result["decades"] and "pdf" in result["formats"]
-    assert "marxism" in result["categories"]
+    assert "2.3 MB" in result["largest"] and "888.7 KB" in result["largest"]
+    assert "marxism" in result["people"] and "Crawford" in result["people"]
     assert "26,532 embedded" in result["build"]
     assert result["counts"] == ["2", "1", "1"]
     # Cards that chose the same scope share one answer; each scope is its own ask.
@@ -3400,7 +3412,7 @@ result.cleared = [...asked];
     assert result["scoped"] == [
         "/api/stats?days=7&top=5",
         "/api/stats/history?days=1&limit=20",
-        "/api/stats?top=5&largest_by=pages",
+        "/api/stats?top=5&largest_by=size",
     ]
     assert result["cleared"][0] == "/api/stats/history/clear"
     assert result["cleared"][1].startswith("/api/stats/history?")
