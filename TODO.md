@@ -21,6 +21,11 @@ An item is done when the harness has produced its measurement and the validation
   - Record the terminal as deliberately none, because an absent terminal file cannot tell the two cases apart.
   - `stop` needs the same ownership proof plus the flag, and a plain `stop` must never end a detached app.
   - `doctor` and the project selector must learn that a detached app outlives its terminal.
+- [ ] **Serve beyond loopback with an explicit security design.** Feature. The workspace binds one loopback port and refuses every other peer, `Host`, and `Origin`; it has no authentication, so `AGENTS.md` requires a design before remote exposure.
+  - Choose the shape: a first-party remote mode, or an authenticated proxy that terminates on loopback and is documented as the supported way to reach a phone or another machine.
+  - A first-party mode needs a configured bind address and allowed `Host` and `Origin`, an access token, TLS or a trusted TLS terminator, and CSRF handling.
+  - State a threat model for every write surface it would expose: settings, ingestion, source and passage exclusions, generation removal, the SQL console, and memory writes.
+  - Keep loopback the default. `doctor` and `README.md` state when remote serving is on and what protects it.
 - [ ] **A connection an unnamed client opened cannot be dropped.** Limit. A client that declared nothing is one client per MCP session, so a hand-written HTTP client has only its sessions refused. `RESEARCH_RAG_CLIENT_NAME` fixes it, and the stdio bridge always sets it.
 - [ ] **Measure the payload difference the app makes.** Nothing states the lean and full search sizes. Measure them against the running app, including the workspace, agent, and control surfaces' own overhead.
 
