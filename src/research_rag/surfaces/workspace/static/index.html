@@ -114,6 +114,14 @@
               <span class="nav-item-name">Status</span>
             </button>
           </li>
+          <li class="sidebar-item" data-view="stats" data-capability="stats" hidden>
+            <button class="nav-item" type="button">
+              <svg class="nav-item-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+                <path d="M5 20v-7M12 20V5M19 20v-10"></path>
+              </svg>
+              <span class="nav-item-name">Stats</span>
+            </button>
+          </li>
           <li class="sidebar-item" data-view="config" data-capability="settings" hidden>
             <button class="nav-item" type="button">
               <svg class="nav-item-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
@@ -189,12 +197,7 @@
 
               <label class="compact-field" for="top-k">
                 <span>Results</span>
-                <select id="top-k" name="top_k">
-                  <option value="5">5</option>
-                  <option value="8" selected>8</option>
-                  <option value="12">12</option>
-                  <option value="20">20</option>
-                </select>
+                <input id="top-k" name="top_k" type="number" min="1" max="50" step="1" value="10" inputmode="numeric" required>
               </label>
 
               <label class="check-control" for="rerank" data-capability="reranking" hidden>
@@ -504,6 +507,75 @@
             <p id="sql-message" class="form-note" hidden></p>
             <p id="sql-affected" class="sql-affected" hidden></p>
             <div id="sql-results" class="sql-results" aria-live="polite"></div>
+          </div>
+        </section>
+
+        <section id="stats-view" class="view-panel" data-panel="stats" data-capability="stats" hidden>
+          <h2>Stats</h2>
+          <p class="form-note measure">
+            How often each source and passage reached a search's top five on this
+            machine, beside what the corpus holds; no query text is kept.
+          </p>
+
+          <div id="stats-cards" class="status-grid" aria-live="polite"></div>
+          <p id="stats-message" class="form-note" hidden></p>
+
+          <div class="panel-section">
+            <details id="stats-sources-fold" class="fold">
+              <summary class="fold-summary">
+                <h3>Sources by appearances</h3>
+                <span id="stats-source-count" class="count-badge">0</span>
+              </summary>
+              <div id="stats-sources"></div>
+            </details>
+          </div>
+
+          <div class="panel-section">
+            <details id="stats-passages-fold" class="fold">
+              <summary class="fold-summary">
+                <h3>Passages by appearances</h3>
+                <span id="stats-passage-count" class="count-badge">0</span>
+              </summary>
+              <div id="stats-passages"></div>
+            </details>
+          </div>
+
+          <div class="panel-section">
+            <details id="stats-unreached-fold" class="fold">
+              <summary class="fold-summary">
+                <h3>Sources no search has reached</h3>
+                <span id="stats-unreached-count" class="count-badge">0</span>
+              </summary>
+              <div id="stats-unreached"></div>
+            </details>
+          </div>
+
+          <div class="panel-section">
+            <details id="stats-days-fold" class="fold">
+              <summary class="fold-summary">
+                <h3>Searches by day</h3>
+                <span id="stats-day-count" class="count-badge">0</span>
+              </summary>
+              <div id="stats-days"></div>
+            </details>
+          </div>
+
+          <div class="panel-section">
+            <details id="stats-corpus-fold" class="fold" open>
+              <summary class="fold-summary">
+                <h3>Corpus</h3>
+              </summary>
+              <div id="stats-corpus" class="stats-groups"></div>
+            </details>
+          </div>
+
+          <div class="panel-section">
+            <details id="stats-build-fold" class="fold" open>
+              <summary class="fold-summary">
+                <h3>Last build</h3>
+              </summary>
+              <div id="stats-build" class="stats-groups"></div>
+            </details>
           </div>
         </section>
 

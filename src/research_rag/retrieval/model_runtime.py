@@ -9,6 +9,7 @@ usable by a backend that stores nothing.
 
 from __future__ import annotations
 
+import threading
 from pathlib import Path
 from typing import Any
 
@@ -141,16 +142,20 @@ class ModelRuntime:
         self._embedding_model: TextEmbedding | None = None
         self._rerankers: dict[str, TextCrossEncoder] = {}
         self._audit_tokenizer: Tokenizer | None = None
+        # A search runs beside a build, so two threads can ask for a model that is
+        # not loaded yet. Each is loaded once, by whichever asks first.
+        self._loading = threading.RLock()
 
     def _embedder(self) -> TextEmbedding:
-        if self._embedding_model is None:
-            self._embedding_model = _load_embedder(
-                self.model_cache_root,
-                offline=self.offline,
-                threads=self.embedding_threads,
-                model=self.embedding_facts.name,
-            )
-        return self._embedding_model
+        with self._loading:
+            if self._embedding_model is None:
+                self._embedding_model = _load_embedder(
+                    self.model_cache_root,
+                    offline=self.offline,
+                    threads=self.embedding_threads,
+                    model=self.embedding_facts.name,
+                )
+            return self._embedding_model
 
     def _cross_encoder(self, model: str | None = None) -> TextCrossEncoder:
         """The pinned cross-encoder for one model, loaded on demand.
@@ -160,28 +165,30 @@ class ModelRuntime:
         """
 
         name = model or self.reranker_model
-        encoder = self._rerankers.get(name)
-        if encoder is None:
-            encoder = _load_cross_encoder(
-                self.model_cache_root,
-                offline=self.offline,
-                model=name,
-            )
-            self._rerankers[name] = encoder
-        return encoder
+        with self._loading:
+            encoder = self._rerankers.get(name)
+            if encoder is None:
+                encoder = _load_cross_encoder(
+                    self.model_cache_root,
+                    offline=self.offline,
+                    model=name,
+                )
+                self._rerankers[name] = encoder
+            return encoder
 
     def _audit_tokenizer_for_ingestion(self) -> Tokenizer:
-        if self._audit_tokenizer is None:
-            try:
-                self._audit_tokenizer = _load_audit_tokenizer(self._embedder())
-            except DenseTokenAuditUnavailable:
-                raise
-            except Exception as exc:
-                raise DenseTokenAuditUnavailable(
-                    "The embedding model is unavailable for the token audit: "
-                    + str(exc)
-                ) from exc
-        return self._audit_tokenizer
+        with self._loading:
+            if self._audit_tokenizer is None:
+                try:
+                    self._audit_tokenizer = _load_audit_tokenizer(self._embedder())
+                except DenseTokenAuditUnavailable:
+                    raise
+                except Exception as exc:
+                    raise DenseTokenAuditUnavailable(
+                        "The embedding model is unavailable for the token audit: "
+                        + str(exc)
+                    ) from exc
+            return self._audit_tokenizer
 
     def embedding_token_counts(self, texts: list[str]) -> list[int]:
         """The embedding tokenizer length of each text, untruncated."""

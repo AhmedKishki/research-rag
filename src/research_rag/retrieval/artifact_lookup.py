@@ -444,6 +444,17 @@ class ArtifactLookup:
                 )
             return count
 
+    def chunk_counts_by_document(self) -> dict[str, int]:
+        """How many passages each document holds, read from the index alone."""
+
+        with self._connect() as connection:
+            return {
+                str(row[0]): int(row[1])
+                for row in connection.execute(
+                    "SELECT document_id, COUNT(*) FROM chunks GROUP BY document_id"
+                )
+            }
+
     def chunks_by_ids(self, chunk_ids: Sequence[str]) -> dict[str, dict[str, Any]]:
         unique = list(dict.fromkeys(chunk_ids))
         if not unique:

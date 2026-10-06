@@ -3,7 +3,7 @@
 The serving process, its health report, and the commands that need no project. The gateway is faked or left closed.
 
 - `test_app.py`: a real app on a loopback port. The agent endpoint answers once mounted, the workspace and agent surface share one service, a control settings write is refused from another site or without a JSON body, a client is listed once and can be disconnected, and a dropped session never reaches the tools.
-- `test_attached_workspace.py`: the pid, port, and tty records, a bare call that never starts a second app, a detached app named with its remedy, and a stop sweep that signals only a provably owned process.
+- `test_attached_workspace.py`: the pid, port, and tty records, a bare call that never starts a second app, a detached app named with its remedy, a process with no terminal refused, an app stopped when its terminal is lost, and a stop sweep that signals only a provably owned process.
 - `test_health.py`: one check per condition in `ok`, `warn`, `blocked`, or `unknown`.
   - A mismatched runtime, a missing model, a held project lock, and a stale lock from a dead process.
   - Free space against the build it must fit, and an app older than the installed code.

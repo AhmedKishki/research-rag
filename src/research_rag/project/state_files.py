@@ -42,6 +42,8 @@ PORT_FILE = "research-rag-ui.port"
 TTY_FILE = "research-rag-ui.tty"
 # The lock a project serves and builds under.
 LOCK_FILE = "project.lock"
+# What searches returned, counted on this machine. No query text is kept.
+SEARCH_STATS_FILE = "search-stats.sqlite3"
 
 
 def process_alive(pid: int) -> bool:

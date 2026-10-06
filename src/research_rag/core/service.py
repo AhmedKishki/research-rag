@@ -101,6 +101,7 @@ from ..storage.records import (  # noqa: F401
     write_handoff_jsonl,
 )
 from .review import ReviewWorkflow
+from .stats import StatsWorkflow
 from .status import StatusWorkflow
 
 # How long a caller waits for another process's project lock before it is told the
@@ -118,6 +119,7 @@ class ResearchService(
     ReviewWorkflow,
     SearchWorkflow,
     SettingsWorkflow,
+    StatsWorkflow,
     StatusWorkflow,
 ):
     def __init__(
@@ -125,9 +127,14 @@ class ResearchService(
         config: ResearchConfig,
         ultrarag: VanillaUltraRAG,
         dense: DenseBackend | None = None,
+        *,
+        record_searches: bool = True,
     ) -> None:
         self.config = config
         self.ultrarag = ultrarag
+        # A measurement builds its own service and runs hundreds of searches, so
+        # it turns the counts off rather than filling them with its query set.
+        self._records_searches = record_searches
         self._dense_backends: dict[str, DenseBackend]
         if dense is not None:
             # An injected backend serves every recorded kind, so deterministic
@@ -179,6 +186,14 @@ class ResearchService(
             timeout=PROJECT_LOCK_TIMEOUT_SECONDS,
         )
         self._loaded_generation: str | None = None
+        # Reads take neither lock above, so a search, a passage, the source list,
+        # and the status answer while a build runs. Two things are still shared
+        # with a build. The gateway holds one BM25 retriever, which a build points
+        # at the index it is writing, so its use is taken in turn. And a read
+        # names the generation it is reading, so a removal waits for it.
+        self._retriever_lock = asyncio.Lock()
+        self._generation_readers: dict[str, int] = {}
+        self._readers_left = asyncio.Condition()
         # Term rarity for pseudo-relevance feedback, as (generation id,
         # function-word set, table). Built on the first search that asks for one,
         # so a process that never enables the feature never makes the pass over
@@ -225,6 +240,65 @@ class ResearchService(
             ) from exc
         finally:
             self._lock.release()
+
+    @asynccontextmanager
+    async def _read(self) -> AsyncIterator[_ReadLease]:
+        """A read of the selected generation, taken without the project lock.
+
+        Activation swaps `current.json` atomically and leaves the generation it
+        replaced on disk, so a read resolves its generation once and reads it
+        whole while a build runs beside it. The lease names that generation so a
+        removal waits for the read to finish.
+        """
+
+        lease = _ReadLease(self)
+        try:
+            yield lease
+        finally:
+            await lease.release()
+
+    async def _wait_for_readers(self, generation_id: str) -> None:
+        """Return once no read holds ``generation_id``, or refuse after the wait."""
+
+        async with self._readers_left:
+            try:
+                await asyncio.wait_for(
+                    self._readers_left.wait_for(
+                        lambda: not self._generation_readers.get(generation_id)
+                    ),
+                    timeout=PROJECT_LOCK_TIMEOUT_SECONDS,
+                )
+            except TimeoutError as exc:
+                raise ResearchError(
+                    f"A read is still using generation {generation_id}, so nothing "
+                    "was removed. Remove it again once that read finishes."
+                ) from exc
+
+    @asynccontextmanager
+    async def _retriever(
+        self, generation_root: Path, manifest: dict[str, Any]
+    ) -> AsyncIterator[None]:
+        """The gateway's BM25 retriever, loaded with this generation, for one use.
+
+        A build points the retriever at the index it is writing, so a search
+        takes it in turn and loads the generation it is reading on the way in.
+        """
+
+        try:
+            await asyncio.wait_for(
+                self._retriever_lock.acquire(), timeout=PROJECT_LOCK_TIMEOUT_SECONDS
+            )
+        except TimeoutError as exc:
+            raise ResearchError(
+                "A build in this app is writing the lexical index"
+                + self._resident_build_note()
+                + ". Nothing was read: search again once that phase ends."
+            ) from exc
+        try:
+            await self._ensure_loaded(generation_root, manifest)
+            yield
+        finally:
+            self._retriever_lock.release()
 
     @staticmethod
     def _busy_remedy(busy_command: str) -> str:
@@ -381,3 +455,30 @@ class ResearchService(
             return load_current_generation(self.config.state_root)
         except StorageError as exc:
             raise ResearchError(str(exc)) from exc
+
+
+class _ReadLease:
+    """The generations one read holds, released when the read ends."""
+
+    def __init__(self, service: ResearchService) -> None:
+        self._service = service
+        self._held: list[str] = []
+
+    def hold(self, generation_id: str) -> None:
+        readers = self._service._generation_readers
+        readers[generation_id] = readers.get(generation_id, 0) + 1
+        self._held.append(generation_id)
+
+    async def release(self) -> None:
+        if not self._held:
+            return
+        readers = self._service._generation_readers
+        for generation_id in self._held:
+            remaining = readers.get(generation_id, 0) - 1
+            if remaining > 0:
+                readers[generation_id] = remaining
+            else:
+                readers.pop(generation_id, None)
+        self._held.clear()
+        async with self._service._readers_left:
+            self._service._readers_left.notify_all()

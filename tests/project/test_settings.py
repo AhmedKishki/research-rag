@@ -414,12 +414,17 @@ def test_a_stopword_list_that_cannot_roundtrip_is_refused(
         _resolve(tmp_path, overrides=["language.corpus=de"], environ={})
 
 
-def test_the_nice_setting_leaves_priority_alone_unless_asked(project: Path) -> None:
-    """0 is the shipped default: a process nobody asked to yield does not yield."""
+def test_the_nice_setting_yields_to_the_desktop_by_default(project: Path) -> None:
+    """10 is the shipped default, in place of a CPU reserve.
+
+    A build saturates every core, and niceness costs it nothing on an idle
+    machine while keeping a desktop responsive on a busy one. 0 restores the
+    priority a process starts with.
+    """
 
     config = resolve_config(project, vanilla_executable=sys.executable)
 
-    assert config.nice == 0
+    assert config.nice == 10
 
 
 def test_apply_process_priority_raises_by_the_difference_and_only_once(

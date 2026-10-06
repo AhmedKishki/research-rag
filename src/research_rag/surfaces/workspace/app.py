@@ -54,6 +54,7 @@ _OPERATION_CAPABILITY = {
     "list_projects": "projects",
     "agent_entry": "agent_entry",
     "check_updates": "updates",
+    "search_stats": "stats",
 }
 
 
@@ -622,6 +623,12 @@ async def _settings_write(request: Request) -> Response:
     return JSONResponse(await _adapter_call(request, "settings_write", body))
 
 
+async def _stats(request: Request) -> Response:
+    """Search counts by rank and corpus facts, as the server reports them."""
+
+    return JSONResponse(await _adapter_call(request, "search_stats"))
+
+
 async def _chunk_exclusions(request: Request) -> Response:
     """The chunks this server has excluded from retrieval."""
 
@@ -764,6 +771,7 @@ def create_ui_app(
         Route("/api/projects", _projects),
         Route("/api/agent-entry", _agent_entry),
         Route("/api/updates", _updates),
+        Route("/api/stats", _stats),
     ]
     app = Starlette(
         routes=routes,

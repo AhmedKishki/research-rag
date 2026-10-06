@@ -467,16 +467,19 @@ class IngestionWorkflow:
             embedding=self.config.settings.embedding_facts,
         ):
             raise ResearchError("Generation portable artifacts failed validation")
-        self._loaded_generation = None
         try:
-            await self.ultrarag.initialize_bm25(
-                root / str(manifest["files"]["chunks"]),
-                root / str(manifest["files"]["bm25_index"]),
-                language=self.config.settings.bm25_stopwords_language,
-            )
-            chunks_path = root / str(manifest["files"]["chunks"])
-            probe = next(iter_jsonl(chunks_path))["contents"]
-            bm25_probe = await self.ultrarag.search_bm25(str(probe), 1)
+            # The probe points the gateway's one retriever at this generation, so
+            # a search running beside the build waits for it and reloads its own.
+            async with self._retriever_lock:
+                self._loaded_generation = None
+                await self.ultrarag.initialize_bm25(
+                    root / str(manifest["files"]["chunks"]),
+                    root / str(manifest["files"]["bm25_index"]),
+                    language=self.config.settings.bm25_stopwords_language,
+                )
+                chunks_path = root / str(manifest["files"]["chunks"])
+                probe = next(iter_jsonl(chunks_path))["contents"]
+                bm25_probe = await self.ultrarag.search_bm25(str(probe), 1)
             stored_probe = (
                 await _atomic_to_thread(lookup.chunks_by_contents, bm25_probe)
                 if bm25_probe
@@ -1683,12 +1686,15 @@ class IngestionWorkflow:
                 bm25_index_path = staging_root / "indexes" / "bm25"
                 shutil.rmtree(bm25_index_path, ignore_errors=True)
                 started = time.perf_counter()
-                self._loaded_generation = None
-                await self.ultrarag.build_bm25(
-                    staging_root / "chunks" / "chunks.jsonl",
-                    bm25_index_path,
-                    language=self.config.settings.bm25_stopwords_language,
-                )
+                # The build points the gateway's one retriever at the staging
+                # index, so a search beside it waits and reloads its own.
+                async with self._retriever_lock:
+                    self._loaded_generation = None
+                    await self.ultrarag.build_bm25(
+                        staging_root / "chunks" / "chunks.jsonl",
+                        bm25_index_path,
+                        language=self.config.settings.bm25_stopwords_language,
+                    )
                 self._add_phase_time(
                     checkpoint,
                     "bm25_indexing",
@@ -2265,6 +2271,9 @@ class IngestionWorkflow:
                 raise ResearchError(
                     f"Generation {generation_id} could not be measured: {exc}"
                 ) from exc
+            # A read takes no project lock, so one that resolved this generation
+            # before it stopped being current may still be reading it.
+            await self._wait_for_readers(generation_id)
             try:
                 shutil.rmtree(root)
             except OSError as exc:

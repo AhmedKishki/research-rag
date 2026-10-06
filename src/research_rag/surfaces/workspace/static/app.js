@@ -1486,6 +1486,7 @@ async function loadWorkspace({ announce = false } = {}) {
       state.updates.checked = true;
       void checkUpdates();
     }
+    if (hasCapability("stats") && activeView() === "stats") void loadStats();
     if (announce) toast("Workspace refreshed.");
   } catch (error) {
     setConnection("error", "Not answered", error.message);
@@ -1493,6 +1494,292 @@ async function loadWorkspace({ announce = false } = {}) {
   } finally {
     setBusy(false);
     if (state.status) configureRetrieval(state.status);
+  }
+}
+
+// ------------------------------------------------------------------- stats --
+//
+// The server counts each search's first five ranks and reports them beside the
+// facts its selected generation records. The page draws what came back: tables
+// of counts with a bar beside each one for scale, never a figure the payload
+// did not carry.
+
+// A bar for scale beside a count the row already states in text.
+function statBar(value, maximum) {
+  const track = node("span", "stat-bar");
+  track.setAttribute("aria-hidden", "true");
+  const fill = node("span", "stat-bar-fill");
+  const share = maximum > 0 ? Math.max(0, Math.min(1, Number(value) / maximum)) : 0;
+  fill.style.width = `${Math.round(share * 1000) / 10}%`;
+  track.append(fill);
+  return track;
+}
+
+// A table of labelled counts. Each column names its header and how to read the
+// row, and the first numeric column also draws the bar.
+function statTable(columns, rows, { bar = null } = {}) {
+  if (!rows.length) return node("p", "form-note", "Nothing to count yet.");
+  const table = node("table", "record-table stats-table");
+  const header = node("tr");
+  columns.forEach((column) => {
+    const cell = node("th", column.numeric ? "number-cell" : "", column.label);
+    cell.scope = "col";
+    header.append(cell);
+  });
+  if (bar) {
+    const cell = node("th", "bar-cell");
+    cell.scope = "col";
+    cell.append(node("span", "visually-hidden", "Scale"));
+    header.append(cell);
+  }
+  const head = node("thead");
+  head.append(header);
+  const body = node("tbody");
+  const maximum = bar ? Math.max(...rows.map((row) => Number(row[bar]) || 0)) : 0;
+  rows.forEach((row) => {
+    const line = node("tr");
+    columns.forEach((column, index) => {
+      const value = column.value(row);
+      const cell = index === 0 ? node("th", "stat-row-label") : node("td", column.numeric ? "number-cell" : "");
+      if (index === 0) cell.scope = "row";
+      if (value !== null && typeof value === "object") cell.append(value);
+      else cell.textContent = column.numeric ? formatNumber(value) : String(value ?? "");
+      line.append(cell);
+    });
+    if (bar) {
+      const cell = node("td", "bar-cell");
+      cell.append(statBar(row[bar], maximum));
+      line.append(cell);
+    }
+    body.append(line);
+  });
+  table.append(head, body);
+  const scroller = node("div", "table-scroll");
+  scroller.append(table);
+  return scroller;
+}
+
+function statCard(label, value, detail) {
+  const card = node("article", "stat-card");
+  card.append(node("span", "stat-label", label));
+  card.append(node("strong", "stat-value", value));
+  if (detail) card.append(node("span", "stat-detail", detail));
+  return card;
+}
+
+function milliseconds(value) {
+  if (value === null || value === undefined) return "—";
+  return value >= 1000 ? `${(value / 1000).toFixed(1)} s` : `${Math.round(value)} ms`;
+}
+
+function sourceCell(entry) {
+  const cell = document.createDocumentFragment();
+  cell.append(node("span", "stat-title", inlineText(entry.title) || entry.source_relative_path || entry.source_id || "Unknown source"));
+  if (entry.in_corpus === false) cell.append(node("span", "state-badge", "Not in this generation"));
+  return cell;
+}
+
+function passageCell(entry) {
+  const cell = document.createDocumentFragment();
+  cell.append(node("span", "stat-title", inlineText(entry.title) || "Unknown source"));
+  cell.append(
+    node(
+      "span",
+      "locator-badge",
+      entry.in_current_generation ? locatorLabel(entry.locator) : "Not in this generation",
+    ),
+  );
+  return cell;
+}
+
+const RANK_COLUMNS = [
+  { label: "Top five", numeric: true, value: (row) => row.top_five },
+  { label: "Rank one", numeric: true, value: (row) => row.rank_one },
+];
+
+function countedTable(label, entries) {
+  return statTable(
+    [{ label, value: (row) => row.value }, { label: "Sources", numeric: true, value: (row) => row.count }],
+    entries || [],
+    { bar: "count" },
+  );
+}
+
+function statGroup(title, content) {
+  const group = node("section", "stats-group");
+  group.append(node("h4", "stats-group-title", title));
+  group.append(content);
+  return group;
+}
+
+function renderStats(payload) {
+  const searches = payload.searches || {};
+  const count = Number(searches.search_count || 0);
+  const cards = byId("stats-cards");
+  cards.replaceChildren(
+    statCard(
+      "Searches",
+      formatNumber(count),
+      searches.first_search_at ? `Since ${formatDate(searches.first_search_at)}` : "None counted yet",
+    ),
+    statCard(
+      "With no results",
+      formatNumber(searches.zero_result_count),
+      count ? `${Math.round((100 * searches.zero_result_count) / count)}% of searches` : "—",
+    ),
+    statCard(
+      "Median time",
+      milliseconds(searches.median_elapsed_ms),
+      searches.p95_elapsed_ms === null || searches.p95_elapsed_ms === undefined
+        ? "—"
+        : `95th percentile ${milliseconds(searches.p95_elapsed_ms)}`,
+    ),
+    statCard(
+      "Never in a top five",
+      count ? formatNumber(payload.unreached_source_count) : "—",
+      payload.corpus ? `of ${formatNumber(payload.corpus.source_count)} searchable sources` : "No generation yet",
+    ),
+  );
+  const message = byId("stats-message");
+  message.hidden = Boolean(count);
+  message.textContent = count
+    ? ""
+    : "No search has been counted on this machine yet. Every search from the workspace, an agent, or the command line counts.";
+
+  const sources = payload.sources || [];
+  byId("stats-source-count").textContent = formatNumber(sources.length);
+  byId("stats-sources").replaceChildren(
+    statTable([{ label: "Source", value: sourceCell }, ...RANK_COLUMNS], sources, { bar: "top_five" }),
+  );
+  // The ranked lists are what this view is for and the server bounds them, so
+  // they open unless the reader closed them.
+  foldList(byId("stats-sources-fold"), Math.min(sources.length, FOLD_LIMIT));
+
+  const passages = payload.passages || [];
+  byId("stats-passage-count").textContent = formatNumber(passages.length);
+  byId("stats-passages").replaceChildren(
+    statTable([{ label: "Passage", value: passageCell }, ...RANK_COLUMNS], passages, { bar: "top_five" }),
+  );
+  foldList(byId("stats-passages-fold"), Math.min(passages.length, FOLD_LIMIT));
+
+  const unreached = payload.unreached_sources || [];
+  byId("stats-unreached-count").textContent = formatNumber(payload.unreached_source_count || 0);
+  const list = node("ul", "stats-list");
+  unreached.forEach((entry) => list.append(node("li", "", inlineText(entry.title) || entry.source_relative_path)));
+  const more = (payload.unreached_source_count || 0) - unreached.length;
+  byId("stats-unreached").replaceChildren(
+    unreached.length ? list : node("p", "form-note", count ? "Every searchable source has reached a top five." : "Nothing to count yet."),
+    ...(more > 0 ? [node("p", "form-note", `And ${formatNumber(more)} more.`)] : []),
+  );
+  foldList(byId("stats-unreached-fold"), payload.unreached_source_count || 0);
+
+  const days = [...(searches.searches_by_day || [])].reverse();
+  byId("stats-day-count").textContent = formatNumber(days.length);
+  byId("stats-days").replaceChildren(
+    statTable(
+      [{ label: "Day", value: (row) => row.day }, { label: "Searches", numeric: true, value: (row) => row.count }],
+      days,
+      { bar: "count" },
+    ),
+  );
+  foldList(byId("stats-days-fold"), days.length);
+
+  const corpus = payload.corpus;
+  const corpusBox = byId("stats-corpus");
+  if (!corpus) {
+    corpusBox.replaceChildren(node("p", "form-note", "This project has no generation yet."));
+  } else {
+    const spread = corpus.passages_per_source || {};
+    const missing = corpus.missing_metadata || {};
+    corpusBox.replaceChildren(
+      statGroup(
+        "Size",
+        factList(
+          [
+            ["Searchable sources", formatNumber(corpus.source_count)],
+            ["Passages", formatNumber(corpus.passage_count)],
+            ["PDF pages", formatNumber(corpus.pdf_page_count)],
+            [
+              "Passages per source",
+              `${formatNumber(spread.minimum)} fewest · ${formatNumber(spread.median)} median · ${formatNumber(spread.maximum)} most`,
+            ],
+          ],
+          "fact-list",
+        ),
+      ),
+      statGroup(
+        "Reviewed metadata missing",
+        factList(
+          [
+            ["Authors", `${formatNumber(missing.authors)} sources`],
+            ["Year", `${formatNumber(missing.year)} sources`],
+            ["Categories", `${formatNumber(missing.categories)} sources`],
+          ],
+          "fact-list",
+        ),
+      ),
+      statGroup(
+        "Largest sources",
+        statTable(
+          [{ label: "Source", value: sourceCell }, { label: "Passages", numeric: true, value: (row) => row.passage_count }],
+          corpus.largest_sources || [],
+          { bar: "passage_count" },
+        ),
+      ),
+      statGroup("Formats", countedTable("Format", corpus.formats)),
+      statGroup("Languages", countedTable("Language", corpus.languages)),
+      statGroup("Decades", countedTable("Decade", corpus.decades)),
+    );
+  }
+
+  const build = payload.last_build;
+  const buildBox = byId("stats-build");
+  if (!build) {
+    buildBox.replaceChildren(node("p", "form-note", "This project has no generation yet."));
+  } else {
+    const phases = Object.entries(build.phase_seconds || {}).map(([phase, seconds]) => ({
+      phase: checkLabel(phase),
+      seconds,
+    }));
+    const facts = [["Built", formatDate(build.created_at)]];
+    if (build.seconds !== null && build.seconds !== undefined) facts.push(["Build time", `${formatNumber(build.seconds)} s`]);
+    if (build.created_vector_count !== null && build.created_vector_count !== undefined) {
+      facts.push([
+        "Vectors",
+        `${formatNumber(build.reused_vector_count)} reused · ${formatNumber(build.created_vector_count)} embedded`,
+      ]);
+    }
+    if (build.rebuilt_document_count !== null && build.rebuilt_document_count !== undefined) {
+      facts.push([
+        "Sources",
+        `${formatNumber(build.reused_document_count)} reused · ${formatNumber(build.rebuilt_document_count)} rebuilt`,
+      ]);
+    }
+    if (build.excluded_corrupt_unit_count) facts.push(["Corrupt units left out", formatNumber(build.excluded_corrupt_unit_count)]);
+    if (build.dense_truncated_chunk_count) facts.push(["Passages truncated for embedding", formatNumber(build.dense_truncated_chunk_count)]);
+    const generations = payload.generations || {};
+    facts.push(["Generations on disk", `${formatNumber(generations.count)} · ${bytes(generations.bytes)}`]);
+    buildBox.replaceChildren(
+      statGroup("Facts", factList(facts, "fact-list")),
+      statGroup(
+        "Time by phase",
+        statTable(
+          [{ label: "Phase", value: (row) => row.phase }, { label: "Seconds", numeric: true, value: (row) => row.seconds }],
+          phases,
+          { bar: "seconds" },
+        ),
+      ),
+    );
+  }
+}
+
+async function loadStats() {
+  try {
+    renderStats(await api("/api/stats"));
+  } catch (error) {
+    const message = byId("stats-message");
+    message.hidden = false;
+    message.textContent = error.message;
   }
 }
 
@@ -1504,7 +1791,21 @@ async function loadWorkspace({ announce = false } = {}) {
 // to the view, the search, and the page of sources they were on. The fragment
 // is never sent to the server, so a query stays in this browser.
 
-const DEFAULT_TOP_K = "8";
+// A search asks for any number of passages the server allows; ten unless the
+// reader or the address says otherwise. The field's own maximum is the server's.
+const DEFAULT_TOP_K = "10";
+
+function topKLimit() {
+  const maximum = Number(byId("top-k").max);
+  return Number.isInteger(maximum) && maximum > 0 ? maximum : 50;
+}
+
+function validTopK(value) {
+  const text = String(value ?? "").trim();
+  if (!/^\d+$/.test(text)) return false;
+  const number = Number(text);
+  return number >= 1 && number <= topKLimit();
+}
 
 // The search filters by the names the search operation takes, each holding the
 // text of its field as typed.
@@ -1611,9 +1912,8 @@ async function applyRoute() {
     if (target === "search") {
       const query = params.get("q") || "";
       byId("query").value = query;
-      const topK = byId("top-k");
       const wanted = params.get("k") || DEFAULT_TOP_K;
-      if ([...(topK.options || [])].some((option) => option.value === wanted)) topK.value = wanted;
+      byId("top-k").value = validTopK(wanted) ? String(Number(wanted)) : DEFAULT_TOP_K;
       FILTER_PARAMS.forEach(([name, field]) => {
         byId(field).value = params.get(name) || "";
       });
@@ -1664,6 +1964,8 @@ function switchView(name, { moveFocus = false } = {}) {
   });
   if (opened) opened.focus({ preventScroll: true });
   closeNav();
+  // The counts change with every search, so the view reads them when it opens.
+  if (name === "stats" && hasCapability("stats")) void loadStats();
 }
 
 // Below 992px the sidebar is a drawer behind the header button. It traps
@@ -1818,6 +2120,10 @@ async function search(event) {
 async function runSearch() {
   const query = byId("query").value.trim();
   if (!query) return;
+  if (!validTopK(byId("top-k").value)) {
+    toast(`Results must be a whole number from 1 to ${topKLimit()}.`, true);
+    return;
+  }
   const key = searchKey();
   const method = document.querySelector("input[name='retrieval_method']:checked")?.value || "hybrid";
   const payload = {

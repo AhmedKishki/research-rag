@@ -22,6 +22,7 @@ import research_rag.runtime.app as app_module
 import research_rag.runtime.update as update_module
 from research_rag.project import registry, state_files
 from research_rag.project.config import ConfigurationError, resolve_config
+from research_rag.project.policy import ResearchError
 from research_rag.project.state_files import recorded_pid
 from research_rag.runtime.app import (
     PID_FILE,
@@ -115,6 +116,45 @@ async def test_an_app_that_never_serves_would_stop_ends_when_the_closing_asks(
     await asyncio.wait_for(waiting, timeout=5)
 
     assert closing.asked.is_set()
+
+
+async def test_an_app_ends_when_its_terminal_goes_without_a_signal(
+    project: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A disowned process gets no SIGHUP when its terminal closes.
+
+    It loses its controlling terminal instead, and that loss ends the wait the
+    same way a closed window does, so no serving process outlives its terminal.
+    """
+
+    answers = iter([True, True, False])
+    monkeypatch.setattr(cli, "_terminal_attached", lambda: next(answers, False))
+    monkeypatch.setattr(cli, "_TERMINAL_CHECK_SECONDS", 0.01)
+    config = _initialised(project, "Disowned")
+    app = App(config, port=_a_free_port())
+
+    await asyncio.wait_for(cli._wait_until_stopped(app, cli._Closing()), timeout=5)
+
+
+async def test_a_process_with_no_terminal_is_not_served(
+    project: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A background job, a desktop launcher, or an agent's shell has no terminal.
+
+    Serving from one leaves a process only `stop` ends, so it is refused before
+    an app is built or a port is claimed.
+    """
+
+    def never(*_args: Any, **_kwargs: Any) -> None:
+        raise AssertionError("no app may be built without a terminal")
+
+    monkeypatch.setattr(cli, "_terminal_attached", lambda: False)
+    monkeypatch.setattr(cli, "App", never)
+    config = _initialised(project, "Terminalless")
+
+    with pytest.raises(ResearchError, match="has no terminal"):
+        await cli._serve_attached(config, port=None, open_browser=False)
+    assert not (config.state_root / PID_FILE).exists()
 
 
 async def test_a_closing_asks_only_once() -> None:

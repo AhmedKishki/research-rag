@@ -197,7 +197,7 @@ class ReviewWorkflow:
     async def list_chunk_exclusions(self) -> dict[str, Any]:
         """The decision list `review_state.list_chunk_exclusions` renders."""
 
-        async with self._operation():
+        async with self._read():
             current = self._load_current_optional()
             exclusions = self._chunk_exclusions()
             placements = await self._chunk_placements(list(exclusions), current)
@@ -253,7 +253,7 @@ class ReviewWorkflow:
             raise ResearchError("Provide a filename, title, or author to look up.")
         bounded = max(1, min(int(limit), FIND_SOURCE_MAX_MATCHES))
         needle = term.casefold()
-        async with self._operation():
+        async with self._read():
             current = self._load_current_optional()
             try:
                 scan = scan_sources(self.config)
@@ -391,7 +391,7 @@ class ReviewWorkflow:
                 {**record, **(metadata.get(relative) or {})}, **wanted
             )
 
-        async with self._operation():
+        async with self._read():
             current = self._load_current_optional()
             try:
                 scan = scan_sources(self.config)

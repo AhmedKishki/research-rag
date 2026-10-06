@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import time
 from collections import defaultdict
 from collections.abc import Mapping, Sequence
 from pathlib import Path
@@ -370,6 +371,21 @@ class SearchWorkflow:
         bucket.append(entry)
 
     async def _bm25_ranking(
+        self, *args: Any, generation: tuple[Path, dict[str, Any]], **kwargs: Any
+    ) -> tuple[
+        list[str],
+        dict[str, int],
+        dict[str, dict[str, Any]],
+        dict[str, list[dict[str, Any]]],
+        int,
+        int,
+    ]:
+        """Rank lexically with the gateway's retriever held for this generation."""
+
+        async with self._retriever(*generation):
+            return await self._bm25_ranking_loaded(*args, **kwargs)
+
+    async def _bm25_ranking_loaded(
         self,
         query: str,
         lookup: ArtifactLookup,
@@ -655,6 +671,7 @@ class SearchWorkflow:
         measurement reads to see where a passage went, no surface asks for it,
         and no surface projects it into an agent's answer.
         """
+        started = time.perf_counter()
         query = query.strip()
         if not query:
             raise ResearchError("query must not be empty")
@@ -671,11 +688,12 @@ class SearchWorkflow:
         except ValueError as exc:
             raise ResearchError(str(exc)) from exc
 
-        async with self._operation():
+        async with self._read() as lease:
             current = self._load_current_optional()
             if current is None:
                 raise ResearchError("No knowledge base exists; call ingest first")
             generation_root, manifest = current
+            lease.hold(str(manifest["generation_id"]))
             passage_token_policy = self._passage_token_policy(manifest)
             gate_stopwords = self.config.settings.gate_stopwords
             lookup = await self._ensure_artifact_lookup(generation_root, manifest)
@@ -815,8 +833,7 @@ class SearchWorkflow:
 
             use_bm25 = retrieval_method in {"bm25", "hybrid"}
             use_dense = retrieval_method in {"dense", "hybrid"}
-            if use_bm25:
-                await self._ensure_loaded(generation_root, manifest)
+            generation = (generation_root, manifest)
 
             bm25_ranking: list[str] = []
             bm25_window = 0
@@ -866,6 +883,7 @@ class SearchWorkflow:
                         withheld=withheld,
                         stopwords=gate_stopwords,
                         token_policy=passage_token_policy,
+                        generation=generation,
                     ),
                     search_dense(),
                 )
@@ -904,6 +922,7 @@ class SearchWorkflow:
                     withheld=withheld,
                     stopwords=gate_stopwords,
                     token_policy=passage_token_policy,
+                    generation=generation,
                 )
                 chunks_by_id.update(bm25_chunks)
             else:
@@ -961,6 +980,7 @@ class SearchWorkflow:
                         withheld=withheld,
                         stopwords=gate_stopwords,
                         token_policy=passage_token_policy,
+                        generation=generation,
                     )
                     chunks_by_id.update(bm25_chunks)
                     # The feedback pass searched a second window, so the answer
@@ -1587,6 +1607,11 @@ class SearchWorkflow:
                     },
                     collapsed=collapsed,
                 )
+            # A measurement's search is not a reader's, so it is not counted.
+            if not evaluation_trace:
+                await self._record_search(
+                    payload, requested_top_k=top_k, started=started
+                )
             return payload
 
     async def get_passage(
@@ -1606,11 +1631,12 @@ class SearchWorkflow:
 
         if not 0 <= context_chunks <= 5:
             raise ResearchError("context_chunks must be between 0 and 5")
-        async with self._operation():
+        async with self._read() as lease:
             current = self._load_current_optional()
             if current is None:
                 raise ResearchError("No knowledge base exists; call ingest first")
             generation_root, manifest = current
+            lease.hold(str(manifest["generation_id"]))
             lookup = await self._ensure_artifact_lookup(generation_root, manifest)
             documents_by_id = _effective_documents(manifest, self._metadata())
             target = (await asyncio.to_thread(lookup.chunks_by_ids, [chunk_id])).get(

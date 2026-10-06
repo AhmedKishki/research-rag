@@ -6,6 +6,7 @@ Durable writes, and the record schemas they write.
 |---|---|
 | `durable_io.py` | Atomic writes with an fsync of the file and its parent directory, and the reads that go with them |
 | `records.py` | The five hand-editable record schemas and the current-generation pointer |
+| `search_stats.py` | The machine-local search counts: one row per search and one per tracked rank, no query text |
 
 ## Rules
 

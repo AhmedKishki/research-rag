@@ -4,11 +4,6 @@ An item is done when the harness has produced its measurement and the validation
 
 Entries are grouped by the module each one touches.
 
-## ui
-
-- [ ] **Show analytics and statistics in the workspace.** Feature. Deferred.
-- [ ] **Search options in ui must be expanded.** not just 5, 8, 12, 20 results - this should be freely chosen, with default as 10.
-
 ## cli
 
 - [ ] **Let a command start the app when the corpus is not ready.** Decision. A command that touches the corpus goes to the running app. With no app up, it is answered in process, which opens a second service nobody serves. Starting an app instead makes `status` leave a process behind. App should be started explicitly for any process.
@@ -39,10 +34,6 @@ Entries are grouped by the module each one touches.
   - Record the terminal as deliberately none, because an absent terminal file cannot tell the two cases apart.
   - `stop` needs the same ownership proof plus the flag, and a plain `stop` must never end a detached app.
   - `doctor` and the project selector must learn that a detached app outlives its terminal.
-- [ ] **Never leave a detached serving process behind.** Problem. A project was served on a loopback port by a process with no terminal attached, which the app reports as a state it does not serve; `Ctrl-C` in the terminal does not stop it, and only `research-rag stop` ends it, after which a bare call serves the project from the terminal. This state must never arise.
-
-  - A serving process may not outlive the terminal that started it unless detaching was explicitly requested.
-  - When it is found, report the `stop` remedy and never adopt the process.
 - [ ] **Serve beyond loopback with an explicit security design.** Feature. The workspace binds one loopback port and refuses every other peer, `Host`, and `Origin`; it has no authentication, so `AGENTS.md` requires a design before remote exposure.
 
   - Choose the shape: a first-party remote mode, or an authenticated proxy that terminates on loopback and is documented as the supported way to reach a phone or another machine.
@@ -50,12 +41,6 @@ Entries are grouped by the module each one touches.
   - State a threat model for every write surface it would expose: settings, ingestion, source and passage exclusions, generation removal, the SQL console, and memory writes.
   - Keep loopback the default. `doctor` and `README.md` state when remote serving is on and what protects it.
 - [ ] **A connection an unnamed client opened cannot be dropped.** Limit. A client that declared nothing is one client per MCP session, so a hand-written HTTP client has only its sessions refused. `RESEARCH_RAG_CLIENT_NAME` fixes it, and the stdio bridge always sets it.
-- [ ] **Let reads run during a build.** Problem. Every operation takes the project lock, so `status`, `sources`, `search`, and `passage` are refused while a build runs. Activation swaps `current.json` atomically and leaves the old generation intact, so reads can resolve the selected generation without the lock.
-- [ ] **Add a CPU reserve.** Feature. `runtime.embedding_threads` is a thread count, and cutting threads costs throughput where `runtime.nice` costs none. A reserve states the intent directly, as physical cores minus the reserve, and needs a measurement to price it.
-
-## stats
-
-- [ ] **Count source and chunk appearances by rank.** Feature. For each source and each chunk, count how often it appears in the top five and how often at rank one.
 
 ## reporting
 

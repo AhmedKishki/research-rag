@@ -656,7 +656,9 @@ def _client_scope(config: Any) -> AbstractAsyncContextManager[Any]:
 def _service_for(config: Any, client: Any) -> ResearchService:
     """The app's own service, over that gateway."""
 
-    return ResearchService(config, VanillaUltraRAG(client, config))
+    return ResearchService(
+        config, VanillaUltraRAG(client, config), record_searches=False
+    )
 
 
 def _require_servable(
