@@ -654,6 +654,7 @@ async def _stats(request: Request) -> Response:
             _present_arguments(
                 days=_query_number(request, "days"),
                 top=None if top is None else int(top),
+                largest_by=request.query_params.get("largest_by") or None,
             ),
         )
     )

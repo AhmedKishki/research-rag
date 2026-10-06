@@ -3281,9 +3281,15 @@ const stats = {
   corpus: {
     source_count: 3, passage_count: 400, pdf_page_count: 900,
     passages_per_source: { minimum: 20, median: 100, maximum: 280 },
-    largest_sources: [{ title: "Capital", passage_count: 280, in_corpus: true }],
+    largest_by: "passages",
+    largest_sources: [
+      { source_id: "src_2", title: "Capital", passage_count: 280, physical_pages: 410, in_corpus: true },
+      { source_id: "src_1", title: "Atlas of AI", passage_count: 90, physical_pages: 300, in_corpus: true },
+    ],
     formats: [{ value: "pdf", count: 3 }], languages: [{ value: "en", count: 3 }],
-    decades: [{ value: "2020s", count: 2 }],
+    decades: [{ value: "2020s", count: 2 }, { value: "2010s", count: 1 }],
+    categories: [{ value: "marxism", count: 2 }, { value: "labour", count: 1 }],
+    authors: [{ value: "Crawford", count: 1 }, { value: "Marx", count: 1 }],
     missing_metadata: { authors: 0, year: 1, categories: 2 },
   },
   last_build: { created_at: "2026-10-05T08:36:50Z", seconds: 1545,
@@ -3316,7 +3322,14 @@ result.sourceLinks = collect(body("sources"));
 result.passageLinks = collect(body("passages"));
 result.historyLinks = collect(body("history"));
 result.unreachedLinks = collect(body("unreached-list"));
-result.corpus = text(body("corpus"));
+result.corpus = text(body("corpus-size"));
+result.missing = text(body("missing-metadata"));
+result.largest = text(body("largest"));
+result.largestLinks = collect(body("largest"));
+result.formats = text(body("formats"));
+result.categories = text(body("categories"));
+result.decades = text(body("decades"));
+result.passageColumns = body("passages").children[0].children[0].children[0].children[0].children.map((cell) => cell.textContent);
 result.build = text(body("build"));
 result.counts = ["sources", "passages", "history"].map((id) => state.statPanels.get(id).count.textContent);
 result.firstRequests = [...new Set(asked)].sort();
@@ -3326,7 +3339,13 @@ state.statScopes.sources = { days: 7, top: 5 };
 await refreshCard(STAT_CARDS.find((card) => card.id === "sources"));
 state.statScopes.history = { days: 1, top: 20 };
 await refreshCard(STAT_CARDS.find((card) => card.id === "history"));
+state.statScopes.largest = { days: null, top: 5, by: "pages" };
+await refreshCard(STAT_CARDS.find((card) => card.id === "largest"));
+state.statScopes.decades = { days: null, top: 5 };
+await refreshCard(STAT_CARDS.find((card) => card.id === "decades"));
 result.scoped = [...asked];
+state.statScopes.decades = { days: null, top: 5 };
+state.statScopes.categories = { days: null, top: 5 };
 
 asked.length = 0;
 await clearHistory();
@@ -3345,6 +3364,14 @@ result.cleared = [...asked];
     assert ["Atlas of AI", "#/source?id=src_1"] in result["sourceLinks"]
     assert ["Page 7", "#/passage?id=chk_1"] in result["passageLinks"]
     assert ["Atlas of AI", "#/source?id=src_1"] in result["passageLinks"]
+    # The source and the place in it are columns of their own.
+    assert result["passageColumns"] == [
+        "Source",
+        "Passage",
+        "Top five",
+        "Rank one",
+        "",
+    ]
     assert ["Unread Book", "#/source?id=src_9"] in result["unreachedLinks"]
     # A kept search is run again from its own address, filters and size included.
     assert result["historyLinks"] == [
@@ -3354,16 +3381,26 @@ result.cleared = [...asked];
         ]
     ]
     assert "20 fewest · 100 median · 280 most" in result["corpus"]
+    assert "1 sources" in result["missing"] and "2 sources" in result["missing"]
+    assert ["Capital", "#/source?id=src_2"] in result["largestLinks"]
+    assert "280" in result["largest"] and "410" in result["largest"]
+    assert "2020s" in result["decades"] and "pdf" in result["formats"]
+    assert "marxism" in result["categories"]
     assert "26,532 embedded" in result["build"]
     assert result["counts"] == ["2", "1", "1"]
     # Cards that chose the same scope share one answer; each scope is its own ask.
     assert result["firstRequests"] == [
         "/api/stats/history?limit=10",
         "/api/stats?top=10",
+        "/api/stats?top=5",
     ]
+    # Ranking the largest sources is the one scope that reaches the server; a
+    # distribution is shortened in the page, and shares the answer a card of the
+    # same scope already asked for.
     assert result["scoped"] == [
         "/api/stats?days=7&top=5",
         "/api/stats/history?days=1&limit=20",
+        "/api/stats?top=5&largest_by=pages",
     ]
     assert result["cleared"][0] == "/api/stats/history/clear"
     assert result["cleared"][1].startswith("/api/stats/history?")

@@ -2255,7 +2255,14 @@ textarea:disabled {
 
 .stats-lists {
   display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(26rem, 100%), 1fr));
   gap: var(--space-md);
+  align-items: start;
+}
+
+/* A table that needs the width takes the whole row; a short list shares it. */
+.stat-panel-wide {
+  grid-column: 1 / -1;
 }
 
 .stat-panel {

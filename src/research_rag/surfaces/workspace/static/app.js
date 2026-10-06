@@ -1540,6 +1540,11 @@ const STAT_TIME_SCOPES = [
   { label: "24 hours", days: 1 },
 ];
 const STAT_SIZES = [5, 10, 20, 50];
+// What the largest sources are ranked by.
+const STAT_LARGEST_BY = [
+  { value: "passages", label: "By passages" },
+  { value: "pages", label: "By pages" },
+];
 const SCOPE_STORAGE_KEY = "research-rag.stat-scopes";
 
 // A reader's scopes survive a reload where the browser allows it, and the board
@@ -1565,15 +1570,20 @@ function cardScope(card) {
   const saved = state.statScopes[card.id] || {};
   const days = STAT_TIME_SCOPES.some((scope) => scope.days === saved.days) ? saved.days : null;
   const top = STAT_SIZES.includes(saved.top) ? saved.top : card.top || 10;
-  return { days, top };
+  const by = STAT_LARGEST_BY.some((option) => option.value === saved.by) ? saved.by : "passages";
+  return { days, top, by };
 }
 
 function statRequest(source, scope) {
-  const key = `${source}|${scope.days ?? ""}|${scope.top}`;
+  // Only the largest-sources ranking depends on `by`, so a request for anything
+  // else names it the default and shares an answer with every other card.
+  const by = source === "stats" ? scope.by : "passages";
+  const key = `${source}|${scope.days ?? ""}|${scope.top}|${by}`;
   if (!state.statData.has(key)) {
     const params = new URLSearchParams();
     if (scope.days !== null) params.set("days", String(scope.days));
     params.set(source === "history" ? "limit" : "top", String(scope.top));
+    if (source === "stats" && by !== "passages") params.set("largest_by", by);
     const path = source === "history" ? "/api/stats/history" : "/api/stats";
     state.statData.set(
       key,
@@ -1675,20 +1685,24 @@ function sourceCell(entry) {
   return cell;
 }
 
-function passageCell(entry) {
-  const cell = document.createDocumentFragment();
+// A passage is two facts, the source it is in and the place in it, and each has
+// a column of its own: the source goes to all of its passages, the place to the
+// text around it.
+function passageSourceCell(entry) {
   const title = inlineText(entry.title) || "Unknown source";
+  const cell = document.createDocumentFragment();
   cell.append(
     entry.source_id && entry.in_corpus !== false
       ? entityLink(title, sourceHref(entry.source_id), "stat-title")
       : node("span", "stat-title", title),
   );
-  cell.append(
-    entry.in_current_generation
-      ? entityLink(locatorLabel(entry.locator), passageHref(entry.chunk_id), "locator-badge")
-      : node("span", "locator-badge", "Not in this generation"),
-  );
   return cell;
+}
+
+function passagePlaceCell(entry) {
+  return entry.in_current_generation
+    ? entityLink(locatorLabel(entry.locator), passageHref(entry.chunk_id), "locator-badge")
+    : node("span", "locator-badge", "Not in this generation");
 }
 
 const RANK_COLUMNS = [
@@ -1834,6 +1848,7 @@ const STAT_CARDS = [
   },
   {
     id: "sources",
+    wide: true,
     title: "Sources by appearances",
     source: "stats",
     scopes: ["time", "size"],
@@ -1844,16 +1859,26 @@ const STAT_CARDS = [
   },
   {
     id: "passages",
+    wide: true,
     title: "Passages by appearances",
     source: "stats",
     scopes: ["time", "size"],
     top: 10,
     count: (payload) => (payload.passages || []).length,
     render: (payload) =>
-      statTable([{ label: "Passage", value: passageCell }, ...RANK_COLUMNS], payload.passages || [], { bar: "top_five" }),
+      statTable(
+        [
+          { label: "Source", value: passageSourceCell },
+          { label: "Passage", value: passagePlaceCell },
+          ...RANK_COLUMNS,
+        ],
+        payload.passages || [],
+        { bar: "top_five" },
+      ),
   },
   {
     id: "history",
+    wide: true,
     title: "Search history",
     source: "history",
     scopes: ["time", "size"],
@@ -1877,6 +1902,7 @@ const STAT_CARDS = [
   },
   {
     id: "unreached-list",
+    wide: true,
     title: "Sources no search has reached",
     source: "stats",
     scopes: ["time", "size"],
@@ -1906,12 +1932,32 @@ const STAT_CARDS = [
     },
   },
   {
-    id: "corpus",
-    title: "Corpus",
+    id: "corpus-size",
+    title: "Corpus size",
     source: "stats",
     scopes: [],
-    wide: true,
-    render: (payload) => renderCorpus(payload.corpus),
+    render: (payload) => renderCorpusSize(payload.corpus),
+  },
+  {
+    id: "largest",
+    title: "Largest sources",
+    source: "stats",
+    scopes: ["size", "by"],
+    top: 5,
+    count: (payload) => (payload.corpus?.largest_sources || []).length,
+    render: (payload) => renderLargest(payload.corpus),
+  },
+  distributionCard("formats", "Sources by format", "formats", "Format"),
+  distributionCard("languages", "Sources by language", "languages", "Language"),
+  distributionCard("decades", "Sources by decade", "decades", "Decade"),
+  distributionCard("categories", "Sources by category", "categories", "Category"),
+  distributionCard("authors", "Sources by author", "authors", "Author"),
+  {
+    id: "missing-metadata",
+    title: "Reviewed metadata missing",
+    source: "stats",
+    scopes: [],
+    render: (payload) => renderMissingMetadata(payload.corpus),
   },
   {
     id: "build",
@@ -1923,51 +1969,71 @@ const STAT_CARDS = [
   },
 ];
 
-function renderCorpus(corpus) {
+function renderCorpusSize(corpus) {
   if (!corpus) return node("p", "form-note", "This project has no generation yet.");
   const spread = corpus.passages_per_source || {};
-  const missing = corpus.missing_metadata || {};
-  const groups = node("div", "stats-groups");
-  groups.append(
-    statGroup(
-      "Size",
-      factList(
-        [
-          ["Searchable sources", formatNumber(corpus.source_count)],
-          ["Passages", formatNumber(corpus.passage_count)],
-          ["PDF pages", formatNumber(corpus.pdf_page_count)],
-          [
-            "Passages per source",
-            `${formatNumber(spread.minimum)} fewest · ${formatNumber(spread.median)} median · ${formatNumber(spread.maximum)} most`,
-          ],
-        ],
-        "fact-list",
-      ),
-    ),
-    statGroup(
-      "Reviewed metadata missing",
-      factList(
-        [
-          ["Authors", `${formatNumber(missing.authors)} sources`],
-          ["Year", `${formatNumber(missing.year)} sources`],
-          ["Categories", `${formatNumber(missing.categories)} sources`],
-        ],
-        "fact-list",
-      ),
-    ),
-    statGroup(
-      "Largest sources",
-      statTable(
-        [{ label: "Source", value: sourceCell }, { label: "Passages", numeric: true, value: (row) => row.passage_count }],
-        corpus.largest_sources || [],
-        { bar: "passage_count" },
-      ),
-    ),
-    statGroup("Formats", countedTable("Format", corpus.formats)),
-    statGroup("Languages", countedTable("Language", corpus.languages)),
-    statGroup("Decades", countedTable("Decade", corpus.decades)),
+  return factList(
+    [
+      ["Searchable sources", formatNumber(corpus.source_count)],
+      ["Passages", formatNumber(corpus.passage_count)],
+      ["PDF pages", formatNumber(corpus.pdf_page_count)],
+      [
+        "Passages per source",
+        `${formatNumber(spread.minimum)} fewest · ${formatNumber(spread.median)} median · ${formatNumber(spread.maximum)} most`,
+      ],
+    ],
+    "fact-list",
   );
-  return groups;
+}
+
+function renderMissingMetadata(corpus) {
+  if (!corpus) return node("p", "form-note", "This project has no generation yet.");
+  const missing = corpus.missing_metadata || {};
+  return factList(
+    [
+      ["Authors", `${formatNumber(missing.authors)} sources`],
+      ["Year", `${formatNumber(missing.year)} sources`],
+      ["Categories", `${formatNumber(missing.categories)} sources`],
+    ],
+    "fact-list",
+  );
+}
+
+// The largest sources, ranked by what the card says; the bar shows that measure
+// and the other is a column beside it.
+function renderLargest(corpus) {
+  if (!corpus) return node("p", "form-note", "This project has no generation yet.");
+  const byPages = corpus.largest_by === "pages";
+  const rows = (corpus.largest_sources || []).map((entry) => ({
+    ...entry,
+    physical_pages: entry.physical_pages ?? 0,
+  }));
+  return statTable(
+    [
+      { label: "Source", value: sourceCell },
+      { label: "Passages", numeric: true, value: (row) => row.passage_count },
+      { label: "Pages", numeric: true, value: (row) => row.physical_pages },
+    ],
+    rows,
+    { bar: byPages ? "physical_pages" : "passage_count" },
+  );
+}
+
+// A distribution over the searchable sources, shortened to the size the card
+// chose; the badge says how many entries there are in all.
+function distributionCard(id, title, key, label) {
+  return {
+    id,
+    title,
+    source: "stats",
+    scopes: ["size"],
+    top: 10,
+    count: (payload) => (payload.corpus?.[key] || []).length,
+    render: (payload, scope) =>
+      payload.corpus
+        ? countedTable(label, (payload.corpus[key] || []).slice(0, scope.top))
+        : node("p", "form-note", "This project has no generation yet."),
+  };
 }
 
 function renderBuild(payload) {
@@ -2010,15 +2076,17 @@ function renderBuild(payload) {
   return groups;
 }
 
+const SCOPE_NAMES = { days: "Time scope", top: "List size", by: "Ranking" };
+
 function scopeSelect(card, field, options) {
   const label = node("label", "stat-scope-field");
-  label.append(node("span", "visually-hidden", `${field === "days" ? "Time scope" : "List size"} for ${card.title}`));
+  label.append(node("span", "visually-hidden", `${SCOPE_NAMES[field]} for ${card.title}`));
   const select = node("select", "stat-scope-select");
   select.dataset.scope = field;
   const current = cardScope(card)[field];
   options.forEach((option) => {
-    const item = node("option", "", field === "days" ? option.label : `Top ${option}`);
-    item.value = String(field === "days" ? (option.days ?? "") : option);
+    const item = node("option", "", field === "top" ? `Top ${option}` : option.label);
+    item.value = String(field === "days" ? (option.days ?? "") : field === "by" ? option.value : option);
     select.append(item);
   });
   select.value = String(current ?? "");
@@ -2037,6 +2105,7 @@ function statPanel(card) {
   const controls = node("div", "stat-scope");
   if (card.scopes.includes("time")) controls.append(scopeSelect(card, "days", STAT_TIME_SCOPES));
   if (card.scopes.includes("size")) controls.append(scopeSelect(card, "top", STAT_SIZES));
+  if (card.scopes.includes("by")) controls.append(scopeSelect(card, "by", STAT_LARGEST_BY));
   if (card.clearable && hasCapability("stats")) {
     controls.append(button("Clear", "clear-history", "", "text-button"));
   }
@@ -2051,8 +2120,9 @@ async function refreshCard(card) {
   const parts = state.statPanels.get(card.id);
   if (!parts) return;
   try {
-    const payload = await statRequest(card.source, cardScope(card));
-    parts.body.replaceChildren(card.render(payload));
+    const scope = cardScope(card);
+    const payload = await statRequest(card.source, scope);
+    parts.body.replaceChildren(card.render(payload, scope));
     parts.count.hidden = !card.count;
     if (card.count) parts.count.textContent = formatNumber(card.count(payload));
     const message = byId("stats-message");
@@ -2099,6 +2169,7 @@ function changeScope(event) {
   if (!card) return;
   const scope = { ...cardScope(card) };
   if (select.dataset.scope === "days") scope.days = select.value === "" ? null : Number(select.value);
+  else if (select.dataset.scope === "by") scope.by = select.value;
   else scope.top = Number(select.value);
   state.statScopes[card.id] = scope;
   saveScopes();

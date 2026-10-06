@@ -223,6 +223,7 @@ async def _stats(app: App, request: Request) -> JSONResponse:
         await app.service.search_stats(
             since_days=_query_days(request),
             top=_query_int(request, "top", default=20, maximum=100),
+            largest_by=request.query_params.get("largest_by") or "passages",
         )
     )
 
@@ -534,8 +535,14 @@ class Control:
     def search(self, query: str, **arguments: Any) -> dict[str, Any]:
         return self._call("POST", "/search", json={"query": query, **arguments})
 
-    def stats(self, *, days: float | None = None, top: int = 20) -> dict[str, Any]:
-        params: dict[str, Any] = {"top": top}
+    def stats(
+        self,
+        *,
+        days: float | None = None,
+        top: int = 20,
+        largest_by: str = "passages",
+    ) -> dict[str, Any]:
+        params: dict[str, Any] = {"top": top, "largest_by": largest_by}
         if days is not None:
             params["days"] = days
         return self._call("GET", "/stats", params=params)
