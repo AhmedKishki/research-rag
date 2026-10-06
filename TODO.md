@@ -2,13 +2,6 @@
 
 An item is done when the harness has produced its measurement and the validation in `AGENTS.md` is clean.
 
-## Workspace layout
-
-- [ ] **Justify search result text.** Feature. Set `text-align: justify` on passage text in search results.
-- [ ] **Centre the page content.** Feature. Content uses little of the screen and sits to one side. Centre the content block, capped at a readable width. Leave text alignment unchanged.
-- [ ] **Name the app and the project once.** Feature. `research-rag` and the project name repeat across the workspace. Show each once, in the header.
-- [ ] **Show "Cleaned passage" once.** Feature. The label repeats on every passage. Show the notice once per results view, and keep the quotation rule in the page.
-
 ## The app and its front ends
 
 - [ ] **Choose the project in the workspace, not the terminal.** Feature. A bare `research-rag` asks which project when the installation holds several, before the app can answer anything.

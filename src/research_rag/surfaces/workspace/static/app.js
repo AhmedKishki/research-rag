@@ -38,7 +38,6 @@ function applyProfile(profile) {
   byId("application-name").textContent = profile.application_name;
   byId("project-label").textContent = profile.project_label;
   byId("workspace-nav").setAttribute("aria-label", profile.navigation_label);
-  byId("sidebar-project-label").textContent = profile.project_label;
   byId("ingest-intro").textContent = profile.ingest_intro;
   // Whether a build can be continued is the host's own fact about its own
   // pipeline, so the sentence that says so arrives with the rest of its wording
@@ -715,9 +714,6 @@ function renderStatus(status) {
     || state.profile?.project_fallback_name
     || "Knowledge base";
   byId("project-name").textContent = projectName;
-  // The sidebar repeats the project as its quiet footer, so a reader who has
-  // scrolled past the header still knows which project the page serves.
-  byId("sidebar-project-name").textContent = projectName;
   byId("project-path").textContent = projectPath;
   byId("project-path").title = projectPath;
   byId("searchable-count").textContent = formatNumber(
@@ -1686,7 +1682,6 @@ function resultCard(hit) {
   content.append(node("div", "result-byline", `${authorLine(hit)} · ${hit.source_path}`));
   if (hit.doi) content.append(node("div", "result-doi", `doi:${inlineText(hit.doi).replace(/^doi:/i, "")}`));
   content.append(node("p", "result-citation", inlineText(hit.citation) || "Citation unavailable"));
-  content.append(node("div", "semantic-text-label", state.profile?.result_text_label || "Retrieved passage"));
   content.append(node("p", "passage-text", readableText(hit.text)));
 
   if ((hit.categories || []).length || (hit.keywords || []).length) {
@@ -1752,6 +1747,11 @@ function renderResults(payload) {
     compactId(payload.generation_id),
   ].filter(Boolean);
   byId("result-meta").textContent = details.join(" · ");
+  // The label is a property of the whole results view, not of a passage, so it
+  // is written once above the list rather than repeated on every card.
+  const notice = byId("results-notice");
+  notice.textContent = state.profile?.result_text_label || "Retrieved passage";
+  notice.hidden = !count;
   if (!count) {
     results.append(node("div", "no-records", "No passages matched. Broaden the query or remove metadata filters."));
     return;
@@ -1768,6 +1768,7 @@ function clearResults() {
   state.searchKey = "";
   byId("results").replaceChildren();
   byId("search-summary").hidden = true;
+  byId("results-notice").hidden = true;
   byId("search-empty").hidden = false;
 }
 
