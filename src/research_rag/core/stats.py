@@ -157,6 +157,7 @@ class StatsWorkflow:
                     read_search_stats,
                     self._search_stats_path,
                     top=top,
+                    days=None,
                     since_days=since_days,
                 )
             except SearchStatsError as exc:

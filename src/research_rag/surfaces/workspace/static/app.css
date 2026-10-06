@@ -2182,6 +2182,8 @@ textarea:disabled {
 }
 
 .stats-table .bar-cell {
+  /* Keep the absolute, screen-reader-only heading inside the table scroller. */
+  position: relative;
   width: 30%;
   min-width: 6rem;
 }
@@ -2220,7 +2222,7 @@ textarea:disabled {
 
 .stats-groups {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(min(11rem, 100%), 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(min(16rem, 100%), 1fr));
   gap: var(--space-sm) var(--space-md);
   margin-top: var(--space-2xs);
 }
@@ -2258,9 +2260,7 @@ textarea:disabled {
   line-height: var(--leading-normal);
 }
 
-/* Every statistic is a card with its own scope. The cards share a grid with a
-   small gap and stretch to the height of their row, so neighbours end together
-   and no card leaves a hole beside it. */
+/* Cards use the page width; their figures and groups wrap within each card. */
 .stats-board {
   display: grid;
   margin-top: var(--space-xs);
@@ -2268,12 +2268,12 @@ textarea:disabled {
 
 .stats-lists {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(min(28rem, 100%), 1fr));
+  grid-template-columns: minmax(0, 1fr);
   gap: var(--space-xs);
   align-items: stretch;
 }
 
-/* A table that needs the width takes the whole row; the rest share it. */
+/* A full-width card spans every track if a host gives the board more columns. */
 .stat-panel-wide {
   grid-column: 1 / -1;
 }
@@ -2285,6 +2285,53 @@ textarea:disabled {
   border-radius: var(--radius-md);
   background: var(--bg-card);
   box-shadow: var(--shadow-sm);
+}
+
+.stat-panel-body {
+  min-width: 0;
+}
+
+.stats-table thead th {
+  white-space: normal;
+}
+
+.usage-chart {
+  margin: 0;
+}
+
+.usage-chart svg {
+  display: block;
+  width: 100%;
+  height: auto;
+  min-height: 12rem;
+  color: var(--text-secondary);
+  font-family: var(--font-sans);
+  font-size: var(--text-xs);
+  /* The workspace's SVG icons are outlined; chart text and bars are not. */
+  stroke: none;
+}
+
+.usage-chart text {
+  fill: currentColor;
+  font-weight: 400;
+}
+
+.usage-gridline {
+  stroke: var(--border-subtle);
+}
+
+.usage-bar {
+  fill: var(--accent);
+}
+
+.usage-data {
+  margin-top: var(--space-xs);
+}
+
+.usage-data summary {
+  cursor: pointer;
+  margin-bottom: var(--space-2xs);
+  font-size: var(--text-sm);
 }
 
 .stat-panel-head {
@@ -2302,7 +2349,7 @@ textarea:disabled {
 /* The headline figures of the searches, side by side. */
 .stat-figures {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(11rem, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(min(11rem, 100%), 1fr));
   gap: var(--space-sm) var(--space-md);
 }
 
@@ -2310,10 +2357,6 @@ textarea:disabled {
   display: grid;
   align-content: start;
   gap: var(--space-3xs);
-}
-
-.stat-scope {
-  margin-left: 0;
 }
 
 .stat-scope {

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import sys
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
@@ -183,6 +184,27 @@ def test_a_window_counts_only_recent_searches(tmp_path: Path) -> None:
     assert read_history(path, since_days=1)["searches"][0]["query"] == "new"
 
 
+def test_usage_covers_the_whole_time_frame_without_history(project: Path) -> None:
+    service = _service(project, history=False)
+    today = datetime.now(UTC)
+    for days_ago in range(45):
+        record_search(
+            service._search_stats_path,
+            searched_at=(today - timedelta(days=days_ago)).isoformat(),
+            generation_id="g",
+            requested_top_k=5,
+            result_count=0,
+            elapsed_ms=1.0,
+            ranked=[],
+        )
+    everything = asyncio.run(service.search_stats())
+    recent = asyncio.run(service.search_stats(since_days=7))
+    assert everything["searches"]["search_count"] == 45
+    assert len(everything["searches"]["searches_by_day"]) == 45
+    assert sum(day["count"] for day in recent["searches"]["searches_by_day"]) == 7
+    assert asyncio.run(service.search_history())["searches"] == []
+
+
 def test_a_version_one_counts_file_gains_history_and_keeps_its_rows(
     tmp_path: Path,
 ) -> None:
@@ -287,10 +309,29 @@ def test_a_source_lists_its_passages_with_how_often_each_was_returned(
             await service.source_chunks(source_id="src_unknown")
         with pytest.raises(ResearchError, match="page must be"):
             await service.source_chunks(source_id=source_id, page=0)
-        return {"first": first, "last": last, "top": found["hits"][0]["chunk_id"]}
+        # The top hit can sit on any page, so walk every bounded page of
+        # passages instead of assuming it is on the first or last.
+        counted: dict[str, int] = {}
+        page_number = 1
+        while True:
+            listing = await service.source_chunks(
+                source_id=source_id, page=page_number, page_size=50
+            )
+            for chunk in listing["chunks"]:
+                counted[chunk["chunk_id"]] = chunk["top_five"]
+            if page_number >= listing["pages"]:
+                break
+            page_number += 1
+        return {
+            "first": first,
+            "last": last,
+            "top": found["hits"][0]["chunk_id"],
+            "counted": counted,
+        }
 
     answered = asyncio.run(exercise())
     first, last = answered["first"], answered["last"]  # type: ignore[assignment]
+    counted = answered["counted"]  # type: ignore[assignment]
 
     assert first["source"]["title"] == "Cobalt Article"
     assert first["source"]["passage_count"] >= 4
@@ -303,11 +344,6 @@ def test_a_source_lists_its_passages_with_how_often_each_was_returned(
     # A page past the end is the last page, and its numbering continues.
     assert last["page"] == last["pages"]
     assert last["chunks"][0]["ordinal"] == (last["pages"] - 1) * 2 + 1
-    counted = {
-        chunk["chunk_id"]: chunk["top_five"]
-        for page in (first, last)
-        for chunk in page["chunks"]
-    }
     assert counted.get(answered["top"], 0) >= 1
 
 

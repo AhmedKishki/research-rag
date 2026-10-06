@@ -1568,7 +1568,8 @@ function saveScopes() {
 
 function cardScope(card) {
   const saved = state.statScopes[card.id] || {};
-  const days = STAT_TIME_SCOPES.some((scope) => scope.days === saved.days) ? saved.days : null;
+  const timeScopes = card.timeScopes || STAT_TIME_SCOPES;
+  const days = timeScopes.some((scope) => scope.days === saved.days) ? saved.days : null;
   const top = STAT_SIZES.includes(saved.top) ? saved.top : card.top || 10;
   const by = STAT_LARGEST_BY.some((option) => option.value === saved.by) ? saved.by : "passages";
   return { days, top, by };
@@ -1827,6 +1828,93 @@ function renderSearchFigures(payload) {
   return grid;
 }
 
+// Count every UTC interval between the first and last recorded day, including
+// quiet intervals. Long histories use weeks or months rather than tiny bars.
+function usageSeries(entries, scope = {}, now = new Date()) {
+  const days = entries.filter((entry) => /^\d{4}-\d{2}-\d{2}$/.test(entry.day))
+    .sort((left, right) => left.day.localeCompare(right.day));
+  if (!days.length) return { interval: "day", buckets: [] };
+  const end = scope.days ? new Date(now) : new Date(`${days.at(-1).day}T00:00:00Z`);
+  const start = scope.days ? new Date(now - scope.days * 86400000) : new Date(`${days[0].day}T00:00:00Z`);
+  start.setUTCHours(0, 0, 0, 0);
+  end.setUTCHours(0, 0, 0, 0);
+  const span = Math.round((end - start) / 86400000) + 1;
+  const interval = span <= 60 ? "day" : span <= 420 ? "week" : "month";
+  const key = (date) => {
+    const day = new Date(date);
+    if (interval === "week") day.setUTCDate(day.getUTCDate() - (day.getUTCDay() + 6) % 7);
+    if (interval === "month") day.setUTCDate(1);
+    return day.toISOString().slice(0, 10);
+  };
+  const totals = new Map();
+  days.forEach((entry) => {
+    const day = key(new Date(`${entry.day}T00:00:00Z`));
+    totals.set(day, (totals.get(day) || 0) + Number(entry.count || 0));
+  });
+  const buckets = [];
+  const cursor = new Date(`${key(start)}T00:00:00Z`);
+  while (cursor <= end) {
+    const day = key(cursor);
+    buckets.push({ day, count: totals.get(day) || 0 });
+    if (interval === "month") cursor.setUTCMonth(cursor.getUTCMonth() + 1);
+    else cursor.setUTCDate(cursor.getUTCDate() + (interval === "week" ? 7 : 1));
+  }
+  return { interval, buckets };
+}
+
+function renderUsage(payload, scope) {
+  const { interval, buckets } = usageSeries(payload.searches?.searches_by_day || [], scope);
+  if (!buckets.length) return node("p", "form-note", "No search invocations in this time frame.");
+  const chart = node("figure", "usage-chart");
+  const total = buckets.reduce((sum, bucket) => sum + bucket.count, 0);
+  const caption = `${formatNumber(total)} search invocations · per ${interval} · UTC`;
+  chart.append(node("figcaption", "stat-detail", caption));
+  const svgNode = (tag, attributes, text) => {
+    const element = document.createElementNS("http://www.w3.org/2000/svg", tag);
+    Object.entries(attributes).forEach(([name, value]) => element.setAttribute(name, String(value)));
+    if (text !== undefined) element.textContent = text;
+    return element;
+  };
+  const svg = svgNode("svg", {
+    viewBox: "0 0 800 260", role: "img", "aria-label": caption,
+    "aria-describedby": "usage-chart-description",
+  });
+  svg.append(svgNode("title", {}, caption));
+  svg.append(svgNode("desc", { id: "usage-chart-description" },
+    buckets.map((bucket) => `${bucket.day}: ${formatNumber(bucket.count)} invocations`).join("; ")));
+  const maximum = Math.ceil(Math.max(1, ...buckets.map((bucket) => bucket.count)) / 2) * 2;
+  const step = 730 / buckets.length;
+  [0, 0.5, 1].forEach((share) => {
+    const y = 220 - share * 190;
+    svg.append(svgNode("line", { x1: 50, y1: y, x2: 780, y2: y, class: "usage-gridline" }));
+    svg.append(svgNode("text", { x: 42, y: y + 4, "text-anchor": "end" }, formatNumber(maximum * share)));
+  });
+  buckets.forEach((bucket, index) => {
+    const height = bucket.count / maximum * 190;
+    const bar = svgNode("rect", {
+      x: 50 + index * step + step * 0.1, y: 220 - height,
+      width: step * 0.8, height, class: "usage-bar",
+    });
+    bar.append(svgNode("title", {}, `${bucket.day}: ${formatNumber(bucket.count)} invocations`));
+    svg.append(bar);
+  });
+  [...new Set([0, Math.floor((buckets.length - 1) / 2), buckets.length - 1])].forEach((index) => {
+    svg.append(svgNode("text", {
+      x: 50 + (index + 0.5) * step, y: 248,
+      "text-anchor": index === 0 ? "start" : index === buckets.length - 1 ? "end" : "middle",
+    }, buckets[index].day));
+  });
+  chart.append(svg);
+  const data = node("details", "usage-data");
+  data.append(node("summary", "", "View counts"));
+  data.append(statTable([
+    { label: `${checkLabel(interval)} starting (UTC)`, value: (row) => row.day },
+    { label: "Invocations", numeric: true, value: (row) => row.count },
+  ], buckets));
+  chart.append(data);
+  return chart;
+}
+
 // Every card on the board: its title, where its numbers come from, the scopes a
 // reader may change on it, and how it draws what came back. A card that would
 // hold a line or two shares one with its neighbours, so the board is a few full
@@ -1876,22 +1964,19 @@ const STAT_CARDS = [
     source: "history",
     scopes: ["time", "size"],
     top: 10,
+    wide: true,
     count: (payload) => payload.count || 0,
     clearable: true,
     render: (payload) => historyBody(payload),
   },
   {
-    id: "days",
-    title: "Searches by day",
+    id: "usage",
+    title: "Search usage",
     source: "stats",
     scopes: ["time"],
-    count: (payload) => (payload.searches?.searches_by_day || []).length,
-    render: (payload) =>
-      statTable(
-        [{ label: "Day", value: (row) => row.day }, { label: "Searches", numeric: true, value: (row) => row.count }],
-        [...(payload.searches?.searches_by_day || [])].reverse(),
-        { bar: "count" },
-      ),
+    timeScopes: STAT_TIME_SCOPES.filter((scope) => scope.days !== 1),
+    wide: true,
+    render: renderUsage,
   },
   {
     id: "largest",
@@ -1899,6 +1984,7 @@ const STAT_CARDS = [
     source: "stats",
     scopes: ["size", "by"],
     top: 5,
+    wide: true,
     count: (payload) => (payload.corpus?.largest_sources || []).length,
     render: (payload) => renderLargest(payload.corpus),
   },
@@ -1908,6 +1994,7 @@ const STAT_CARDS = [
     source: "stats",
     scopes: ["size"],
     top: 10,
+    wide: true,
     render: (payload, scope) => renderPeople(payload.corpus, scope.top),
   },
   {
@@ -1931,8 +2018,7 @@ const STAT_CARDS = [
 
 const NO_GENERATION = "This project has no generation yet.";
 
-// What a corpus is: how big, what is missing from it, and how it divides by
-// format, language, and decade. The lists are the card's size at most.
+// Corpus size, missing metadata, and publication decades.
 function renderCorpus(corpus, top) {
   if (!corpus) return node("p", "form-note", NO_GENERATION);
   const spread = corpus.passages_per_source || {};
@@ -1965,8 +2051,6 @@ function renderCorpus(corpus, top) {
         "fact-list",
       ),
     ),
-    statGroup("Formats", countedTable("Format", (corpus.formats || []).slice(0, top))),
-    statGroup("Languages", countedTable("Language", (corpus.languages || []).slice(0, top))),
     statGroup("Decades", countedTable("Decade", (corpus.decades || []).slice(0, top))),
   );
   return groups;
@@ -1987,6 +2071,10 @@ function renderPeople(corpus, top) {
 // rather than none counted, and the bar follows the ranking.
 function renderLargest(corpus) {
   if (!corpus) return node("p", "form-note", NO_GENERATION);
+  if (!STAT_LARGEST_BY.some((option) => option.value === corpus.largest_by)) {
+    return node("p", "form-note",
+      "The running app has an older statistics API. Restart it from its starting terminal to load text-size rankings. Refreshing the browser alone does not reload the app.");
+  }
   const bySize = corpus.largest_by === "size";
   return statTable(
     [
@@ -2071,7 +2159,7 @@ function statPanel(card) {
   count.hidden = true;
   head.append(count);
   const controls = node("div", "stat-scope");
-  if (card.scopes.includes("time")) controls.append(scopeSelect(card, "days", STAT_TIME_SCOPES));
+  if (card.scopes.includes("time")) controls.append(scopeSelect(card, "days", card.timeScopes || STAT_TIME_SCOPES));
   if (card.scopes.includes("size")) controls.append(scopeSelect(card, "top", STAT_SIZES));
   if (card.scopes.includes("by")) controls.append(scopeSelect(card, "by", STAT_LARGEST_BY));
   if (card.clearable && hasCapability("stats")) {
@@ -2087,16 +2175,25 @@ function statPanel(card) {
 async function refreshCard(card) {
   const parts = state.statPanels.get(card.id);
   if (!parts) return;
+  const request = (parts.request || 0) + 1;
+  parts.request = request;
+  parts.panel.setAttribute("aria-busy", "true");
+  parts.count.hidden = true;
+  parts.body.replaceChildren(node("p", "form-note", "Loading…"));
   try {
     const scope = cardScope(card);
     const payload = await statRequest(card.source, scope);
+    if (parts.request !== request) return;
     parts.body.replaceChildren(card.render(payload, scope));
     parts.count.hidden = !card.count;
     if (card.count) parts.count.textContent = formatNumber(card.count(payload));
     const message = byId("stats-message");
     message.hidden = true;
   } catch (error) {
+    if (parts.request !== request) return;
     parts.body.replaceChildren(node("p", "form-note", error.message));
+  } finally {
+    if (parts.request === request) parts.panel.setAttribute("aria-busy", "false");
   }
 }
 
