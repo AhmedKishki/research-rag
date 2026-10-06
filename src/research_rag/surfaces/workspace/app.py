@@ -657,6 +657,13 @@ async def _security_headers(request: Request, call_next: Any) -> Response:
     response.headers["X-Frame-Options"] = "DENY"
     if request.url.path.startswith("/api/"):
         response.headers["Cache-Control"] = "no-store"
+    else:
+        # The page and its assets are revalidated on every load rather than
+        # reused from a browser cache. A stale script against a newer page throws
+        # before it draws, and this app is updated in place, so the two must never
+        # come from different revisions. FileResponse answers the revalidation
+        # with a 304 while the bytes are unchanged.
+        response.headers["Cache-Control"] = "no-cache"
     return response
 
 

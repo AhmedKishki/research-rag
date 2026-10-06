@@ -825,13 +825,9 @@ def test_the_sidebar_navigates_without_a_tab_strip() -> None:
     # page adds no request and no dependency.
     assert page.count('<svg class="nav-item-icon"') == 7
     assert "http://" not in page
-    # The column is keyboard operable with a visible focus ring, and the project
-    # is repeated as a quiet footer beneath the views.
+    # The column is keyboard operable with a visible focus ring.
     assert ":focus-visible {" in client_css()
     assert "outline: 2px solid var(--accent);" in client_css()
-    assert 'class="sidebar-footer"' in page
-    assert 'id="sidebar-project-name" class="sidebar-footer-name"' in page
-    assert 'byId("sidebar-project-name").textContent = projectName' in script
 
 
 def test_the_sidebar_becomes_a_drawer_below_the_large_breakpoint() -> None:
@@ -907,6 +903,97 @@ def test_the_workspace_declares_a_spacing_and_type_scale() -> None:
     assert "white-space: nowrap;" in css  # only on the connection state and the select
     assert ".nav-item {" in css
     assert "min-height: var(--control-height);" in css
+
+
+def test_search_result_text_is_justified() -> None:
+    """A result's passage is set as a justified block, and nothing else is.
+
+    The context dialog and the memory rounds keep their own alignment, so the
+    change is scoped to the search result rather than to every passage.
+    """
+
+    css = client_css()
+
+    rule = css.split(".passage-text {", 1)[1].split("}", 1)[0]
+    assert "text-align: justify;" in rule
+
+
+def test_the_content_is_centred_at_a_readable_width() -> None:
+    """The content block is capped and centred rather than pinned to the left.
+
+    A wide window used to leave the column flush against the sidebar with all
+    the spare room to its right, so the block is capped at the page width and
+    centred in the space that remains.
+    """
+
+    css = client_css()
+
+    workspace = css.split(".workspace {", 1)[1].split("}", 1)[0]
+    assert "width: min(var(--layout-max), 100%);" in workspace
+    assert "flex: 0 1 auto;" in workspace
+    assert "margin-inline: auto;" in workspace
+
+
+def test_the_app_and_the_project_are_named_once_in_the_header() -> None:
+    """The header names the app and the project, and nothing repeats them.
+
+    The project used to be named again in a sidebar footer, which gave a reader
+    two places to read one name.
+    """
+
+    with _host(ClientControlAdapter()) as client:
+        page = client.get("/").text
+        script = client.get("/assets/app.js").text
+
+    assert 'id="application-name" class="brand-name"' in page
+    assert page.count('id="application-name"') == 1
+    assert 'id="project-name" class="project-name"' in page
+    assert page.count('id="project-name"') == 1
+    assert "sidebar-project-name" not in page
+    assert "sidebar-project-name" not in script
+    assert "sidebar-footer" not in page
+    assert "sidebar-footer" not in client_css()
+
+
+def test_the_cleaned_passage_notice_is_shown_once_per_results_view() -> None:
+    """The label belongs to the results view, not to every passage in it.
+
+    Repeating it on each card added a line to every result to say one thing
+    about all of them.
+    """
+
+    with _panel_host() as client:
+        page = client.get("/").text
+        script = client.get("/assets/app.js").text
+
+    assert 'id="results-notice" class="semantic-text-label" hidden' in page
+    assert page.count('class="semantic-text-label"') == 1
+    # The label is written once, and no card carries its own copy.
+    assert 'node("div", "semantic-text-label"' not in script
+    assert 'const notice = byId("results-notice");' in script
+    assert "notice.textContent" in script
+    assert "result_text_label" in script
+    assert "notice.hidden = !count;" in script
+    # A cleared view takes the notice with the summary and the results.
+    assert 'byId("results-notice").hidden = true;' in script
+
+
+def test_the_page_and_its_assets_are_revalidated_against_a_stale_cache() -> None:
+    """The page and its assets share one revision, so neither may be reused stale.
+
+    An updated page served against a cached script throws before it draws, so
+    the page and every asset are revalidated on each load. API reads are not
+    stored at all, so a project's records are never read from a cache.
+    """
+
+    with _host(ClientControlAdapter()) as client:
+        page = client.get("/")
+        script = client.get("/assets/app.js")
+        api = client.get("/api/ui")
+
+    assert page.headers["cache-control"] == "no-cache"
+    assert script.headers["cache-control"] == "no-cache"
+    assert api.headers["cache-control"] == "no-store"
 
 
 def test_the_workspace_reads_in_light_and_dark() -> None:

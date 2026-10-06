@@ -509,28 +509,6 @@ code {
   text-transform: uppercase;
 }
 
-.sidebar-footer {
-  display: grid;
-  gap: var(--space-3xs);
-  margin-top: auto;
-  padding-top: var(--space-sm);
-  border-top: 1px solid var(--border-subtle);
-}
-
-.sidebar-footer-label {
-  color: var(--text-tertiary);
-  font-size: var(--text-xs);
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
-}
-
-.sidebar-footer-name {
-  color: var(--text-secondary);
-  font-size: var(--text-sm);
-  font-weight: 600;
-  overflow-wrap: anywhere;
-}
-
 .nav-scrim {
   display: none;
 }
@@ -540,7 +518,11 @@ code {
 .workspace {
   width: min(var(--layout-max), 100%);
   min-width: 0;
-  flex: 1 1 auto;
+  /* The content block is capped at a page width and centred in the space beside
+     the column, so a wide window leaves a margin rather than all of it to the
+     right. It does not grow past the cap. */
+  flex: 0 1 auto;
+  margin-inline: auto;
   padding: var(--space-lg) var(--space-lg) var(--space-xl);
 }
 
@@ -880,7 +862,7 @@ h3 {
 }
 
 .semantic-text-label {
-  margin-top: var(--space-sm);
+  margin: 0 0 var(--space-2xs);
   color: var(--text-secondary);
   font-size: var(--text-xs);
   font-weight: 600;
@@ -925,6 +907,13 @@ h3 {
   line-height: var(--leading-prose);
   white-space: pre-wrap;
   overflow-wrap: anywhere;
+}
+
+/* A result's passage is read as a block of argument rather than scanned, so it
+   is justified. The context dialog and the memory rounds keep their own
+   alignment: only the search result is set this way. */
+.passage-text {
+  text-align: justify;
 }
 
 .tag-row,
