@@ -207,6 +207,10 @@ async def _sources(app: App, request: Request) -> JSONResponse:
     return _json(await app.service.list_sources())
 
 
+async def _stats(app: App, _request: Request) -> JSONResponse:
+    return _json(await app.service.search_stats())
+
+
 async def _passage(app: App, request: Request) -> JSONResponse:
     chunk_id = request.path_params["chunk_id"]
     # The engine reads this bound, and the command line documents the same range,
@@ -411,6 +415,7 @@ def control_routes(app: App) -> list[Route]:
         route("/ingest", _ingest, ["POST"]),
         route("/search", _search, ["POST"]),
         route("/sources", _sources, ["GET"]),
+        route("/stats", _stats, ["GET"]),
         route("/passages/{chunk_id}", _passage, ["GET"]),
         route("/source-inclusion", _source_inclusion, ["POST"]),
         route("/chunk-inclusion", _chunk_inclusion, ["POST"]),
@@ -481,6 +486,9 @@ class Control:
 
     def search(self, query: str, **arguments: Any) -> dict[str, Any]:
         return self._call("POST", "/search", json={"query": query, **arguments})
+
+    def stats(self) -> dict[str, Any]:
+        return self._call("GET", "/stats")
 
     def sources(self) -> dict[str, Any]:
         return self._call("GET", "/sources")

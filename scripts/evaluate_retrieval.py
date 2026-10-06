@@ -1979,7 +1979,9 @@ async def evaluate(args: argparse.Namespace) -> dict[str, Any]:
         timeout=1800,
         init_timeout=1800,
     ) as vanilla_client:
-        service = ResearchService(config, VanillaUltraRAG(vanilla_client, config))
+        service = ResearchService(
+            config, VanillaUltraRAG(vanilla_client, config), record_searches=False
+        )
         status = await service.status()
         generation_root = status.get("generation_root")
         if not generation_root:

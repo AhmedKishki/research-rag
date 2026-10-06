@@ -20,6 +20,7 @@ my-research-project/
         ├── research-rag-ui.port          port a running app serves, while it runs
         ├── research-rag-ui.pid           its process, while it runs
         ├── research-rag-ui.tty           the terminal it is attached to; absent when it has none
+        ├── search-stats.sqlite3          what searches returned at their first five ranks; no query text
         ├── logs/
         ├── failures/                     small failed-build records
         ├── staging/<build-id>/           resumable incomplete build plus checkpoint
@@ -88,11 +89,13 @@ my-research-project/
 ## Derived state
 
 - Everything under `.research-rag/runtime/` is rebuilt from `sources/` plus the portable state. Deleting it costs one ingestion.
+  - `search-stats.sqlite3` is the exception: it is this machine's search counts and no ingestion rebuilds it. Deleting it resets the counts and nothing else.
 - `current.json` names the one generation search uses.
 - Earlier successful generations stay on disk, are not searched, and are not pruned automatically.
 - `research-rag status` reports `retained_generation_count` and `retained_generation_bytes`.
 - `research-rag generations` lists every generation with creation time, chunk and document counts, file count, and size. A generation whose manifest is missing or unreadable shows `manifest_error`.
 - Both commands that move a generation take the project lock and refuse the generation search reads.
+- Reads take no project lock. A removal waits for a read of the generation it removes, and refuses after the lock wait.
 - `research-rag generations --use GENERATION_ID` points the project at a retained generation.
   - It validates the artifacts and both indexes as a build's activation does.
   - It rewrites `current.json` only after validation succeeds, so a rollback onto a damaged generation fails instead of breaking every read surface.

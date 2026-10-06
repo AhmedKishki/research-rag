@@ -76,6 +76,7 @@ from ..runtime.app import (
     App,
     _claim_loopback_port,
     _own_tty,
+    has_terminal,
     recorded_pid,
     running_url,
 )
@@ -161,6 +162,13 @@ HELP_GROUPS: tuple[tuple[str, tuple[tuple[str, str], ...]], ...] = (
             (
                 "generations",
                 "Every generation on disk with its size, and the one search reads.",
+            ),
+            (
+                "stats",
+                (
+                    "Which sources and passages searches return at rank one and in "
+                    "the top five, and what the corpus holds."
+                ),
             ),
             (
                 "remove-generation",
@@ -836,6 +844,18 @@ def _parser() -> argparse.ArgumentParser:
             "indexed and why, what each one's reviewed metadata says, and what has "
             "been decided about it. This is the inventory the workspace's Sources "
             "view reads, and it is not on the agent surface."
+        ),
+    )
+
+    add(
+        "stats",
+        description=(
+            "Report how often each source and passage reached rank one and the top "
+            "five of a search on this machine, how many searches returned nothing, "
+            "how long they took, which searchable sources no search has reached, "
+            "and the corpus composition and last build the selected generation "
+            "records. Counts keep no query text; deleting the counts file named in "
+            "the answer resets them."
         ),
     )
 
@@ -1589,6 +1609,9 @@ class Local:
     async def sources(self) -> dict[str, Any]:
         return await self._require().list_sources()
 
+    async def stats(self) -> dict[str, Any]:
+        return await self._require().search_stats()
+
     async def passage(self, chunk_id: str, *, context_chunks: int) -> dict[str, Any]:
         return await self._require().get_passage(
             chunk_id, context_chunks=context_chunks
@@ -1685,6 +1708,9 @@ class Remote:
     async def sources(self) -> dict[str, Any]:
         return self.control.sources()
 
+    async def stats(self) -> dict[str, Any]:
+        return self.control.stats()
+
     async def passage(self, chunk_id: str, *, context_chunks: int) -> dict[str, Any]:
         return self.control.passage(chunk_id, context_chunks=context_chunks)
 
@@ -1726,15 +1752,15 @@ class Remote:
         )
 
     async def generations(self) -> dict[str, Any]:
-        return await self.control.generations()
+        return self.control.generations()
 
     async def use_generation(self, generation_id: str) -> dict[str, Any]:
-        return await self.control.use_generation(generation_id)
+        return self.control.use_generation(generation_id)
 
     async def remove_generation(
         self, generation_id: str, *, confirm: str
     ) -> dict[str, Any]:
-        return await self.control.remove_generation(generation_id, confirm=confirm)
+        return self.control.remove_generation(generation_id, confirm=confirm)
 
 
 async def _operate(
@@ -1808,6 +1834,8 @@ async def _operate(
             source_id=args.source_id,
             metadata=_metadata_body(args),
         )
+    if command == "stats":
+        return await operations.stats()
     if command == "generations":
         if args.use_generation:
             return await operations.use_generation(args.use_generation)
@@ -1838,6 +1866,40 @@ class CommandResult:
     text: str | None = None
 
 
+# How often a serving app checks that the terminal it was started from is still
+# its controlling terminal.
+_TERMINAL_CHECK_SECONDS = 2.0
+
+
+def _terminal_attached() -> bool:
+    """Whether this process has a controlling terminal.
+
+    The live process answers first, as `/proc/self/stat` reports it. Where there
+    is no procfs, standard input standing on a terminal is the next best answer.
+    """
+
+    answer = has_terminal(os.getpid())
+    if answer is not None:
+        return answer
+    return _own_tty() is not None
+
+
+async def _terminal_lost() -> None:
+    """Return when the controlling terminal this process started with is gone.
+
+    A closed window sends SIGHUP, which the closing below already handles. A
+    process the shell disowned, or one whose session leader exited, gets no
+    signal: it only loses its terminal, so the loss is checked for directly.
+    """
+
+    # Polled: the kernel announces a lost terminal to a process outside the
+    # foreground group with nothing an event loop can wait on.
+    while True:
+        if not _terminal_attached():
+            return
+        await asyncio.sleep(_TERMINAL_CHECK_SECONDS)
+
+
 async def _serve_attached(
     config: ResearchConfig,
     *,
@@ -1855,6 +1917,15 @@ async def _serve_attached(
     moved it.
     """
 
+    # A process with no terminal would serve until `stop`, which is the detached
+    # state this app does not serve. It is refused before anything is started.
+    if not _terminal_attached():
+        raise ResearchError(
+            f"This process has no terminal, so {config.project_name} was not "
+            "served. The app is served from a terminal and stops when that "
+            f"terminal closes: run '{CLI_NAME} start' in one. Serving detached is "
+            "not available."
+        )
     # A port named by the caller is the one they asked for, and it is tried once:
     # its refusal is the app's own sentence, which names the alternative. A port
     # chosen here is this app's to move, so it walks forward past one that is taken.
@@ -1892,16 +1963,22 @@ async def _wait_until_stopped(app: App, closing: _Closing) -> None:
 
     serving = asyncio.ensure_future(app.wait())
     asked = asyncio.ensure_future(closing.asked.wait())
+    # Only a terminal that was there can be lost; a run with none was refused.
+    watched = [asyncio.ensure_future(_terminal_lost())] if _terminal_attached() else []
     try:
-        await asyncio.wait((serving, asked), return_when=asyncio.FIRST_COMPLETED)
+        await asyncio.wait(
+            (serving, asked, *watched), return_when=asyncio.FIRST_COMPLETED
+        )
     except (KeyboardInterrupt, asyncio.CancelledError):
         pass
     finally:
-        # Only the wait on the closing is cancelled here. The serving task is left
-        # for `App.stop`, which asks uvicorn to shut down and then waits for it;
-        # cancelling this waiter would put a CancelledError inside that task and
-        # turn an orderly stop into a traceback.
+        # Only the waits on the closing and the terminal are cancelled here. The
+        # serving task is left for `App.stop`, which asks uvicorn to shut down and
+        # then waits for it; cancelling this waiter would put a CancelledError
+        # inside that task and turn an orderly stop into a traceback.
         asked.cancel()
+        for waiter in watched:
+            waiter.cancel()
 
 
 def _a_free_port() -> int:

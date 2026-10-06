@@ -91,6 +91,9 @@ RESEARCH_UI_PROFILE = UIProfile(
         # it written for a browser.
         agent_entry=True,
         updates=True,
+        # Every search counts its first five ranks on this machine, without the
+        # query, so the workspace can show which sources and passages answer.
+        stats=True,
     ),
 )
 
@@ -138,7 +141,12 @@ _OPERATION_ARGUMENTS: Mapping[str, frozenset[str]] = {
     "list_projects": frozenset(),
     "agent_entry": frozenset(),
     "check_updates": frozenset(),
+    "search_stats": frozenset(),
 }
+
+
+# Operations that take no argument and share the service method's name.
+_PLAIN_READS = frozenset({"list_sources", "list_chunk_exclusions", "search_stats"})
 
 
 def _project_listing(config: ResearchConfig) -> dict[str, Any]:
@@ -346,6 +354,9 @@ class ResearchUIAdapter:
     ) -> Mapping[str, Any]:
         if operation == "check_updates":
             return await self._check_updates()
+        # The reads that take no argument, answered as the service words them.
+        if operation in _PLAIN_READS:
+            return await getattr(self.service, operation)()
         if operation == "status":
             payload = dict(await self.service.status())
             if self.app_state is not None:
@@ -355,8 +366,6 @@ class ResearchUIAdapter:
                 # differently.
                 payload.update(self.app_state())
             return payload
-        if operation == "list_sources":
-            return await self.service.list_sources()
         if operation == "ingest":
             force_recompute = arguments.get("force_recompute", False)
             if not isinstance(force_recompute, bool):
@@ -416,8 +425,6 @@ class ResearchUIAdapter:
             )
         if operation == "set_chunk_inclusion":
             return await self._set_chunk_inclusion(arguments)
-        if operation == "list_chunk_exclusions":
-            return await self.service.list_chunk_exclusions()
         if operation == "set_source_metadata":
             metadata = arguments.get("metadata")
             if not isinstance(metadata, Mapping):

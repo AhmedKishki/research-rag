@@ -45,9 +45,10 @@ log_level = "warn"
 tool_detail = "lean"
 # ONNX Runtime threads for the embedding model; 0 leaves the choice to the runtime.
 embedding_threads = 0
-# CPU niceness for this process and its children. 0 leaves priority unchanged;
-# 10 or higher keeps a desktop responsive while a build saturates every core.
-nice = 0
+# CPU niceness for this process and its children. 10 keeps a desktop responsive
+# while a build saturates every core and costs a build no throughput on an idle
+# machine; 0 leaves priority unchanged.
+nice = 10
 # Shared FastEmbed model cache; empty means this user's cache.
 model_cache_root = ""
 

@@ -556,7 +556,9 @@ def test_an_unserved_search_argument_never_reaches_the_service(
         "list_projects",
         "agent_entry",
         "check_updates",
+        "search_stats",
     }
+    assert _OPERATION_ARGUMENTS["search_stats"] == frozenset()
     assert _OPERATION_ARGUMENTS["list_projects"] == frozenset()
     assert _OPERATION_ARGUMENTS["agent_entry"] == frozenset()
     assert _OPERATION_ARGUMENTS["check_updates"] == frozenset()

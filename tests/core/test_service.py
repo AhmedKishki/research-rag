@@ -5206,6 +5206,89 @@ def test_a_call_behind_this_apps_own_build_is_refused_rather_than_held(
     asyncio.run(exercise())
 
 
+def test_reads_answer_while_a_build_holds_the_project(
+    project: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A build no longer takes status, the sources, search, and passages with it.
+
+    Activation swaps `current.json` atomically and leaves the generation it
+    replaced intact, so a read resolves the selected generation without the
+    project lock. Only the gateway's one BM25 retriever is still taken in turn,
+    because a build points it at the index it is writing.
+    """
+
+    async def exercise() -> None:
+        write_pdf(
+            project / "sources" / "article.pdf",
+            ["Cobalt evidence about labour and artificial intelligence."],
+            title="Research Article",
+        )
+        config = resolve_config(project, vanilla_executable=sys.executable)
+        monkeypatch.setattr(service_module, "PROJECT_LOCK_TIMEOUT_SECONDS", 0.2)
+        service = ResearchService(  # type: ignore[arg-type]
+            config, FakeUltraRAG(), dense=FakeDenseBackend()
+        )
+        await service.ingest(chunk_size=100, chunk_overlap=10)
+
+        holder = AsyncFileLock(config.state_root / "project.lock", timeout=1)
+        async with holder:
+            await service._lock.acquire()
+            try:
+                started = time.perf_counter()
+                status = await service.status()
+                sources = await service.list_sources()
+                found = await service.search("cobalt labour", top_k=1)
+                passage = await service.get_passage(found["hits"][0]["chunk_id"])
+                exclusions = await service.list_chunk_exclusions()
+                elapsed = time.perf_counter() - started
+                # The BM25 phase of a build holds the retriever, and a search
+                # behind it is told so rather than held.
+                await service._retriever_lock.acquire()
+                try:
+                    with pytest.raises(
+                        ResearchError, match="writing the lexical index"
+                    ):
+                        await service.search("cobalt", top_k=1)
+                finally:
+                    service._retriever_lock.release()
+            finally:
+                service._lock.release()
+
+        assert status["ready"] is True
+        assert sources["source_count"] == 1
+        assert found["result_count"] == 1
+        assert passage["requested_chunk_id"] == found["hits"][0]["chunk_id"]
+        assert exclusions["exclusions"] == []
+        assert elapsed < 5
+        assert service._generation_readers == {}
+
+    asyncio.run(exercise())
+
+
+def test_a_removal_waits_for_a_read_of_its_generation(
+    project: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A read holds the generation it resolved, so it is not deleted under it."""
+
+    async def exercise() -> None:
+        config = resolve_config(project, vanilla_executable=sys.executable)
+        monkeypatch.setattr(service_module, "PROJECT_LOCK_TIMEOUT_SECONDS", 0.2)
+        service = ResearchService(  # type: ignore[arg-type]
+            config, FakeUltraRAG(), dense=FakeDenseBackend()
+        )
+        async with service._read() as lease:
+            lease.hold("g-old")
+            with pytest.raises(ResearchError, match="still using generation g-old"):
+                await service._wait_for_readers("g-old")
+            await service._wait_for_readers("g-other")
+        await service._wait_for_readers("g-old")
+        assert service._generation_readers == {}
+
+    asyncio.run(exercise())
+
+
 def _aliased_dense_backend() -> FakeDenseBackend:
     """A dense backend whose vectors follow the words, so tests can aim them.
 

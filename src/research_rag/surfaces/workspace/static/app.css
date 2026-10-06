@@ -684,10 +684,17 @@ h3 {
   font-size: var(--text-sm);
 }
 
-.compact-field select {
+.compact-field select,
+.compact-field input[type="number"] {
   width: auto;
   min-height: var(--control-height);
   padding: var(--space-2xs) var(--space-xs);
+}
+
+/* Room for a two-digit count and the browser's stepper, and no wider. */
+.compact-field input[type="number"] {
+  width: 5.5rem;
+  font-variant-numeric: tabular-nums;
 }
 
 .check-control {
@@ -2153,6 +2160,89 @@ textarea:disabled {
   margin-bottom: var(--space-sm);
   border-top: 1px solid var(--border-subtle);
   content: "";
+}
+
+/* ----------------------------------------------------------------- stats -- */
+
+/* Counts are read as text; the bar beside each gives its scale against the
+   largest in the same table. One series, so one hue and no legend. */
+.stats-table .stat-row-label {
+  min-width: 14rem;
+  font-weight: 400;
+  white-space: normal;
+}
+
+.stats-table .stat-row-label .locator-badge,
+.stats-table .stat-row-label .state-badge {
+  margin-left: var(--space-2xs);
+}
+
+.stat-title {
+  overflow-wrap: anywhere;
+}
+
+.stats-table .bar-cell {
+  width: 30%;
+  min-width: 6rem;
+}
+
+/* In a column of the corpus and build groups the label wraps instead, so the
+   bar stays inside the column rather than scrolling out of it. */
+.stats-group .stats-table .stat-row-label {
+  min-width: 0;
+}
+
+.stats-group .stats-table .bar-cell {
+  width: 25%;
+  min-width: 3rem;
+}
+
+.stat-bar {
+  display: block;
+  height: 0.5rem;
+  border-radius: 999px;
+  background: var(--bg-surface);
+}
+
+.stat-bar-fill {
+  display: block;
+  height: 100%;
+  min-width: 2px;
+  border-radius: 999px;
+  background: var(--accent);
+}
+
+.stats-groups {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(22rem, 100%), 1fr));
+  gap: var(--space-md) var(--space-lg);
+  margin-top: var(--space-2xs);
+}
+
+.stats-group {
+  display: grid;
+  align-content: start;
+  gap: var(--space-2xs);
+  min-width: 0;
+}
+
+.stats-group-title {
+  color: var(--text-secondary);
+  font-size: var(--text-xs);
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.stats-list {
+  margin: var(--space-2xs) 0 0;
+  padding-left: var(--space-md);
+  columns: 2 20rem;
+  font-size: var(--text-sm);
+  line-height: var(--leading-normal);
+}
+
+#stats-view .status-grid {
+  margin-top: var(--space-sm);
 }
 
 /* ----------------------------------------------------------------- folds -- */

@@ -472,7 +472,7 @@ class StatusWorkflow:
         return generation_inventory(self.config, current_generation_id)
 
     async def status(self) -> dict[str, Any]:
-        async with self._operation():
+        async with self._read():
             payload = await asyncio.to_thread(self._status)
             payload.update(
                 await asyncio.to_thread(

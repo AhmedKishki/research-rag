@@ -10,6 +10,9 @@ copies of a check are two places for it to be wrong.
 
 from __future__ import annotations
 
+import threading
+from collections.abc import Iterator
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
 
@@ -50,10 +53,26 @@ class LocalQdrantDenseBackend:
         # The index and every manifest number are written against the runtime's
         # model facts, so an injected runtime is the only statement of them.
         self.embedding_facts: EmbeddingModel = self.runtime.embedding_facts
+        self._path_locks: dict[Path, threading.Lock] = {}
+        self._path_locks_guard = threading.Lock()
 
-    @staticmethod
-    def _client(index_path: Path) -> QdrantClient:
-        return QdrantClient(path=str(index_path))
+    @contextmanager
+    def _opened(self, index_path: Path) -> Iterator[QdrantClient]:
+        """One local-mode client on a path at a time, closed after its use.
+
+        Local mode locks its storage directory per client, so a second client on
+        the same path fails rather than waits. Reads run beside a build and
+        beside one another, so the opens of one path are taken in turn.
+        """
+
+        with self._path_locks_guard:
+            lock = self._path_locks.setdefault(index_path, threading.Lock())
+        with lock:
+            client = QdrantClient(path=str(index_path))
+            try:
+                yield client
+            finally:
+                client.close()
 
     def embedding_token_counts(self, texts: list[str]) -> list[int]:
         return self.runtime.embedding_token_counts(texts)
@@ -106,8 +125,7 @@ class LocalQdrantDenseBackend:
         if index_path.exists():
             raise ValueError(f"Dense index path already exists: {index_path}")
         index_path.parent.mkdir(parents=True, exist_ok=True)
-        client = self._client(index_path)
-        try:
+        with self._opened(index_path) as client:
             client.create_collection(
                 collection_name=COLLECTION_NAME,
                 vectors_config=models.VectorParams(
@@ -115,8 +133,6 @@ class LocalQdrantDenseBackend:
                     distance=models.Distance.COSINE,
                 ),
             )
-        finally:
-            client.close()
 
     def upload_index_batch(
         self,
@@ -128,8 +144,7 @@ class LocalQdrantDenseBackend:
     ) -> None:
         if vectors.shape != (len(chunks), self.embedding_facts.dimension):
             raise ValueError("Dense index batch has an invalid vector shape")
-        client = self._client(index_path)
-        try:
+        with self._opened(index_path) as client:
             points = (
                 models.PointStruct(
                     id=offset + index,
@@ -150,8 +165,6 @@ class LocalQdrantDenseBackend:
                 batch_size=64,
                 wait=True,
             )
-        finally:
-            client.close()
 
     def finalize_index(
         self,
@@ -186,8 +199,7 @@ class LocalQdrantDenseBackend:
     ) -> None:
         if not index_path.is_dir() or index_path.is_symlink():
             raise ValueError(f"Dense index is missing or unsafe: {index_path}")
-        client = self._client(index_path)
-        try:
+        with self._opened(index_path) as client:
             if not client.collection_exists(COLLECTION_NAME):
                 raise RuntimeError(f"Qdrant collection is missing: {COLLECTION_NAME}")
             collection = client.get_collection(COLLECTION_NAME)
@@ -204,8 +216,6 @@ class LocalQdrantDenseBackend:
                     "Qdrant verification failed: "
                     f"expected dimension {dimension}, found {actual_dimension}"
                 )
-        finally:
-            client.close()
 
     @staticmethod
     def _filter(
@@ -250,8 +260,7 @@ class LocalQdrantDenseBackend:
         if len(query_vectors) != 1:
             raise RuntimeError("FastEmbed did not return exactly one query vector")
 
-        client = self._client(index_path)
-        try:
+        with self._opened(index_path) as client:
             if not client.collection_exists(COLLECTION_NAME):
                 raise RuntimeError(f"Qdrant collection is missing: {COLLECTION_NAME}")
             response = client.query_points(
@@ -265,8 +274,6 @@ class LocalQdrantDenseBackend:
                 with_payload=["chunk_id"],
                 with_vectors=False,
             )
-        finally:
-            client.close()
 
         hits: list[DenseSearchHit] = []
         for point in response.points:

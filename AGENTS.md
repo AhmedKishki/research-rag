@@ -144,7 +144,8 @@
 - Signal only proven project-owned processes. Require the app entrypoint and a matching `--project-root` in stop sweeps.
   - Never signal the sweep itself.
 - Serve from the starting terminal. Report a detached serving process instead of adopting it.
-  - Closing the starting terminal ends its app. Only `stop` ends a detached app.
+  - Refuse to serve from a process with no controlling terminal.
+  - Closing the starting terminal ends its app, by SIGHUP or by the lost terminal. Only `stop` ends a detached app.
   - Read terminal ownership from `/proc/<pid>/stat`, not only `research-rag-ui.tty`.
   - `start`, bare invocation, `projects`, and `stop` report the condition with a `stop` remedy. They never launch a second app.
   - `tests/runtime/test_attached_workspace.py` covers this. Detached serving is deferred in `TODO.md`.
@@ -163,7 +164,10 @@
 - Resolve settings and serve before opening the gateway. Local reads must work without a managed runtime.
   - Lightweight commands must not require the retrieval stack.
 - Move blocking extraction and filesystem scans off the event loop.
-- Serialize project operations with both the in-process lock and the cross-process `project.lock`.
+- Serialize project writes with both the in-process lock and the cross-process `project.lock`. Bound both waits and refuse after them.
+  - Reads take neither lock. A read holds a lease on the generation it resolved, and removing that generation waits for it.
+  - The gateway holds one BM25 retriever. A build and a search take it in turn.
+- Search counts store ranks, ids, times, and result counts, never query text. A measurement does not count.
 
 ## Architecture
 

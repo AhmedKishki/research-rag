@@ -1004,3 +1004,44 @@ def test_remove_generation_refuses_without_a_confirmation() -> None:
 
     with pytest.raises(SystemExit):
         _parser().parse_args(["remove-generation", "20260930T191235Z-45608dc5"])
+
+
+def test_the_running_app_answers_generations_and_stats_without_awaiting_a_dict() -> (
+    None
+):
+    """`Control` is synchronous, so awaiting its answer raised a TypeError.
+
+    `generations`, `generations --use`, and `remove-generation` failed whenever
+    an app was serving the project, because the remote half awaited a dict.
+    """
+
+    class Answering:
+        def generations(self) -> dict[str, Any]:
+            return {"generations": []}
+
+        def use_generation(self, generation_id: str) -> dict[str, Any]:
+            return {"generation_id": generation_id}
+
+        def remove_generation(
+            self, generation_id: str, *, confirm: str
+        ) -> dict[str, Any]:
+            return {"generation_id": generation_id, "confirm": confirm}
+
+        def stats(self) -> dict[str, Any]:
+            return {"searches": {"search_count": 2}}
+
+    async def exercise() -> list[dict[str, Any]]:
+        remote = cli_module.Remote(Answering())  # type: ignore[arg-type]
+        return [
+            await remote.generations(),
+            await remote.use_generation("g1"),
+            await remote.remove_generation("g1", confirm="g1"),
+            await remote.stats(),
+        ]
+
+    assert asyncio.run(exercise()) == [
+        {"generations": []},
+        {"generation_id": "g1"},
+        {"generation_id": "g1", "confirm": "g1"},
+        {"searches": {"search_count": 2}},
+    ]

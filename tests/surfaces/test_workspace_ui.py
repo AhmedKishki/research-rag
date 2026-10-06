@@ -766,6 +766,7 @@ def test_the_tab_bar_is_the_whole_navigation() -> None:
         ("search", "documents"),
         ("sources", "sources"),
         ("status", "documents"),
+        ("stats", "stats"),
         ("config", "settings"),
         ("mcp", "clients"),
         ("memory", "memory"),
@@ -800,7 +801,7 @@ def test_the_sidebar_navigates_without_a_tab_strip() -> None:
     assert 'data-view="search" data-capability="documents"' in page
     assert 'class="sidebar-list"' in page
     # One item per view, and the item is a button rather than a tab role.
-    assert page.count('<button class="nav-item') == 7
+    assert page.count('<button class="nav-item') == 8
     assert 'role="tab"' not in page
     assert "aria-selected" not in page
     # The current view is marked as the current page, and only one is.
@@ -824,7 +825,7 @@ def test_the_sidebar_navigates_without_a_tab_strip() -> None:
     )
     # An icon is inline SVG rather than an icon font or a fetched file, so the
     # page adds no request and no dependency.
-    assert page.count('<svg class="nav-item-icon"') == 7
+    assert page.count('<svg class="nav-item-icon"') == 8
     assert "http://" not in page
     # The column is keyboard operable with a visible focus ring.
     assert ":focus-visible {" in client_css()
@@ -1260,6 +1261,7 @@ def test_a_host_that_serves_no_panel_leaves_every_nav_item_out() -> None:
         ("search", "documents"),
         ("sources", "sources"),
         ("status", "documents"),
+        ("stats", "stats"),
         ("config", "settings"),
         ("mcp", "clients"),
         ("memory", "memory"),
@@ -1373,6 +1375,7 @@ def test_a_panel_holds_only_the_blocks_that_belong_to_it() -> None:
         "search",
         "sources",
         "status",
+        "stats",
         "config",
         "mcp",
         "memory",
@@ -3190,3 +3193,114 @@ result.changed = row(12);
     assert "Default:" not in result["same"]
     assert "Value: 12" in result["changed"]
     assert "Default: 8" in result["changed"]
+
+
+def test_a_search_asks_for_any_number_of_results_up_to_the_servers_limit(
+    tmp_path: Path,
+) -> None:
+    """Four fixed choices became a number the reader types, ten by default."""
+
+    with _panel_host() as client:
+        page = client.get("/").text
+    assert (
+        '<input id="top-k" name="top_k" type="number" min="1" max="50" step="1" '
+        'value="10"' in page
+    )
+
+    result = _drive_page(
+        tmp_path,
+        """
+(async () => {
+state.profile = { capabilities: { documents: true } };
+result.valid = ["1", "10", "37", "50", "0", "51", "4.5", "ten", ""].map(validTopK);
+window.location.hash = "#/search?q=labour&k=37";
+await applyRoute();
+result.routed = document.getElementById("top-k").value;
+window.location.hash = "#/search?q=labour&k=500";
+await applyRoute();
+result.clamped = document.getElementById("top-k").value;
+const before = requests.length;
+document.getElementById("top-k").value = "0";
+await runSearch();
+result.refusedRequests = requests.length - before;
+document.getElementById("top-k").value = "23";
+await runSearch();
+result.sent = JSON.parse(requests[requests.length - 1].body).top_k;
+})()
+""",
+    )
+
+    assert result["valid"] == [
+        True,
+        True,
+        True,
+        True,
+        False,
+        False,
+        False,
+        False,
+        False,
+    ]
+    assert result["routed"] == "37"
+    assert result["clamped"] == "10"
+    assert result["refusedRequests"] == 0
+    assert result["sent"] == 23
+
+
+def test_the_stats_view_draws_what_the_server_counted(tmp_path: Path) -> None:
+    """Counts by rank, the sources no search reached, the corpus, and the build."""
+
+    result = _drive_page(
+        tmp_path,
+        """
+state.profile = { capabilities: { stats: true } };
+renderStats({
+  searches: {
+    search_count: 12,
+    zero_result_count: 3,
+    median_elapsed_ms: 840,
+    p95_elapsed_ms: 2400,
+    first_search_at: "2026-10-01T08:00:00Z",
+    searches_by_day: [{ day: "2026-10-06", count: 9 }, { day: "2026-10-05", count: 3 }],
+  },
+  sources: [
+    { source_id: "s1", title: "Atlas of AI", top_five: 9, rank_one: 4, in_corpus: true },
+    { source_id: "s2", title: "Capital", top_five: 3, rank_one: 0, in_corpus: true },
+  ],
+  passages: [
+    { chunk_id: "c1", title: "Atlas of AI", top_five: 5, rank_one: 3, in_current_generation: true, locator: { page: 7 } },
+  ],
+  unreached_source_count: 1,
+  unreached_sources: [{ title: "Unread Book" }],
+  corpus: {
+    source_count: 3,
+    passage_count: 400,
+    pdf_page_count: 900,
+    passages_per_source: { minimum: 20, median: 100, maximum: 280 },
+    largest_sources: [{ title: "Capital", passage_count: 280, in_corpus: true }],
+    formats: [{ value: "pdf", count: 3 }],
+    languages: [{ value: "en", count: 3 }],
+    decades: [{ value: "2020s", count: 2 }, { value: "no year", count: 1 }],
+    missing_metadata: { authors: 0, year: 1, categories: 2 },
+  },
+  last_build: { created_at: "2026-10-05T08:36:50Z", seconds: 1545, phase_seconds: { embedding: 1150, extraction: 340 }, reused_vector_count: 0, created_vector_count: 26532 },
+  generations: { count: 2, bytes: 1048576 },
+});
+result.cards = text(document.getElementById("stats-cards"));
+result.sources = text(document.getElementById("stats-sources"));
+result.passages = text(document.getElementById("stats-passages"));
+result.unreached = text(document.getElementById("stats-unreached"));
+result.corpus = text(document.getElementById("stats-corpus"));
+result.build = text(document.getElementById("stats-build"));
+result.message = document.getElementById("stats-message").hidden;
+""",
+    )
+
+    assert "12" in result["cards"] and "25% of searches" in result["cards"]
+    assert "840 ms" in result["cards"] and "2.4 s" in result["cards"]
+    assert "Atlas of AI" in result["sources"] and "9" in result["sources"]
+    assert "Page 7" in result["passages"]
+    assert "Unread Book" in result["unreached"]
+    assert "20 fewest · 100 median · 280 most" in result["corpus"]
+    assert "Embedding" in result["build"] and "26,532 embedded" in result["build"]
+    assert result["message"] is True

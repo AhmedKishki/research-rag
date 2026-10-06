@@ -74,6 +74,10 @@ class UICapabilities:
     agent_entry: bool = False
     # Release checking only; installation and approval remain in the terminal.
     updates: bool = False
+    # Whether this adapter counts what its searches returned and can report
+    # those counts beside facts about its corpus. Off by default: the workspace
+    # cannot know whether a host records anything about its searches.
+    stats: bool = False
 
     def as_dict(self) -> dict[str, bool]:
         return asdict(self)
