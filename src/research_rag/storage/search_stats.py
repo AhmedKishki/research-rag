@@ -165,13 +165,14 @@ def read_search_stats(
     path: Path,
     *,
     top: int = 20,
-    days: int = 30,
+    days: int | None = 30,
     since_days: float | None = None,
 ) -> dict[str, Any]:
     """The counts the workspace and `research-rag stats` report.
 
     `since_days` bounds every figure to the searches of that many recent days;
-    `None` counts all of them. A file that does not exist yet is a project nobody
+    `None` counts all of them. `days=None` returns every active day in that window.
+    A file that does not exist yet is a project nobody
     has searched on this machine, which is an answer of zeros rather than an error.
     """
 
@@ -214,8 +215,9 @@ def read_search_stats(
                 {"day": row["day"], "count": int(row["count"])}
                 for row in connection.execute(
                     "SELECT substr(searched_at, 1, 10) AS day, COUNT(*) AS count "
-                    f"FROM searches {where} GROUP BY day ORDER BY day DESC LIMIT ?",
-                    (*parameters, days),
+                    f"FROM searches {where} GROUP BY day ORDER BY day DESC"
+                    + (" LIMIT ?" if days is not None else ""),
+                    (*parameters, days) if days is not None else parameters,
                 )
             ]
             sources = [

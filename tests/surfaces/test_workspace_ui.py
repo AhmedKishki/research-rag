@@ -2017,7 +2017,7 @@ function element() {
     replaceChildren(...kids) { this.children = kids; },
     addEventListener() {},
     removeEventListener() {},
-    setAttribute() {},
+    setAttribute(name, value) { this.attributes[name] = value; },
     removeAttribute() {},
     focus() {},
     showModal() {},
@@ -2183,6 +2183,7 @@ function element(tagName = "div") {
     style: {},
     children: [],
     opened: false,
+    attributes: {},
     classList: {
       add(...names) { names.forEach((name) => classes.add(name)); },
       remove(...names) { names.forEach((name) => classes.delete(name)); },
@@ -2198,7 +2199,7 @@ function element(tagName = "div") {
     replaceChildren(...kids) { this.children = kids; },
     addEventListener() {},
     removeEventListener() {},
-    setAttribute() {},
+    setAttribute(name, value) { this.attributes[name] = value; },
     removeAttribute() {},
     focus() {},
     scrollIntoView() {},
@@ -2233,6 +2234,7 @@ const document = {
     return registry.get(id);
   },
   createElement: element,
+  createElementNS: (_namespace, tag) => element(tag),
   createDocumentFragment: () => element("fragment"),
   createTextNode: (text) => ({ textContent: text, children: [] }),
   querySelectorAll(selector) {
@@ -3327,6 +3329,9 @@ result.largest = text(body("largest"));
 result.largestLinks = collect(body("largest"));
 result.people = text(body("people"));
 result.cardIds = [...state.statPanels.keys()];
+result.wide = ["history", "usage", "largest"].map((id) => state.statPanels.get(id).panel.className);
+result.usage = text(body("usage"));
+result.svg = find(body("usage"), (node) => node.tagName === "svg").attributes;
 result.passageColumns = body("passages").children[0].children[0].children[0].children[0].children.map((cell) => cell.textContent);
 result.build = text(body("build"));
 result.counts = ["sources", "passages", "history"].map((id) => state.statPanels.get(id).count.textContent);
@@ -3364,7 +3369,7 @@ result.cleared = [...asked];
         "sources",
         "passages",
         "history",
-        "days",
+        "usage",
         "largest",
         "people",
         "corpus",
@@ -3392,7 +3397,12 @@ result.cleared = [...asked];
     ]
     assert "20 fewest · 100 median · 280 most" in result["corpus"]
     assert "1 sources" in result["corpus"] and "2 sources" in result["corpus"]
-    assert "2020s" in result["corpus"] and "pdf" in result["corpus"]
+    assert "2020s" in result["corpus"]
+    assert "Formats" not in result["corpus"] and "Languages" not in result["corpus"]
+    assert all("stat-panel-wide" in card for card in result["wide"])
+    assert "12 search invocations · per day · UTC" in result["usage"]
+    assert result["svg"]["role"] == "img"
+    assert result["svg"]["viewBox"] == "0 0 800 260"
     assert ["Capital", "#/source?id=src_2"] in result["largestLinks"]
     # Text size is shown for every source, and an EPUB has no pages to show.
     assert "280" in result["largest"] and "410" in result["largest"]
@@ -3416,6 +3426,127 @@ result.cleared = [...asked];
     ]
     assert result["cleared"][0] == "/api/stats/history/clear"
     assert result["cleared"][1].startswith("/api/stats/history?")
+
+
+def test_usage_graph_counts_quiet_intervals_and_groups_long_histories(
+    tmp_path: Path,
+) -> None:
+    result = _drive_page(
+        tmp_path,
+        """
+result.daily = usageSeries([
+  { day: "2026-10-06", count: 4 }, { day: "2026-10-04", count: 2 },
+]);
+result.scoped = usageSeries([{ day: "2026-10-06", count: 4 }], { days: 7 }, new Date("2026-10-06T12:00:00Z"));
+result.usageScopes = STAT_CARDS.find((card) => card.id === "usage").timeScopes.map((scope) => scope.days);
+result.weekly = usageSeries([
+  { day: "2026-07-01", count: 2 }, { day: "2026-09-01", count: 3 },
+]);
+result.monthly = usageSeries([
+  { day: "2024-12-31", count: 7 }, { day: "2026-10-06", count: 4 },
+]);
+result.empty = text(renderUsage({ searches: { searches_by_day: [] } }));
+const chart = renderUsage({ searches: { searches_by_day: [
+  { day: "2026-10-06", count: 4 }, { day: "2026-10-04", count: 2 },
+] } });
+const svg = find(chart, (node) => node.tagName === "svg");
+result.bars = svg.children.filter((node) => node.tagName === "rect").map((node) => node.attributes);
+result.data = text(find(chart, (node) => node.tagName === "details"));
+result.description = text(find(chart, (node) => node.tagName === "desc"));
+const one = renderUsage({ searches: { searches_by_day: [{ day: "2026-10-06", count: 1 }] } });
+result.one = text(one);
+""",
+    )
+    assert result["daily"] == {
+        "interval": "day",
+        "buckets": [
+            {"day": "2026-10-04", "count": 2},
+            {"day": "2026-10-05", "count": 0},
+            {"day": "2026-10-06", "count": 4},
+        ],
+    }
+    assert result["weekly"]["interval"] == "week"
+    assert len(result["scoped"]["buckets"]) == 8
+    assert result["scoped"]["buckets"][0] == {"day": "2026-09-29", "count": 0}
+    assert result["scoped"]["buckets"][-1] == {"day": "2026-10-06", "count": 4}
+    assert result["usageScopes"] == [None, 30, 7]
+    assert result["weekly"]["buckets"][0] == {"day": "2026-06-29", "count": 2}
+    assert result["weekly"]["buckets"][-1] == {"day": "2026-08-31", "count": 3}
+    assert result["monthly"]["interval"] == "month"
+    assert len(result["monthly"]["buckets"]) == 23
+    assert sum(bucket["count"] for bucket in result["monthly"]["buckets"]) == 11
+    assert "No search invocations" in result["empty"]
+    assert [float(bar["height"]) for bar in result["bars"]] == [95, 0, 190]
+    assert "2026-10-05" in result["data"] and "Invocations" in result["data"]
+    assert "2026-10-05: 0 invocations" in result["description"]
+    assert "0.5" not in result["one"]
+
+
+def test_largest_sources_names_an_old_running_api_instead_of_empty_columns(
+    tmp_path: Path,
+) -> None:
+    result = _drive_page(
+        tmp_path,
+        """
+result.legacy = text(renderLargest({ largest_sources: [
+  { title: "Capital", source_relative_path: "capital.pdf", passage_count: 123 },
+] }));
+result.noGeneration = text(renderLargest(null));
+result.empty = text(renderLargest({ largest_by: "passages", largest_sources: [] }));
+""",
+    )
+    assert "older statistics API" in result["legacy"]
+    assert "Restart it from its starting terminal" in result["legacy"]
+    assert "Refreshing the browser alone" in result["legacy"]
+    assert "no generation" in result["noGeneration"]
+    assert result["empty"] == "Nothing to count yet."
+
+
+@pytest.mark.parametrize("old_fails", [False, True])
+def test_stat_cards_ignore_obsolete_scope_responses(
+    tmp_path: Path, old_fails: bool
+) -> None:
+    result = _drive_page(
+        tmp_path,
+        """
+(async () => {
+state.profile = { capabilities: { stats: true } };
+buildStatsBoard();
+const pending = [];
+fetch = (path) => new Promise((resolve, reject) => pending.push({ path, resolve, reject }));
+const card = STAT_CARDS.find((entry) => entry.id === "sources");
+const panel = state.statPanels.get("sources");
+const old = refreshCard(card);
+state.statScopes.sources = { days: 7, top: 5 };
+const current = refreshCard(card);
+result.loading = text(panel.body);
+result.busy = panel.panel.attributes["aria-busy"];
+pending[1].resolve({ ok: true, json: async () => ({ sources: [
+  { source_id: "new", title: "Current scope", top_five: 1, rank_one: 1 },
+] }) });
+await current;
+OLD_RESPONSE
+await old;
+result.body = text(panel.body);
+result.count = panel.count.textContent;
+result.done = panel.panel.attributes["aria-busy"];
+result.requests = pending.map((entry) => entry.path);
+})()
+""".replace(
+            "OLD_RESPONSE",
+            'pending[0].reject(new Error("Old error"));'
+            if old_fails
+            else """pending[0].resolve({ ok: true, json: async () => ({ sources: [
+  { source_id: "old", title: "Obsolete scope", top_five: 99, rank_one: 99 },
+] }) });""",
+        ),
+    )
+    assert result["loading"] == "Loading…"
+    assert result["busy"] == "true" and result["done"] == "false"
+    assert "Current scope" in result["body"]
+    assert "Obsolete scope" not in result["body"] and "Old error" not in result["body"]
+    assert result["count"] == "1"
+    assert result["requests"] == ["/api/stats?top=10", "/api/stats?days=7&top=5"]
 
 
 def test_a_source_opens_in_the_desktop_viewer_and_falls_back_to_the_browser(
