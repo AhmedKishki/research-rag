@@ -26,13 +26,22 @@
         <span class="visually-hidden">Views</span>
       </button>
 
-      <div id="application-name" class="brand-name">UltraRAG MCP</div>
+      <div class="brand">
+        <svg class="brand-mark" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+          <path d="M5 4.5h9.5L19 9v10.5H5z"></path>
+          <path d="M14.5 4.5V9H19"></path>
+          <path d="M8.5 13h7M8.5 16.5h4.5"></path>
+        </svg>
+        <div id="application-name" class="brand-name"></div>
+      </div>
 
       <div class="project-identity">
-        <span id="project-label" class="project-label">Project</span>
-        <span id="project-name" class="project-name">Connecting…</span>
+        <span id="project-label" class="visually-hidden">Project</span>
+        <span class="project-line">
+          <span id="project-name" class="project-name">Connecting…</span>
+          <span id="version-label" class="version-label" hidden></span>
+        </span>
         <span id="project-path" class="project-path"></span>
-        <span id="version-label" class="version-label" hidden></span>
       </div>
 
       <div class="header-actions">
@@ -43,10 +52,10 @@
         <button id="refresh-button" class="button button-quiet" type="button">
           Refresh
         </button>
-        <button id="export-button" class="button button-quiet" type="button" data-capability="bundle_export">
+        <button id="export-button" class="button button-quiet" type="button" data-capability="bundle_export" hidden>
           Export
         </button>
-        <button id="import-button" class="button button-quiet" type="button" data-capability="bundle_import">
+        <button id="import-button" class="button button-quiet" type="button" data-capability="bundle_import" hidden>
           Import
         </button>
         <button id="ingest-button" class="button button-primary" type="button" data-capability="ingestion" hidden>
@@ -78,7 +87,7 @@
         </div>
 
         <ul class="sidebar-list">
-          <li class="sidebar-item is-active" data-view="search" data-capability="documents">
+          <li class="sidebar-item is-active" data-view="search" data-capability="documents" hidden>
             <button class="nav-item is-active" type="button" aria-current="page">
               <svg class="nav-item-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
                 <circle cx="11" cy="11" r="6.5"></circle>
@@ -87,7 +96,7 @@
               <span class="nav-item-name">Search</span>
             </button>
           </li>
-          <li class="sidebar-item" data-view="sources" data-capability="sources">
+          <li class="sidebar-item" data-view="sources" data-capability="sources" hidden>
             <button class="nav-item" type="button">
               <svg class="nav-item-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
                 <path d="M4 6.5h16M4 12h16M4 17.5h10"></path>
@@ -97,7 +106,7 @@
               </span>
             </button>
           </li>
-          <li class="sidebar-item" data-view="status" data-capability="documents">
+          <li class="sidebar-item" data-view="status" data-capability="documents" hidden>
             <button class="nav-item" type="button">
               <svg class="nav-item-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
                 <path d="M3.5 12.5h3.5l2.5-6.5 4.5 12 2-5.5h4.5"></path>
@@ -105,7 +114,7 @@
               <span class="nav-item-name">Status</span>
             </button>
           </li>
-          <li class="sidebar-item" data-view="config" data-capability="settings">
+          <li class="sidebar-item" data-view="config" data-capability="settings" hidden>
             <button class="nav-item" type="button">
               <svg class="nav-item-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
                 <path d="M4 8h9M17.5 8H20"></path>
@@ -116,7 +125,7 @@
               <span class="nav-item-name">Config</span>
             </button>
           </li>
-          <li class="sidebar-item" data-view="mcp" data-capability="clients">
+          <li class="sidebar-item" data-view="mcp" data-capability="clients" hidden>
             <button class="nav-item" type="button">
               <svg class="nav-item-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
                 <path d="M9 3v5M15 3v5"></path>
@@ -126,7 +135,7 @@
               <span class="nav-item-name">MCP</span>
             </button>
           </li>
-          <li class="sidebar-item" data-view="memory" data-capability="memory">
+          <li class="sidebar-item" data-view="memory" data-capability="memory" hidden>
             <button class="nav-item" type="button">
               <svg class="nav-item-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
                 <path d="M6 4h12v16l-6-4.5L6 20z"></path>
@@ -137,7 +146,7 @@
               </span>
             </button>
           </li>
-          <li class="sidebar-item" data-view="updates" data-capability="updates">
+          <li class="sidebar-item" data-view="updates" data-capability="updates" hidden>
             <button class="nav-item" type="button">
               <svg class="nav-item-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
                 <path d="M12 4v10"></path>
@@ -156,7 +165,7 @@
       <div id="nav-scrim" class="nav-scrim" hidden></div>
 
       <main id="workspace" class="workspace">
-        <section id="search-view" class="view-panel is-active" data-panel="search" data-capability="documents">
+        <section id="search-view" class="view-panel is-active" data-panel="search" data-capability="documents" hidden>
           <form id="search-form" class="search-console">
             <label class="query-field" for="query">
               <span class="field-label">Query</span>
@@ -171,7 +180,7 @@
             </label>
 
             <div class="search-controls">
-              <fieldset class="method-control" data-capability="retrieval_modes">
+              <fieldset class="method-control" data-capability="retrieval_modes" hidden>
                 <legend>Retrieval</legend>
                 <label><input type="radio" name="retrieval_method" value="hybrid" checked><span>Hybrid</span></label>
                 <label><input type="radio" name="retrieval_method" value="bm25"><span>BM25</span></label>
@@ -188,7 +197,7 @@
                 </select>
               </label>
 
-              <label class="check-control" for="rerank" data-capability="reranking">
+              <label class="check-control" for="rerank" data-capability="reranking" hidden>
                 <input id="rerank" name="rerank" type="checkbox">
                 <span>
                   <strong>CPU rerank</strong>
@@ -211,11 +220,10 @@
                 <span id="filter-summary-note" class="drawer-note">No filter set</span>
               </summary>
               <p class="form-note measure filter-intro">
-                A field left empty matches everything, and a filter applies to
-                the next search without a rebuild.
+                Separate values with commas; an empty field matches everything.
               </p>
               <div class="filter-groups">
-                <fieldset class="filter-group" data-capability="metadata_filters">
+                <fieldset class="filter-group" data-capability="metadata_filters" hidden>
                   <legend>Reviewed metadata</legend>
                   <p class="filter-note">
                     Every value must match: a passage is returned only when its
@@ -224,16 +232,14 @@
                   <label for="category-filter">
                     <span class="field-label">Categories</span>
                     <input id="category-filter" type="text" placeholder="political economy, technology">
-                    <small>Comma separated. A source must carry every category.</small>
                   </label>
                   <label for="keyword-filter">
                     <span class="field-label">Keywords</span>
                     <input id="keyword-filter" type="text" placeholder="labour, automation">
-                    <small>Comma separated. A source must carry every keyword.</small>
                   </label>
                 </fieldset>
 
-                <fieldset class="filter-group" data-capability="category_partitions">
+                <fieldset class="filter-group" data-capability="category_partitions" hidden>
                   <legend>Corpus partitions</legend>
                   <p class="filter-note">
                     At least one value must match: a passage is returned when its
@@ -242,11 +248,11 @@
                   <label for="category-any-filter">
                     <span class="field-label">Any of these categories</span>
                     <input id="category-any-filter" type="text" placeholder="first partition, second partition">
-                    <small>Comma separated. Select partitions from the list below.</small>
+                    <small>Select partitions from the list below.</small>
                   </label>
                 </fieldset>
 
-                <fieldset class="filter-group" data-capability="project_metadata">
+                <fieldset class="filter-group" data-capability="project_metadata" hidden>
                   <legend>Projects</legend>
                   <p class="filter-note">
                     At least one value must match: a passage is returned when its
@@ -255,11 +261,11 @@
                   <label for="project-any-filter">
                     <span class="field-label">Any of these projects</span>
                     <input id="project-any-filter" type="text" placeholder="first project, second project">
-                    <small>Comma separated. Select projects from the list below.</small>
+                    <small>Select projects from the list below.</small>
                   </label>
                 </fieldset>
 
-                <fieldset class="filter-group" data-capability="bibliographic_filters">
+                <fieldset class="filter-group" data-capability="bibliographic_filters" hidden>
                   <legend>Author, work, or language</legend>
                   <p class="filter-note">
                     In each field you fill, at least one value must match. A
@@ -269,66 +275,65 @@
                   <label for="author-filter">
                     <span class="field-label">Any of these authors</span>
                     <input id="author-filter" type="text" placeholder="Surname, Other Surname">
-                    <small>Comma separated. One matching surname is enough.</small>
                   </label>
                   <label for="title-filter">
                     <span class="field-label">Any of these titles</span>
                     <input id="title-filter" type="text" placeholder="First fragment, second fragment">
-                    <small>Comma separated. One matching phrase is enough.</small>
                   </label>
                   <label for="language-filter">
                     <span class="field-label">Any of these languages</span>
                     <input id="language-filter" type="text" placeholder="en, de">
-                    <small>Comma separated, ISO 639 codes. Select them from the list below.</small>
+                    <small>ISO 639 codes. Select them from the list below.</small>
                   </label>
                 </fieldset>
 
-                <fieldset class="filter-group" data-capability="source_selection">
+                <fieldset class="filter-group" data-capability="source_selection" hidden>
                   <legend>Named sources</legend>
                   <p class="filter-note">
-                    Stable source identifiers. An empty inclusion searches every
-                    source, and an empty exclusion excludes none.
+                    Stable source identifiers, chosen from the Sources view.
                   </p>
                   <label for="include-source-filter">
                     <span class="field-label">Only these sources</span>
                     <input id="include-source-filter" type="text" placeholder="src_…, src_…">
-                    <small>Comma separated. Empty searches every source.</small>
+                    <small>Empty searches every source.</small>
                   </label>
                   <label for="exclude-source-filter">
                     <span class="field-label">Exclude these sources</span>
                     <input id="exclude-source-filter" type="text" placeholder="src_…, src_…">
-                    <small>Comma separated. Empty excludes nothing.</small>
+                    <small>Empty excludes nothing.</small>
                   </label>
                 </fieldset>
               </div>
 
               <div id="filter-picks" class="filter-picks">
-                <div id="partition-summary" class="pick-group" data-capability="category_partitions" hidden>
-                  <h3>Corpus partitions</h3>
-                  <p class="form-note measure">
-                    Select a category to add it to the filter; each count is
-                    the searchable sources carrying it.
-                  </p>
+                <p class="form-note filter-picks-note">
+                  Select a value to add it to its filter; each count is the
+                  searchable sources carrying it.
+                </p>
+
+                <details id="partition-summary" class="pick-group fold" data-capability="category_partitions" hidden>
+                  <summary class="fold-summary">
+                    <h3>Corpus partitions</h3>
+                    <span class="count-badge">0</span>
+                  </summary>
                   <div id="partition-chips" class="pick-list"></div>
-                </div>
+                </details>
 
-                <div id="project-summary" class="pick-group" data-capability="project_metadata" hidden>
-                  <h3>Projects</h3>
-                  <p class="form-note measure">
-                    Select a project tag to add it to the filter; each count
-                    is the searchable sources carrying it.
-                  </p>
+                <details id="project-summary" class="pick-group fold" data-capability="project_metadata" hidden>
+                  <summary class="fold-summary">
+                    <h3>Projects</h3>
+                    <span class="count-badge">0</span>
+                  </summary>
                   <div id="project-chips" class="pick-list"></div>
-                </div>
+                </details>
 
-                <div id="language-summary" class="pick-group" data-capability="bibliographic_filters" hidden>
-                  <h3>Languages</h3>
-                  <p class="form-note measure">
-                    Select a language to add it to the filter; each count is
-                    the searchable sources carrying it.
-                  </p>
+                <details id="language-summary" class="pick-group fold" data-capability="bibliographic_filters" hidden>
+                  <summary class="fold-summary">
+                    <h3>Languages</h3>
+                    <span class="count-badge">0</span>
+                  </summary>
                   <div id="language-chips" class="pick-list"></div>
-                </div>
+                </details>
               </div>
             </details>
           </section>
@@ -348,35 +353,35 @@
         </section>
 
         <section id="sources-view" class="view-panel" data-panel="sources" data-capability="sources" hidden>
-          <h2>Indexed sources</h2>
-          <p class="form-note measure">
-            Each indexed source, with the metadata you can review and the decisions
-            you can make on it.
-          </p>
-
           <div class="sources-toolbar">
-            <h3 id="source-list-heading">Sources</h3>
+            <h2 id="source-list-heading">Indexed sources</h2>
             <label class="source-filter" for="source-filter">
               <span class="visually-hidden">Filter sources</span>
               <input id="source-filter" type="search" placeholder="Filter by title, author, category…">
             </label>
           </div>
+          <p class="form-note measure">
+            Each indexed source, with the metadata you can review and the decisions
+            you can make on it.
+          </p>
 
           <p id="source-range" class="form-note source-range" aria-live="polite" hidden></p>
           <div id="source-list" class="source-list" aria-labelledby="source-list-heading"></div>
           <nav id="source-pager" class="pager" aria-label="Source pages" hidden></nav>
 
           <section id="excluded-section" class="excluded-section" hidden>
-            <div class="section-heading-row">
-              <h3 id="excluded-heading">Excluded sources</h3>
-              <span id="excluded-count" class="count-badge">0</span>
-            </div>
-            <p class="form-note measure">
-              Sources this project does not search; restoring one needs no
-              rebuild, and no file is edited.
-            </p>
-            <div id="excluded-list" class="excluded-list"></div>
-            <nav id="excluded-pager" class="pager" aria-label="Excluded source pages" hidden></nav>
+            <details id="excluded-fold" class="fold">
+              <summary class="fold-summary">
+                <h3 id="excluded-heading">Excluded sources</h3>
+                <span id="excluded-count" class="count-badge">0</span>
+              </summary>
+              <p class="form-note measure">
+                Sources this project does not search; restoring one needs no
+                rebuild, and no file is edited.
+              </p>
+              <div id="excluded-list" class="excluded-list"></div>
+              <nav id="excluded-pager" class="pager" aria-label="Excluded source pages" hidden></nav>
+            </details>
           </section>
         </section>
 
@@ -434,39 +439,43 @@
           <details id="status-details" class="detail-drawer">
             <summary>
               <span class="drawer-title">Build facts and identifiers</span>
-              <span class="drawer-note">Directory, generation id, counts, and methods</span>
+              <span class="drawer-note">Source directory, sources on disk, and formats</span>
             </summary>
             <dl id="status-facts" class="fact-list"></dl>
           </details>
 
           <div id="generation-summary" class="panel-section" data-capability="generations" hidden>
-            <div class="section-heading-row">
-              <h3>Generations</h3>
-              <span id="generation-count" class="count-badge">0</span>
-            </div>
-            <p class="form-note measure">
-              Removing a build frees its space and cannot be undone; the sources
-              are not touched.
-            </p>
-            <div class="rebuild-row" data-capability="force_recompute">
-              <button id="rebuild-button" class="button button-quiet" type="button" hidden>
-                Rebuild from scratch…
-              </button>
-            </div>
-            <div id="generation-chips" class="record-list"></div>
+            <details id="generation-fold" class="fold">
+              <summary class="fold-summary">
+                <h3>Generations</h3>
+                <span id="generation-count" class="count-badge">0</span>
+              </summary>
+              <p class="form-note measure">
+                Removing a build frees its space and cannot be undone; the sources
+                are not touched.
+              </p>
+              <div class="rebuild-row" data-capability="force_recompute" hidden>
+                <button id="rebuild-button" class="button button-quiet" type="button" hidden>
+                  Rebuild from scratch…
+                </button>
+              </div>
+              <div id="generation-chips" class="record-list"></div>
+            </details>
           </div>
 
           <div id="chunk-exclusion-summary" class="panel-section" data-capability="chunk_exclusion" hidden>
-            <div class="section-heading-row">
-              <h3>Passage exclusions</h3>
-              <span id="chunk-exclusion-count" class="count-badge">0</span>
-            </div>
-            <p class="form-note measure">
-              Passages left out of search while their source stays in;
-              restoring one brings it back in every generation that holds it.
-            </p>
-            <p id="chunk-exclusion-message" class="form-note" hidden></p>
-            <div id="chunk-exclusion-list" class="excluded-list" aria-live="polite"></div>
+            <details id="chunk-exclusion-fold" class="fold">
+              <summary class="fold-summary">
+                <h3>Passage exclusions</h3>
+                <span id="chunk-exclusion-count" class="count-badge">0</span>
+              </summary>
+              <p class="form-note measure">
+                Passages left out of search while their source stays in;
+                restoring one brings it back in every generation that holds it.
+              </p>
+              <p id="chunk-exclusion-message" class="form-note" hidden></p>
+              <div id="chunk-exclusion-list" class="excluded-list" aria-live="polite"></div>
+            </details>
           </div>
 
           <div id="sql-console" class="panel-section" data-capability="sql_console" hidden>
@@ -552,7 +561,7 @@
             </div>
           </div>
 
-          <div id="agent-entry-summary" class="panel-section" data-capability="agent_entry">
+          <div id="agent-entry-summary" class="panel-section" data-capability="agent_entry" hidden>
             <h3>Client entry</h3>
             <p class="form-note measure">
               For a client that cannot open a socket: it names the project rather
@@ -605,9 +614,9 @@
           <p id="update-declined" class="form-note measure" hidden></p>
         </section>
       </main>
-    </div>
 
-    <footer id="footer-text" class="site-footer" hidden></footer>
+      <footer id="footer-text" class="site-footer" hidden></footer>
+    </div>
 
     <dialog id="ingest-dialog" class="dialog">
       <form id="ingest-form" method="dialog">
@@ -621,7 +630,7 @@
         </p>
         <p id="ingest-note" class="form-note dialog-note" hidden></p>
         <p id="ingest-cost" class="notice-inline" hidden></p>
-        <div class="two-column-fields" data-capability="chunk_settings">
+        <div class="two-column-fields" data-capability="chunk_settings" hidden>
           <label for="chunk-size">
             <span class="field-label">Chunk size</span>
             <input id="chunk-size" type="number" min="50" max="384" value="384" required>
@@ -672,7 +681,7 @@
             <span class="field-label">Keywords</span>
             <input id="metadata-keywords" type="text" placeholder="labour, automation">
           </label>
-          <label for="metadata-project" data-capability="project_metadata">
+          <label for="metadata-project" data-capability="project_metadata" hidden>
             <span class="field-label">Projects</span>
             <input id="metadata-project" type="text" placeholder="first project, second project">
           </label>

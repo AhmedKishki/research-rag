@@ -96,9 +96,11 @@
   --leading-normal: 1.5;
   --leading-prose: 1.7;
 
-  /* A readable measure, a page width, a sidebar, and a pointer-sized control. */
+  /* A readable measure for a view's own sentences, a page width, a sidebar, and
+     a pointer-sized control. Text inside a card takes the card's whole width,
+     so every card's text lines up with its title. */
   --measure: 68ch;
-  --layout-max: 76rem;
+  --layout-max: 80rem;
   --sidebar-width: 15rem;
   --control-height: 2.75rem;
 }
@@ -239,18 +241,36 @@ code {
 
 /* ---------------------------------------------------------------- header -- */
 
+/* One row: the views button, the app, the project it serves, and the state and
+   actions at the far end. The app and the project are divided by a rule rather
+   than stacked, so the header is one line tall on a wide window. */
 .site-header {
   display: flex;
   flex-wrap: wrap;
-  align-items: flex-end;
-  gap: var(--space-sm) var(--space-lg);
-  padding: var(--space-sm) var(--space-md);
+  align-items: center;
+  gap: var(--space-xs) var(--space-md);
+  padding: var(--space-xs) var(--space-md);
   border-bottom: 1px solid var(--border-subtle);
   background: var(--bg-card);
+  box-shadow: var(--shadow-sm);
+}
+
+.brand {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: var(--space-2xs);
+  padding-right: var(--space-md);
+  border-right: 1px solid var(--border-subtle);
+}
+
+.brand-mark {
+  width: 1.5rem;
+  height: 1.5rem;
+  color: var(--accent);
 }
 
 .brand-name {
-  flex: 0 0 auto;
   font-size: var(--text-md);
   font-weight: 600;
   letter-spacing: -0.01em;
@@ -261,14 +281,13 @@ code {
   min-width: 0;
   flex: 1 1 14rem;
   flex-direction: column;
-  gap: var(--space-3xs);
 }
 
-.project-label {
-  color: var(--text-secondary);
-  font-size: var(--text-xs);
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
+.project-line {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: var(--space-2xs);
 }
 
 .project-name {
@@ -277,9 +296,18 @@ code {
   overflow-wrap: anywhere;
 }
 
-.project-path,
-.version-label {
+.project-path {
   color: var(--text-tertiary);
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  overflow-wrap: anywhere;
+}
+
+.version-label {
+  padding: 0 var(--space-2xs);
+  border: 1px solid var(--border-subtle);
+  border-radius: 999px;
+  color: var(--text-secondary);
   font-family: var(--font-mono);
   font-size: var(--text-xs);
   overflow-wrap: anywhere;
@@ -352,6 +380,11 @@ code {
   display: flex;
   align-items: center;
   gap: var(--space-2xs);
+  min-height: 2rem;
+  padding: 0 var(--space-xs);
+  border: 1px solid var(--border-subtle);
+  border-radius: 999px;
+  background: var(--bg-surface);
   color: var(--text-secondary);
   font-size: var(--text-xs);
   white-space: nowrap;
@@ -376,10 +409,15 @@ code {
 /* A degraded project still answers, so the dot alone would read as loading; the
    label carries the count and takes the warning colour with it. */
 .connection-state[data-state="warn"] {
+  border-color: var(--warning-border);
+  background: var(--warning-soft);
   color: var(--warning);
 }
 
+.connection-state[data-state="error"],
 .connection-state[data-state="blocked"] {
+  border-color: var(--danger-border);
+  background: var(--danger-soft);
   color: var(--danger);
 }
 
@@ -403,22 +441,25 @@ code {
 
 /* --------------------------------------------------------------- sidebar -- */
 
+/* The column on the left, and beside it the views over the footer that
+   qualifies them, so the footer is centred under the content it is about. */
 .app-body {
-  display: flex;
-  align-items: flex-start;
-  min-height: calc(100vh - 5rem);
+  display: grid;
+  grid-template-columns: var(--sidebar-width) minmax(0, 1fr);
+  grid-template-rows: 1fr auto;
+  min-height: calc(100vh - 4rem);
 }
 
 .workspace-sidebar {
   position: sticky;
   top: 0;
   display: flex;
-  width: var(--sidebar-width);
   max-height: 100vh;
   /* The column fills the window rather than ending where its last item ends, so
      the page beside it shows no band of bare ground under the nav. */
+  grid-row: 1 / -1;
+  grid-column: 1;
   align-self: stretch;
-  flex: 0 0 var(--sidebar-width);
   flex-direction: column;
   gap: var(--space-md);
   padding: var(--space-md) var(--space-sm);
@@ -516,12 +557,12 @@ code {
 /* ---------------------------------------------------------------- panels -- */
 
 .workspace {
+  /* The content block takes the space beside the column up to a page width and
+     is centred in it, so a wide window leaves an even margin on both sides. */
+  grid-row: 1;
+  grid-column: 2;
   width: min(var(--layout-max), 100%);
   min-width: 0;
-  /* The content block is capped at a page width and centred in the space beside
-     the column, so a wide window leaves a margin rather than all of it to the
-     right. It does not grow past the cap. */
-  flex: 0 1 auto;
   margin-inline: auto;
   padding: var(--space-lg) var(--space-lg) var(--space-xl);
 }
@@ -739,17 +780,24 @@ h3 {
 .section-heading-row,
 .memory-toolbar,
 .memory-scope-header,
-.result-card-header,
-.result-footer {
+.result-card-header {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: var(--space-sm);
 }
 
-.result-summary,
-.sources-toolbar {
+.result-summary {
   margin: var(--space-lg) 0 var(--space-sm);
+}
+
+.sources-toolbar {
+  margin: 0 0 var(--space-2xs);
+}
+
+.sources-toolbar h2 {
+  font-size: var(--text-xl);
+  letter-spacing: -0.01em;
 }
 
 .source-range {
@@ -819,29 +867,32 @@ h3 {
   box-shadow: var(--shadow-sm);
 }
 
+/* A result is one padded block: every line in it starts and ends at the same
+   two edges, so the passage is centred in the card rather than pushed right by
+   a rank column. */
 .result-card {
-  display: grid;
-  grid-template-columns: 3rem minmax(0, 1fr);
-  overflow: hidden;
+  min-width: 0;
+  padding: var(--space-md) var(--space-lg);
 }
 
 .result-rank {
-  padding: var(--space-md) var(--space-2xs);
-  border-right: 1px solid var(--border-subtle);
+  flex: 0 0 auto;
+  padding: var(--space-3xs) var(--space-2xs);
+  border-radius: var(--radius-sm);
   background: var(--bg-surface);
   color: var(--text-secondary);
   font-family: var(--font-mono);
   font-size: var(--text-xs);
-  text-align: center;
-}
-
-.result-content {
-  min-width: 0;
-  padding: var(--space-md);
+  line-height: 1.4;
 }
 
 .result-card-header {
   align-items: flex-start;
+  justify-content: flex-start;
+}
+
+.result-card-header .result-title {
+  flex: 1 1 auto;
 }
 
 /* Beside a title the badge keeps a short locator on one line, and a long
@@ -855,6 +906,7 @@ h3 {
 .result-title {
   min-width: 0;
   margin: 0;
+  padding-top: 0.0625rem;
   font-size: var(--text-md);
   font-weight: 600;
   line-height: var(--leading-tight);
@@ -874,33 +926,23 @@ h3 {
   display: flex;
   flex-wrap: wrap;
   gap: var(--space-2xs);
-  margin-top: var(--space-2xs);
+  margin-top: var(--space-3xs);
   color: var(--text-secondary);
   font-size: var(--text-sm);
   line-height: var(--leading-normal);
   overflow-wrap: anywhere;
 }
 
-.source-doi,
-.result-doi {
+.source-doi {
   margin: var(--space-3xs) 0 0;
   color: var(--text-tertiary);
   font-size: var(--text-xs);
   overflow-wrap: anywhere;
 }
 
-.result-citation {
-  margin: var(--space-xs) 0 0;
-  color: var(--accent-ink);
-  font-size: var(--text-sm);
-  font-weight: 600;
-  overflow-wrap: anywhere;
-}
-
 .passage-text,
 .context-passage p,
 .memory-text {
-  max-width: var(--measure);
   margin: var(--space-xs) 0 0;
   color: var(--text-primary);
   font-size: var(--text-base);
@@ -910,16 +952,19 @@ h3 {
 }
 
 /* A result's passage is read as a block of argument rather than scanned, so it
-   is justified. The context dialog and the memory rounds keep their own
-   alignment: only the search result is set this way. */
+   is justified across the card's whole width, which keeps it centred between
+   the card's edges. Hyphenation keeps a justified line from opening gaps. The
+   context dialog and the memory rounds keep their own alignment: only the search
+   result is set this way. */
 .passage-text {
+  margin-top: var(--space-sm);
   text-align: justify;
+  hyphens: auto;
 }
 
 .tag-row,
 .source-tags,
 .result-actions,
-.source-card-actions,
 .header-actions,
 .project-actions,
 .dialog-actions,
@@ -997,7 +1042,6 @@ h3 {
 }
 
 .source-path,
-.result-doi,
 .setting-key,
 .setting-env,
 .setting-readonly,
@@ -1322,7 +1366,6 @@ textarea:disabled {
    any one of them is enough, because that difference decides the result and is
    not visible from the field name. */
 .filter-note {
-  max-width: var(--measure);
   margin: 0;
   color: var(--text-secondary);
   font-size: var(--text-sm);
@@ -1332,20 +1375,18 @@ textarea:disabled {
 .filter-group > label {
   display: grid;
   gap: var(--space-3xs);
-  max-width: 34rem;
 }
 
 /* The lists a reader picks from sit beside the fields they fill, so a value
    chosen here is one click from where it lands. */
 .filter-picks {
   display: grid;
-  gap: var(--space-md);
+  gap: var(--space-xs);
   margin-top: var(--space-md);
 }
 
-.pick-group {
-  display: grid;
-  gap: var(--space-2xs);
+.filter-picks-note {
+  margin: 0;
 }
 
 .pick-list {
@@ -1603,16 +1644,17 @@ textarea:disabled {
 }
 
 .settings-section {
-  display: grid;
-  gap: var(--space-2xs);
-  padding: var(--space-md);
+  padding: var(--space-2xs) var(--space-md);
   border: 1px solid var(--border-subtle);
   border-radius: var(--radius-md);
   background: var(--bg-card);
 }
 
-.settings-section > h4 {
-  margin-bottom: var(--space-2xs);
+.settings-section[open] {
+  padding-bottom: var(--space-md);
+}
+
+.settings-section h4 {
   color: var(--text-secondary);
   font-size: var(--text-xs);
   letter-spacing: 0.04em;
@@ -1652,7 +1694,6 @@ textarea:disabled {
 }
 
 .setting-doc {
-  max-width: 62ch;
   margin: 0;
   color: var(--text-secondary);
   font-size: var(--text-sm);
@@ -1840,21 +1881,12 @@ textarea:disabled {
   color: var(--accent);
 }
 
-.result-footer {
-  align-items: flex-start;
-  flex-wrap: wrap;
-  margin-top: var(--space-sm);
-  padding-top: var(--space-xs);
-  border-top: 1px solid var(--border-subtle);
-}
-
-.result-actions,
-.source-card-actions {
+.result-actions {
   gap: var(--space-3xs);
 }
 
 .source-filter {
-  width: min(24rem, 45%);
+  width: min(32rem, 50%);
 }
 
 /* One source is a column: what it is, then what it is tagged with, then what a
@@ -1881,6 +1913,8 @@ textarea:disabled {
 }
 
 .source-title {
+  flex: 1 1 auto;
+  min-width: 0;
   font-size: var(--text-md);
   font-weight: 600;
   overflow-wrap: anywhere;
@@ -1897,23 +1931,13 @@ textarea:disabled {
   margin: 0;
 }
 
-.source-card-actions {
-  align-items: flex-start;
-  justify-content: flex-start;
-  padding-top: var(--space-xs);
-  border-top: 1px solid var(--border-subtle);
-}
-
 /* The colour marks the action whose reach is the project, not the action that
-   happens to come last, and the row sets it apart from the actions beside it
+   happens to come last, and the menu sets it apart from the actions above it
    because the danger red and the accent are close at link size. */
 .action-button-danger {
   color: var(--danger);
 }
 
-.source-card-actions .action-button-danger {
-  margin-left: auto;
-}
 
 .action-button-danger:hover {
   color: var(--danger-strong);
@@ -2071,7 +2095,6 @@ textarea:disabled {
 }
 
 .health-reason {
-  max-width: var(--measure);
   margin: 0;
   overflow-wrap: anywhere;
 }
@@ -2111,13 +2134,147 @@ textarea:disabled {
   gap: var(--space-2xs);
 }
 
+/* The footer qualifies the passages, so it sits under the views at their width
+   rather than across the column, under a rule of its own. */
 .site-footer {
-  padding: var(--space-sm) var(--space-md);
-  border-top: 1px solid var(--border-subtle);
+  grid-row: 2;
+  grid-column: 2;
+  width: min(var(--layout-max), 100%);
+  margin-inline: auto;
+  padding: 0 var(--space-lg) var(--space-md);
   color: var(--text-secondary);
-  font-size: var(--text-sm);
-  line-height: var(--leading-prose);
+  font-size: var(--text-xs);
+  line-height: var(--leading-normal);
   text-align: center;
+}
+
+.site-footer::before {
+  display: block;
+  margin-bottom: var(--space-sm);
+  border-top: 1px solid var(--border-subtle);
+  content: "";
+}
+
+/* ----------------------------------------------------------------- folds -- */
+
+/* A list that can run long is a fold: its heading and count are the summary,
+   and the list opens on one click. The marker turns rather than changing
+   character, so the summary keeps its width. */
+.fold > .fold-summary {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2xs);
+  min-height: var(--control-height);
+  list-style: none;
+}
+
+.fold > .fold-summary::-webkit-details-marker {
+  display: none;
+}
+
+.fold > .fold-summary::before {
+  width: 0.45rem;
+  height: 0.45rem;
+  margin: 0 var(--space-3xs) 0 0.125rem;
+  border-right: 2px solid var(--text-secondary);
+  border-bottom: 2px solid var(--text-secondary);
+  content: "";
+  transform: rotate(-45deg);
+  transition: transform 120ms ease-out;
+}
+
+.fold[open] > .fold-summary::before {
+  transform: rotate(45deg);
+}
+
+.fold > .fold-summary:hover h3,
+.fold > .fold-summary:hover h4 {
+  color: var(--accent-ink);
+}
+
+.pick-group > .fold-summary h3 {
+  font-size: var(--text-sm);
+}
+
+/* ------------------------------------------------------------ card menus -- */
+
+/* Each card's actions sit behind one button at the end of its first row. The
+   list opens over the cards below rather than pushing them down. */
+.card-menu {
+  position: relative;
+  flex: 0 0 auto;
+  margin-left: auto;
+}
+
+.card-menu > summary {
+  display: flex;
+  width: 2.25rem;
+  height: 2.25rem;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  color: var(--text-secondary);
+  list-style: none;
+}
+
+.card-menu > summary::-webkit-details-marker {
+  display: none;
+}
+
+.card-menu > summary:hover,
+.card-menu[open] > summary {
+  border-color: var(--border-subtle);
+  background: var(--bg-surface);
+  color: var(--text-primary);
+}
+
+.card-menu-dots {
+  font-size: var(--text-lg);
+  font-weight: 700;
+  line-height: 1;
+}
+
+.card-menu-list {
+  position: absolute;
+  top: calc(100% + var(--space-3xs));
+  right: 0;
+  z-index: 30;
+  display: grid;
+  min-width: 15rem;
+  padding: var(--space-3xs);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  background: var(--bg-card);
+  box-shadow: var(--shadow-float);
+}
+
+.card-menu-list .action-button {
+  min-height: 2.25rem;
+  padding: var(--space-2xs) var(--space-xs);
+  color: var(--text-primary);
+  text-align: left;
+  text-decoration: none;
+  white-space: nowrap;
+}
+
+.card-menu-list .action-button:hover,
+.card-menu-list .action-button:focus-visible {
+  background: var(--accent-soft);
+  color: var(--accent-ink);
+}
+
+.card-menu-list .action-button-danger {
+  margin-top: var(--space-3xs);
+  border-top: 1px solid var(--border-subtle);
+  border-radius: 0 0 var(--radius-sm) var(--radius-sm);
+  color: var(--danger);
+}
+
+.card-menu-list .action-button-danger:hover,
+.card-menu-list .action-button-danger:focus-visible {
+  background: var(--danger-soft);
+  color: var(--danger-strong);
 }
 
 /* --------------------------------------------------------------- dialogs -- */
@@ -2469,6 +2626,11 @@ textarea:disabled {
     min-height: 0;
   }
 
+  .brand {
+    padding-right: 0;
+    border-right: 0;
+  }
+
   .workspace-sidebar {
     position: fixed;
     z-index: 95;
@@ -2497,11 +2659,15 @@ textarea:disabled {
   .workspace {
     padding: var(--space-md);
   }
+
+  .site-footer {
+    padding-inline: var(--space-md);
+  }
 }
 
 @media (max-width: 767.98px) {
   .site-header {
-    align-items: flex-start;
+    gap: var(--space-xs);
   }
 
   .project-identity {
@@ -2528,15 +2694,11 @@ textarea:disabled {
     grid-template-columns: minmax(0, 1fr);
   }
 
-  .result-card-header,
   .notice {
     align-items: flex-start;
     flex-direction: column;
   }
 
-  .result-footer {
-    flex-direction: column;
-  }
 
   .check-control {
     margin-left: 0;
@@ -2578,19 +2740,11 @@ textarea:disabled {
 }
 
 @media (max-width: 575.98px) {
-  .header-actions {
-    margin-left: 0;
-  }
-
   #refresh-button {
     display: none;
   }
 
   .result-card {
-    grid-template-columns: 2.25rem minmax(0, 1fr);
-  }
-
-  .result-content {
     padding: var(--space-sm);
   }
 
@@ -2644,7 +2798,7 @@ textarea:disabled {
   .search-console,
   .sources-toolbar .source-filter,
   .result-actions,
-  .source-card-actions,
+  .card-menu,
   .pager,
   .excluded-section,
   .system-summary,

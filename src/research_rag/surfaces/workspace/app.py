@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import logging
 from collections.abc import Mapping
 from contextlib import asynccontextmanager
@@ -10,11 +11,12 @@ from typing import Any
 
 import uvicorn
 from starlette.applications import Starlette
+from starlette.concurrency import run_in_threadpool
 from starlette.exceptions import HTTPException
 from starlette.middleware import Middleware
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
-from starlette.responses import FileResponse, JSONResponse, Response
+from starlette.responses import FileResponse, HTMLResponse, JSONResponse, Response
 from starlette.routing import Route
 
 from . import write_guard
@@ -22,6 +24,9 @@ from .contracts import AdapterFactory, SourceFile, UIAdapter, UIProfile, UIReque
 
 LOGGER = logging.getLogger(__name__)
 STATIC_ROOT = Path(__file__).with_name("static")
+# The page's two assets and their media types; nothing else under the static
+# root is served.
+_ASSETS = {"app.css": "text/css", "app.js": "text/javascript"}
 MAX_ERROR_LENGTH = 1200
 # A statement is forwarded whole and unchanged, so the request layer is where an
 # accidental paste stops: past this length it is a file, not a statement.
@@ -105,16 +110,33 @@ async def _json_body(request: Request) -> dict[str, Any]:
     return value
 
 
+def _stamped_page(static_root: Path) -> str:
+    """Return the page with each asset address carrying a digest of its bytes.
+
+    The app is updated in place, and a browser may reuse a cached asset whatever
+    the cache headers say, such as one a process without them served earlier. A
+    page that names its assets by content can only load the script and the
+    stylesheet it was written with, so a newer page never runs an older script
+    against elements that script does not know.
+    """
+
+    page = (static_root / "index.html").read_text(encoding="utf-8")
+    for filename in _ASSETS:
+        digest = hashlib.sha256((static_root / filename).read_bytes()).hexdigest()
+        page = page.replace(
+            f'"/assets/{filename}"', f'"/assets/{filename}?v={digest[:16]}"'
+        )
+    return page
+
+
 async def _index(request: Request) -> Response:
-    return FileResponse(
-        request.app.state.static_root / "index.html", media_type="text/html"
-    )
+    page = await run_in_threadpool(_stamped_page, request.app.state.static_root)
+    return HTMLResponse(page)
 
 
 async def _asset(request: Request) -> Response:
     filename = request.path_params["filename"]
-    allowed = {"app.css": "text/css", "app.js": "text/javascript"}
-    media_type = allowed.get(filename)
+    media_type = _ASSETS.get(filename)
     if media_type is None:
         raise HTTPException(status_code=404, detail="Asset not found")
     return FileResponse(request.app.state.static_root / filename, media_type=media_type)

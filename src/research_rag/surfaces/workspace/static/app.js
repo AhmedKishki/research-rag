@@ -23,7 +23,10 @@ const state = {
   settings: new Map(),
   chunkExclusions: new Map(),
   pendingSettings: null,
-  updates: { payload: null, declinedVersion: "" },
+  updates: { payload: null, declinedVersion: "", checked: false },
+  // A fold the reader opened or closed keeps that choice across a refresh, keyed
+  // by the fold's id or its `data-fold` name.
+  folds: new Map(),
 };
 
 const byId = (id) => document.getElementById(id);
@@ -107,6 +110,43 @@ function button(label, action, value, className = "action-button") {
   element.dataset.action = action;
   if (value !== undefined) element.dataset.value = value;
   return element;
+}
+
+// A list longer than this starts folded behind its heading and count, so a view
+// opens on what it is about rather than on the length of one of its lists.
+const FOLD_LIMIT = 5;
+
+function foldKey(drawer) {
+  return drawer.dataset.fold || drawer.id || "";
+}
+
+// Open a fold when its list is short, unless the reader already chose.
+function foldList(drawer, count) {
+  if (!drawer) return;
+  const key = foldKey(drawer);
+  drawer.open = key && state.folds.has(key) ? state.folds.get(key) : count <= FOLD_LIMIT;
+}
+
+// The actions a card offers sit behind one menu, so a list of ten cards is ten
+// cards and not ten rows of the same five links. The menu is a disclosure: it
+// opens on a click or a key, and the actions in it are ordinary buttons.
+function actionMenu(name, actions) {
+  const menu = node("details", "card-menu");
+  const toggle = node("summary", "card-menu-toggle");
+  toggle.title = "Actions";
+  toggle.append(node("span", "card-menu-dots", "⋯"));
+  toggle.append(node("span", "visually-hidden", `Actions for ${name}`));
+  menu.append(toggle);
+  const list = node("div", "card-menu-list");
+  actions.forEach((action) => list.append(action));
+  menu.append(list);
+  return menu;
+}
+
+function closeMenus(except = null) {
+  document.querySelectorAll("details.card-menu[open]").forEach((menu) => {
+    if (menu !== except) menu.open = false;
+  });
 }
 
 function listValue(value) {
@@ -519,36 +559,18 @@ function methodLabels(status) {
   );
 }
 
-// The counts and identifiers a reader needs to act are in the cards above. The
-// rest — the directory this page serves, the generation identifier in full, the
-// methods a search may ask for — is here, labelled and selectable, because it is
-// what a reader copies into a report and it was previously squeezed into a
-// twelve-pixel line under a number.
+// The counts and identifiers a reader needs to act are in the cards above, and
+// the project directory is in the header. What is left — where the sources are
+// read from, how many are on disk, and the formats accepted — is here, labelled
+// and selectable. A fact the page already shows elsewhere is not repeated.
 function renderStatusFacts(status) {
-  const rows = [["Project directory", status.project_root || ""]];
+  const rows = [];
   if (status.source_root) rows.push(["Source directory", status.source_root]);
-  if (status.generation_id) {
-    rows.push(["Generation identifier", status.generation_id]);
-    rows.push(["Built", formatDate(status.created_at)]);
-  }
-  const methods = methodLabels(status);
-  if (methods.length) {
-    rows.push([
-      "Retrieval methods",
-      `${methods.join(", ")} (default ${status.default_retrieval_method || "bm25"})`,
-    ]);
-  }
   rows.push([
     "Sources on disk",
     `${formatNumber(status.selected_source_count)} selected · ${formatNumber(
       status.excluded_source_count,
     )} excluded`,
-  ]);
-  rows.push([
-    "Excluded passages",
-    `${formatNumber(status.excluded_chunk_count)} of ${formatNumber(
-      status.chunk_count,
-    )} in this generation`,
   ]);
   const formats = status.allowed_formats || [];
   if (formats.length) rows.push(["Accepted formats", formats.join(", ")]);
@@ -681,12 +703,11 @@ function renderHealth(status) {
   byId("health-summary").textContent = conditions.length
     ? `${conditions.length} to act on`
     : "All passed";
+  // With nothing to act on, the badge says so and the list is not drawn.
   const list = byId("health-conditions");
   list.replaceChildren();
+  list.hidden = !conditions.length;
   conditions.forEach((entry) => list.append(healthCondition(entry)));
-  if (!conditions.length) {
-    list.append(node("p", "form-note", "Every check passed."));
-  }
 
   const rows = [
     ...checks.map((entry) => ({ ...entry, state: entry.state || "unknown" })),
@@ -878,6 +899,8 @@ function renderInventory(containerId, entries, key, action) {
   const group = container.closest(".pick-group");
   if (group) {
     group.hidden = !hasCapability(group.dataset.capability) || !inventoryNarrows(entries);
+    group.querySelector(".count-badge").textContent = formatNumber(entries.length);
+    foldList(group, entries.length);
   }
   entries.forEach((item) => {
     const control = button(item[key], action, item[key], "pick-button");
@@ -1189,8 +1212,9 @@ function sourceCard(source) {
   const card = node("article", "source-card");
   const body = node("div", "source-card-body");
   const titleRow = node("div", "source-title-row");
+  const title = inlineText(source.title) || source.source_relative_path;
   titleRow.append(node("span", "format-badge", source.format || "source"));
-  titleRow.append(node("span", "source-title", inlineText(source.title) || source.source_relative_path));
+  titleRow.append(node("span", "source-title", title));
   body.append(titleRow);
   body.append(node("p", "source-byline", authorLine(source)));
   if (source.doi) body.append(node("p", "source-doi", `doi:${inlineText(source.doi).replace(/^doi:/i, "")}`));
@@ -1223,23 +1247,23 @@ function sourceCard(source) {
   body.append(identifiers);
   card.append(body);
 
-  const actions = node("div", "source-card-actions");
+  const actions = [];
   if (hasCapability("source_files")) {
-    actions.append(button("Open original", "open-source", source.source_relative_path));
+    actions.push(button("Open original", "open-source", source.source_relative_path));
   }
   if (hasCapability("metadata")) {
-    actions.append(button("Edit metadata", "edit-metadata", source.document_id));
+    actions.push(button("Edit metadata", "edit-metadata", source.document_id));
   }
   // Two different decisions sit here, and their names keep them apart. The
   // search pair fills a filter for the next query and opens the search; the
   // project exclusion is recorded, read by every surface and agent, and kept
   // until it is restored, so it is named for its reach and coloured for it.
   if (hasCapability("source_selection")) {
-    actions.append(button("Search only this source", "only-source", source.source_id));
-    actions.append(button("Search without this source", "exclude-from-search", source.source_id));
+    actions.push(button("Search only this source", "only-source", source.source_id));
+    actions.push(button("Search without this source", "exclude-from-search", source.source_id));
   }
   if (hasCapability("source_inclusion")) {
-    actions.append(
+    actions.push(
       button(
         "Exclude from project…",
         "exclude-source",
@@ -1248,7 +1272,7 @@ function sourceCard(source) {
       ),
     );
   }
-  if (actions.childElementCount) card.append(actions);
+  if (actions.length) titleRow.append(actionMenu(title, actions));
   return card;
 }
 
@@ -1270,10 +1294,11 @@ function excludedCard(source) {
   return card;
 }
 
-// A page of sources holds ten. A collection drawn whole was one column of every
-// card, so a reader looking for one source scrolled past all the others. The
-// filter still reads every source, and the pages divide what it matched.
-const SOURCES_PER_PAGE = 10;
+// A page of sources holds five, so one page fits the window. A collection drawn
+// whole was one column of every card, so a reader looking for one source
+// scrolled past all the others. The filter still reads every source, and the
+// pages divide what it matched.
+const SOURCES_PER_PAGE = 5;
 
 function pageCount(total) {
   return Math.max(1, Math.ceil(total / SOURCES_PER_PAGE));
@@ -1378,8 +1403,12 @@ function renderExcludedPage() {
 // list's heading rather than on a pager button that may have moved.
 function goToSourcePage(list, page) {
   state.sourcePages[list] = page;
-  if (list === "excluded") renderExcludedPage();
-  else renderSourcePage();
+  if (list === "excluded") {
+    byId("excluded-fold").open = true;
+    renderExcludedPage();
+  } else {
+    renderSourcePage();
+  }
   recordRoute();
   const heading = byId(list === "excluded" ? "excluded-heading" : "source-list-heading");
   heading.tabIndex = -1;
@@ -1395,6 +1424,7 @@ function renderSources(payload) {
   byId("excluded-count").textContent = String(state.excludedSources.length);
   renderSourcePage();
   byId("excluded-section").hidden = !state.excludedSources.length;
+  foldList(byId("excluded-fold"), state.excludedSources.length);
   renderExcludedPage();
 }
 
@@ -1448,15 +1478,17 @@ async function loadWorkspace({ announce = false } = {}) {
       }
     }
     setConnection(...connectionHealth(state.status));
-    // The update check runs after the workspace has drawn and is never awaited,
-    // so a slow or unreachable release feed cannot hold up a search. It asks one
+    // The update check runs once per page, after the workspace has drawn, and is
+    // never awaited, so a slow or unreachable release feed cannot hold up a
+    // search and a refresh after every save does not ask again. It asks one
     // question and downloads nothing.
-    if (hasCapability("updates")) {
+    if (hasCapability("updates") && !state.updates.checked) {
+      state.updates.checked = true;
       void checkUpdates();
     }
     if (announce) toast("Workspace refreshed.");
   } catch (error) {
-    setConnection("error", "Connection failed");
+    setConnection("error", "Not answered", error.message);
     toast(error.message, true);
   } finally {
     setBusy(false);
@@ -1672,41 +1704,41 @@ function scorePair(label, value) {
 
 function resultCard(hit) {
   const card = node("article", "result-card");
-  card.append(node("div", "result-rank", String(hit.rank).padStart(2, "0")));
-  const content = node("div", "result-content");
+  const title = inlineText(hit.title) || hit.source_path;
 
+  // The rank, the title, the place in the source, and the menu share one row,
+  // so the passage below spans the whole card and sits centred in it. The
+  // citation is not printed: it repeats the title, the byline, and the locator,
+  // and "Copy citation" still copies it whole.
   const header = node("div", "result-card-header");
-  header.append(node("h3", "result-title", inlineText(hit.title) || hit.source_path));
+  header.append(node("span", "result-rank", String(hit.rank).padStart(2, "0")));
+  header.append(node("h3", "result-title", title));
   header.append(node("span", "locator-badge", locatorLabel(hit.locator)));
-  content.append(header);
-  content.append(node("div", "result-byline", `${authorLine(hit)} · ${hit.source_path}`));
-  if (hit.doi) content.append(node("div", "result-doi", `doi:${inlineText(hit.doi).replace(/^doi:/i, "")}`));
-  content.append(node("p", "result-citation", inlineText(hit.citation) || "Citation unavailable"));
-  content.append(node("p", "passage-text", readableText(hit.text)));
+  const actions = [
+    button(state.profile?.copy_text_label || "Copy passage", "copy-passage", hit.chunk_id),
+    button("Copy citation", "copy-citation", hit.chunk_id),
+  ];
+  if (hasCapability("passage_context")) {
+    actions.push(button("Nearby context", "show-context", hit.chunk_id));
+  }
+  const source = sourceForDocument(hit.document_id);
+  if (source && hasCapability("source_files")) {
+    actions.push(button("Open original", "open-source", source.source_relative_path));
+  }
+  if (hasCapability("chunk_exclusion")) {
+    actions.push(chunkAction(hit));
+  }
+  header.append(actionMenu(title, actions));
+  card.append(header);
+  card.append(node("div", "result-byline", authorLine(hit)));
+  card.append(node("p", "passage-text", readableText(hit.text)));
 
   if ((hit.categories || []).length || (hit.keywords || []).length) {
     const tags = node("div", "tag-row");
     tags.append(tagList(hit.categories, "tag"));
     tags.append(tagList(hit.keywords, "tag tag-keyword"));
-    content.append(tags);
+    card.append(tags);
   }
-
-  const footer = node("div", "result-footer");
-  const actions = node("div", "result-actions");
-  actions.append(button(state.profile?.copy_text_label || "Copy passage", "copy-passage", hit.chunk_id));
-  actions.append(button("Copy citation", "copy-citation", hit.chunk_id));
-  if (hasCapability("passage_context")) {
-    actions.append(button("Nearby context", "show-context", hit.chunk_id));
-  }
-  if (hasCapability("chunk_exclusion")) {
-    actions.append(chunkAction(hit));
-  }
-  const source = sourceForDocument(hit.document_id);
-  if (source && hasCapability("source_files")) {
-    actions.append(button("Open original", "open-source", source.source_relative_path));
-  }
-  footer.append(actions);
-  content.append(footer);
 
   // The rank each component gave this passage and the passage identifier are
   // what a reader checks when a result looks wrong, and they are not what a
@@ -1727,9 +1759,9 @@ function resultCard(hit) {
   rows.push(["Passage identifier", hit.chunk_id]);
   if (hit.document_id) rows.push(["Source identifier", hit.document_id]);
   if (hit.source_path) rows.push(["Path", hit.source_path]);
+  if (hit.doi) rows.push(["DOI", inlineText(hit.doi).replace(/^doi:/i, "")]);
   details.append(factList(rows, "fact-list score-facts"));
-  content.append(details);
-  card.append(content);
+  card.append(details);
   return card;
 }
 
@@ -1971,6 +2003,7 @@ function renderGenerations(generations) {
   const container = byId("generation-chips");
   container.replaceChildren();
   byId("generation-count").textContent = formatNumber(generations.length);
+  foldList(byId("generation-fold"), generations.length);
   if (!generations.length) {
     container.append(node("p", "form-note", "This project has no build yet."));
     return;
@@ -2430,7 +2463,12 @@ function settingRow(setting, index) {
 
   const facts = node("div", "setting-facts");
   facts.append(node("span", "setting-fact setting-value", `Value: ${settingValueLabel(setting.value)}`));
-  if (setting.default !== undefined) {
+  // The default is named only where it differs, because "Value: 8, Default: 8"
+  // says one thing twice on most rows.
+  if (
+    setting.default !== undefined
+    && settingValueLabel(setting.default) !== settingValueLabel(setting.value)
+  ) {
     facts.append(
       node("span", "setting-fact setting-default", `Default: ${settingValueLabel(setting.default)}`),
     );
@@ -2464,8 +2502,15 @@ function renderSettings(payload) {
   const container = byId("settings-sections");
   container.replaceChildren();
   for (const section of payload.sections || []) {
-    const block = node("section", "settings-section");
-    block.append(node("h4", "", section.title || section.key));
+    // A section is a fold like any other long list, and a control in a closed
+    // fold is still read and sent, so folding hides nothing from a save.
+    const block = node("details", "settings-section fold");
+    block.dataset.fold = `settings-${slugify(section.key || section.title)}`;
+    const summary = node("summary", "fold-summary");
+    summary.append(node("h4", "", section.title || section.key));
+    const count = node("span", "count-badge");
+    summary.append(count);
+    block.append(summary);
     let index = 0;
     for (const setting of section.settings || []) {
       if (!setting?.key) continue;
@@ -2473,6 +2518,8 @@ function renderSettings(payload) {
       block.append(settingRow(setting, `${index}-${slugify(setting.key)}`));
       index += 1;
     }
+    count.textContent = formatNumber(index);
+    foldList(block, index);
     container.append(block);
   }
   const message = byId("settings-message");
@@ -2765,6 +2812,7 @@ function renderChunkExclusions(payload) {
   const entries = payload.exclusions || [];
   state.chunkExclusions = new Map(entries.map((entry) => [entry.chunk_id, entry]));
   byId("chunk-exclusion-count").textContent = String(entries.length);
+  foldList(byId("chunk-exclusion-fold"), entries.length);
   // The summary is the page's own sentence over the server's fields. The
   // server's message says "chunk", the word its agent tools use; this page calls
   // the same thing a passage everywhere. An empty list says so once, in the list.
@@ -3000,7 +3048,27 @@ function initialize() {
   byId("nav-toggle").addEventListener("click", toggleNav);
   byId("nav-scrim").addEventListener("click", () => closeNav());
   document.addEventListener("keydown", (event) => {
-    if (event.key === "Escape") closeNav({ restoreFocus: true });
+    if (event.key !== "Escape") return;
+    const menu = document.activeElement?.closest?.("details.card-menu[open]");
+    if (menu) {
+      menu.open = false;
+      menu.querySelector("summary")?.focus();
+      return;
+    }
+    closeNav({ restoreFocus: true });
+  });
+  // One listener serves every fold and every card menu, including the ones a
+  // render draws later. A fold remembers what the reader chose; a menu closes
+  // when its action is taken or the reader clicks elsewhere.
+  document.addEventListener("click", (event) => {
+    const summary = event.target.closest?.("summary");
+    const fold = summary?.parentElement;
+    if (fold?.classList.contains("fold") && foldKey(fold)) {
+      state.folds.set(foldKey(fold), !fold.open);
+    }
+    const menu = event.target.closest?.("details.card-menu");
+    closeMenus(menu);
+    if (menu && event.target.closest("[data-action]")) menu.open = false;
   });
   // Widening past the breakpoint turns the drawer back into a fixed column, so
   // it is left closed rather than reopening itself over the page.

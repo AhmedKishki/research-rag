@@ -195,22 +195,48 @@ class ResearchService(
         operation whose reader is waiting on the answer rather than on the work.
         """
 
-        async with self._lock:
-            try:
-                async with self._project_lock:
-                    yield
-            except FileLockTimeout as exc:
-                raise ResearchError(
-                    "Another research process is working on this project"
-                    + self._resident_build_note()
-                    + (
-                        f". Nothing was written. Read {busy_command} to see what "
-                        "is holding it, or wait for it to finish."
-                        if busy_command
-                        else ". Its work is not lost: call this again once it "
-                        "finishes, or stop that process first."
-                    )
-                ) from exc
+        # The workspace, the agents, and the CLI share this process, so one
+        # caller's build holds the in-process lock as long as a build call runs.
+        # Waiting on it without a bound froze every other surface for that long;
+        # it is refused after the same wait as the cross-process lock.
+        try:
+            await asyncio.wait_for(
+                self._lock.acquire(), timeout=PROJECT_LOCK_TIMEOUT_SECONDS
+            )
+        except TimeoutError as exc:
+            raise ResearchError(
+                "This app is already working on this project"
+                + self._resident_build_note()
+                + (
+                    self._busy_remedy(busy_command)
+                    if busy_command
+                    else ". Nothing was written: call this again once that work "
+                    "finishes."
+                )
+            ) from exc
+        try:
+            async with self._project_lock:
+                yield
+        except FileLockTimeout as exc:
+            raise ResearchError(
+                "Another research process is working on this project"
+                + self._resident_build_note()
+                + self._busy_remedy(busy_command)
+            ) from exc
+        finally:
+            self._lock.release()
+
+    @staticmethod
+    def _busy_remedy(busy_command: str) -> str:
+        if busy_command:
+            return (
+                f". Nothing was written. Read {busy_command} to see what is "
+                "holding it, or wait for it to finish."
+            )
+        return (
+            ". Its work is not lost: call this again once it finishes, or stop "
+            "that process first."
+        )
 
     def _resident_build_note(self) -> str:
         """Describe the build another process is running, when one is visible.
