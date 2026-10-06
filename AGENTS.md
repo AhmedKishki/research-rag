@@ -79,6 +79,9 @@
 - Client entries and generated templates carry a project name, never a path.
   - `mcp --project-name` or `RESEARCH_RAG_PROJECT_NAME` resolves exactly through `registry.py`.
   - Refuse `mcp --project-root` and `mcp --project`.
+- The bridge decides nothing at launch. It asks per call whether the app answers, serves the same eight tools while it does not, and never starts it.
+- Writes take turns one at a time, and searches `runtime.search_concurrency` at a time. Waiting callers are served in rounds by agent, waits are bounded, and a refusal says how many were ahead.
+  - A second `ingest` during a build is refused with the build's phase, not queued.
 - For an uninitialized project, open the session with only `status`, an `init` remedy in `blocked_by`, and no corpus tools.
   - `tests/surfaces/test_bridge.py` covers this surface in `surfaces/mcp.py`.
 - Answer generation is out of scope until the design in `ROADMAP.md` is chosen.

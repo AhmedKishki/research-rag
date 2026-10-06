@@ -14,6 +14,7 @@ from .workspace import create_ui_app as create_shared_ui_app
 if TYPE_CHECKING:  # pragma: no cover - typing only
     from starlette.applications import Starlette
 
+from ..core.admission import as_caller
 from ..core.service import ResearchService
 from ..corpus.sources import SourcePolicyError, scan_sources
 from ..project.config import (
@@ -291,7 +292,8 @@ class ResearchUIAdapter:
     ) -> Mapping[str, Any]:
         accepted = self._arguments(operation, arguments)
         try:
-            return await self._run(operation, accepted)
+            with as_caller("workspace"):
+                return await self._run(operation, accepted)
         except UIRequestError:
             raise
         except Exception as exc:

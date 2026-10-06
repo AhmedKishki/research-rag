@@ -100,6 +100,7 @@ from ..storage.records import (  # noqa: F401
     read_jsonl,
     write_handoff_jsonl,
 )
+from .admission import Admission, AdmissionTimeout
 from .review import ReviewWorkflow
 from .stats import StatsWorkflow
 from .status import StatusWorkflow
@@ -109,6 +110,11 @@ from .status import StatusWorkflow
 # a build ends, and the work it waited for goes on unseen. Reporting the resident
 # build is more useful than outlasting the client.
 PROJECT_LOCK_TIMEOUT_SECONDS = 20
+
+# How long a search waits for its turn behind the others before it is told to ask
+# again. It is longer than a write's wait because a search is short and a queue of
+# them clears, where a write waits behind a build that does not.
+SEARCH_QUEUE_SECONDS = 45
 
 
 # The retrieval policy is fixed here: the tool offers exactly one way to search.
@@ -175,7 +181,17 @@ class ResearchService(
         self.retrieval_policy_fingerprint = retrieval_policy_fingerprint(
             config.settings
         )
-        self._lock = asyncio.Lock()
+        # Writes take turns one at a time and searches a few at a time, each caller
+        # in rounds, so no one agent, and no build, holds the others out. Both
+        # waits are bounded and refuse with the queue they stood in.
+        self._writes = Admission(
+            1, wait_seconds=PROJECT_LOCK_TIMEOUT_SECONDS, what="operations"
+        )
+        self._searches = Admission(
+            config.settings.search_concurrency,
+            wait_seconds=SEARCH_QUEUE_SECONDS,
+            what="searches",
+        )
         self._project_lock = AsyncFileLock(
             config.state_root / LOCK_FILE,
             # A caller must not sit in silence behind another build. A long build is
@@ -210,18 +226,22 @@ class ResearchService(
         operation whose reader is waiting on the answer rather than on the work.
         """
 
-        # The workspace, the agents, and the CLI share this process, so one
-        # caller's build holds the in-process lock as long as a build call runs.
-        # Waiting on it without a bound froze every other surface for that long;
-        # it is refused after the same wait as the cross-process lock.
         try:
-            await asyncio.wait_for(
-                self._lock.acquire(), timeout=PROJECT_LOCK_TIMEOUT_SECONDS
-            )
-        except TimeoutError as exc:
+            async with self._writes.slot():
+                try:
+                    async with self._project_lock:
+                        yield
+                except FileLockTimeout as exc:
+                    raise ResearchError(
+                        "Another research process is working on this project"
+                        + self._resident_build_note()
+                        + self._busy_remedy(busy_command)
+                    ) from exc
+        except AdmissionTimeout as exc:
             raise ResearchError(
                 "This app is already working on this project"
                 + self._resident_build_note()
+                + f" ({exc.ahead} calls were ahead of this one)"
                 + (
                     self._busy_remedy(busy_command)
                     if busy_command
@@ -229,17 +249,6 @@ class ResearchService(
                     "finishes."
                 )
             ) from exc
-        try:
-            async with self._project_lock:
-                yield
-        except FileLockTimeout as exc:
-            raise ResearchError(
-                "Another research process is working on this project"
-                + self._resident_build_note()
-                + self._busy_remedy(busy_command)
-            ) from exc
-        finally:
-            self._lock.release()
 
     @asynccontextmanager
     async def _read(self) -> AsyncIterator[_ReadLease]:
@@ -299,6 +308,19 @@ class ResearchService(
             yield
         finally:
             self._retriever_lock.release()
+
+    @asynccontextmanager
+    async def _search_read(self) -> AsyncIterator[_ReadLease]:
+        """A read of the selected generation, taken in turn with the other searches."""
+
+        try:
+            async with self._searches.slot(), self._read() as lease:
+                yield lease
+        except AdmissionTimeout as exc:
+            raise ResearchError(
+                f"{exc} The app is serving {self._searches.waiting} waiting "
+                f"{'search' if self._searches.waiting == 1 else 'searches'} now."
+            ) from exc
 
     @staticmethod
     def _busy_remedy(busy_command: str) -> str:

@@ -20,6 +20,7 @@ from starlette.requests import Request
 from starlette.responses import JSONResponse
 from starlette.routing import Route
 
+from ..core.admission import as_caller
 from ..project.config import ResearchConfig
 from ..project.policy import ResearchError
 from ..project.registry import account_projects
@@ -381,7 +382,8 @@ async def _handle(app: App, endpoint: Any, request: Request) -> JSONResponse:
     """
 
     try:
-        return await endpoint(app, request)
+        with as_caller("command line"):
+            return await endpoint(app, request)
     except (ClientError, ResearchError) as exc:
         return _json({"error": str(exc)}, status_code=400)
 

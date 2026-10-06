@@ -6,6 +6,11 @@ agent endpoint on the app's own port. The proxy adds nothing — the tools, the
 answer projection, the project, and the UltraRAG gateway are the app's, so a
 stdio client and a browser cannot see two different states.
 
+The bridge decides nothing at launch. Whether the app is up, and whether the
+project exists here, are asked on every call, so an agent that connected before
+the app started, or while it restarted, finds the same tools working as soon as
+the app answers. While it does not, each call returns the command that starts it.
+
 The bridge names a project and never a directory. A client configuration is
 written once and copied between machines, a phone, and a repository, and an
 absolute path in it is true on exactly one of them; a project's recorded name is
@@ -17,7 +22,8 @@ A project that this machine has not initialised is answered, not refused: the
 connection is established, `status` reports that the name resolves to nothing
 here, and the answer carries the command that creates the project. The other seven
 operations are absent, because there is no corpus behind them. An agent's entry
-therefore needs no editing after that command runs.
+therefore needs no editing after that command runs, though a client that listed
+its tools before may need to list them again to see the other seven.
 
 The bridge names itself and says where it is running, so a disconnect is legible
 and a list of clients is a list of agents rather than a list of session ids: the
@@ -27,13 +33,18 @@ and therefore the client.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import os
 from collections.abc import Mapping
 from typing import Any
 
+from fastmcp import FastMCP
 from fastmcp.client.transports import StreamableHttpTransport
-from fastmcp.server import create_proxy
+from fastmcp.exceptions import FastMCPError, ToolError
+from fastmcp.server.middleware import Middleware
+from fastmcp.server.providers.proxy import FastMCPProxy, ProxyClient
+from mcp.shared.exceptions import McpError
 
 from ..project import registry
 from ..project.config import (
@@ -51,9 +62,19 @@ from ..runtime.app import (
 )
 from ..runtime.control import connect, is_serving, not_running_reason
 from ..runtime.version import APP_VERSION
-from .mcp import AGENT_BRIDGE_NAME, create_blocked_mcp
+from .mcp import AGENT_BRIDGE_NAME, create_blocked_mcp, create_unserved_mcp
 
 DEFAULT_CLIENT_NAME = "stdio-bridge"
+# Asking whether the app answers is a local HTTP round trip, so a few seconds is
+# generous, and an app that does not answer in them is not serving.
+HEALTH_TIMEOUT_SECONDS = 3.0
+# How long an upstream session may take to open.
+INIT_TIMEOUT_SECONDS = 15.0
+# A call waits at most this much beyond the longest build the app allows one call.
+CALL_TIMEOUT_MARGIN_SECONDS = 600.0
+# The tools that change nothing, so repeating one after a dropped connection is
+# safe. A write is never repeated for the caller: it may have been applied.
+READ_ONLY_TOOLS = frozenset({"status", "search", "find_source", "get_passage"})
 
 
 def client_name() -> str:
@@ -117,27 +138,180 @@ def client_identity(
     }
 
 
-def build_proxy(url: str, *, name: str, identity: Mapping[str, Any]) -> Any:
-    """Return a stdio server that forwards everything to the app at `url`.
+def _headers(name: str, identity: Mapping[str, Any]) -> dict[str, str]:
+    return {
+        CLIENT_NAME_HEADER: name,
+        CLIENT_IDENTITY_HEADER: json.dumps(identity, separators=(",", ":")),
+    }
 
-    The tools are proxied, not re-declared: a second copy of the seven operations
-    would be a second place for them to be wrong, and would give the agent a
-    different answer than the workspace for the same question. The transport is
-    built here rather than from a URL so the bridge can name itself and say where
-    it is running, which is what makes it identifiable in the app's client list.
+
+class Backends:
+    """Where each call goes: the app when it answers, a stand-in when it does not.
+
+    The decision is made per call and never cached, so the bridge cannot be left
+    in a state its first call chose. The tools are proxied, not re-declared: a
+    second copy of the operations would be a second place for them to be wrong,
+    and would give the agent a different answer than the workspace for the same
+    question. The stand-in is built from the same declarations as the app's
+    surface, so the tool list does not change when the app comes and goes.
     """
 
-    return create_proxy(
-        StreamableHttpTransport(
-            url,
-            headers={
-                CLIENT_NAME_HEADER: name,
-                CLIENT_IDENTITY_HEADER: json.dumps(identity, separators=(",", ":")),
-            },
-        ),
+    def __init__(
+        self,
+        project_name: str,
+        *,
+        name: str,
+        identity: Mapping[str, Any],
+        settings: Mapping[str, Any] | None = None,
+    ) -> None:
+        self.project_name = project_name
+        self.name = name
+        self.identity = identity
+        self.settings = settings
+        self._config: ResearchConfig | None = None
+        self._standin: FastMCP[Any] | None = None
+
+    def _resolve(self) -> tuple[ResearchConfig | None, str | None]:
+        """The project's configuration, read again until the project exists here.
+
+        Resolving a configuration writes the project's portable state, so a
+        project that resolved is remembered; one that did not is looked for again
+        on every call, because `init` may have been run since.
+        """
+
+        if self._config is not None:
+            return self._config, None
+        config, reason = resolve_project(self.project_name, settings=self.settings)
+        self._config = config
+        return config, reason
+
+    def _serving_url(self, config: ResearchConfig) -> str | None:
+        if not is_serving(config, timeout=HEALTH_TIMEOUT_SECONDS):
+            return None
+        control = connect(config)
+        if control is None:
+            return None
+        with control:
+            return f"{control.base_url}/mcp"
+
+    async def serving_url(self) -> str | None:
+        """The app's agent endpoint, or None while it is not answering."""
+
+        config, _reason = await asyncio.to_thread(self._resolve)
+        if config is None:
+            return None
+        return await asyncio.to_thread(self._serving_url, config)
+
+    async def client(self) -> ProxyClient:
+        """The client this one call goes through."""
+
+        config, reason = await asyncio.to_thread(self._resolve)
+        if config is None:
+            return ProxyClient(
+                create_blocked_mcp(self.project_name, reason or "", config=None)
+            )
+        url = await asyncio.to_thread(self._serving_url, config)
+        if url is None:
+            if self._standin is None:
+                self._standin = create_unserved_mcp(config, not_running_reason())
+            return ProxyClient(self._standin)
+        return self._upstream(url, config)
+
+    def _upstream(self, url: str, config: ResearchConfig) -> ProxyClient:
+        """A session on the app's agent endpoint, named and located for its client list."""
+
+        return ProxyClient(
+            StreamableHttpTransport(url, headers=_headers(self.name, self.identity)),
+            timeout=config.settings.work_budget_seconds + CALL_TIMEOUT_MARGIN_SECONDS,
+            init_timeout=INIT_TIMEOUT_SECONDS,
+        )
+
+    async def explain(self, error: Exception) -> str:
+        """What a failed call means, in words that name the command that fixes it."""
+
+        config, reason = await asyncio.to_thread(self._resolve)
+        if config is None:
+            return reason or "This project is not initialised on this machine."
+        if await self.serving_url() is None:
+            from ..core.blocked_answers import not_served_status
+
+            standin = not_served_status(config, not_running_reason())
+            remedy = standin["blocked_by"][0]["remedy"]
+            return (
+                f"The app stopped answering during this call. Run `{remedy}` in a "
+                "terminal, then call this tool again; this entry needs no change."
+            )
+        return (
+            "The connection to the app dropped during this call "
+            f"({type(error).__name__}), and the app is still up. Call `status` to "
+            "see whether the change was applied before repeating a write."
+        )
+
+
+def _transport_failure(error: Exception) -> Exception | None:
+    """The connection failure behind `error`, or None when the backend itself refused.
+
+    FastMCP wraps whatever a call raised in a `ToolError` that carries the
+    original as its cause. The app's own refusals reach the bridge as a plain
+    `ToolError` with no cause, or as a protocol error, and are the answer, not a
+    fault: only a failure of the connection is explained here.
+    """
+
+    cause = error.__cause__ if isinstance(error, ToolError) else error
+    if cause is None or isinstance(cause, FastMCPError | McpError):
+        return None
+    return cause if isinstance(cause, Exception) else None
+
+
+class _Resilience(Middleware):
+    """Turn a dropped connection into an answer, and repeat a read once.
+
+    An agent told only that a connection closed has nothing to act on, so the
+    failure is replaced by whether the app is still there and the command that
+    starts it when it is not.
+    """
+
+    def __init__(self, backends: Backends) -> None:
+        self._backends = backends
+
+    async def on_call_tool(self, context: Any, call_next: Any) -> Any:
+        try:
+            return await call_next(context)
+        except Exception as error:
+            failure = _transport_failure(error)
+            if failure is None:
+                raise
+        if (
+            context.message.name in READ_ONLY_TOOLS
+            and await self._backends.serving_url() is not None
+        ):
+            try:
+                return await call_next(context)
+            except Exception as error:
+                again = _transport_failure(error)
+                if again is None:
+                    raise
+                failure = again
+        raise ToolError(await self._backends.explain(failure)) from failure
+
+
+def build_bridge(
+    project_name: str,
+    *,
+    name: str,
+    identity: Mapping[str, Any],
+    settings: Mapping[str, Any] | None = None,
+) -> Any:
+    """The stdio server for one project name, which never decides at launch."""
+
+    backends = Backends(project_name, name=name, identity=identity, settings=settings)
+    server = FastMCPProxy(
+        client_factory=backends.client,
         name=AGENT_BRIDGE_NAME,
         version=APP_VERSION,
     )
+    server.add_middleware(_Resilience(backends))
+    return server
 
 
 def uninitialised_reason(project_name: str) -> str | None:
@@ -199,43 +373,27 @@ def resolve_project(
     )
 
 
-def serve_blocked(
-    project_name: str, reason: str, *, config: ResearchConfig | None
-) -> None:
-    """Answer an agent whose project this machine cannot serve, and start nothing."""
-
-    create_blocked_mcp(project_name, reason, config=config).run(
-        transport="stdio", show_banner=False
-    )
-
-
 def run(
     project_name: str,
     *,
     settings: Mapping[str, Any] | None = None,
     name: str | None = None,
 ) -> None:
-    """Connect stdio to the app serving this project name, and stay up as long as it does.
+    """Connect stdio to the app serving this project name, and stay up for the client.
 
     Nothing is started here. An app runs in a terminal and ends when that terminal
-    closes, so a client that arrives while the project is not being served is told
+    closes, so a call that arrives while the project is not being served is told
     which command to run rather than quietly given a server of its own to leave
-    behind.
+    behind. The bridge itself is up as long as its client is, whatever the app
+    does meanwhile.
     """
 
-    config, reason = resolve_project(project_name, settings=settings)
-    if config is None:
-        serve_blocked(project_name, reason or "", config=None)
-        return
-    if not is_serving(config):
-        serve_blocked(project_name, not_running_reason(), config=config)
-        return
-    with connect(config) as control:
-        url = f"{control.base_url}/mcp"
-    name = name or client_name()
-    build_proxy(url, name=name, identity=client_identity(project_name)).run(
-        transport="stdio", show_banner=False
-    )
+    build_bridge(
+        project_name,
+        name=name or client_name(),
+        identity=client_identity(project_name),
+        settings=settings,
+    ).run(transport="stdio", show_banner=False)
 
 
 def main(

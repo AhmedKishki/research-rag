@@ -527,6 +527,22 @@ class ClientRegistry:
         return [client for client in self._clients.values() if client.attached]
 
 
+def request_caller() -> str:
+    """Who the agent request being handled came from, as a fair queue names it.
+
+    One agent is one caller however many sessions it opens, which is the grain
+    the client list already keeps, so a bridge that opens a session per call
+    waits in one place in the rounds.
+    """
+
+    from fastmcp.server.dependencies import get_http_headers
+
+    headers = get_http_headers(include_all=True)
+    identity = parse_client_identity(headers.get(CLIENT_IDENTITY_HEADER))
+    session_id = (headers.get("mcp-session-id") or "").strip()
+    return ClientRegistry._key(session_id, identity) if session_id or identity else ""
+
+
 class ClientGate:
     """Refuse a dropped session before its requests reach the agent.
 
@@ -701,7 +717,10 @@ class App:
         from .control import control_routes
 
         mcp_http = create_mcp(
-            self.config, connect=self._service, app_state=self.state
+            self.config,
+            connect=self._service,
+            app_state=self.state,
+            caller=request_caller,
         ).http_app(path=MCP_PATH)
         workspace = create_ui_app(
             self.config,

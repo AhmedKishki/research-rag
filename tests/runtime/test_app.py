@@ -1320,3 +1320,32 @@ def test_a_project_with_no_app_reports_no_app(project: Path) -> None:
     config = resolve_config(project)
     assert recorded_port(config) is None
     assert running_url(config) is None
+
+
+def test_an_agents_sessions_wait_in_one_place_in_the_rounds(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """One agent is one caller however many sessions its bridge opens."""
+
+    from fastmcp.server import dependencies
+
+    from research_rag.runtime.app import CLIENT_IDENTITY_HEADER, request_caller
+
+    def headers(session: str, pid: int | None) -> dict[str, str]:
+        found = {"mcp-session-id": session}
+        if pid is not None:
+            found[CLIENT_IDENTITY_HEADER] = json.dumps({"pid": pid})
+        return found
+
+    def caller_of(session: str, pid: int | None) -> str:
+        monkeypatch.setattr(
+            dependencies, "get_http_headers", lambda **_: headers(session, pid)
+        )
+        return request_caller()
+
+    assert caller_of("s1", 4242) == caller_of("s2", 4242)
+    assert caller_of("s1", 4242) != caller_of("s3", 9999)
+    # A client that declared nothing is its session.
+    assert caller_of("s1", None) != caller_of("s2", None)
+    monkeypatch.setattr(dependencies, "get_http_headers", lambda **_: {})
+    assert request_caller() == ""

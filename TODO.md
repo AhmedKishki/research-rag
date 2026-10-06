@@ -2,7 +2,32 @@
 
 An item is done when the harness has produced its measurement and the validation in `AGENTS.md` is clean.
 
-Entries are grouped by the module each one touches.
+## future
+
+* [arxiv.org/pdf/2602.07297](https://arxiv.org/pdf/2602.07297)
+* Hierarchical Navigable Small World and KNN
+
+## method
+
+* [ ] **Scalability of embeddings is questioned.** if most results are concentrated between 0.7 and 0.9 - there is not so much possibility to differentiate between good and better matches.
+
+## ui
+
+* [ ] O**penning source should not download.** File is already on system, opening from ui should open with default viewer.
+* [ ] **Hyperlink to passage, and source when pressed on name. Pressing on a passage name hyperlinks to it, showing the passage in context. (optional depends on practicality) Pressing on a source name should hyperlink to viewing all chunks, all stats for each chunk, etc.**
+
+## mcp/cli
+
+* [ ] **Mcp does not provide ocr.** but ocr accessible via cli. check pdf-tools: /home/ahmed/Documents/pdf-tools - should not depend on pdf-tools and must research-rag must remain self-contained.
+
+## chunking
+
+* [ ] **Health check must be conducted before chunking.** an error rate of more than 1% is enough to trigger a fault and rejection, mentioning that source is not clean and a loss is expected. suggest ocr in that case, but note that ocr is not automatically callable, i.e. it must be called separately via cli.
+
+## Stats
+
+* [ ] **Make each stats take a new card.** with possibility to change the scope of each card
+* [ ] **Provide a history of searches.** with quick link to search again.
 
 ## cli
 

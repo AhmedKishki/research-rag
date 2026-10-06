@@ -325,6 +325,20 @@ SETTINGS: tuple[Setting, ...] = (
         env="RESEARCH_RAG_NICE",
     ),
     Setting(
+        key="runtime.search_concurrency",
+        field="search_concurrency",
+        kind=int,
+        layer="runtime",
+        doc=(
+            "How many searches run at once. A search saturates the cores while it "
+            "reranks, so more only slows each one. Searches beyond it wait their "
+            "turn, one caller after another in rounds."
+        ),
+        minimum=1,
+        maximum=16,
+        env="RESEARCH_RAG_SEARCH_CONCURRENCY",
+    ),
+    Setting(
         key="runtime.model_cache_root",
         field="model_cache_root",
         kind=str,
@@ -788,6 +802,7 @@ class EffectiveSettings:
     tool_detail: str
     embedding_threads: int | None
     nice: int
+    search_concurrency: int
     model_cache_root: Path | None
     rrf_k: int
     bm25_weight: float

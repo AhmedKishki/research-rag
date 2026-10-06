@@ -688,7 +688,7 @@ class SearchWorkflow:
         except ValueError as exc:
             raise ResearchError(str(exc)) from exc
 
-        async with self._read() as lease:
+        async with self._search_read() as lease:
             current = self._load_current_optional()
             if current is None:
                 raise ResearchError("No knowledge base exists; call ingest first")
