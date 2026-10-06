@@ -59,10 +59,20 @@ An item is done when the harness has produced its measurement and the validation
 - [ ] **Reuse vectors across a contextual-header change.** Feature. Vector reuse keys on canonical passage text, so turning `chunking.headers` on recomputes every vector.
   - Fix: two hash columns, one canonical and one embedded, plus a lookup-schema bump. The bump rebuilds the sidecar from canonical artifacts, not the corpus.
   - `generation_is_reusable` validates the sidecar before anything ensures it, so a version bump denies reuse to the first ingest after it.
+- [ ] **Chunk by paragraph, not by a fixed token window.** Feature. `chunking.size` and `chunking.overlap` cut fixed GPT-2 token windows, so a passage can begin and end mid-sentence and neighbours repeat the overlap. A paragraph boundary, with a size ceiling and an overlap only where one paragraph exceeds it, is what a reader quotes. Needs a judged-set measurement before it changes the default; both settings are identity, so a change rebuilds the generation.
+- [ ] **Refuse a garbage passage, not only a garbage unit.** Feature. `corpus/text_quality.py` judges a unit and extraction withholds one whose text carries a reason. Extend the verdicts to what a reader retrieves — running heads, page numbers, a table of contents, an index, a reference list, boilerplate — and refuse the passage at build time. Measure what it removes, and what it takes with it, against the judged set.
+
+## Serving a large corpus
+
+- [ ] **Measure the operating envelope.** Test. No figure covers search latency, index size, resident memory, or build time at the corpus size this app claims to serve. `retrieval.exact_backend_chunk_limit = 200000` is where `auto` selects the ANN backend, but nothing states where the exact scan stops being usable. Record the envelope in `MEASUREMENTS.md`, and let it bound the source and passage counts the app supports.
+- [ ] **Choose whether canonical retrieval text moves into SQLite.** Decision. `retrieval/artifact_lookup.py` keeps a SQLite sidecar of identifiers, ordinals, digests, and byte offsets, while passage and extraction text stay in JSONL and are read on demand; a large corpus pays a file read per hit. Options: keep the split and measure it against the recorded envelope, or make the sidecar the canonical store for retrieval text. `sources/` remains the authority for a quotation, and the artifacts stay portable, either way.
+- [ ] **Make duplicate handling a stated, measured policy.** Feature. `retrieval.duplicate_cosine` already suppresses a passage a search has shown, at search time. Name every case it must cover — one essay alone and inside a book, a byte-identical source under two names, a passage repeated across a generation — and measure what still appears twice on a large corpus.
+  - Keep suppression at search time, never at chunk- or record-time, so a duplicate keeps the rank the next query could use.
 
 ## Closing the paraphrase gap
 
 - Judged paraphrase queries miss the designated passage within the top ten although nothing is withheld. The passages are present and the ranking does not find them.
+- [ ] **Improve paraphrase matching, and price each lever.** Feature. Measure the levers the app already reaches — the pseudo-relevance expansion, the CPU reranker, and a larger embedding model from the pinned registry — against the pooled judgments once they exist. Keep only a lever whose pooled result improves and whose cost is stated.
 - [ ] **Pool relevance judgments.** Test. The set is known-item, so a passage making the same point scores as a miss. Collect every candidate from every mode and judge the pool. Pooling also lets the pseudo-relevance expansion be measured, which a known-item set cannot see.
 - [ ] **Grow the judged set from real questions.** Test. Needs a settled privacy position on query logs.
 - [ ] **Measure headers on a corpus with sections.** Test. A PDF locator carries a page, so the header is the title alone. An EPUB locator carries a section, which the passage does not state.
