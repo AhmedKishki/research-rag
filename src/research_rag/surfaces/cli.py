@@ -929,6 +929,12 @@ def _parser() -> argparse.ArgumentParser:
         metavar="N",
         help="How many sources and passages each ranked list names (1-100).",
     )
+    stats.add_argument(
+        "--largest-by",
+        choices=("passages", "pages"),
+        default="passages",
+        help="What the largest sources are ranked by (default passages).",
+    )
 
     history = add(
         "history",
@@ -1731,8 +1737,12 @@ class Local:
     async def sources(self) -> dict[str, Any]:
         return await self._require().list_sources()
 
-    async def stats(self, *, days: float | None, top: int) -> dict[str, Any]:
-        return await self._require().search_stats(since_days=days, top=top)
+    async def stats(
+        self, *, days: float | None, top: int, largest_by: str
+    ) -> dict[str, Any]:
+        return await self._require().search_stats(
+            since_days=days, top=top, largest_by=largest_by
+        )
 
     async def history(self, *, limit: int, days: float | None) -> dict[str, Any]:
         return await self._require().search_history(limit=limit, since_days=days)
@@ -1846,8 +1856,10 @@ class Remote:
     async def sources(self) -> dict[str, Any]:
         return self.control.sources()
 
-    async def stats(self, *, days: float | None, top: int) -> dict[str, Any]:
-        return self.control.stats(days=days, top=top)
+    async def stats(
+        self, *, days: float | None, top: int, largest_by: str
+    ) -> dict[str, Any]:
+        return self.control.stats(days=days, top=top, largest_by=largest_by)
 
     async def history(self, *, limit: int, days: float | None) -> dict[str, Any]:
         return self.control.history(limit=limit, days=days)
@@ -1984,7 +1996,9 @@ async def _operate(
             metadata=_metadata_body(args),
         )
     if command == "stats":
-        return await operations.stats(days=args.days, top=args.top)
+        return await operations.stats(
+            days=args.days, top=args.top, largest_by=args.largest_by
+        )
     if command == "history":
         if args.clear:
             return await operations.clear_history()

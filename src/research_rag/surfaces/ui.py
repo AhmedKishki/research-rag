@@ -142,7 +142,7 @@ _OPERATION_ARGUMENTS: Mapping[str, frozenset[str]] = {
     "list_projects": frozenset(),
     "agent_entry": frozenset(),
     "check_updates": frozenset(),
-    "search_stats": frozenset({"days", "top"}),
+    "search_stats": frozenset({"days", "top", "largest_by"}),
     "search_history": frozenset({"limit", "days"}),
     "clear_search_history": frozenset(),
     "source_chunks": frozenset({"source_id", "source_path", "page", "page_size"}),
@@ -376,6 +376,7 @@ class ResearchUIAdapter:
                 top=_bounded_int(
                     arguments.get("top"), default=20, maximum=100, name="top"
                 ),
+                largest_by=_optional_text(arguments.get("largest_by")) or "passages",
             )
         if operation == "search_history":
             return await self.service.search_history(

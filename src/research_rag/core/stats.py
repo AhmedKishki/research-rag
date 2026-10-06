@@ -43,6 +43,9 @@ from .admission import current_caller
 
 LOGGER = logging.getLogger(__name__)
 
+# What the largest sources are ranked by.
+LARGEST_BY = ("passages", "pages")
+
 # How much of a passage a list of them shows; the whole is `get_passage`.
 PREVIEW_CHARACTERS = 420
 
@@ -126,15 +129,22 @@ class StatsWorkflow:
             LOGGER.warning("search counts not recorded: %s", exc)
 
     async def search_stats(
-        self, *, since_days: float | None = None, top: int = TOP_ENTRIES
+        self,
+        *,
+        since_days: float | None = None,
+        top: int = TOP_ENTRIES,
+        largest_by: str = "passages",
     ) -> dict[str, Any]:
         """Search counts by rank, and the facts the selected generation carries.
 
         `since_days` bounds the counts to recent searches and `top` the length of
-        the ranked lists; the corpus and build facts are the generation's own and
-        do not move with either.
+        the ranked lists, including the largest sources, which `largest_by` ranks by
+        `passages` or `pages`. The corpus and build facts are the generation's own
+        and do not move with the time window.
         """
 
+        if largest_by not in LARGEST_BY:
+            raise ResearchError(f"largest_by must be one of: {', '.join(LARGEST_BY)}")
         if since_days is not None and since_days <= 0:
             raise ResearchError("since_days must be a positive number of days")
         if not 1 <= top <= 100:
@@ -247,7 +257,9 @@ class StatsWorkflow:
             if counts["search_count"]
             else []
         )
-        answer["corpus"] = self._corpus_facts(searchable, passages_by_document)
+        answer["corpus"] = self._corpus_facts(
+            searchable, passages_by_document, top=top, largest_by=largest_by
+        )
         answer["last_build"] = self._build_facts(manifest)
         return answer
 
@@ -422,6 +434,7 @@ class StatsWorkflow:
         if document is None:
             return {"title": None, "source_relative_path": None, "in_corpus": False}
         return {
+            "source_id": document.get("source_id"),
             "title": document.get("title") or document.get("source_relative_path"),
             "source_relative_path": document.get("source_relative_path"),
             "in_corpus": True,
@@ -431,12 +444,21 @@ class StatsWorkflow:
     def _corpus_facts(
         documents: list[dict[str, Any]],
         passages_by_document: dict[str, int],
+        *,
+        top: int = TOP_ENTRIES,
+        largest_by: str = "passages",
     ) -> dict[str, Any]:
-        """Composition the manifest already records, counted over searchable sources."""
+        """Composition the manifest already records, counted over searchable sources.
+
+        Every distribution is complete and a reader's card shortens it; only the
+        largest sources are cut here, because ranking them is the question asked.
+        """
 
         formats: Counter[str] = Counter()
         languages: Counter[str] = Counter()
         decades: Counter[str] = Counter()
+        categories: Counter[str] = Counter()
+        authors: Counter[str] = Counter()
         missing: Counter[str] = Counter()
         pages = 0
         sizes = []
@@ -446,6 +468,10 @@ class StatsWorkflow:
                 languages[str(language)] += 1
             decade = _decade(document.get("year"))
             decades[decade or "no year"] += 1
+            for category in document.get("categories") or []:
+                categories[str(category)] += 1
+            for author in document.get("authors") or []:
+                authors[str(author)] += 1
             for field in ("authors", "year", "categories"):
                 if not document.get(field):
                     missing[field] += 1
@@ -457,7 +483,14 @@ class StatsWorkflow:
                 )
             )
         counts = sorted(count for count, _ in sizes)
-        largest = sorted(sizes, key=lambda item: -item[0])[:5]
+        if largest_by == "pages":
+            ranked = sorted(
+                sizes,
+                key=lambda item: (-int(item[1].get("physical_pages") or 0), -item[0]),
+            )
+        else:
+            ranked = sorted(sizes, key=lambda item: -item[0])
+        largest = ranked[:top]
         return {
             "source_count": len(documents),
             "passage_count": sum(counts),
@@ -467,13 +500,20 @@ class StatsWorkflow:
                 "median": statistics.median(counts) if counts else None,
                 "maximum": counts[-1] if counts else None,
             },
+            "largest_by": largest_by,
             "largest_sources": [
-                {"passage_count": count, **StatsWorkflow._source_label(document)}
+                {
+                    "passage_count": count,
+                    "physical_pages": document.get("physical_pages"),
+                    **StatsWorkflow._source_label(document),
+                }
                 for count, document in largest
             ],
             "formats": _counted(formats),
             "languages": _counted(languages),
             "decades": _counted(decades),
+            "categories": _counted(categories),
+            "authors": _counted(authors),
             "missing_metadata": {
                 field: missing.get(field, 0)
                 for field in ("authors", "year", "categories")

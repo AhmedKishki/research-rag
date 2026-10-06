@@ -562,7 +562,9 @@ def test_an_unserved_search_argument_never_reaches_the_service(
         "source_chunks",
         "open_source",
     }
-    assert _OPERATION_ARGUMENTS["search_stats"] == frozenset({"days", "top"})
+    assert _OPERATION_ARGUMENTS["search_stats"] == frozenset(
+        {"days", "top", "largest_by"}
+    )
     assert _OPERATION_ARGUMENTS["list_projects"] == frozenset()
     assert _OPERATION_ARGUMENTS["agent_entry"] == frozenset()
     assert _OPERATION_ARGUMENTS["check_updates"] == frozenset()
@@ -977,15 +979,21 @@ def _counting_client(project: Path) -> tuple[TestClient, _CountingService]:
 def test_the_stats_routes_pass_their_scope_and_bound_it(project: Path) -> None:
     client, fake = _counting_client(project)
     with client:
-        assert client.get("/api/stats?days=7&top=5").json()["searches"] == {
-            "search_count": 3
-        }
+        assert client.get("/api/stats?days=7&top=5&largest_by=pages").json()[
+            "searches"
+        ] == {"search_count": 3}
         client.get("/api/stats")
         history = client.get("/api/stats/history?limit=10&days=1").json()
         bad = client.get("/api/stats?days=soon")
         too_many = client.get("/api/stats?top=1000")
-    assert ("search_stats", {"since_days": 7.0, "top": 5}) in fake.calls
-    assert ("search_stats", {"since_days": None, "top": 20}) in fake.calls
+    assert (
+        "search_stats",
+        {"since_days": 7.0, "top": 5, "largest_by": "pages"},
+    ) in fake.calls
+    assert (
+        "search_stats",
+        {"since_days": None, "top": 20, "largest_by": "passages"},
+    ) in fake.calls
     assert ("search_history", {"limit": 10, "since_days": 1.0}) in fake.calls
     assert history["recording"] is True
     assert bad.status_code == 400

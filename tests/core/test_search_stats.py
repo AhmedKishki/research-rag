@@ -309,3 +309,46 @@ def test_a_source_lists_its_passages_with_how_often_each_was_returned(
         for chunk in page["chunks"]
     }
     assert counted.get(answered["top"], 0) >= 1
+
+
+def test_the_largest_sources_are_ranked_by_what_the_reader_asks(project: Path) -> None:
+    async def exercise() -> dict[str, object]:
+        for name, pages in (("short", 1), ("long", 3), ("middle", 2)):
+            write_pdf(
+                project / "sources" / f"{name}.pdf",
+                [
+                    f"Evidence about {name} labour, page {n}. " * 12
+                    for n in range(pages)
+                ],
+                title=name.title(),
+            )
+        service = _service(project)
+        write_reviewed_metadata(
+            service.config,
+            "long.pdf",
+            {"authors": ["Ada"], "categories": ["labour", "theory"]},
+        )
+        write_reviewed_metadata(
+            service.config, "short.pdf", {"authors": ["Ada"], "categories": ["labour"]}
+        )
+        await service.ingest(chunk_size=60, chunk_overlap=10)
+        by_pages = await service.search_stats(largest_by="pages", top=2)
+        by_passages = await service.search_stats(largest_by="passages", top=3)
+        with pytest.raises(ResearchError, match="largest_by"):
+            await service.search_stats(largest_by="words")
+        return {"pages": by_pages, "passages": by_passages}
+
+    answered = asyncio.run(exercise())
+    pages, passages = answered["pages"], answered["passages"]  # type: ignore[assignment]
+
+    assert pages["corpus"]["largest_by"] == "pages"
+    assert [entry["title"] for entry in pages["corpus"]["largest_sources"]] == [
+        "long",
+        "middle",
+    ]
+    assert pages["corpus"]["largest_sources"][0]["physical_pages"] == 3
+    assert all(entry["source_id"] for entry in pages["corpus"]["largest_sources"])
+    assert len(passages["corpus"]["largest_sources"]) == 3
+    counts = passages["corpus"]
+    assert counts["categories"][0] == {"value": "labour", "count": 2}
+    assert {"value": "Ada", "count": 2} in counts["authors"]
