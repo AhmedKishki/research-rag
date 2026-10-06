@@ -7,6 +7,7 @@ What is on disk, how it is read, and what a file's text says about itself.
 | `sources.py` | The scan of `sources/`, the policy that decides what is a source, and the stable source ID |
 | `extraction.py` | PDF page extraction, EPUB traversal, the units they yield, the stripping of non-argument sections across a source, and the gate both build paths apply |
 | `text_normalization.py` | Reading text as it is read: compatibility characters, whitespace, sentence ends |
+| `ocr.py` | `research-rag ocr` alone: a copy of one PDF whose scanned pages carry a recognised text layer |
 | `text_quality.py` | Whether a string is usable: corruption, scripts, the flags a chunk carries, which paragraphs belong to a non-argument section, and whether a whole source is readable |
 
 ## Rules
@@ -76,7 +77,7 @@ What is on disk, how it is read, and what a file's text says about itself.
   `unsafe_to_clean`, and it exists because a rule that is wrong about a document is
   worse than no rule. `text_quality.source_health_reasons` owns the verdicts.
   Mixed image-only and readable pages produce a warning rather than a scan-only refusal.
-- This folder performs no OCR. A page is judged a scan by
+- Extraction performs no OCR, and `ocr.py` is not reached from it. `ocr.py` serves `research-rag ocr` alone and writes a copy of one PDF. A page is judged a scan by
   `extraction._image_only_page`, which asks whether the page has no text and an
   image covering most of it; a share of digits or symbols is not a scan.
   An existing OCR text layer must pass the same health checks as other text.

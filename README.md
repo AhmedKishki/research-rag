@@ -82,7 +82,9 @@ research-rag --project-root "/path/to/project" doctor --mcp-entry
 - `research-rag --help` or `research-rag help`: the command reference, without a project.
 - `research-rag COMMAND --help`: arguments and examples for one command.
 - `research-rag help TOPIC`: workflow guidance for `agents`, `filters`, or `settings`.
-- No OCR is performed. A PDF with an OCR text layer is indexed as that text. A PDF with no text layer or a password is refused.
+- Ingestion performs no OCR. A PDF with an OCR text layer is indexed as that text. A PDF with no text layer or a password is refused.
+  - `research-rag ocr SOURCE` writes an OCR copy of a scanned PDF outside the sources directory, using the optional `ocr` extra (`uv sync --extra ocr`). Move the copy in yourself, then run `ingest`.
+  - A source with more than 1% of its text unreadable is refused when it is extracted, and the refusal names this command.
 - [Features and limits](FEATURES.md), [storage and portability](STORAGE.md), [measurement protocols](MEASUREMENTS.md).
 
 ## UltraRAG credit and licensing

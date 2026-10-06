@@ -219,6 +219,7 @@ def test_pdf_page_batches_share_handles_and_preserve_extraction_output(
             "excluded_corrupt_units",
             "extracted_units",
             "removed_repeated_margin_blocks",
+            "unclean_character_rate",
         }:
             assert document[key] == value
 

@@ -74,6 +74,7 @@ RESTART_SETTINGS = frozenset(
         "runtime.log_level",
         "runtime.nice",
         "runtime.search_concurrency",
+        "runtime.search_history",
         "runtime.offline",
         "runtime.embedding_threads",
         "dense.embedding_model",

@@ -11,24 +11,6 @@ An item is done when the harness has produced its measurement and the validation
 
 * [ ] **Scalability of embeddings is questioned.** if most results are concentrated between 0.7 and 0.9 - there is not so much possibility to differentiate between good and better matches.
 
-## ui
-
-* [ ] O**penning source should not download.** File is already on system, opening from ui should open with default viewer.
-* [ ] **Hyperlink to passage, and source when pressed on name. Pressing on a passage name hyperlinks to it, showing the passage in context. (optional depends on practicality) Pressing on a source name should hyperlink to viewing all chunks, all stats for each chunk, etc.**
-
-## mcp/cli
-
-* [ ] **Mcp does not provide ocr.** but ocr accessible via cli. check pdf-tools: /home/ahmed/Documents/pdf-tools - should not depend on pdf-tools and must research-rag must remain self-contained.
-
-## chunking
-
-* [ ] **Health check must be conducted before chunking.** an error rate of more than 1% is enough to trigger a fault and rejection, mentioning that source is not clean and a loss is expected. suggest ocr in that case, but note that ocr is not automatically callable, i.e. it must be called separately via cli.
-
-## Stats
-
-* [ ] **Make each stats take a new card.** with possibility to change the scope of each card
-* [ ] **Provide a history of searches.** with quick link to search again.
-
 ## cli
 
 - [ ] **Let a command start the app when the corpus is not ready.** Decision. A command that touches the corpus goes to the running app. With no app up, it is answered in process, which opens a second service nobody serves. Starting an app instead makes `status` leave a process behind. App should be started explicitly for any process.

@@ -3,7 +3,9 @@
 What enters an index: source selection, locators, text cleanup, and the health gate. They also cover source-directory and runtime-root resolution in `src/research_rag/project/config.py`.
 
 - `test_sources_and_extraction.py`: source selection and stable ids, symlink and escaping-directory rejection, PDF page and EPUB section locators, batched page extraction, EPUB anchor stability, text normalization, corruption and script signals with their reasons, front-matter metadata, layout restoration, language detection, and the relocated runtime root's claim marker.
-- `test_extraction_health_gate.py`: pre-chunk cleanup and the source health gate.
+- `test_ocr.py`: a scanned page gains a text layer in a copy, the original is untouched, nothing is written into the sources, a missing backend names how to install it, and the real recogniser reads a page when it is installed.
+- `test_extraction_health_gate.py`: pre-chunk cleanup and the source health gate, including the share of unreadable text a source may lose before it is refused.
+- `test_ocr.py`: a scanned page gains a text layer in a copy, the original is untouched, nothing is written into the sources, a missing backend names how to install it, and the real recogniser reads a page when it is installed.
   - Each removal rule against the text it must keep.
   - A section continued across unit boundaries, and one that stops at the next argument heading.
   - Sidebar, footnote, and EPUB furniture cases.

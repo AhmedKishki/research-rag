@@ -1027,8 +1027,8 @@ def test_the_running_app_answers_generations_and_stats_without_awaiting_a_dict()
         ) -> dict[str, Any]:
             return {"generation_id": generation_id, "confirm": confirm}
 
-        def stats(self) -> dict[str, Any]:
-            return {"searches": {"search_count": 2}}
+        def stats(self, *, days: float | None, top: int) -> dict[str, Any]:
+            return {"searches": {"search_count": 2}, "days": days, "top": top}
 
     async def exercise() -> list[dict[str, Any]]:
         remote = cli_module.Remote(Answering())  # type: ignore[arg-type]
@@ -1036,12 +1036,12 @@ def test_the_running_app_answers_generations_and_stats_without_awaiting_a_dict()
             await remote.generations(),
             await remote.use_generation("g1"),
             await remote.remove_generation("g1", confirm="g1"),
-            await remote.stats(),
+            await remote.stats(days=7, top=5),
         ]
 
     assert asyncio.run(exercise()) == [
         {"generations": []},
         {"generation_id": "g1"},
         {"generation_id": "g1", "confirm": "g1"},
-        {"searches": {"search_count": 2}},
+        {"searches": {"search_count": 2}, "days": 7, "top": 5},
     ]

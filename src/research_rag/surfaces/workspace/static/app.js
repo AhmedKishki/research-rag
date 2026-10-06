@@ -27,6 +27,18 @@ const state = {
   // A fold the reader opened or closed keeps that choice across a refresh, keyed
   // by the fold's id or its `data-fold` name.
   folds: new Map(),
+  // The stats board: each card's scope, the answers the cards share, and the
+  // panels drawn for them.
+  statScopes: {},
+  statData: new Map(),
+  statPanels: new Map(),
+  // The view on screen, which may be a detail view the sidebar has no item for,
+  // the source being read, and the passage a link opened.
+  view: "",
+  sourceView: { id: "", page: 1, title: "" },
+  passageId: "",
+  passagePushed: false,
+  closingForRoute: false,
 };
 
 const byId = (id) => document.getElementById(id);
@@ -303,7 +315,9 @@ async function api(path, options = {}) {
     // A non-JSON response is represented by the HTTP status below.
   }
   if (!response.ok) {
-    throw new Error(payload?.error || `Request failed with status ${response.status}`);
+    const error = new Error(payload?.error || `Request failed with status ${response.status}`);
+    error.status = response.status;
+    throw error;
   }
   return payload;
 }
@@ -1214,7 +1228,9 @@ function sourceCard(source) {
   const titleRow = node("div", "source-title-row");
   const title = inlineText(source.title) || source.source_relative_path;
   titleRow.append(node("span", "format-badge", source.format || "source"));
-  titleRow.append(node("span", "source-title", title));
+  const name = node("span", "source-title");
+  name.append(source.source_id && hasCapability("sources") ? entityLink(title, sourceHref(source.source_id)) : title);
+  titleRow.append(name);
   body.append(titleRow);
   body.append(node("p", "source-byline", authorLine(source)));
   if (source.doi) body.append(node("p", "source-doi", `doi:${inlineText(source.doi).replace(/^doi:/i, "")}`));
@@ -1402,6 +1418,17 @@ function renderExcludedPage() {
 // A new page starts where its list starts, and a keyboard reader lands on the
 // list's heading rather than on a pager button that may have moved.
 function goToSourcePage(list, page) {
+  if (list === "chunks") {
+    state.sourceView.page = page;
+    recordRoute();
+    void loadSourceView().then(() => {
+      const heading = byId("source-chunks-heading");
+      heading.tabIndex = -1;
+      heading.focus({ preventScroll: true });
+      heading.scrollIntoView({ block: "start", behavior: "smooth" });
+    });
+    return;
+  }
   state.sourcePages[list] = page;
   if (list === "excluded") {
     byId("excluded-fold").open = true;
@@ -1500,9 +1527,64 @@ async function loadWorkspace({ announce = false } = {}) {
 // ------------------------------------------------------------------- stats --
 //
 // The server counts each search's first five ranks and reports them beside the
-// facts its selected generation records. The page draws what came back: tables
-// of counts with a bar beside each one for scale, never a figure the payload
-// did not carry.
+// facts its selected generation records. Every figure is a card of its own with
+// its own scope, because a reader comparing last week's searches with the whole
+// history wants both at once. A card asks the server for exactly its scope, and
+// the answers are shared between cards that chose the same one. The page draws
+// what came back and never a figure the payload did not carry.
+
+const STAT_TIME_SCOPES = [
+  { label: "All time", days: null },
+  { label: "30 days", days: 30 },
+  { label: "7 days", days: 7 },
+  { label: "24 hours", days: 1 },
+];
+const STAT_SIZES = [5, 10, 20, 50];
+const SCOPE_STORAGE_KEY = "research-rag.stat-scopes";
+
+// A reader's scopes survive a reload where the browser allows it, and the board
+// draws with its defaults where it does not.
+function readSavedScopes() {
+  try {
+    const saved = JSON.parse(window.localStorage.getItem(SCOPE_STORAGE_KEY) || "{}");
+    return saved && typeof saved === "object" ? saved : {};
+  } catch (_error) {
+    return {};
+  }
+}
+
+function saveScopes() {
+  try {
+    window.localStorage.setItem(SCOPE_STORAGE_KEY, JSON.stringify(state.statScopes));
+  } catch (_error) {
+    // Storage is a convenience; the scopes stay in this page.
+  }
+}
+
+function cardScope(card) {
+  const saved = state.statScopes[card.id] || {};
+  const days = STAT_TIME_SCOPES.some((scope) => scope.days === saved.days) ? saved.days : null;
+  const top = STAT_SIZES.includes(saved.top) ? saved.top : card.top || 10;
+  return { days, top };
+}
+
+function statRequest(source, scope) {
+  const key = `${source}|${scope.days ?? ""}|${scope.top}`;
+  if (!state.statData.has(key)) {
+    const params = new URLSearchParams();
+    if (scope.days !== null) params.set("days", String(scope.days));
+    params.set(source === "history" ? "limit" : "top", String(scope.top));
+    const path = source === "history" ? "/api/stats/history" : "/api/stats";
+    state.statData.set(
+      key,
+      api(`${path}?${params}`).catch((error) => {
+        state.statData.delete(key);
+        throw error;
+      }),
+    );
+  }
+  return state.statData.get(key);
+}
 
 // A bar for scale beside a count the row already states in text.
 function statBar(value, maximum) {
@@ -1559,35 +1641,52 @@ function statTable(columns, rows, { bar = null } = {}) {
   return scroller;
 }
 
-function statCard(label, value, detail) {
-  const card = node("article", "stat-card");
-  card.append(node("span", "stat-label", label));
-  card.append(node("strong", "stat-value", value));
-  if (detail) card.append(node("span", "stat-detail", detail));
-  return card;
-}
-
 function milliseconds(value) {
   if (value === null || value === undefined) return "—";
   return value >= 1000 ? `${(value / 1000).toFixed(1)} s` : `${Math.round(value)} ms`;
 }
 
+// A name that goes somewhere: a source to its passages, a passage to the text
+// around it. The click is handled by one listener, so the same link works from
+// every view, and a copied address returns to the same place.
+function entityLink(text, href, className = "") {
+  const link = node("a", `entity-link ${className}`.trim(), text);
+  link.href = href;
+  return link;
+}
+
+function sourceHref(sourceId) {
+  return `#/source?id=${encodeURIComponent(sourceId)}`;
+}
+
+function passageHref(chunkId) {
+  return `#/passage?id=${encodeURIComponent(chunkId)}`;
+}
+
 function sourceCell(entry) {
   const cell = document.createDocumentFragment();
-  cell.append(node("span", "stat-title", inlineText(entry.title) || entry.source_relative_path || entry.source_id || "Unknown source"));
+  const title = inlineText(entry.title) || entry.source_relative_path || entry.source_id || "Unknown source";
+  cell.append(
+    entry.source_id && entry.in_corpus !== false
+      ? entityLink(title, sourceHref(entry.source_id), "stat-title")
+      : node("span", "stat-title", title),
+  );
   if (entry.in_corpus === false) cell.append(node("span", "state-badge", "Not in this generation"));
   return cell;
 }
 
 function passageCell(entry) {
   const cell = document.createDocumentFragment();
-  cell.append(node("span", "stat-title", inlineText(entry.title) || "Unknown source"));
+  const title = inlineText(entry.title) || "Unknown source";
   cell.append(
-    node(
-      "span",
-      "locator-badge",
-      entry.in_current_generation ? locatorLabel(entry.locator) : "Not in this generation",
-    ),
+    entry.source_id && entry.in_corpus !== false
+      ? entityLink(title, sourceHref(entry.source_id), "stat-title")
+      : node("span", "stat-title", title),
+  );
+  cell.append(
+    entry.in_current_generation
+      ? entityLink(locatorLabel(entry.locator), passageHref(entry.chunk_id), "locator-badge")
+      : node("span", "locator-badge", "Not in this generation"),
   );
   return cell;
 }
@@ -1612,174 +1711,522 @@ function statGroup(title, content) {
   return group;
 }
 
-function renderStats(payload) {
-  const searches = payload.searches || {};
-  const count = Number(searches.search_count || 0);
-  const cards = byId("stats-cards");
-  cards.replaceChildren(
-    statCard(
-      "Searches",
-      formatNumber(count),
-      searches.first_search_at ? `Since ${formatDate(searches.first_search_at)}` : "None counted yet",
-    ),
-    statCard(
-      "With no results",
-      formatNumber(searches.zero_result_count),
-      count ? `${Math.round((100 * searches.zero_result_count) / count)}% of searches` : "—",
-    ),
-    statCard(
-      "Median time",
-      milliseconds(searches.median_elapsed_ms),
-      searches.p95_elapsed_ms === null || searches.p95_elapsed_ms === undefined
-        ? "—"
-        : `95th percentile ${milliseconds(searches.p95_elapsed_ms)}`,
-    ),
-    statCard(
-      "Never in a top five",
-      count ? formatNumber(payload.unreached_source_count) : "—",
-      payload.corpus ? `of ${formatNumber(payload.corpus.source_count)} searchable sources` : "No generation yet",
-    ),
-  );
-  const message = byId("stats-message");
-  message.hidden = Boolean(count);
-  message.textContent = count
-    ? ""
-    : "No search has been counted on this machine yet. Every search from the workspace, an agent, or the command line counts.";
+function numberBody(value, detail) {
+  const box = document.createDocumentFragment();
+  box.append(node("strong", "stat-value", value));
+  if (detail) box.append(node("span", "stat-detail", detail));
+  return box;
+}
 
-  const sources = payload.sources || [];
-  byId("stats-source-count").textContent = formatNumber(sources.length);
-  byId("stats-sources").replaceChildren(
-    statTable([{ label: "Source", value: sourceCell }, ...RANK_COLUMNS], sources, { bar: "top_five" }),
-  );
-  // The ranked lists are what this view is for and the server bounds them, so
-  // they open unless the reader closed them.
-  foldList(byId("stats-sources-fold"), Math.min(sources.length, FOLD_LIMIT));
+// The address that runs a kept search again: its question, its size, and each
+// filter in the field the search page reads it from.
+function searchHref(entry) {
+  const params = new URLSearchParams();
+  params.set("q", entry.query);
+  if (entry.requested_top_k && String(entry.requested_top_k) !== DEFAULT_TOP_K) {
+    params.set("k", String(entry.requested_top_k));
+  }
+  FILTER_PARAMS.forEach(([name]) => {
+    const values = entry.filters?.[name];
+    if (Array.isArray(values) && values.length) params.set(name, values.join(", "));
+  });
+  return `#/search?${params}`;
+}
 
-  const passages = payload.passages || [];
-  byId("stats-passage-count").textContent = formatNumber(passages.length);
-  byId("stats-passages").replaceChildren(
-    statTable([{ label: "Passage", value: passageCell }, ...RANK_COLUMNS], passages, { bar: "top_five" }),
-  );
-  foldList(byId("stats-passages-fold"), Math.min(passages.length, FOLD_LIMIT));
-
-  const unreached = payload.unreached_sources || [];
-  byId("stats-unreached-count").textContent = formatNumber(payload.unreached_source_count || 0);
-  const list = node("ul", "stats-list");
-  unreached.forEach((entry) => list.append(node("li", "", inlineText(entry.title) || entry.source_relative_path)));
-  const more = (payload.unreached_source_count || 0) - unreached.length;
-  byId("stats-unreached").replaceChildren(
-    unreached.length ? list : node("p", "form-note", count ? "Every searchable source has reached a top five." : "Nothing to count yet."),
-    ...(more > 0 ? [node("p", "form-note", `And ${formatNumber(more)} more.`)] : []),
-  );
-  foldList(byId("stats-unreached-fold"), payload.unreached_source_count || 0);
-
-  const days = [...(searches.searches_by_day || [])].reverse();
-  byId("stats-day-count").textContent = formatNumber(days.length);
-  byId("stats-days").replaceChildren(
-    statTable(
-      [{ label: "Day", value: (row) => row.day }, { label: "Searches", numeric: true, value: (row) => row.count }],
-      days,
-      { bar: "count" },
-    ),
-  );
-  foldList(byId("stats-days-fold"), days.length);
-
-  const corpus = payload.corpus;
-  const corpusBox = byId("stats-corpus");
-  if (!corpus) {
-    corpusBox.replaceChildren(node("p", "form-note", "This project has no generation yet."));
-  } else {
-    const spread = corpus.passages_per_source || {};
-    const missing = corpus.missing_metadata || {};
-    corpusBox.replaceChildren(
-      statGroup(
-        "Size",
-        factList(
-          [
-            ["Searchable sources", formatNumber(corpus.source_count)],
-            ["Passages", formatNumber(corpus.passage_count)],
-            ["PDF pages", formatNumber(corpus.pdf_page_count)],
-            [
-              "Passages per source",
-              `${formatNumber(spread.minimum)} fewest · ${formatNumber(spread.median)} median · ${formatNumber(spread.maximum)} most`,
-            ],
-          ],
-          "fact-list",
-        ),
-      ),
-      statGroup(
-        "Reviewed metadata missing",
-        factList(
-          [
-            ["Authors", `${formatNumber(missing.authors)} sources`],
-            ["Year", `${formatNumber(missing.year)} sources`],
-            ["Categories", `${formatNumber(missing.categories)} sources`],
-          ],
-          "fact-list",
-        ),
-      ),
-      statGroup(
-        "Largest sources",
-        statTable(
-          [{ label: "Source", value: sourceCell }, { label: "Passages", numeric: true, value: (row) => row.passage_count }],
-          corpus.largest_sources || [],
-          { bar: "passage_count" },
-        ),
-      ),
-      statGroup("Formats", countedTable("Format", corpus.formats)),
-      statGroup("Languages", countedTable("Language", corpus.languages)),
-      statGroup("Decades", countedTable("Decade", corpus.decades)),
+function historyBody(payload) {
+  const searches = payload.searches || [];
+  if (!searches.length) {
+    return node(
+      "p",
+      "form-note",
+      payload.recording === false
+        ? "History is off, so only counts are kept. Turn on runtime.search_history in Config to keep questions."
+        : "No search has kept its question yet.",
     );
   }
+  const list = node("ul", "history-list");
+  searches.forEach((entry) => {
+    const item = node("li", "history-item");
+    const head = node("div", "history-head");
+    head.append(entityLink(entry.query, searchHref(entry), "history-query"));
+    head.append(node("span", "state-badge", entry.caller || "unknown"));
+    item.append(head);
+    const filters = Object.entries(entry.filters || {}).filter(([, values]) => values.length);
+    const meta = [
+      formatDate(entry.searched_at),
+      `${formatNumber(entry.result_count)} of ${formatNumber(entry.requested_top_k)} passages`,
+      milliseconds(entry.elapsed_ms),
+    ];
+    item.append(node("p", "result-meta", meta.join(" · ")));
+    if (filters.length) {
+      const tags = node("div", "tag-row");
+      filters.forEach(([name, values]) =>
+        tags.append(node("span", "tag", `${name.replaceAll("_", " ")}: ${values.join(", ")}`)),
+      );
+      item.append(tags);
+    }
+    list.append(item);
+  });
+  return list;
+}
 
-  const build = payload.last_build;
-  const buildBox = byId("stats-build");
-  if (!build) {
-    buildBox.replaceChildren(node("p", "form-note", "This project has no generation yet."));
-  } else {
-    const phases = Object.entries(build.phase_seconds || {}).map(([phase, seconds]) => ({
-      phase: checkLabel(phase),
-      seconds,
-    }));
-    const facts = [["Built", formatDate(build.created_at)]];
-    if (build.seconds !== null && build.seconds !== undefined) facts.push(["Build time", `${formatNumber(build.seconds)} s`]);
-    if (build.created_vector_count !== null && build.created_vector_count !== undefined) {
-      facts.push([
-        "Vectors",
-        `${formatNumber(build.reused_vector_count)} reused · ${formatNumber(build.created_vector_count)} embedded`,
-      ]);
-    }
-    if (build.rebuilt_document_count !== null && build.rebuilt_document_count !== undefined) {
-      facts.push([
-        "Sources",
-        `${formatNumber(build.reused_document_count)} reused · ${formatNumber(build.rebuilt_document_count)} rebuilt`,
-      ]);
-    }
-    if (build.excluded_corrupt_unit_count) facts.push(["Corrupt units left out", formatNumber(build.excluded_corrupt_unit_count)]);
-    if (build.dense_truncated_chunk_count) facts.push(["Passages truncated for embedding", formatNumber(build.dense_truncated_chunk_count)]);
-    const generations = payload.generations || {};
-    facts.push(["Generations on disk", `${formatNumber(generations.count)} · ${bytes(generations.bytes)}`]);
-    buildBox.replaceChildren(
-      statGroup("Facts", factList(facts, "fact-list")),
-      statGroup(
-        "Time by phase",
-        statTable(
-          [{ label: "Phase", value: (row) => row.phase }, { label: "Seconds", numeric: true, value: (row) => row.seconds }],
-          phases,
-          { bar: "seconds" },
-        ),
+// Every card on the board: its title, where its numbers come from, the scopes a
+// reader may change on it, and how it draws what came back.
+const STAT_CARDS = [
+  {
+    id: "searches",
+    title: "Searches",
+    source: "stats",
+    scopes: ["time"],
+    number: true,
+    render: (payload) => {
+      const searches = payload.searches || {};
+      const mean = searches.mean_result_count;
+      return numberBody(
+        formatNumber(searches.search_count),
+        mean === null || mean === undefined ? "None counted yet" : `${mean} passages on average`,
+      );
+    },
+  },
+  {
+    id: "no-results",
+    title: "With no results",
+    source: "stats",
+    scopes: ["time"],
+    number: true,
+    render: (payload) => {
+      const searches = payload.searches || {};
+      const count = Number(searches.search_count || 0);
+      return numberBody(
+        formatNumber(searches.zero_result_count),
+        count ? `${Math.round((100 * searches.zero_result_count) / count)}% of searches` : "—",
+      );
+    },
+  },
+  {
+    id: "search-time",
+    title: "Median time",
+    source: "stats",
+    scopes: ["time"],
+    number: true,
+    render: (payload) => {
+      const searches = payload.searches || {};
+      const slow = searches.p95_elapsed_ms;
+      return numberBody(
+        milliseconds(searches.median_elapsed_ms),
+        slow === null || slow === undefined ? "—" : `95th percentile ${milliseconds(slow)}`,
+      );
+    },
+  },
+  {
+    id: "unreached",
+    title: "Never in a top five",
+    source: "stats",
+    scopes: ["time"],
+    number: true,
+    render: (payload) => {
+      const counted = Number(payload.searches?.search_count || 0);
+      return numberBody(
+        counted ? formatNumber(payload.unreached_source_count) : "—",
+        payload.corpus ? `of ${formatNumber(payload.corpus.source_count)} searchable sources` : "No generation yet",
+      );
+    },
+  },
+  {
+    id: "sources",
+    title: "Sources by appearances",
+    source: "stats",
+    scopes: ["time", "size"],
+    top: 10,
+    count: (payload) => (payload.sources || []).length,
+    render: (payload) =>
+      statTable([{ label: "Source", value: sourceCell }, ...RANK_COLUMNS], payload.sources || [], { bar: "top_five" }),
+  },
+  {
+    id: "passages",
+    title: "Passages by appearances",
+    source: "stats",
+    scopes: ["time", "size"],
+    top: 10,
+    count: (payload) => (payload.passages || []).length,
+    render: (payload) =>
+      statTable([{ label: "Passage", value: passageCell }, ...RANK_COLUMNS], payload.passages || [], { bar: "top_five" }),
+  },
+  {
+    id: "history",
+    title: "Search history",
+    source: "history",
+    scopes: ["time", "size"],
+    top: 10,
+    count: (payload) => payload.count || 0,
+    clearable: true,
+    render: (payload) => historyBody(payload),
+  },
+  {
+    id: "days",
+    title: "Searches by day",
+    source: "stats",
+    scopes: ["time"],
+    count: (payload) => (payload.searches?.searches_by_day || []).length,
+    render: (payload) =>
+      statTable(
+        [{ label: "Day", value: (row) => row.day }, { label: "Searches", numeric: true, value: (row) => row.count }],
+        [...(payload.searches?.searches_by_day || [])].reverse(),
+        { bar: "count" },
       ),
-    );
+  },
+  {
+    id: "unreached-list",
+    title: "Sources no search has reached",
+    source: "stats",
+    scopes: ["time", "size"],
+    top: 10,
+    count: (payload) => payload.unreached_source_count || 0,
+    render: (payload) => {
+      const counted = Number(payload.searches?.search_count || 0);
+      const unreached = payload.unreached_sources || [];
+      if (!unreached.length) {
+        return node("p", "form-note", counted ? "Every searchable source has reached a top five." : "Nothing to count yet.");
+      }
+      const list = node("ul", "stats-list");
+      unreached.forEach((entry) => {
+        const item = node("li");
+        item.append(
+          entry.source_id
+            ? entityLink(inlineText(entry.title) || entry.source_relative_path, sourceHref(entry.source_id))
+            : node("span", "", inlineText(entry.title) || entry.source_relative_path),
+        );
+        list.append(item);
+      });
+      const box = document.createDocumentFragment();
+      box.append(list);
+      const more = (payload.unreached_source_count || 0) - unreached.length;
+      if (more > 0) box.append(node("p", "form-note", `And ${formatNumber(more)} more.`));
+      return box;
+    },
+  },
+  {
+    id: "corpus",
+    title: "Corpus",
+    source: "stats",
+    scopes: [],
+    wide: true,
+    render: (payload) => renderCorpus(payload.corpus),
+  },
+  {
+    id: "build",
+    title: "Last build",
+    source: "stats",
+    scopes: [],
+    wide: true,
+    render: (payload) => renderBuild(payload),
+  },
+];
+
+function renderCorpus(corpus) {
+  if (!corpus) return node("p", "form-note", "This project has no generation yet.");
+  const spread = corpus.passages_per_source || {};
+  const missing = corpus.missing_metadata || {};
+  const groups = node("div", "stats-groups");
+  groups.append(
+    statGroup(
+      "Size",
+      factList(
+        [
+          ["Searchable sources", formatNumber(corpus.source_count)],
+          ["Passages", formatNumber(corpus.passage_count)],
+          ["PDF pages", formatNumber(corpus.pdf_page_count)],
+          [
+            "Passages per source",
+            `${formatNumber(spread.minimum)} fewest · ${formatNumber(spread.median)} median · ${formatNumber(spread.maximum)} most`,
+          ],
+        ],
+        "fact-list",
+      ),
+    ),
+    statGroup(
+      "Reviewed metadata missing",
+      factList(
+        [
+          ["Authors", `${formatNumber(missing.authors)} sources`],
+          ["Year", `${formatNumber(missing.year)} sources`],
+          ["Categories", `${formatNumber(missing.categories)} sources`],
+        ],
+        "fact-list",
+      ),
+    ),
+    statGroup(
+      "Largest sources",
+      statTable(
+        [{ label: "Source", value: sourceCell }, { label: "Passages", numeric: true, value: (row) => row.passage_count }],
+        corpus.largest_sources || [],
+        { bar: "passage_count" },
+      ),
+    ),
+    statGroup("Formats", countedTable("Format", corpus.formats)),
+    statGroup("Languages", countedTable("Language", corpus.languages)),
+    statGroup("Decades", countedTable("Decade", corpus.decades)),
+  );
+  return groups;
+}
+
+function renderBuild(payload) {
+  const build = payload.last_build;
+  if (!build) return node("p", "form-note", "This project has no generation yet.");
+  const phases = Object.entries(build.phase_seconds || {}).map(([phase, seconds]) => ({
+    phase: checkLabel(phase),
+    seconds,
+  }));
+  const facts = [["Built", formatDate(build.created_at)]];
+  if (build.seconds !== null && build.seconds !== undefined) facts.push(["Build time", `${formatNumber(build.seconds)} s`]);
+  if (build.created_vector_count !== null && build.created_vector_count !== undefined) {
+    facts.push([
+      "Vectors",
+      `${formatNumber(build.reused_vector_count)} reused · ${formatNumber(build.created_vector_count)} embedded`,
+    ]);
+  }
+  if (build.rebuilt_document_count !== null && build.rebuilt_document_count !== undefined) {
+    facts.push([
+      "Sources",
+      `${formatNumber(build.reused_document_count)} reused · ${formatNumber(build.rebuilt_document_count)} rebuilt`,
+    ]);
+  }
+  if (build.excluded_corrupt_unit_count) facts.push(["Corrupt units left out", formatNumber(build.excluded_corrupt_unit_count)]);
+  if (build.dense_truncated_chunk_count) facts.push(["Passages truncated for embedding", formatNumber(build.dense_truncated_chunk_count)]);
+  const generations = payload.generations || {};
+  facts.push(["Generations on disk", `${formatNumber(generations.count)} · ${bytes(generations.bytes)}`]);
+  const groups = node("div", "stats-groups");
+  groups.append(
+    statGroup("Facts", factList(facts, "fact-list")),
+    statGroup(
+      "Time by phase",
+      statTable(
+        [{ label: "Phase", value: (row) => row.phase }, { label: "Seconds", numeric: true, value: (row) => row.seconds }],
+        phases,
+        { bar: "seconds" },
+      ),
+    ),
+  );
+  return groups;
+}
+
+function scopeSelect(card, field, options) {
+  const label = node("label", "stat-scope-field");
+  label.append(node("span", "visually-hidden", `${field === "days" ? "Time scope" : "List size"} for ${card.title}`));
+  const select = node("select", "stat-scope-select");
+  select.dataset.scope = field;
+  const current = cardScope(card)[field];
+  options.forEach((option) => {
+    const item = node("option", "", field === "days" ? option.label : `Top ${option}`);
+    item.value = String(field === "days" ? (option.days ?? "") : option);
+    select.append(item);
+  });
+  select.value = String(current ?? "");
+  label.append(select);
+  return label;
+}
+
+function statPanel(card) {
+  const panel = node("article", `stat-panel${card.number ? " stat-panel-number" : ""}${card.wide ? " stat-panel-wide" : ""}`);
+  panel.dataset.card = card.id;
+  const head = node("header", "stat-panel-head");
+  head.append(node("h3", "stat-panel-title", card.title));
+  const count = node("span", "count-badge");
+  count.hidden = true;
+  head.append(count);
+  const controls = node("div", "stat-scope");
+  if (card.scopes.includes("time")) controls.append(scopeSelect(card, "days", STAT_TIME_SCOPES));
+  if (card.scopes.includes("size")) controls.append(scopeSelect(card, "top", STAT_SIZES));
+  if (card.clearable && hasCapability("stats")) {
+    controls.append(button("Clear", "clear-history", "", "text-button"));
+  }
+  head.append(controls);
+  const body = node("div", "stat-panel-body");
+  panel.append(head, body);
+  state.statPanels.set(card.id, { panel, body, count, card });
+  return panel;
+}
+
+async function refreshCard(card) {
+  const parts = state.statPanels.get(card.id);
+  if (!parts) return;
+  try {
+    const payload = await statRequest(card.source, cardScope(card));
+    parts.body.replaceChildren(card.render(payload));
+    parts.count.hidden = !card.count;
+    if (card.count) parts.count.textContent = formatNumber(card.count(payload));
+    const message = byId("stats-message");
+    message.hidden = true;
+  } catch (error) {
+    parts.body.replaceChildren(node("p", "form-note", error.message));
+  }
+}
+
+function buildStatsBoard() {
+  const board = byId("stats-board");
+  board.replaceChildren();
+  state.statPanels = new Map();
+  const numbers = node("div", "status-grid stats-numbers");
+  const lists = node("div", "stats-lists");
+  STAT_CARDS.forEach((card) => (card.number ? numbers : lists).append(statPanel(card)));
+  board.append(numbers, lists);
+}
+
+async function clearHistory() {
+  try {
+    const result = await api("/api/stats/history/clear", { method: "POST", body: "{}" });
+    toast(result.message || "History cleared.");
+    state.statData = new Map();
+    await refreshCard(STAT_CARDS.find((card) => card.id === "history"));
+  } catch (error) {
+    toast(error.message, true);
   }
 }
 
 async function loadStats() {
+  // Counts change with every search, so each visit asks again.
+  state.statData = new Map();
+  if (!state.statPanels.size) buildStatsBoard();
+  await Promise.all(STAT_CARDS.map((card) => refreshCard(card)));
+}
+
+// A card's scope changes only that card, and is remembered for the next visit.
+function changeScope(event) {
+  const select = event.target.closest?.(".stat-scope-select");
+  const panel = event.target.closest?.(".stat-panel");
+  if (!select || !panel) return;
+  const card = STAT_CARDS.find((entry) => entry.id === panel.dataset.card);
+  if (!card) return;
+  const scope = { ...cardScope(card) };
+  if (select.dataset.scope === "days") scope.days = select.value === "" ? null : Number(select.value);
+  else scope.top = Number(select.value);
+  state.statScopes[card.id] = scope;
+  saveScopes();
+  void refreshCard(card);
+}
+
+// ------------------------------------------------------------- source view --
+//
+// One source and its passages, a page at a time: where each sits, its text
+// trimmed, how big it is, whether it is excluded, and how often a search put it
+// in a top five. The counts are the server's own and come with the page.
+
+const SOURCE_CHUNKS_PER_PAGE = 20;
+
+function chunkCard(chunk) {
+  const card = node("article", "source-card chunk-card");
+  const head = node("div", "source-title-row");
+  head.append(node("span", "format-badge", `#${formatNumber(chunk.ordinal)}`));
+  head.append(entityLink(locatorLabel(chunk.locator), passageHref(chunk.chunk_id), "locator-badge"));
+  if (chunk.excluded) head.append(node("span", "state-badge state-badge-blocked", "Excluded from search"));
+  const returned = chunk.top_five
+    ? `Top five ${formatNumber(chunk.top_five)} · rank one ${formatNumber(chunk.rank_one)}`
+    : "Not returned by any search";
+  head.append(node("span", "state-badge", returned));
+  card.append(head);
+  card.append(node("p", "passage-text", `${chunk.text}${chunk.truncated ? "…" : ""}`));
+  const facts = [`${formatNumber(chunk.characters)} characters`];
+  if (chunk.embedding_token_count !== null && chunk.embedding_token_count !== undefined) {
+    facts.push(`${formatNumber(chunk.embedding_token_count)} tokens`);
+  }
+  if (chunk.dense_truncated) facts.push("truncated for embedding");
+  if (chunk.content_kind && chunk.content_kind !== "prose") facts.push(chunk.content_kind);
+  (chunk.quality_flags || []).forEach((flag) => facts.push(String(flag).replaceAll("_", " ")));
+  card.append(node("p", "result-meta", facts.join(" · ")));
+  if (hasCapability("passage_context")) {
+    const actions = node("div", "result-actions");
+    actions.append(button("Read in context", "show-context", chunk.chunk_id));
+    card.append(actions);
+  }
+  return card;
+}
+
+function renderSourceView(payload) {
+  const source = payload.source || {};
+  state.sourceView.title = inlineText(source.title) || source.source_relative_path || "Source";
+  byId("source-view-title").textContent = state.sourceView.title;
+  document.title = routeTitle("source");
+  byId("source-view-message").hidden = true;
+
+  const summary = byId("source-summary");
+  summary.replaceChildren();
+  summary.append(node("p", "source-byline", authorLine(source)));
+  if (source.doi) summary.append(node("p", "source-doi", `doi:${inlineText(source.doi).replace(/^doi:/i, "")}`));
+  if ((source.categories || []).length || (source.keywords || []).length || (source.project || []).length) {
+    const tags = node("div", "source-tags");
+    tags.append(tagList(source.project, "tag tag-project"));
+    tags.append(tagList(source.categories, "tag"));
+    tags.append(tagList(source.keywords, "tag tag-keyword"));
+    summary.append(tags);
+  }
+  const actions = node("div", "result-actions");
+  if (hasCapability("source_files") && source.source_relative_path) {
+    actions.append(button("Open original", "open-source", source.source_relative_path));
+  }
+  const listed = state.sources.find((entry) => entry.source_id === source.source_id);
+  if (hasCapability("metadata") && listed) {
+    actions.append(button("Edit metadata", "edit-metadata", listed.document_id));
+  }
+  if (hasCapability("source_selection")) {
+    actions.append(button("Search only this source", "only-source", source.source_id));
+  }
+  if (actions.childElementCount) summary.append(actions);
+  const facts = [
+    ["Path", source.source_relative_path || ""],
+    ["Identifier", source.source_id || ""],
+    ["Format", source.format || ""],
+  ];
+  if (source.physical_pages) facts.push(["Pages", formatNumber(source.physical_pages)]);
+  if (source.withheld_units) {
+    facts.push([
+      "Text withheld",
+      `${formatNumber(source.withheld_units)} unreadable units${
+        source.unclean_character_rate ? `, ${(source.unclean_character_rate * 100).toFixed(1)}% of the text` : ""
+      }`,
+    ]);
+  }
+  if (source.excluded) facts.push(["Search", "This source is excluded from search"]);
+  summary.append(factList(facts.filter(([, value]) => value), "fact-list identifier-list"));
+
+  byId("source-stat-cards").replaceChildren(
+    statCardFor("Passages", formatNumber(source.passage_count), "In the generation in use"),
+    statCardFor("In a top five", formatNumber(source.top_five), "Times any of its passages was returned"),
+    statCardFor("At rank one", formatNumber(source.rank_one), "Times it was the first passage"),
+  );
+  byId("source-chunks-count").textContent = formatNumber(source.passage_count);
+  const list = byId("source-chunks");
+  list.replaceChildren();
+  (payload.chunks || []).forEach((chunk) => list.append(chunkCard(chunk)));
+  if (!(payload.chunks || []).length) list.append(node("div", "no-records", "This source holds no passages."));
+  state.sourceView.page = payload.page || 1;
+  renderPager("source-chunk-pager", "chunks", payload.page || 1, payload.pages || 1);
+}
+
+function statCardFor(label, value, detail) {
+  const card = node("article", "stat-card");
+  card.append(node("span", "stat-label", label));
+  card.append(node("strong", "stat-value", value));
+  if (detail) card.append(node("span", "stat-detail", detail));
+  return card;
+}
+
+async function loadSourceView() {
+  const { id, page } = state.sourceView;
+  const message = byId("source-view-message");
+  if (!id) return;
+  byId("source-chunks").replaceChildren(node("div", "no-records", "Reading the passages…"));
   try {
-    renderStats(await api("/api/stats"));
+    const params = new URLSearchParams({
+      source_id: id,
+      page: String(page),
+      page_size: String(SOURCE_CHUNKS_PER_PAGE),
+    });
+    renderSourceView(await api(`/api/source-chunks?${params}`));
   } catch (error) {
-    const message = byId("stats-message");
     message.hidden = false;
     message.textContent = error.message;
+    byId("source-chunks").replaceChildren();
+    byId("source-chunk-pager").hidden = true;
   }
 }
 
@@ -1836,8 +2283,18 @@ function navItems() {
   return [...document.querySelectorAll(".sidebar-item")].filter((item) => !item.hidden);
 }
 
+// A view the sidebar has no item of its own for. It is drawn in a panel and its
+// parent item stays marked, so a source read from the Sources list is still "in"
+// Sources, and a passage opened from a result is still "in" Search.
+const DETAIL_VIEWS = {
+  source: { panel: "source", nav: "sources", capability: "sources" },
+  passage: { panel: "search", nav: "search", capability: "passage_context" },
+};
+
 function activeView() {
-  return navItems().find((item) => item.classList.contains("is-active"))?.dataset.view || "search";
+  return state.view
+    || navItems().find((item) => item.classList.contains("is-active"))?.dataset.view
+    || "search";
 }
 
 function routeHash(view = activeView()) {
@@ -1855,6 +2312,11 @@ function routeHash(view = activeView()) {
     const filter = byId("source-filter").value.trim();
     if (filter) params.set("filter", filter);
     if (state.sourcePages.excluded > 1) params.set("excluded", String(state.sourcePages.excluded));
+  } else if (view === "source") {
+    params.set("id", state.sourceView.id);
+    if (state.sourceView.page > 1) params.set("page", String(state.sourceView.page));
+  } else if (view === "passage") {
+    params.set("id", state.passageId);
   }
   const query = params.toString();
   return `#/${view}${query ? `?${query}` : ""}`;
@@ -1868,6 +2330,11 @@ function routeTitle(view) {
   const label = [...(item?.querySelector(".nav-item-name")?.childNodes || [])]
     .map((child) => child.textContent.trim())
     .find(Boolean) || view;
+  if (view === "source") {
+    const page = state.sourceView.page > 1 ? ` · page ${state.sourceView.page}` : "";
+    return `${state.sourceView.title || "Source"}${page} · ${name}`;
+  }
+  if (view === "passage") return `Passage in context · ${name}`;
   let detail = "";
   if (view === "search" && state.searchedQuery) detail = ` “${state.searchedQuery}”`;
   if (view === "sources" && state.sourcePages.sources > 1) detail = ` · page ${state.sourcePages.sources}`;
@@ -1903,12 +2370,33 @@ function pageParam(value) {
 async function applyRoute() {
   const { view, params } = parseRoute(window.location.hash);
   const available = navItems();
-  const target = available.some((item) => item.dataset.view === view)
+  const detail = DETAIL_VIEWS[view];
+  const detailId = params.get("id") || "";
+  const wantsDetail = Boolean(detail && detailId && hasCapability(detail.capability));
+  // A detail view named without what it shows falls back to the list it belongs to.
+  const named = detail && !wantsDetail ? detail.nav : view;
+  const target = wantsDetail
     ? view
-    : available[0]?.dataset.view || "search";
+    : available.some((item) => item.dataset.view === named)
+      ? named
+      : available[0]?.dataset.view || "search";
+  // A dialog belongs to the page being left, so it closes without that closing
+  // being read as a request to leave a passage the route is still showing.
+  state.closingForRoute = true;
+  document.querySelectorAll("dialog[open]").forEach((dialog) => {
+    if (!(target === "passage" && dialog.id === "context-dialog")) dialog.close();
+  });
+  state.closingForRoute = false;
   let rerun = false;
+  let showPassage = "";
   state.restoringRoute = true;
   try {
+    if (target === "source") {
+      state.sourceView = { id: detailId, page: pageParam(params.get("page")), title: "" };
+    } else if (target === "passage") {
+      state.passageId = detailId;
+      showPassage = detailId;
+    }
     if (target === "search") {
       const query = params.get("q") || "";
       byId("query").value = query;
@@ -1935,13 +2423,44 @@ async function applyRoute() {
   // A fragment that named no view, a hidden one, or a page past the end is
   // replaced by the page actually drawn.
   recordRoute({ replace: true });
+  if (target === "source") void loadSourceView();
+  if (showPassage) void showContext(showPassage);
   if (rerun) await runSearch();
+}
+
+// Following a name goes through the router rather than the browser's own
+// fragment jump, so a view the page draws itself is drawn in the same pass and
+// Back returns to where the name was clicked.
+function navigateTo(href) {
+  if (!href || href === window.location.hash) return;
+  state.passagePushed = href.startsWith("#/passage");
+  window.history.pushState(null, "", href);
+  void applyRoute();
+}
+
+// The route of a passage opened from a link is the dialog's own: closing it
+// returns to the page it was opened from, or to the search when the address was
+// opened cold.
+function leavePassageRoute() {
+  if (state.closingForRoute || state.restoringRoute || state.view !== "passage") return;
+  if (state.passagePushed) {
+    state.passagePushed = false;
+    window.history.back();
+    return;
+  }
+  state.passageId = "";
+  window.history.replaceState(null, "", "#/search");
+  void applyRoute();
 }
 
 function switchView(name, { moveFocus = false } = {}) {
   let opened = null;
+  state.view = name || "";
+  const detail = DETAIL_VIEWS[name];
+  const panelName = detail ? detail.panel : name;
+  const navName = detail ? detail.nav : name;
   document.querySelectorAll(".sidebar-item").forEach((item) => {
-    const active = item.dataset.view === name;
+    const active = item.dataset.view === navName;
     item.classList.toggle("is-active", active);
     item.querySelector(".nav-item")?.classList.toggle("is-active", active);
     // This is navigation rather than a tab set, so the current view is marked
@@ -1950,7 +2469,7 @@ function switchView(name, { moveFocus = false } = {}) {
     else item.querySelector(".nav-item")?.removeAttribute("aria-current");
   });
   document.querySelectorAll(".view-panel").forEach((panel) => {
-    const active = panel.dataset.panel === name;
+    const active = panel.dataset.panel === panelName;
     panel.classList.toggle("is-active", active);
     panel.hidden = !active;
     // The panel is given a focus stop of its own so a keyboard reader who chose
@@ -2014,8 +2533,16 @@ function resultCard(hit) {
   // and "Copy citation" still copies it whole.
   const header = node("div", "result-card-header");
   header.append(node("span", "result-rank", String(hit.rank).padStart(2, "0")));
-  header.append(node("h3", "result-title", title));
-  header.append(node("span", "locator-badge", locatorLabel(hit.locator)));
+  // The title names the source and goes to all of its passages; the place in it
+  // names this passage and goes to the text around it.
+  const heading = node("h3", "result-title");
+  heading.append(hit.source_id && hasCapability("sources") ? entityLink(title, sourceHref(hit.source_id)) : title);
+  header.append(heading);
+  header.append(
+    hit.chunk_id && hasCapability("passage_context")
+      ? entityLink(locatorLabel(hit.locator), passageHref(hit.chunk_id), "locator-badge")
+      : node("span", "locator-badge", locatorLabel(hit.locator)),
+  );
   const actions = [
     button(state.profile?.copy_text_label || "Copy passage", "copy-passage", hit.chunk_id),
     button("Copy citation", "copy-citation", hit.chunk_id),
@@ -2167,8 +2694,23 @@ async function runSearch() {
   }
 }
 
-function openSource(path) {
-  window.open(`/api/source-file?path=${encodeURIComponent(path)}`, "_blank", "noopener");
+// A source is already on this machine, so it opens in the desktop's own viewer
+// and nothing is downloaded. A machine with no desktop to hand it to answers 501,
+// and the file is shown in the browser instead.
+async function openSource(path) {
+  try {
+    const result = await api("/api/open-source", {
+      method: "POST",
+      body: JSON.stringify({ source_path: path }),
+    });
+    toast(`Opened ${result.filename} in ${result.viewer}.`);
+  } catch (error) {
+    if (error.status !== 501) {
+      toast(error.message, true);
+      return;
+    }
+    window.open(`/api/source-file?path=${encodeURIComponent(path)}`, "_blank", "noopener");
+  }
 }
 
 async function copyText(text, message) {
@@ -2219,8 +2761,18 @@ async function showContext(chunkId) {
       container.append(item);
     });
     if (!container.children.length) container.append(node("div", "no-records", "No context was returned."));
-    byId("context-title").textContent = payload.context?.[0]?.title || "Passage context";
-    byId("context-dialog").showModal();
+    const requestedPassage = (payload.context || []).find(
+      (passage) => passage.chunk_id === payload.requested_chunk_id,
+    ) || payload.context?.[0];
+    const contextTitle = byId("context-title");
+    const heading = requestedPassage?.title || "Passage context";
+    // The dialog names the source, and the name goes to all of its passages.
+    contextTitle.replaceChildren(
+      requestedPassage?.source_id && hasCapability("sources")
+        ? entityLink(heading, sourceHref(requestedPassage.source_id))
+        : document.createTextNode(heading),
+    );
+    if (!byId("context-dialog").open) byId("context-dialog").showModal();
   } catch (error) {
     toast(error.message, true);
   } finally {
@@ -3309,6 +3861,7 @@ function handleAction(event) {
     if (hit) copyText(inlineText(hit.citation), "Citation copied.");
   } else if (action === "ingest") openIngest(state.ingestPlan);
   else if (action === "copy-remedy") copyText(value, "Command copied.");
+  else if (action === "clear-history") void clearHistory();
   else if (action === "source-page") goToSourcePage(target.dataset.list, Number(value));
   else if (action === "partition-filter") addSearchFilter("category-any-filter", value);
   else if (action === "project-filter") addSearchFilter("project-any-filter", value);
@@ -3345,6 +3898,23 @@ function filterSources() {
 
 function initialize() {
   state.hits = new Map();
+  state.statScopes = readSavedScopes();
+  // A name that goes somewhere is followed through the router, so the view it
+  // names is drawn in the same pass, and a modified click keeps the browser's own
+  // behaviour of opening it elsewhere.
+  document.addEventListener("click", (event) => {
+    const link = event.target.closest?.("a.entity-link");
+    if (!link || event.defaultPrevented) return;
+    if (event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
+    event.preventDefault();
+    navigateTo(link.getAttribute("href"));
+  });
+  byId("context-dialog").addEventListener("close", leavePassageRoute);
+  byId("stats-board").addEventListener("change", changeScope);
+  byId("stats-board").addEventListener("click", handleAction);
+  byId("source-summary").addEventListener("click", handleAction);
+  byId("source-chunks").addEventListener("click", handleAction);
+  byId("source-chunk-pager").addEventListener("click", handleAction);
   document.querySelectorAll(".sidebar-item").forEach((item) => {
     item.querySelector(".nav-item")?.addEventListener("click", () => {
       switchView(item.dataset.view, { moveFocus: true });
@@ -3483,7 +4053,9 @@ function initialize() {
   // Back and Forward move between the pages this workspace recorded. An open
   // dialog belongs to the page being left, so it closes.
   window.addEventListener("popstate", () => {
+    state.closingForRoute = true;
     document.querySelectorAll("dialog[open]").forEach((dialog) => dialog.close());
+    state.closingForRoute = false;
     void applyRoute();
   });
   loadWorkspace().then(() => applyRoute());

@@ -170,7 +170,11 @@
 - Serialize project writes with both the in-process lock and the cross-process `project.lock`. Bound both waits and refuse after them.
   - Reads take neither lock. A read holds a lease on the generation it resolved, and removing that generation waits for it.
   - The gateway holds one BM25 retriever. A build and a search take it in turn.
-- Search counts store ranks, ids, times, and result counts, never query text. A measurement does not count.
+- Search counts store ranks, ids, times, result counts, and who asked. They store the question and its filters only while `runtime.search_history` is on, and `history --clear` removes them and leaves the counts. A measurement does not count.
+- OCR is `research-rag ocr` alone. Ingestion never runs it, and no agent tool, control route, or workspace action reaches it. It writes a copy outside the sources directory and never edits an original.
+  - The recogniser is the optional `ocr` extra. Do not depend on another project for it.
+- A source is refused before it is chunked when more than `ingestion.maximum_unclean_percent` of its extracted characters are unreadable. The refusal names OCR and says it is never run automatically.
+- Opening a source asks the desktop's own viewer through an authorised path, and falls back to the browser only where there is no desktop.
 
 ## Architecture
 

@@ -55,6 +55,10 @@ _OPERATION_CAPABILITY = {
     "agent_entry": "agent_entry",
     "check_updates": "updates",
     "search_stats": "stats",
+    "search_history": "stats",
+    "clear_search_history": "stats",
+    "source_chunks": "sources",
+    "open_source": "source_files",
 }
 
 
@@ -623,10 +627,79 @@ async def _settings_write(request: Request) -> Response:
     return JSONResponse(await _adapter_call(request, "settings_write", body))
 
 
+def _query_number(request: Request, name: str) -> float | None:
+    """A numeric query parameter, or None when absent; anything else is a 400."""
+
+    raw = request.query_params.get(name)
+    if raw is None or raw == "":
+        return None
+    try:
+        return float(raw)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=f"{name} must be a number") from exc
+
+
+def _present_arguments(**values: Any) -> dict[str, Any]:
+    return {key: value for key, value in values.items() if value is not None}
+
+
 async def _stats(request: Request) -> Response:
     """Search counts by rank and corpus facts, as the server reports them."""
 
-    return JSONResponse(await _adapter_call(request, "search_stats"))
+    top = _query_number(request, "top")
+    return JSONResponse(
+        await _adapter_call(
+            request,
+            "search_stats",
+            _present_arguments(
+                days=_query_number(request, "days"),
+                top=None if top is None else int(top),
+            ),
+        )
+    )
+
+
+async def _stats_history(request: Request) -> Response:
+    limit = _query_number(request, "limit")
+    return JSONResponse(
+        await _adapter_call(
+            request,
+            "search_history",
+            _present_arguments(
+                days=_query_number(request, "days"),
+                limit=None if limit is None else int(limit),
+            ),
+        )
+    )
+
+
+async def _stats_history_clear(request: Request) -> Response:
+    await _json_body(request)
+    return JSONResponse(await _adapter_call(request, "clear_search_history"))
+
+
+async def _source_chunks(request: Request) -> Response:
+    page = _query_number(request, "page")
+    size = _query_number(request, "page_size")
+    return JSONResponse(
+        await _adapter_call(
+            request,
+            "source_chunks",
+            _present_arguments(
+                source_id=request.query_params.get("source_id") or None,
+                source_path=request.query_params.get("path") or None,
+                page=None if page is None else int(page),
+                page_size=None if size is None else int(size),
+            ),
+        )
+    )
+
+
+async def _open_source(request: Request) -> Response:
+    """Open one source in the desktop's own viewer, forwarded to the host's decision."""
+
+    body = await _json_body(request)
+    return JSONResponse(await _adapter_call(request, "open_source", body))
 
 
 async def _chunk_exclusions(request: Request) -> Response:
@@ -772,6 +845,10 @@ def create_ui_app(
         Route("/api/agent-entry", _agent_entry),
         Route("/api/updates", _updates),
         Route("/api/stats", _stats),
+        Route("/api/stats/history", _stats_history),
+        Route("/api/stats/history/clear", _stats_history_clear, methods=["POST"]),
+        Route("/api/source-chunks", _source_chunks),
+        Route("/api/open-source", _open_source, methods=["POST"]),
     ]
     app = Starlette(
         routes=routes,

@@ -208,8 +208,50 @@ async def _sources(app: App, request: Request) -> JSONResponse:
     return _json(await app.service.list_sources())
 
 
-async def _stats(app: App, _request: Request) -> JSONResponse:
-    return _json(await app.service.search_stats())
+def _query_days(request: Request) -> float | None:
+    raw = request.query_params.get("days")
+    if raw is None or not raw.strip():
+        return None
+    try:
+        return float(raw)
+    except ValueError as exc:
+        raise ResearchError("days must be a number") from exc
+
+
+async def _stats(app: App, request: Request) -> JSONResponse:
+    return _json(
+        await app.service.search_stats(
+            since_days=_query_days(request),
+            top=_query_int(request, "top", default=20, maximum=100),
+        )
+    )
+
+
+async def _stats_history(app: App, request: Request) -> JSONResponse:
+    return _json(
+        await app.service.search_history(
+            limit=_query_int(request, "limit", default=20, maximum=200),
+            since_days=_query_days(request),
+        )
+    )
+
+
+async def _stats_history_clear(app: App, request: Request) -> JSONResponse:
+    refusal = _write_refusal(request)
+    if refusal is not None:
+        return refusal
+    return _json(await app.service.clear_search_history())
+
+
+async def _source_chunks(app: App, request: Request) -> JSONResponse:
+    return _json(
+        await app.service.source_chunks(
+            source_id=request.query_params.get("source_id") or None,
+            source_path=request.query_params.get("path") or None,
+            page=_query_int(request, "page", default=1, maximum=1_000_000),
+            page_size=_query_int(request, "page_size", default=20, maximum=50),
+        )
+    )
 
 
 async def _passage(app: App, request: Request) -> JSONResponse:
@@ -418,6 +460,9 @@ def control_routes(app: App) -> list[Route]:
         route("/search", _search, ["POST"]),
         route("/sources", _sources, ["GET"]),
         route("/stats", _stats, ["GET"]),
+        route("/stats/history", _stats_history, ["GET"]),
+        route("/stats/history/clear", _stats_history_clear, ["POST"]),
+        route("/source-chunks", _source_chunks, ["GET"]),
         route("/passages/{chunk_id}", _passage, ["GET"]),
         route("/source-inclusion", _source_inclusion, ["POST"]),
         route("/chunk-inclusion", _chunk_inclusion, ["POST"]),
@@ -489,8 +534,34 @@ class Control:
     def search(self, query: str, **arguments: Any) -> dict[str, Any]:
         return self._call("POST", "/search", json={"query": query, **arguments})
 
-    def stats(self) -> dict[str, Any]:
-        return self._call("GET", "/stats")
+    def stats(self, *, days: float | None = None, top: int = 20) -> dict[str, Any]:
+        params: dict[str, Any] = {"top": top}
+        if days is not None:
+            params["days"] = days
+        return self._call("GET", "/stats", params=params)
+
+    def history(self, *, limit: int = 20, days: float | None = None) -> dict[str, Any]:
+        params: dict[str, Any] = {"limit": limit}
+        if days is not None:
+            params["days"] = days
+        return self._call("GET", "/stats/history", params=params)
+
+    def clear_history(self) -> dict[str, Any]:
+        return self._call("POST", "/stats/history/clear", json={})
+
+    def source_chunks(
+        self,
+        *,
+        source: str,
+        page: int = 1,
+        page_size: int = 20,
+    ) -> dict[str, Any]:
+        key = "source_id" if source.startswith("src_") else "path"
+        return self._call(
+            "GET",
+            "/source-chunks",
+            params={key: source, "page": page, "page_size": page_size},
+        )
 
     def sources(self) -> dict[str, Any]:
         return self._call("GET", "/sources")

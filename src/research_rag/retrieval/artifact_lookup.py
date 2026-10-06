@@ -523,6 +523,30 @@ class ArtifactLookup:
                 result.setdefault(text, int(row["ordinal"]))
         return result
 
+    def chunks_for_document_page(
+        self, document_id: str, *, offset: int, limit: int
+    ) -> list[dict[str, Any]]:
+        """One page of a document's passages in reading order, read from the index."""
+
+        with self._connect() as connection:
+            rows = connection.execute(
+                """
+                SELECT * FROM chunks
+                WHERE document_id = ?
+                ORDER BY document_chunk_index, ordinal
+                LIMIT ? OFFSET ?
+                """,
+                (document_id, limit, offset),
+            ).fetchall()
+        loaded = self._load_rows(self.chunks_path, rows)
+        loaded.sort(
+            key=lambda item: (
+                int(item[0]["document_chunk_index"]),
+                int(item[0]["ordinal"]),
+            )
+        )
+        return [record for _row, record in loaded]
+
     def chunks_for_document(self, document_id: str) -> list[dict[str, Any]]:
         with self._connect() as connection:
             rows = connection.execute(

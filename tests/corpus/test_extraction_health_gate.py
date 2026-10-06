@@ -10,6 +10,7 @@ from __future__ import annotations
 import asyncio
 import json
 import sys
+from collections import Counter
 from pathlib import Path
 
 import pymupdf
@@ -33,6 +34,7 @@ from research_rag.corpus.text_quality import (
     SOURCE_REASON_NO_LETTER_TEXT,
     SOURCE_REASON_NO_TEXT,
     SOURCE_REASON_NO_TEXT_LAYER,
+    SOURCE_REASON_UNCLEAN,
     SOURCE_REASON_UNSAFE_TO_CLEAN,
     is_reference_entry,
     non_argument_removal_flags,
@@ -753,6 +755,79 @@ def test_the_gate_names_a_refused_file_its_own_locator_and_a_remedy() -> None:
     assert "symbol_only=1" in message
     assert "research-rag exclude scan.pdf" in message
     assert SYMBOLS_ONLY not in message
+
+
+def test_a_source_losing_more_than_the_accepted_share_is_refused_as_not_clean() -> None:
+    """The share is of characters, measured before anything is chunked.
+
+    One page of garbage in a long paper is a hole the unit rule already handles;
+    a project that states how much loss it accepts refuses the file past that.
+    The message says a loss is expected and names OCR, which is never run here.
+    """
+
+    ordinary = "A page that reads as ordinary argument about labour and time. " * 12
+    units = [_unit(1, ordinary), _unit(2, ordinary), _unit(3, CORRUPT_PAGE)]
+
+    with pytest.raises(ExtractionError) as failure:
+        screen_source_units(
+            _named_source("poor-layer.pdf"),
+            {"title": "Poor layer"},
+            units,
+            maximum_unclean_percent=1.0,
+        )
+
+    message = str(failure.value)
+    assert "Source is not clean (unclean_text)" in message
+    assert "indexing it would lose that text" in message
+    assert "research-rag ocr poor-layer.pdf" in message
+    assert "never run automatically" in message
+    assert "research-rag exclude poor-layer.pdf" in message
+    assert CORRUPT_PAGE not in message
+
+
+def test_a_source_within_the_accepted_share_is_kept_and_its_rate_is_recorded() -> None:
+    ordinary = "A page that reads as ordinary argument about labour and time. " * 400
+    document: dict = {"title": "Mostly clean"}
+    units = [_unit(1, ordinary), _unit(2, CORRUPT_PAGE)]
+
+    retained = screen_source_units(
+        _named_source("mostly-clean.pdf"),
+        document,
+        units,
+        maximum_unclean_percent=5.0,
+    )
+    unlimited = screen_source_units(
+        _named_source("any.pdf"), {"title": "Any"}, units, maximum_unclean_percent=None
+    )
+
+    assert len(retained) == len(unlimited) == 1
+    assert 0 < document["unclean_character_rate"] < 0.05
+
+
+def test_the_source_gate_states_no_share_unless_asked() -> None:
+    assert SOURCE_REASON_UNCLEAN not in source_health_reasons(
+        unit_count=10,
+        retained_count=9,
+        withheld_reasons=Counter(),
+        kept_characters=1000,
+        withheld_characters=500,
+    )
+    assert SOURCE_REASON_UNCLEAN not in source_health_reasons(
+        unit_count=10,
+        retained_count=9,
+        withheld_reasons=Counter(),
+        kept_characters=1000,
+        withheld_characters=10,
+        maximum_unclean_percent=1.0,
+    )
+    assert SOURCE_REASON_UNCLEAN in source_health_reasons(
+        unit_count=10,
+        retained_count=9,
+        withheld_reasons=Counter(),
+        kept_characters=1000,
+        withheld_characters=11,
+        maximum_unclean_percent=1.0,
+    )
 
 
 def test_the_gate_names_an_epub_refusal_by_section_and_file() -> None:

@@ -1610,7 +1610,20 @@ class SearchWorkflow:
             # A measurement's search is not a reader's, so it is not counted.
             if not evaluation_trace:
                 await self._record_search(
-                    payload, requested_top_k=top_k, started=started
+                    payload,
+                    requested_top_k=top_k,
+                    started=started,
+                    query=query,
+                    filters={
+                        "categories_any": categories_any or [],
+                        "projects_any": projects_any or [],
+                        "keywords": keywords or [],
+                        "languages_any": languages_any or [],
+                        "authors_any": authors_any or [],
+                        "titles_any": titles_any or [],
+                        "source_ids": source_ids or [],
+                        "exclude_source_ids": exclude_source_ids or [],
+                    },
                 )
             return payload
 
