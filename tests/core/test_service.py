@@ -5178,6 +5178,34 @@ def test_a_busy_project_is_reported_rather_than_waited_for(
     asyncio.run(exercise())
 
 
+def test_a_call_behind_this_apps_own_build_is_refused_rather_than_held(
+    project: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The workspace froze while an agent's build ran in the same process.
+
+    Every surface shares one service, and its in-process lock had no bound, so a
+    status read waited out the whole build with the page's busy bar up. It is
+    refused after the same wait as another process's lock, and the lock is free
+    again for the next caller.
+    """
+
+    async def exercise() -> None:
+        config = resolve_config(project, vanilla_executable=sys.executable)
+        monkeypatch.setattr(service_module, "PROJECT_LOCK_TIMEOUT_SECONDS", 0.2)
+        service = ResearchService(  # type: ignore[arg-type]
+            config, FakeUltraRAG(), dense=FakeDenseBackend()
+        )
+        started = time.perf_counter()
+        async with service._operation():
+            with pytest.raises(ResearchError, match="already working on this project"):
+                await service.ingest(chunk_size=50, chunk_overlap=10)
+        assert time.perf_counter() - started < 5
+        assert not service._lock.locked()
+
+    asyncio.run(exercise())
+
+
 def _aliased_dense_backend() -> FakeDenseBackend:
     """A dense backend whose vectors follow the words, so tests can aim them.
 

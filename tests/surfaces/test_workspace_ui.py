@@ -21,6 +21,7 @@ assertion about a class name.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import re
 import shutil
@@ -736,7 +737,7 @@ def test_the_workspace_carries_the_chunk_exclusion_controls() -> None:
     assert 'id="chunk-dialog"' in page.text
     assert 'id="chunk-error"' in page.text
     assert 'hasCapability("chunk_exclusion")' in script
-    assert "actions.append(chunkAction(hit))" in script
+    assert "actions.push(chunkAction(hit))" in script
     assert "/api/chunk-exclusions" in script
     assert "/api/chunk-inclusion" in script
     # A chunk the server already excluded is offered a restore instead.
@@ -853,7 +854,8 @@ def test_the_sidebar_becomes_a_drawer_below_the_large_breakpoint() -> None:
     assert "transform: translateX(-100%);" in css
     assert ".workspace-sidebar.is-open {\n    transform: none;" in css
     # Escape closes it and hands the focus back, and no listener holds focus.
-    assert 'if (event.key === "Escape") closeNav({ restoreFocus: true });' in script
+    assert 'if (event.key !== "Escape") return;' in script
+    assert "closeNav({ restoreFocus: true });" in script
     assert 'addEventListener("keydown"' in script
     assert "trapFocus" not in script
     assert 'byId("nav-scrim").addEventListener("click", () => closeNav());' in script
@@ -930,7 +932,7 @@ def test_the_content_is_centred_at_a_readable_width() -> None:
 
     workspace = css.split(".workspace {", 1)[1].split("}", 1)[0]
     assert "width: min(var(--layout-max), 100%);" in workspace
-    assert "flex: 0 1 auto;" in workspace
+    assert "grid-column: 2;" in workspace
     assert "margin-inline: auto;" in workspace
 
 
@@ -1442,7 +1444,7 @@ def test_a_filter_group_says_whether_every_value_or_only_one_must_match() -> Non
     # A list the reader picks from is named as such, and an empty field is stated
     # to match everything rather than to match nothing.
     assert "Select partitions from the list below." in page
-    assert "A field left empty" in page and "matches" in page
+    assert "an empty field matches everything" in page
     assert "Empty searches every source." in page
     assert "Empty excludes nothing." in page
 
@@ -1771,9 +1773,9 @@ def test_the_updates_view_is_gated_on_a_capability_the_page_never_invents() -> N
     assert 'data-view="updates" data-capability="updates"' in page
     assert 'id="updates-view" class="view-panel" data-panel="updates"' in page
     assert 'if (!hasCapability("updates")) return;' in script
-    assert 'if (hasCapability("updates")) {' in script
-    # The check runs after the workspace has drawn and is never awaited, so a
-    # slow or unreachable release feed cannot hold up a search.
+    assert 'if (hasCapability("updates") && !state.updates.checked) {' in script
+    # The check runs once a page, after the workspace has drawn, and is never
+    # awaited, so a slow or unreachable release feed cannot hold up a search.
     assert "void checkUpdates();" in script
 
 
@@ -2486,7 +2488,7 @@ renderHealth({ checks: [{ check: "lock", state: "ok", reason: "free" }] });
 result.healthy = {
   hidden: section.hidden,
   summary: document.getElementById("health-summary").textContent,
-  text: text(document.getElementById("health-conditions")),
+  listHidden: document.getElementById("health-conditions").hidden,
 };
 renderHealth({ ready: true });
 result.absent = section.hidden;
@@ -2514,10 +2516,11 @@ result.absent = section.hidden;
     ]
     assert result["blockedPill"] == ["blocked", "Local · 1 blocked"]
     assert result["healthyPill"] == ["ready", "Local · ready", ""]
-    # A healthy project says so in one line; a host with no checks shows nothing.
+    # A healthy project says so once, in the badge; a host with no checks shows
+    # nothing.
     assert result["healthy"]["hidden"] is False
     assert result["healthy"]["summary"] == "All passed"
-    assert result["healthy"]["text"] == "Every check passed."
+    assert result["healthy"]["listHidden"] is True
     assert result["absent"] is True
 
 
@@ -2573,7 +2576,7 @@ def test_the_results_follow_the_query_and_the_filters_fold_into_one_drawer() -> 
         script = client.get("/assets/app.js").text
 
     search = page.split('id="search-view"', 1)[1].split("</main>", 1)[0]
-    drawer = search.split('id="filter-fields"', 1)[1].split("</details>", 1)[0]
+    drawer = search.split('id="filter-fields"', 1)[1].split("</section>", 1)[0]
     for element in (
         'class="form-note measure filter-intro"',
         'id="filter-count"',
@@ -2585,7 +2588,8 @@ def test_the_results_follow_the_query_and_the_filters_fold_into_one_drawer() -> 
         assert element in drawer
     # Nothing but the closed drawer stands between the query and the results.
     between = search.split("</form>", 1)[1].split('id="search-summary"', 1)[0]
-    assert between.count("<details") == 1
+    assert between.count("<section") == 1
+    assert between.count('class="filter-drawer"') == 1
     assert "<h2" not in between.split('id="filter-fields"', 1)[0]
     # The page scrolls to the results only when they are out of sight.
     assert "window.innerHeight * 0.75" in script
@@ -2620,14 +2624,14 @@ def test_a_source_card_names_the_reach_of_each_exclusion() -> None:
     assert ">Exclude from project</button>" in page
 
 
-def test_the_sources_view_shows_ten_sources_a_page(tmp_path: Path) -> None:
+def test_the_sources_view_shows_five_sources_a_page(tmp_path: Path) -> None:
     """A collection is read a page at a time, and the filter reads all of it.
 
     Every source was drawn at once, one card under another, so a 106-source
     project was one column a reader scrolled through to find one source. The
-    list now holds ten a page with a pager under it; the filter still matches
-    across every source and starts its matches from their first page, and a
-    refresh returns the reader to the page they were on.
+    list now holds five a page, one window's worth, with a pager under it; the
+    filter still matches across every source and starts its matches from their
+    first page, and a refresh returns the reader to the page they were on.
     """
 
     result = _drive_page(
@@ -2658,7 +2662,7 @@ result.first = {
   previousDisabled: pager.children[0].disabled,
   current: pager.children.find((item) => item.dataset.value === "1").dataset.list,
 };
-goToSourcePage("sources", 3);
+goToSourcePage("sources", 5);
 result.last = { ...read(), nextDisabled: pager.children[pager.children.length - 1].disabled };
 
 document.getElementById("source-filter").value = "needle";
@@ -2686,9 +2690,9 @@ result.short = pagerNumbers(1, 3);
     )
 
     assert result["first"] == {
-        "cards": 10,
-        "range": "Showing 1–10 of 23 sources",
-        "pages": ["Previous", "1", "2", "3", "Next"],
+        "cards": 5,
+        "range": "Showing 1–5 of 23 sources",
+        "pages": ["Previous", "1", "2", "…", "5", "Next"],
         "pagerHidden": False,
         "previousDisabled": True,
         "current": "sources",
@@ -2696,7 +2700,7 @@ result.short = pagerNumbers(1, 3);
     assert result["last"] == {
         "cards": 3,
         "range": "Showing 21–23 of 23 sources",
-        "pages": ["Previous", "1", "2", "3", "Next"],
+        "pages": ["Previous", "1", "…", "4", "5", "Next"],
         "nextDisabled": True,
     }
     # The filter matches across every page and starts its own matches at one.
@@ -2712,12 +2716,12 @@ result.short = pagerNumbers(1, 3);
         "rangeHidden": True,
     }
     # A refresh keeps the page, and a page that no longer exists is clamped.
-    assert result["refreshed"] == "Showing 11–20 of 23 sources"
+    assert result["refreshed"] == "Showing 6–10 of 23 sources"
     assert result["shrunk"]["cards"] == 5
     assert result["shrunk"]["pagerHidden"] is True
     assert result["shrunk"]["page"] == 1
     # The excluded list pages the same way.
-    assert result["excluded"] == {"cards": 10, "pagerHidden": False}
+    assert result["excluded"] == {"cards": 5, "pagerHidden": False}
     # A long pager shows its ends and the current page's neighbours.
     assert result["window"] == [1, None, 5, 6, 7, None, 11]
     assert result["short"] == [1, 2, 3]
@@ -2900,7 +2904,7 @@ def test_a_section_opens_with_at_most_one_sentence() -> None:
             r'<p class="form-note measure[^"]*"[^>]*>(.*?)</p>', views, flags=re.DOTALL
         )
     ]
-    assert len(intros) >= 12
+    assert len(intros) >= 10
     for intro in intros:
         assert len(re.findall(r"[.!?](?:\s|$)", intro)) <= 1, intro
 
@@ -2984,12 +2988,12 @@ result.history = window.history.entries;
         "view": "sources",
         "page": 2,
         "filter": "source",
-        "range": "Showing 11–20 of 23 sources",
+        "range": "Showing 6–10 of 23 sources",
         "hash": "#/sources?page=2&filter=source",
         "title": "sources · page 2 · Research RAG",
     }
     # A page past the end is drawn as the last page, and the fragment says so.
-    assert result["clamped"] == "#/sources?page=3"
+    assert result["clamped"] == "#/sources?page=5"
     # A reload of a search runs it once, with what the fragment carries.
     reloaded = result["reloaded"]
     assert reloaded["view"] == "search"
@@ -3008,3 +3012,181 @@ result.history = window.history.entries;
     assert ["push", result["submitted"]] in result["history"]
     # A fragment that names no view is replaced by the view drawn.
     assert result["unknown"] == "#/search"
+
+
+def test_a_load_draws_nothing_the_profile_has_not_allowed() -> None:
+    """A refresh showed the page's raw markup before the profile arrived.
+
+    The retrieval switches, the rerank box, Export, Import, and a Memory view
+    this app does not serve were drawn for a moment and then removed, so every
+    reload flashed a workspace that is not this one. Each capability-gated
+    element now starts hidden, and the app's name waits for the profile.
+    """
+
+    with _panel_host() as client:
+        page = client.get("/").text
+
+    gated = re.findall(r"<[a-z]+\b[^>]*\bdata-capability=\"[^\"]+\"[^>]*>", page)
+    assert len(gated) > 20
+    for tag in gated:
+        assert re.search(r"\shidden(?:\s|>)", tag), tag
+    assert '<div id="application-name" class="brand-name"></div>' in page
+    assert "UltraRAG MCP</div>" not in page
+
+
+def test_the_page_names_the_exact_assets_it_was_written_with() -> None:
+    """The page and its script come from one revision, whatever a cache holds.
+
+    A script cached by a process that sent no revalidation header ran against a
+    newer page and threw `Cannot set properties of null`. The page now names
+    each asset by a digest of its bytes, so a different script is a different
+    address and cannot be reused in its place.
+    """
+
+    with _panel_host() as client:
+        page = client.get("/").text
+        for filename in ("app.css", "app.js"):
+            served = client.get(f"/assets/{filename}").content
+            digest = hashlib.sha256(served).hexdigest()[:16]
+            assert f'"/assets/{filename}?v={digest}"' in page
+            stamped = client.get(f"/assets/{filename}?v={digest}")
+            assert stamped.status_code == 200
+            assert stamped.content == served
+    assert '"/assets/app.js"' not in page
+
+
+def test_a_long_list_starts_folded_and_keeps_the_readers_choice(
+    tmp_path: Path,
+) -> None:
+    """A list of more than five starts closed behind its heading and count.
+
+    Ten generations, twenty passage exclusions, or thirty-nine settings opened
+    in full pushed everything under them off the screen. A short list still
+    opens, and a fold the reader opened stays open across a refresh.
+    """
+
+    result = _drive_page(
+        tmp_path,
+        """
+state.profile = { capabilities: { generations: true } };
+const fold = document.getElementById("generation-fold");
+fold.id = "generation-fold";
+const builds = (count) =>
+  Array.from({ length: count }, (_, index) => ({ generation_id: `g${index}`, is_current: !index }));
+renderGenerations(builds(3));
+result.short = fold.open;
+renderGenerations(builds(8));
+result.long = fold.open;
+result.count = document.getElementById("generation-count").textContent;
+state.folds.set("generation-fold", true);
+renderGenerations(builds(8));
+result.chosen = fold.open;
+
+const setting = (key) => ({ key, label: key, value: 1, default: 1, kind: "int", writable: true });
+renderSettings({
+  sections: [
+    { key: "short", title: "Short", settings: [setting("a.one")] },
+    { key: "long", title: "Long", settings: ["b", "c", "d", "e", "f", "g"].map(setting) },
+  ],
+});
+result.settings = document
+  .getElementById("settings-sections")
+  .children.map((section) => [section.tagName, section.dataset.fold, section.open]);
+""",
+    )
+
+    assert result["short"] is True
+    assert result["long"] is False
+    assert result["count"] == "8"
+    assert result["chosen"] is True
+    assert result["settings"] == [
+        ["details", "settings-short", True],
+        ["details", "settings-long", False],
+    ]
+
+
+def test_each_cards_actions_sit_behind_one_menu(tmp_path: Path) -> None:
+    """Eight results carried forty links, five to a card, saying the same thing.
+
+    Each card now has one menu holding its actions, and a result no longer
+    prints its citation under the title, byline, and locator it repeats; the
+    menu still copies it whole.
+    """
+
+    result = _drive_page(
+        tmp_path,
+        """
+state.profile = {
+  capabilities: {
+    passage_context: true,
+    chunk_exclusion: true,
+    source_files: true,
+    metadata: true,
+    source_selection: true,
+    source_inclusion: true,
+  },
+};
+state.sources = [
+  { document_id: "d1", source_relative_path: "a.pdf", source_id: "src_1", title: "A Title" },
+];
+const actionsIn = (node, inside = false, found = []) => {
+  const inMenu = inside || node.className === "card-menu";
+  if (node.dataset?.action) found.push([node.dataset.action, inMenu]);
+  (node.children || []).forEach((child) => actionsIn(child, inMenu, found));
+  return found;
+};
+const hit = resultCard({
+  rank: 1,
+  title: "A Title",
+  chunk_id: "c1",
+  document_id: "d1",
+  text: "The passage.",
+  citation: "Author, A Title (2000), p. 3",
+  source_path: "a.pdf",
+  locator: { page: 3 },
+  doi: "10.1/x",
+  authors: ["Author"],
+  year: 2000,
+});
+result.hit = actionsIn(hit);
+result.hitText = text(hit);
+result.source = actionsIn(sourceCard(state.sources[0]));
+""",
+    )
+
+    assert result["hit"] == [
+        ["copy-passage", True],
+        ["copy-citation", True],
+        ["show-context", True],
+        ["open-source", True],
+        ["exclude-chunk", True],
+    ]
+    assert "Author, A Title (2000), p. 3" not in result["hitText"]
+    assert "Author · 2000" in result["hitText"]
+    assert result["source"] == [
+        ["open-source", True],
+        ["edit-metadata", True],
+        ["only-source", True],
+        ["exclude-from-search", True],
+        ["exclude-source", True],
+    ]
+
+
+def test_a_setting_names_its_default_only_where_it_differs(tmp_path: Path) -> None:
+    """Most rows said the same number twice, as the value and as the default."""
+
+    result = _drive_page(
+        tmp_path,
+        """
+state.profile = { capabilities: {} };
+const row = (value) =>
+  text(settingRow({ key: "k", label: "K", value, default: 8, kind: "int", writable: true }, "0-k"));
+result.same = row(8);
+result.changed = row(12);
+""",
+    )
+
+    assert "Value: 8" in result["same"]
+    assert "Default:" not in result["same"]
+    assert "Value: 12" in result["changed"]
+    assert "Default: 8" in result["changed"]
