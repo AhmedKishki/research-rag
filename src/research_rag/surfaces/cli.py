@@ -931,7 +931,7 @@ def _parser() -> argparse.ArgumentParser:
     )
     stats.add_argument(
         "--largest-by",
-        choices=("passages", "pages"),
+        choices=("passages", "size"),
         default="passages",
         help="What the largest sources are ranked by (default passages).",
     )

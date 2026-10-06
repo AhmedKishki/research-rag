@@ -979,7 +979,7 @@ def _counting_client(project: Path) -> tuple[TestClient, _CountingService]:
 def test_the_stats_routes_pass_their_scope_and_bound_it(project: Path) -> None:
     client, fake = _counting_client(project)
     with client:
-        assert client.get("/api/stats?days=7&top=5&largest_by=pages").json()[
+        assert client.get("/api/stats?days=7&top=5&largest_by=size").json()[
             "searches"
         ] == {"search_count": 3}
         client.get("/api/stats")
@@ -988,7 +988,7 @@ def test_the_stats_routes_pass_their_scope_and_bound_it(project: Path) -> None:
         too_many = client.get("/api/stats?top=1000")
     assert (
         "search_stats",
-        {"since_days": 7.0, "top": 5, "largest_by": "pages"},
+        {"since_days": 7.0, "top": 5, "largest_by": "size"},
     ) in fake.calls
     assert (
         "search_stats",

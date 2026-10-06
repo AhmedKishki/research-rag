@@ -1043,7 +1043,7 @@ def test_the_running_app_answers_generations_and_stats_without_awaiting_a_dict()
             await remote.generations(),
             await remote.use_generation("g1"),
             await remote.remove_generation("g1", confirm="g1"),
-            await remote.stats(days=7, top=5, largest_by="pages"),
+            await remote.stats(days=7, top=5, largest_by="size"),
         ]
 
     assert asyncio.run(exercise()) == [
@@ -1054,6 +1054,6 @@ def test_the_running_app_answers_generations_and_stats_without_awaiting_a_dict()
             "searches": {"search_count": 2},
             "days": 7,
             "top": 5,
-            "largest_by": "pages",
+            "largest_by": "size",
         },
     ]

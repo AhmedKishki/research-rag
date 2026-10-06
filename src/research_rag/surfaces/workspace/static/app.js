@@ -1543,7 +1543,7 @@ const STAT_SIZES = [5, 10, 20, 50];
 // What the largest sources are ranked by.
 const STAT_LARGEST_BY = [
   { value: "passages", label: "By passages" },
-  { value: "pages", label: "By pages" },
+  { value: "size", label: "By text size" },
 ];
 const SCOPE_STORAGE_KEY = "research-rag.stat-scopes";
 
@@ -1635,7 +1635,8 @@ function statTable(columns, rows, { bar = null } = {}) {
       const cell = index === 0 ? node("th", "stat-row-label") : node("td", column.numeric ? "number-cell" : "");
       if (index === 0) cell.scope = "row";
       if (value !== null && typeof value === "object") cell.append(value);
-      else cell.textContent = column.numeric ? formatNumber(value) : String(value ?? "");
+      else if (column.numeric && typeof value === "number") cell.textContent = formatNumber(value);
+      else cell.textContent = String(value ?? "");
       line.append(cell);
     });
     if (bar) {
@@ -1784,86 +1785,79 @@ function historyBody(payload) {
   return list;
 }
 
+function figure(label, value, detail) {
+  const box = node("div", "stat-figure");
+  box.append(node("span", "stat-label", label));
+  box.append(node("strong", "stat-value", value));
+  if (detail) box.append(node("span", "stat-detail", detail));
+  return box;
+}
+
+// The four headline figures of the searches in a scope share one card and one
+// scope: each is a line or two, and four cards for them were four mostly empty
+// boxes.
+function renderSearchFigures(payload) {
+  const searches = payload.searches || {};
+  const count = Number(searches.search_count || 0);
+  const mean = searches.mean_result_count;
+  const slow = searches.p95_elapsed_ms;
+  const grid = node("div", "stat-figures");
+  grid.append(
+    figure(
+      "Searches",
+      formatNumber(count),
+      mean === null || mean === undefined ? "None counted yet" : `${mean} passages on average`,
+    ),
+    figure(
+      "With no results",
+      formatNumber(searches.zero_result_count),
+      count ? `${Math.round((100 * searches.zero_result_count) / count)}% of searches` : "—",
+    ),
+    figure(
+      "Median time",
+      milliseconds(searches.median_elapsed_ms),
+      slow === null || slow === undefined ? "—" : `95th percentile ${milliseconds(slow)}`,
+    ),
+    figure(
+      "Never in a top five",
+      count ? formatNumber(payload.unreached_source_count) : "—",
+      payload.corpus ? `of ${formatNumber(payload.corpus.source_count)} searchable sources` : "No generation yet",
+    ),
+  );
+  return grid;
+}
+
 // Every card on the board: its title, where its numbers come from, the scopes a
-// reader may change on it, and how it draws what came back.
+// reader may change on it, and how it draws what came back. A card that would
+// hold a line or two shares one with its neighbours, so the board is a few full
+// cards and no scatter of small ones.
 const STAT_CARDS = [
   {
     id: "searches",
     title: "Searches",
     source: "stats",
     scopes: ["time"],
-    number: true,
-    render: (payload) => {
-      const searches = payload.searches || {};
-      const mean = searches.mean_result_count;
-      return numberBody(
-        formatNumber(searches.search_count),
-        mean === null || mean === undefined ? "None counted yet" : `${mean} passages on average`,
-      );
-    },
-  },
-  {
-    id: "no-results",
-    title: "With no results",
-    source: "stats",
-    scopes: ["time"],
-    number: true,
-    render: (payload) => {
-      const searches = payload.searches || {};
-      const count = Number(searches.search_count || 0);
-      return numberBody(
-        formatNumber(searches.zero_result_count),
-        count ? `${Math.round((100 * searches.zero_result_count) / count)}% of searches` : "—",
-      );
-    },
-  },
-  {
-    id: "search-time",
-    title: "Median time",
-    source: "stats",
-    scopes: ["time"],
-    number: true,
-    render: (payload) => {
-      const searches = payload.searches || {};
-      const slow = searches.p95_elapsed_ms;
-      return numberBody(
-        milliseconds(searches.median_elapsed_ms),
-        slow === null || slow === undefined ? "—" : `95th percentile ${milliseconds(slow)}`,
-      );
-    },
-  },
-  {
-    id: "unreached",
-    title: "Never in a top five",
-    source: "stats",
-    scopes: ["time"],
-    number: true,
-    render: (payload) => {
-      const counted = Number(payload.searches?.search_count || 0);
-      return numberBody(
-        counted ? formatNumber(payload.unreached_source_count) : "—",
-        payload.corpus ? `of ${formatNumber(payload.corpus.source_count)} searchable sources` : "No generation yet",
-      );
-    },
+    wide: true,
+    render: renderSearchFigures,
   },
   {
     id: "sources",
-    wide: true,
     title: "Sources by appearances",
     source: "stats",
     scopes: ["time", "size"],
     top: 10,
+    wide: true,
     count: (payload) => (payload.sources || []).length,
     render: (payload) =>
       statTable([{ label: "Source", value: sourceCell }, ...RANK_COLUMNS], payload.sources || [], { bar: "top_five" }),
   },
   {
     id: "passages",
-    wide: true,
     title: "Passages by appearances",
     source: "stats",
     scopes: ["time", "size"],
     top: 10,
+    wide: true,
     count: (payload) => (payload.passages || []).length,
     render: (payload) =>
       statTable(
@@ -1878,7 +1872,6 @@ const STAT_CARDS = [
   },
   {
     id: "history",
-    wide: true,
     title: "Search history",
     source: "history",
     scopes: ["time", "size"],
@@ -1901,44 +1894,6 @@ const STAT_CARDS = [
       ),
   },
   {
-    id: "unreached-list",
-    wide: true,
-    title: "Sources no search has reached",
-    source: "stats",
-    scopes: ["time", "size"],
-    top: 10,
-    count: (payload) => payload.unreached_source_count || 0,
-    render: (payload) => {
-      const counted = Number(payload.searches?.search_count || 0);
-      const unreached = payload.unreached_sources || [];
-      if (!unreached.length) {
-        return node("p", "form-note", counted ? "Every searchable source has reached a top five." : "Nothing to count yet.");
-      }
-      const list = node("ul", "stats-list");
-      unreached.forEach((entry) => {
-        const item = node("li");
-        item.append(
-          entry.source_id
-            ? entityLink(inlineText(entry.title) || entry.source_relative_path, sourceHref(entry.source_id))
-            : node("span", "", inlineText(entry.title) || entry.source_relative_path),
-        );
-        list.append(item);
-      });
-      const box = document.createDocumentFragment();
-      box.append(list);
-      const more = (payload.unreached_source_count || 0) - unreached.length;
-      if (more > 0) box.append(node("p", "form-note", `And ${formatNumber(more)} more.`));
-      return box;
-    },
-  },
-  {
-    id: "corpus-size",
-    title: "Corpus size",
-    source: "stats",
-    scopes: [],
-    render: (payload) => renderCorpusSize(payload.corpus),
-  },
-  {
     id: "largest",
     title: "Largest sources",
     source: "stats",
@@ -1947,17 +1902,22 @@ const STAT_CARDS = [
     count: (payload) => (payload.corpus?.largest_sources || []).length,
     render: (payload) => renderLargest(payload.corpus),
   },
-  distributionCard("formats", "Sources by format", "formats", "Format"),
-  distributionCard("languages", "Sources by language", "languages", "Language"),
-  distributionCard("decades", "Sources by decade", "decades", "Decade"),
-  distributionCard("categories", "Sources by category", "categories", "Category"),
-  distributionCard("authors", "Sources by author", "authors", "Author"),
   {
-    id: "missing-metadata",
-    title: "Reviewed metadata missing",
+    id: "people",
+    title: "Categories and authors",
     source: "stats",
-    scopes: [],
-    render: (payload) => renderMissingMetadata(payload.corpus),
+    scopes: ["size"],
+    top: 10,
+    render: (payload, scope) => renderPeople(payload.corpus, scope.top),
+  },
+  {
+    id: "corpus",
+    title: "Corpus",
+    source: "stats",
+    scopes: ["size"],
+    top: 5,
+    wide: true,
+    render: (payload, scope) => renderCorpus(payload.corpus, scope.top),
   },
   {
     id: "build",
@@ -1969,71 +1929,79 @@ const STAT_CARDS = [
   },
 ];
 
-function renderCorpusSize(corpus) {
-  if (!corpus) return node("p", "form-note", "This project has no generation yet.");
+const NO_GENERATION = "This project has no generation yet.";
+
+// What a corpus is: how big, what is missing from it, and how it divides by
+// format, language, and decade. The lists are the card's size at most.
+function renderCorpus(corpus, top) {
+  if (!corpus) return node("p", "form-note", NO_GENERATION);
   const spread = corpus.passages_per_source || {};
-  return factList(
-    [
-      ["Searchable sources", formatNumber(corpus.source_count)],
-      ["Passages", formatNumber(corpus.passage_count)],
-      ["PDF pages", formatNumber(corpus.pdf_page_count)],
-      [
-        "Passages per source",
-        `${formatNumber(spread.minimum)} fewest · ${formatNumber(spread.median)} median · ${formatNumber(spread.maximum)} most`,
-      ],
-    ],
-    "fact-list",
-  );
-}
-
-function renderMissingMetadata(corpus) {
-  if (!corpus) return node("p", "form-note", "This project has no generation yet.");
   const missing = corpus.missing_metadata || {};
-  return factList(
-    [
-      ["Authors", `${formatNumber(missing.authors)} sources`],
-      ["Year", `${formatNumber(missing.year)} sources`],
-      ["Categories", `${formatNumber(missing.categories)} sources`],
-    ],
-    "fact-list",
+  const groups = node("div", "stats-groups");
+  groups.append(
+    statGroup(
+      "Size",
+      factList(
+        [
+          ["Searchable sources", formatNumber(corpus.source_count)],
+          ["Passages", formatNumber(corpus.passage_count)],
+          ["PDF pages", formatNumber(corpus.pdf_page_count)],
+          [
+            "Passages per source",
+            `${formatNumber(spread.minimum)} fewest · ${formatNumber(spread.median)} median · ${formatNumber(spread.maximum)} most`,
+          ],
+        ],
+        "fact-list",
+      ),
+    ),
+    statGroup(
+      "Reviewed metadata missing",
+      factList(
+        [
+          ["Authors", `${formatNumber(missing.authors)} sources`],
+          ["Year", `${formatNumber(missing.year)} sources`],
+          ["Categories", `${formatNumber(missing.categories)} sources`],
+        ],
+        "fact-list",
+      ),
+    ),
+    statGroup("Formats", countedTable("Format", (corpus.formats || []).slice(0, top))),
+    statGroup("Languages", countedTable("Language", (corpus.languages || []).slice(0, top))),
+    statGroup("Decades", countedTable("Decade", (corpus.decades || []).slice(0, top))),
   );
+  return groups;
 }
 
-// The largest sources, ranked by what the card says; the bar shows that measure
-// and the other is a column beside it.
+function renderPeople(corpus, top) {
+  if (!corpus) return node("p", "form-note", NO_GENERATION);
+  const groups = node("div", "stats-groups");
+  groups.append(
+    statGroup("Categories", countedTable("Category", (corpus.categories || []).slice(0, top))),
+    statGroup("Authors", countedTable("Author", (corpus.authors || []).slice(0, top))),
+  );
+  return groups;
+}
+
+// The largest sources, ranked by what the card says. Text size is the measure
+// every format has, where pages are a PDF's alone, so an EPUB shows no pages
+// rather than none counted, and the bar follows the ranking.
 function renderLargest(corpus) {
-  if (!corpus) return node("p", "form-note", "This project has no generation yet.");
-  const byPages = corpus.largest_by === "pages";
-  const rows = (corpus.largest_sources || []).map((entry) => ({
-    ...entry,
-    physical_pages: entry.physical_pages ?? 0,
-  }));
+  if (!corpus) return node("p", "form-note", NO_GENERATION);
+  const bySize = corpus.largest_by === "size";
   return statTable(
     [
       { label: "Source", value: sourceCell },
       { label: "Passages", numeric: true, value: (row) => row.passage_count },
-      { label: "Pages", numeric: true, value: (row) => row.physical_pages },
+      { label: "Text", numeric: true, value: (row) => bytes(row.text_bytes) || "—" },
+      {
+        label: "Pages",
+        numeric: true,
+        value: (row) => (row.physical_pages ? formatNumber(row.physical_pages) : "—"),
+      },
     ],
-    rows,
-    { bar: byPages ? "physical_pages" : "passage_count" },
+    corpus.largest_sources || [],
+    { bar: bySize ? "text_bytes" : "passage_count" },
   );
-}
-
-// A distribution over the searchable sources, shortened to the size the card
-// chose; the badge says how many entries there are in all.
-function distributionCard(id, title, key, label) {
-  return {
-    id,
-    title,
-    source: "stats",
-    scopes: ["size"],
-    top: 10,
-    count: (payload) => (payload.corpus?.[key] || []).length,
-    render: (payload, scope) =>
-      payload.corpus
-        ? countedTable(label, (payload.corpus[key] || []).slice(0, scope.top))
-        : node("p", "form-note", "This project has no generation yet."),
-  };
 }
 
 function renderBuild(payload) {
@@ -2095,7 +2063,7 @@ function scopeSelect(card, field, options) {
 }
 
 function statPanel(card) {
-  const panel = node("article", `stat-panel${card.number ? " stat-panel-number" : ""}${card.wide ? " stat-panel-wide" : ""}`);
+  const panel = node("article", `stat-panel${card.wide ? " stat-panel-wide" : ""}`);
   panel.dataset.card = card.id;
   const head = node("header", "stat-panel-head");
   head.append(node("h3", "stat-panel-title", card.title));
@@ -2136,10 +2104,9 @@ function buildStatsBoard() {
   const board = byId("stats-board");
   board.replaceChildren();
   state.statPanels = new Map();
-  const numbers = node("div", "status-grid stats-numbers");
-  const lists = node("div", "stats-lists");
-  STAT_CARDS.forEach((card) => (card.number ? numbers : lists).append(statPanel(card)));
-  board.append(numbers, lists);
+  const cards = node("div", "stats-lists");
+  STAT_CARDS.forEach((card) => cards.append(statPanel(card)));
+  board.append(cards);
 }
 
 async function clearHistory() {

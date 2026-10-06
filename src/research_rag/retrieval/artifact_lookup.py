@@ -444,6 +444,23 @@ class ArtifactLookup:
                 )
             return count
 
+    def text_bytes_by_document(self) -> dict[str, int]:
+        """The stored size of each document's extracted units, read from the index.
+
+        The units are the cleaned text a source was built from, so their size is a
+        measure every format shares, which a page count is not: an EPUB has none.
+        It counts each unit's stored record, which carries a little more than its
+        text, so it is a size to compare sources by and not a character count.
+        """
+
+        with self._connect() as connection:
+            return {
+                str(row[0]): int(row[1])
+                for row in connection.execute(
+                    "SELECT document_id, SUM(byte_length) FROM units GROUP BY document_id"
+                )
+            }
+
     def chunk_counts_by_document(self) -> dict[str, int]:
         """How many passages each document holds, read from the index alone."""
 
