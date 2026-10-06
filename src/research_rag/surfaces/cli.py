@@ -54,6 +54,7 @@ from ..project.config import (
     configured_source_directory,
     project_command,
     resolve_config,
+    resolve_source_reference,
 )
 from ..project.policy import DEFAULT_RETRIEVAL_METHOD, RETRIEVAL_METHODS, ResearchError
 from ..project.registry import (
@@ -171,6 +172,10 @@ HELP_GROUPS: tuple[tuple[str, tuple[tuple[str, str], ...]], ...] = (
                 ),
             ),
             (
+                "history",
+                "Recent searches that kept their question, to run again. --clear forgets them.",
+            ),
+            (
                 "remove-generation",
                 (
                     "Delete a generation search does not read, after repeating its id. "
@@ -194,6 +199,10 @@ HELP_GROUPS: tuple[tuple[str, tuple[tuple[str, str], ...]], ...] = (
                 "passage",
                 "One passage and its neighbours, for reading around a result.",
             ),
+            (
+                "chunks",
+                "One source's passages in reading order, each with how often searches returned it.",
+            ),
         ),
     ),
     (
@@ -210,6 +219,13 @@ HELP_GROUPS: tuple[tuple[str, tuple[tuple[str, str], ...]], ...] = (
             (
                 "include",
                 "Put an excluded source or passage back into retrieval.",
+            ),
+            (
+                "ocr",
+                (
+                    "Give a scanned PDF a text layer, as a new file. Never run by "
+                    "ingestion, an agent, or the workspace."
+                ),
             ),
         ),
     ),
@@ -847,16 +863,122 @@ def _parser() -> argparse.ArgumentParser:
         ),
     )
 
-    add(
+    ocr = add(
+        "ocr",
+        description=(
+            "Recognise the text on the scanned pages of one PDF and write a copy "
+            "that carries it as an invisible text layer. The original is never "
+            "edited, and nothing is written into the sources directory: move the "
+            "copy in yourself if it should replace the original, then run "
+            "`ingest`. This is the only OCR here. Ingestion never runs it, and no "
+            "agent tool or workspace action reaches it. It needs the optional "
+            "recognition backend, `uv sync --extra ocr`. Pages that already carry "
+            "text are copied untouched unless --all-pages is given."
+        ),
+    )
+    ocr.add_argument(
+        "source",
+        metavar="SOURCE",
+        help="The PDF, relative to the sources directory, as `sources` reports it.",
+    )
+    ocr.add_argument(
+        "-o",
+        "--output",
+        metavar="PATH",
+        help=(
+            "Where to write the copy. Default: SOURCE's name with `.ocr.pdf` in "
+            "the current directory. It may not be inside the sources directory."
+        ),
+    )
+    ocr.add_argument(
+        "--force", action="store_true", help="Replace the output if it exists."
+    )
+    ocr.add_argument(
+        "--all-pages",
+        action="store_true",
+        help="Recognise every page, including those that already carry text.",
+    )
+    ocr.add_argument(
+        "--dpi",
+        type=int,
+        default=200,
+        metavar="N",
+        help="Resolution pages are rendered at for recognition (default 200).",
+    )
+
+    stats = add(
         "stats",
         description=(
             "Report how often each source and passage reached rank one and the top "
             "five of a search on this machine, how many searches returned nothing, "
             "how long they took, which searchable sources no search has reached, "
             "and the corpus composition and last build the selected generation "
-            "records. Counts keep no query text; deleting the counts file named in "
-            "the answer resets them."
+            "records. Deleting the counts file named in the answer resets them."
         ),
+    )
+    stats.add_argument(
+        "--days",
+        type=float,
+        metavar="N",
+        help="Count only the searches of the last N days (default: all of them).",
+    )
+    stats.add_argument(
+        "--top",
+        type=int,
+        default=20,
+        metavar="N",
+        help="How many sources and passages each ranked list names (1-100).",
+    )
+
+    history = add(
+        "history",
+        description=(
+            "List recent searches that kept their question and filters, newest "
+            "first, with the counts of what each returned. Nothing is kept while "
+            "`runtime.search_history` is false. `--clear` forgets every kept "
+            "question and leaves the counts."
+        ),
+    )
+    history.add_argument(
+        "--limit", type=int, default=20, metavar="N", help="How many to list (1-200)."
+    )
+    history.add_argument(
+        "--days", type=float, metavar="N", help="Only the last N days."
+    )
+    history.add_argument(
+        "--clear",
+        action="store_true",
+        help="Forget every kept question and filter. The counts stay.",
+    )
+
+    chunks = add(
+        "chunks",
+        description=(
+            "List one source's passages in reading order: where each sits, its "
+            "cleaned text trimmed, its size in tokens, whether it is excluded, and "
+            "how many times a search returned it in the top five and at rank one. "
+            "The source is its stable id (`src_...`) or its path as `sources` "
+            "reports it."
+        ),
+    )
+    chunks.add_argument(
+        "source",
+        metavar="SOURCE",
+        help="The source's stable id (`src_...`) or its path as `sources` reports it.",
+    )
+    chunks.add_argument(
+        "--page",
+        type=int,
+        default=1,
+        metavar="N",
+        help="Which page of passages (default 1).",
+    )
+    chunks.add_argument(
+        "--page-size",
+        type=int,
+        default=20,
+        metavar="N",
+        help="Passages per page (1-50).",
     )
 
     generations = add(
@@ -1609,8 +1731,24 @@ class Local:
     async def sources(self) -> dict[str, Any]:
         return await self._require().list_sources()
 
-    async def stats(self) -> dict[str, Any]:
-        return await self._require().search_stats()
+    async def stats(self, *, days: float | None, top: int) -> dict[str, Any]:
+        return await self._require().search_stats(since_days=days, top=top)
+
+    async def history(self, *, limit: int, days: float | None) -> dict[str, Any]:
+        return await self._require().search_history(limit=limit, since_days=days)
+
+    async def clear_history(self) -> dict[str, Any]:
+        return await self._require().clear_search_history()
+
+    async def source_chunks(
+        self, *, source: str, page: int, page_size: int
+    ) -> dict[str, Any]:
+        return await self._require().source_chunks(
+            source_id=source if source.startswith("src_") else None,
+            source_path=None if source.startswith("src_") else source,
+            page=page,
+            page_size=page_size,
+        )
 
     async def passage(self, chunk_id: str, *, context_chunks: int) -> dict[str, Any]:
         return await self._require().get_passage(
@@ -1708,8 +1846,19 @@ class Remote:
     async def sources(self) -> dict[str, Any]:
         return self.control.sources()
 
-    async def stats(self) -> dict[str, Any]:
-        return self.control.stats()
+    async def stats(self, *, days: float | None, top: int) -> dict[str, Any]:
+        return self.control.stats(days=days, top=top)
+
+    async def history(self, *, limit: int, days: float | None) -> dict[str, Any]:
+        return self.control.history(limit=limit, days=days)
+
+    async def clear_history(self) -> dict[str, Any]:
+        return self.control.clear_history()
+
+    async def source_chunks(
+        self, *, source: str, page: int, page_size: int
+    ) -> dict[str, Any]:
+        return self.control.source_chunks(source=source, page=page, page_size=page_size)
 
     async def passage(self, chunk_id: str, *, context_chunks: int) -> dict[str, Any]:
         return self.control.passage(chunk_id, context_chunks=context_chunks)
@@ -1835,7 +1984,15 @@ async def _operate(
             metadata=_metadata_body(args),
         )
     if command == "stats":
-        return await operations.stats()
+        return await operations.stats(days=args.days, top=args.top)
+    if command == "history":
+        if args.clear:
+            return await operations.clear_history()
+        return await operations.history(limit=args.limit, days=args.days)
+    if command == "chunks":
+        return await operations.source_chunks(
+            source=args.source, page=args.page, page_size=args.page_size
+        )
     if command == "generations":
         if args.use_generation:
             return await operations.use_generation(args.use_generation)
@@ -2211,6 +2368,48 @@ def _open_browser(url: str) -> None:
         if webbrowser.open(url):
             return
     print(f"Open {url} in a browser.", file=sys.stderr)
+
+
+def _ocr(args: argparse.Namespace, config: ResearchConfig) -> dict[str, Any]:
+    """Write an OCR copy of one source PDF, outside the sources directory.
+
+    Local by design: ingestion does not call it, the agent surface has no tool for
+    it, and the workspace has no action for it, so a recognised text layer is
+    always something a person asked for and then placed where they wanted it.
+    """
+
+    from ..corpus.ocr import OcrError, check_output_path, ocr_pdf
+
+    source = resolve_source_reference(config, args.source)
+    if source.suffix.lower() != ".pdf" or not source.is_file():
+        raise ConfigurationError(f"Not a PDF in the sources directory: {args.source}")
+    if source.is_symlink():
+        raise ConfigurationError(f"A symlink is not read: {args.source}")
+    output = (
+        Path(args.output).expanduser()
+        if args.output
+        else Path.cwd() / f"{source.stem}.ocr.pdf"
+    )
+    try:
+        check_output_path(
+            source, output, sources_root=config.source_root, force=args.force
+        )
+        written = ocr_pdf(
+            source,
+            output,
+            dpi=args.dpi,
+            every_page=args.all_pages,
+            progress=lambda done, total: sys.stderr.write(
+                f"\rpage {done} of {total}" + ("\n" if done == total else "")
+            ),
+        )
+    except OcrError as exc:
+        raise ResearchError(str(exc)) from exc
+    written["next"] = (
+        "Move the copy into the sources directory yourself if it should replace the "
+        f"original, then run `{CLI_NAME} ingest`. The original was not touched."
+    )
+    return written
 
 
 def _clients(config: ResearchConfig) -> dict[str, Any]:
@@ -2688,6 +2887,8 @@ async def _run(args: argparse.Namespace) -> CommandResult:
         return CommandResult(payload=_stop(args, config))
     if args.command == "doctor":
         return await _doctor(args, config)
+    if args.command == "ocr":
+        return CommandResult(payload=await asyncio.to_thread(_ocr, args, config))
     async with _operations(config) as operations:
         payload = await _operate(args, operations)
     return CommandResult(payload=payload)

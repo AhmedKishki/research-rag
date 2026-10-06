@@ -420,6 +420,10 @@ SOURCE_REASON_UNSAFE_TO_CLEAN = "unsafe_to_clean"
 # numbers beside a labelled paragraph has letters somewhere in the source, and
 # that source is kept.
 SOURCE_REASON_NO_LETTER_TEXT = "no_letter_text"
+# More of the file's text was unreadable than this project accepts, so indexing
+# it would lose that text. Unlike the reasons above it needs a caller that
+# states how much loss it accepts: no share is evidence on its own.
+SOURCE_REASON_UNCLEAN = "unclean_text"
 
 # Below this share of retained units the source is a document with damaged
 # pages rather than a damaged document. The existing policy withholds a corrupt
@@ -448,6 +452,8 @@ def source_health_reasons(
     image_only_pages: int = 0,
     physical_pages: int = 0,
     letter_characters: int | None = None,
+    withheld_characters: int = 0,
+    maximum_unclean_percent: float | None = None,
 ) -> list[str]:
     """The reasons a whole source is refused, from evidence about the whole file.
 
@@ -484,6 +490,13 @@ def source_health_reasons(
         reasons.append(SOURCE_REASON_NO_LETTER_TEXT)
     if physical_pages > 0 and image_only_pages >= physical_pages:
         reasons.append(SOURCE_REASON_NO_TEXT_LAYER)
+
+    if (
+        maximum_unclean_percent is not None
+        and withheld_characters > 0
+        and withheld_characters * 100 > kept_characters * maximum_unclean_percent
+    ):
+        reasons.append(SOURCE_REASON_UNCLEAN)
 
     total = kept_characters + removed_characters
     if (

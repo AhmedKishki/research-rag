@@ -21,23 +21,41 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+from ..corpus.text_normalization import normalize_reading_text
 from ..generations.generation_inventory import generation_inventory
 from ..project.policy import ResearchError
 from ..project.state_files import SEARCH_STATS_FILE
-from ..project.support import _effective_documents
+from ..project.support import (
+    _chunk_text,
+    _effective_documents,
+    _public_document,
+)
 from ..storage.search_stats import (
     TRACKED_RANKS,
     SearchStatsError,
+    clear_history,
+    read_appearances,
+    read_history,
     read_search_stats,
     record_search,
 )
+from .admission import current_caller
 
 LOGGER = logging.getLogger(__name__)
 
+# How much of a passage a list of them shows; the whole is `get_passage`.
+PREVIEW_CHARACTERS = 420
+
 # How many sources and passages each ranked list in the answer names.
 TOP_ENTRIES = 20
-# How many sources the answer names as never having reached a top five.
-UNREACHED_ENTRIES = 20
+
+
+def caller_kind(caller: str) -> str:
+    """What kind of caller a fairness key names, for a list a reader scans."""
+
+    if caller in {"workspace", "command line"}:
+        return caller
+    return "unknown" if caller in {"", "anonymous"} else "agent"
 
 
 def _utc_now() -> str:
@@ -70,8 +88,14 @@ class StatsWorkflow:
         *,
         requested_top_k: int,
         started: float,
+        query: str = "",
+        filters: dict[str, list[str]] | None = None,
     ) -> None:
-        """Count one answered search. A failure is logged, never raised."""
+        """Count one answered search. A failure is logged, never raised.
+
+        The question and its filters are kept only while `runtime.search_history`
+        is on, and only under the kind of caller that asked.
+        """
 
         if not self._records_searches:
             return
@@ -90,18 +114,40 @@ class StatsWorkflow:
                 result_count=int(payload.get("result_count") or 0),
                 elapsed_ms=round((time.perf_counter() - started) * 1000, 1),
                 ranked=ranked,
+                query=query if self.config.settings.search_history else None,
+                filters=(
+                    {key: value for key, value in (filters or {}).items() if value}
+                    if self.config.settings.search_history
+                    else None
+                ),
+                caller=caller_kind(current_caller()),
             )
         except (SearchStatsError, OSError) as exc:
             LOGGER.warning("search counts not recorded: %s", exc)
 
-    async def search_stats(self) -> dict[str, Any]:
-        """Search counts by rank, and the facts the selected generation carries."""
+    async def search_stats(
+        self, *, since_days: float | None = None, top: int = TOP_ENTRIES
+    ) -> dict[str, Any]:
+        """Search counts by rank, and the facts the selected generation carries.
+
+        `since_days` bounds the counts to recent searches and `top` the length of
+        the ranked lists; the corpus and build facts are the generation's own and
+        do not move with either.
+        """
+
+        if since_days is not None and since_days <= 0:
+            raise ResearchError("since_days must be a positive number of days")
+        if not 1 <= top <= 100:
+            raise ResearchError("top must be between 1 and 100")
 
         async with self._read() as lease:
             current = self._load_current_optional()
             try:
                 counts = await asyncio.to_thread(
-                    read_search_stats, self._search_stats_path, top=TOP_ENTRIES
+                    read_search_stats,
+                    self._search_stats_path,
+                    top=top,
+                    since_days=since_days,
                 )
             except SearchStatsError as exc:
                 raise ResearchError(str(exc)) from exc
@@ -196,7 +242,7 @@ class StatsWorkflow:
                 for document in sorted(
                     unreached,
                     key=lambda item: str(item.get("title") or "").casefold(),
-                )[:UNREACHED_ENTRIES]
+                )[:top]
             ]
             if counts["search_count"]
             else []
@@ -204,6 +250,172 @@ class StatsWorkflow:
         answer["corpus"] = self._corpus_facts(searchable, passages_by_document)
         answer["last_build"] = self._build_facts(manifest)
         return answer
+
+    async def search_history(
+        self, *, limit: int = 20, since_days: float | None = None
+    ) -> dict[str, Any]:
+        """Recent searches that kept their question, newest first, to run again."""
+
+        if not 1 <= limit <= 200:
+            raise ResearchError("limit must be between 1 and 200")
+        try:
+            history = await asyncio.to_thread(
+                read_history,
+                self._search_stats_path,
+                limit=limit,
+                since_days=since_days,
+            )
+        except SearchStatsError as exc:
+            raise ResearchError(str(exc)) from exc
+        history["recording"] = bool(self.config.settings.search_history)
+        return history
+
+    async def clear_search_history(self) -> dict[str, Any]:
+        """Forget every kept question and filter. The counts stay."""
+
+        async with self._operation():
+            try:
+                cleared = await asyncio.to_thread(
+                    clear_history, self._search_stats_path
+                )
+            except SearchStatsError as exc:
+                raise ResearchError(str(exc)) from exc
+        return {
+            "cleared": cleared,
+            "message": (
+                f"Forgot {cleared} kept question{'' if cleared == 1 else 's'}. "
+                "The counts are unchanged."
+            ),
+        }
+
+    async def source_chunks(
+        self,
+        *,
+        source_id: str | None = None,
+        source_path: str | None = None,
+        page: int = 1,
+        page_size: int = 20,
+    ) -> dict[str, Any]:
+        """One source and a page of its passages, each with how often it was returned.
+
+        The source is named by its stable id or its path relative to the sources
+        directory. Passages come in reading order from the selected generation's
+        index, with the cleaned text trimmed for a list; the whole passage and its
+        neighbours are `get_passage`.
+        """
+
+        if not (source_id or source_path):
+            raise ResearchError("Name the source by source_id or source_path")
+        if page < 1 or not 1 <= page_size <= 50:
+            raise ResearchError("page must be 1 or more, and page_size 1 to 50")
+        async with self._read() as lease:
+            current = self._load_current_optional()
+            if current is None:
+                raise ResearchError("No knowledge base exists; call ingest first")
+            generation_root, manifest = current
+            lease.hold(str(manifest["generation_id"]))
+            documents = _effective_documents(manifest, self._metadata())
+            document = next(
+                (
+                    item
+                    for item in documents.values()
+                    if (source_id and str(item.get("source_id")) == source_id)
+                    or (
+                        source_path
+                        and str(item.get("source_relative_path")) == source_path
+                    )
+                ),
+                None,
+            )
+            if document is None:
+                raise ResearchError(
+                    "The selected generation holds no such source; it may have been "
+                    "added since the build, or renamed."
+                )
+            document_id = str(document["document_id"])
+            lookup = await self._ensure_artifact_lookup(generation_root, manifest)
+            total = await asyncio.to_thread(lookup.chunk_count, {document_id})
+            pages = max(1, -(-total // page_size))
+            page = min(page, pages)
+            offset = (page - 1) * page_size
+            chunks = await asyncio.to_thread(
+                lookup.chunks_for_document_page,
+                document_id,
+                offset=offset,
+                limit=page_size,
+            )
+            excluded_chunks = set(self._chunk_exclusions())
+            excluded_source = str(document.get("source_relative_path")) in set(
+                self._source_exclusions()
+            )
+        appearances = await asyncio.to_thread(
+            read_appearances,
+            self._search_stats_path,
+            chunk_ids=[str(chunk["chunk_id"]) for chunk in chunks],
+            source_id=str(document["source_id"]),
+        )
+        public = _public_document(document)
+        stored = next(
+            (
+                item
+                for item in manifest.get("documents", [])
+                if str(item.get("document_id")) == document_id
+            ),
+            {},
+        )
+        top_five, rank_one = appearances.get(str(document["source_id"]), (0, 0))
+        entries = []
+        for position, chunk in enumerate(chunks):
+            chunk_id = str(chunk["chunk_id"])
+            text = _chunk_text(chunk)
+            counted = appearances.get(chunk_id, (0, 0))
+            entries.append(
+                {
+                    "chunk_id": chunk_id,
+                    "ordinal": offset + position + 1,
+                    "locator": dict(chunk.get("locator") or {}),
+                    "text": normalize_reading_text(text[:PREVIEW_CHARACTERS]),
+                    "truncated": len(text) > PREVIEW_CHARACTERS,
+                    "characters": len(text),
+                    "embedding_token_count": chunk.get("embedding_token_count"),
+                    "dense_truncated": chunk.get("dense_truncated"),
+                    "content_kind": str(chunk.get("content_kind") or "prose"),
+                    "quality_flags": list(chunk.get("quality_flags") or []),
+                    "excluded": chunk_id in excluded_chunks,
+                    "top_five": counted[0],
+                    "rank_one": counted[1],
+                }
+            )
+        return {
+            "generation_id": manifest["generation_id"],
+            "source": {
+                "source_id": public["source_id"],
+                "title": public["title"],
+                "authors": public["authors"],
+                "year": public.get("year"),
+                "doi": public["doi"],
+                "language": public["language"],
+                "categories": public["categories"],
+                "keywords": public["keywords"],
+                "project": public["project"],
+                "source_path": public["source_path"],
+                "source_relative_path": public.get("source_relative_path"),
+                "format": stored.get("format"),
+                "excluded": excluded_source,
+                "passage_count": total,
+                "physical_pages": stored.get("physical_pages"),
+                "extracted_units": stored.get("extracted_units"),
+                "withheld_units": stored.get("excluded_corrupt_unit_count"),
+                "unclean_character_rate": stored.get("unclean_character_rate"),
+                "metadata_warnings": list(stored.get("metadata_warnings") or []),
+                "top_five": top_five,
+                "rank_one": rank_one,
+            },
+            "page": page,
+            "pages": pages,
+            "page_size": page_size,
+            "chunks": entries,
+        }
 
     @staticmethod
     def _source_label(document: dict[str, Any] | None) -> dict[str, Any]:

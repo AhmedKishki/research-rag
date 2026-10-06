@@ -20,7 +20,7 @@ my-research-project/
         ├── research-rag-ui.port          port a running app serves, while it runs
         ├── research-rag-ui.pid           its process, while it runs
         ├── research-rag-ui.tty           the terminal it is attached to; absent when it has none
-        ├── search-stats.sqlite3          what searches returned at their first five ranks; no query text
+        ├── search-stats.sqlite3          what searches returned at their first five ranks, and the questions kept while search history is on
         ├── logs/
         ├── failures/                     small failed-build records
         ├── staging/<build-id>/           resumable incomplete build plus checkpoint
@@ -89,7 +89,7 @@ my-research-project/
 ## Derived state
 
 - Everything under `.research-rag/runtime/` is rebuilt from `sources/` plus the portable state. Deleting it costs one ingestion.
-  - `search-stats.sqlite3` is the exception: it is this machine's search counts and no ingestion rebuilds it. Deleting it resets the counts and nothing else.
+  - `search-stats.sqlite3` is the exception: it is this machine's search counts and kept questions, and no ingestion rebuilds it. Deleting it resets the counts and the history and nothing else.
 - `current.json` names the one generation search uses.
 - Earlier successful generations stay on disk, are not searched, and are not pruned automatically.
 - `research-rag status` reports `retained_generation_count` and `retained_generation_bytes`.

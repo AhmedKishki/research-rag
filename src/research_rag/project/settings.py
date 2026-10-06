@@ -274,6 +274,18 @@ SETTINGS: tuple[Setting, ...] = (
         env="RESEARCH_RAG_OFFLINE",
     ),
     Setting(
+        key="runtime.search_history",
+        field="search_history",
+        kind=bool,
+        layer="runtime",
+        doc=(
+            "Keep each search's question and filters on this machine, so the "
+            "Stats view can list recent searches and run one again. Off keeps "
+            "only the counts. The history can be cleared at any time."
+        ),
+        env="RESEARCH_RAG_SEARCH_HISTORY",
+    ),
+    Setting(
         key="runtime.log_level",
         field="log_level",
         kind=str,
@@ -643,6 +655,22 @@ SETTINGS: tuple[Setting, ...] = (
     ),
     # --- Ingestion: how much work one call does, and in what batches. ---
     Setting(
+        key="ingestion.maximum_unclean_percent",
+        field="maximum_unclean_percent",
+        kind=float,
+        layer="runtime",
+        doc=(
+            "The share of a source's extracted text, in characters, that may be "
+            "unreadable before the source is refused as not clean. A refused "
+            "source fails the build before it is chunked and names OCR, which "
+            "is never run automatically. Applies to a source when it is "
+            "extracted; 100 accepts every source."
+        ),
+        minimum=0.0,
+        maximum=100.0,
+        env="RESEARCH_RAG_INGESTION_MAXIMUM_UNCLEAN_PERCENT",
+    ),
+    Setting(
         key="ingestion.work_budget_seconds",
         field="work_budget_seconds",
         kind=int,
@@ -798,6 +826,7 @@ def default_config_file() -> Path:
 @dataclass(frozen=True, slots=True)
 class EffectiveSettings:
     offline: bool
+    search_history: bool
     log_level: str
     tool_detail: str
     embedding_threads: int | None
@@ -827,6 +856,7 @@ class EffectiveSettings:
     chunk_headers: bool
     chunk_batch_units: int
     work_budget_seconds: int
+    maximum_unclean_percent: float
     embedding_batch_size: int
     pdf_page_batch_size: int
     dense_backend: str

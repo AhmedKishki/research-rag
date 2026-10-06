@@ -142,12 +142,26 @@ _OPERATION_ARGUMENTS: Mapping[str, frozenset[str]] = {
     "list_projects": frozenset(),
     "agent_entry": frozenset(),
     "check_updates": frozenset(),
-    "search_stats": frozenset(),
+    "search_stats": frozenset({"days", "top"}),
+    "search_history": frozenset({"limit", "days"}),
+    "clear_search_history": frozenset(),
+    "source_chunks": frozenset({"source_id", "source_path", "page", "page_size"}),
+    "open_source": frozenset({"source_path"}),
 }
 
 
 # Operations that take no argument and share the service method's name.
-_PLAIN_READS = frozenset({"list_sources", "list_chunk_exclusions", "search_stats"})
+_PLAIN_READS = frozenset({"list_sources", "list_chunk_exclusions"})
+# The operations about what searches returned and what a source holds.
+_COUNT_OPERATIONS = frozenset(
+    {
+        "search_stats",
+        "search_history",
+        "clear_search_history",
+        "source_chunks",
+        "open_source",
+    }
+)
 
 
 def _project_listing(config: ResearchConfig) -> dict[str, Any]:
@@ -349,6 +363,44 @@ class ResearchUIAdapter:
             self._update_checked_at = time.monotonic()
             return self._update_preview
 
+    async def _run_counts(
+        self,
+        operation: str,
+        arguments: Mapping[str, Any],
+    ) -> Mapping[str, Any]:
+        """The operations about what searches returned and what a source holds."""
+
+        if operation == "search_stats":
+            return await self.service.search_stats(
+                since_days=_days(arguments.get("days")),
+                top=_bounded_int(
+                    arguments.get("top"), default=20, maximum=100, name="top"
+                ),
+            )
+        if operation == "search_history":
+            return await self.service.search_history(
+                limit=_bounded_int(
+                    arguments.get("limit"), default=20, maximum=200, name="limit"
+                ),
+                since_days=_days(arguments.get("days")),
+            )
+        if operation == "clear_search_history":
+            return await self.service.clear_search_history()
+        if operation == "source_chunks":
+            return await self.service.source_chunks(
+                source_id=_optional_text(arguments.get("source_id")),
+                source_path=_optional_text(arguments.get("source_path")),
+                page=_bounded_int(
+                    arguments.get("page"), default=1, maximum=1_000_000, name="page"
+                ),
+                page_size=_bounded_int(
+                    arguments.get("page_size"), default=20, maximum=50, name="page_size"
+                ),
+            )
+        if operation == "open_source":
+            return await self._open_source(_source_path(arguments))
+        raise UIRequestError(f"Research operation {operation!r} is not available", 404)
+
     async def _run(
         self,
         operation: str,
@@ -356,6 +408,8 @@ class ResearchUIAdapter:
     ) -> Mapping[str, Any]:
         if operation == "check_updates":
             return await self._check_updates()
+        if operation in _COUNT_OPERATIONS:
+            return await self._run_counts(operation, arguments)
         # The reads that take no argument, answered as the service words them.
         if operation in _PLAIN_READS:
             return await getattr(self.service, operation)()
@@ -519,6 +573,23 @@ class ResearchUIAdapter:
             reason=reason,
         )
 
+    async def _open_source(self, source_path: str) -> dict[str, Any]:
+        """Ask the desktop to open an authorised source in its own viewer.
+
+        The same check as serving the file decides which path is allowed, so the
+        desktop is only ever handed a source this project selected. A machine
+        with no desktop answers 501 and the page shows the file in the browser.
+        """
+
+        from ..runtime.viewer import ViewerUnavailable, open_in_default_viewer
+
+        source = await self.source_file(source_path)
+        try:
+            viewer = await asyncio.to_thread(open_in_default_viewer, source.path)
+        except ViewerUnavailable as exc:
+            raise UIRequestError(str(exc), status_code=501) from exc
+        return {"opened": True, "viewer": viewer, "filename": source.filename}
+
     async def source_file(self, source_path: str) -> SourceFile:
         try:
             target = resolve_source_reference(self.config, source_path)
@@ -540,6 +611,24 @@ class ResearchUIAdapter:
             filename=selected.path.name,
             content_disposition_type=disposition,
         )
+
+
+def _days(value: Any) -> float | None:
+    """A window of days for a count, or None for every search."""
+
+    if value is None:
+        return None
+    if isinstance(value, bool) or not isinstance(value, int | float) or value <= 0:
+        raise UIRequestError("days must be a positive number")
+    return float(value)
+
+
+def _optional_text(value: Any) -> str | None:
+    if value is None:
+        return None
+    if not isinstance(value, str):
+        raise UIRequestError("A source is named by a string")
+    return value.strip() or None
 
 
 def _source_path(arguments: Mapping[str, Any]) -> str:

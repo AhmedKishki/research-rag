@@ -49,6 +49,6 @@
 
 ## Outside the documented envelope
 
-- OCR before ingestion, so scanned sources can be indexed.
+- OCR as part of ingestion, so scanned sources are indexed without a separate step. `research-rag ocr` exists and is requested by hand.
   - It needs its own accuracy expectations and tests.
   - It needs an answer on whether an OCR'd source can share a project with a digital one, since their evidence quality differs.

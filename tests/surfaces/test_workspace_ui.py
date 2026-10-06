@@ -772,9 +772,12 @@ def test_the_tab_bar_is_the_whole_navigation() -> None:
         ("memory", "memory"),
         ("updates", "updates"),
     ]
-    # Every item has a panel, and every panel is reached by exactly one item.
+    # Every item has a panel, and every panel but the detail view of one source is
+    # reached by exactly one item. The source view is reached from a name, and its
+    # sidebar item stays marked.
     panels = re.findall(r'data-panel="([^"]+)"\s+data-capability="([^"]+)"', page)
-    assert panels == items
+    assert [panel for panel in panels if panel[0] != "source"] == items
+    assert ("source", "sources") in panels
     assert 'byId("workspace-nav").hidden = !visibleNavItems.length' in script
     # A profile that leaves no item shows no panel rather than the panel of an
     # item that is gone.
@@ -1374,6 +1377,7 @@ def test_a_panel_holds_only_the_blocks_that_belong_to_it() -> None:
     assert set(panels) == {
         "search",
         "sources",
+        "source",
         "status",
         "stats",
         "config",
@@ -3247,60 +3251,290 @@ result.sent = JSON.parse(requests[requests.length - 1].body).top_k;
     assert result["sent"] == 23
 
 
-def test_the_stats_view_draws_what_the_server_counted(tmp_path: Path) -> None:
-    """Counts by rank, the sources no search reached, the corpus, and the build."""
+def test_each_stat_is_a_card_with_a_scope_of_its_own(tmp_path: Path) -> None:
+    """A card asks the server for its own scope, and links go where their names say."""
 
     result = _drive_page(
         tmp_path,
         """
-state.profile = { capabilities: { stats: true } };
-renderStats({
+(async () => {
+state.profile = { capabilities: { stats: true, sources: true, passage_context: true } };
+const stats = {
   searches: {
     search_count: 12,
     zero_result_count: 3,
+    mean_result_count: 7.5,
     median_elapsed_ms: 840,
     p95_elapsed_ms: 2400,
-    first_search_at: "2026-10-01T08:00:00Z",
     searches_by_day: [{ day: "2026-10-06", count: 9 }, { day: "2026-10-05", count: 3 }],
   },
   sources: [
-    { source_id: "s1", title: "Atlas of AI", top_five: 9, rank_one: 4, in_corpus: true },
-    { source_id: "s2", title: "Capital", top_five: 3, rank_one: 0, in_corpus: true },
+    { source_id: "src_1", title: "Atlas of AI", top_five: 9, rank_one: 4, in_corpus: true },
+    { source_id: "src_2", title: "Capital", top_five: 3, rank_one: 0, in_corpus: true },
   ],
   passages: [
-    { chunk_id: "c1", title: "Atlas of AI", top_five: 5, rank_one: 3, in_current_generation: true, locator: { page: 7 } },
+    { chunk_id: "chk_1", source_id: "src_1", title: "Atlas of AI", top_five: 5, rank_one: 3,
+      in_current_generation: true, in_corpus: true, locator: { page: 7 } },
   ],
   unreached_source_count: 1,
-  unreached_sources: [{ title: "Unread Book" }],
+  unreached_sources: [{ source_id: "src_9", title: "Unread Book" }],
   corpus: {
-    source_count: 3,
-    passage_count: 400,
-    pdf_page_count: 900,
+    source_count: 3, passage_count: 400, pdf_page_count: 900,
     passages_per_source: { minimum: 20, median: 100, maximum: 280 },
     largest_sources: [{ title: "Capital", passage_count: 280, in_corpus: true }],
-    formats: [{ value: "pdf", count: 3 }],
-    languages: [{ value: "en", count: 3 }],
-    decades: [{ value: "2020s", count: 2 }, { value: "no year", count: 1 }],
+    formats: [{ value: "pdf", count: 3 }], languages: [{ value: "en", count: 3 }],
+    decades: [{ value: "2020s", count: 2 }],
     missing_metadata: { authors: 0, year: 1, categories: 2 },
   },
-  last_build: { created_at: "2026-10-05T08:36:50Z", seconds: 1545, phase_seconds: { embedding: 1150, extraction: 340 }, reused_vector_count: 0, created_vector_count: 26532 },
+  last_build: { created_at: "2026-10-05T08:36:50Z", seconds: 1545,
+    phase_seconds: { embedding: 1150, extraction: 340 }, reused_vector_count: 0, created_vector_count: 26532 },
   generations: { count: 2, bytes: 1048576 },
-});
-result.cards = text(document.getElementById("stats-cards"));
-result.sources = text(document.getElementById("stats-sources"));
-result.passages = text(document.getElementById("stats-passages"));
-result.unreached = text(document.getElementById("stats-unreached"));
-result.corpus = text(document.getElementById("stats-corpus"));
-result.build = text(document.getElementById("stats-build"));
-result.message = document.getElementById("stats-message").hidden;
+};
+const history = {
+  recording: true, count: 1,
+  searches: [{ searched_at: "2026-10-06T09:00:00Z", query: "labour and automation",
+    filters: { categories_any: ["marxism"] }, requested_top_k: 12, result_count: 12,
+    elapsed_ms: 900, caller: "agent" }],
+};
+const asked = [];
+fetch = async (path, options = {}) => {
+  asked.push(path);
+  const body = path.startsWith("/api/stats/history/clear") ? { cleared: 1, message: "Forgot 1." }
+    : path.startsWith("/api/stats/history") ? history : stats;
+  return { ok: true, status: 200, json: async () => body };
+};
+await loadStats();
+const body = (id) => state.statPanels.get(id).body;
+const collect = (node, found = []) => {
+  if ((node.className || "").includes("entity-link")) found.push([node.textContent, node.href]);
+  (node.children || []).forEach((child) => collect(child, found));
+  return found;
+};
+result.cards = ["searches", "no-results", "search-time", "unreached"].map((id) => text(body(id)));
+result.sources = text(body("sources"));
+result.sourceLinks = collect(body("sources"));
+result.passageLinks = collect(body("passages"));
+result.historyLinks = collect(body("history"));
+result.unreachedLinks = collect(body("unreached-list"));
+result.corpus = text(body("corpus"));
+result.build = text(body("build"));
+result.counts = ["sources", "passages", "history"].map((id) => state.statPanels.get(id).count.textContent);
+result.firstRequests = [...new Set(asked)].sort();
+
+asked.length = 0;
+state.statScopes.sources = { days: 7, top: 5 };
+await refreshCard(STAT_CARDS.find((card) => card.id === "sources"));
+state.statScopes.history = { days: 1, top: 20 };
+await refreshCard(STAT_CARDS.find((card) => card.id === "history"));
+result.scoped = [...asked];
+
+asked.length = 0;
+await clearHistory();
+result.cleared = [...asked];
+})()
 """,
     )
 
-    assert "12" in result["cards"] and "25% of searches" in result["cards"]
-    assert "840 ms" in result["cards"] and "2.4 s" in result["cards"]
-    assert "Atlas of AI" in result["sources"] and "9" in result["sources"]
-    assert "Page 7" in result["passages"]
-    assert "Unread Book" in result["unreached"]
+    assert (
+        "12" in result["cards"][0] and "7.5 passages on average" in result["cards"][0]
+    )
+    assert "25% of searches" in result["cards"][1]
+    assert "840 ms" in result["cards"][2] and "2.4 s" in result["cards"][2]
+    assert "of 3 searchable sources" in result["cards"][3]
+    assert "Atlas of AI" in result["sources"]
+    assert ["Atlas of AI", "#/source?id=src_1"] in result["sourceLinks"]
+    assert ["Page 7", "#/passage?id=chk_1"] in result["passageLinks"]
+    assert ["Atlas of AI", "#/source?id=src_1"] in result["passageLinks"]
+    assert ["Unread Book", "#/source?id=src_9"] in result["unreachedLinks"]
+    # A kept search is run again from its own address, filters and size included.
+    assert result["historyLinks"] == [
+        [
+            "labour and automation",
+            "#/search?q=labour+and+automation&k=12&categories_any=marxism",
+        ]
+    ]
     assert "20 fewest · 100 median · 280 most" in result["corpus"]
-    assert "Embedding" in result["build"] and "26,532 embedded" in result["build"]
-    assert result["message"] is True
+    assert "26,532 embedded" in result["build"]
+    assert result["counts"] == ["2", "1", "1"]
+    # Cards that chose the same scope share one answer; each scope is its own ask.
+    assert result["firstRequests"] == [
+        "/api/stats/history?limit=10",
+        "/api/stats?top=10",
+    ]
+    assert result["scoped"] == [
+        "/api/stats?days=7&top=5",
+        "/api/stats/history?days=1&limit=20",
+    ]
+    assert result["cleared"][0] == "/api/stats/history/clear"
+    assert result["cleared"][1].startswith("/api/stats/history?")
+
+
+def test_a_source_opens_in_the_desktop_viewer_and_falls_back_to_the_browser(
+    tmp_path: Path,
+) -> None:
+    result = _drive_page(
+        tmp_path,
+        """
+(async () => {
+state.profile = { capabilities: { source_files: true } };
+const opened = [];
+const toasts = [];
+window.open = (url) => opened.push(url);
+const posted = [];
+fetch = async (path, options = {}) => {
+  posted.push([path, options.method || "GET", options.body || null]);
+  if (result.headless) {
+    return { ok: false, status: 501, json: async () => ({ error: "no desktop" }) };
+  }
+  return { ok: true, status: 200, json: async () => ({ opened: true, viewer: "xdg-open", filename: "a b.pdf" }) };
+};
+await openSource("books/a b.pdf");
+result.desktop = { posted: [...posted], opened: [...opened], toast: text(document.getElementById("toast-region")) };
+result.headless = true;
+posted.length = 0;
+await openSource("books/a b.pdf");
+result.browser = { posted: [...posted], opened: [...opened] };
+})()
+""",
+    )
+
+    assert result["desktop"]["posted"] == [
+        ["/api/open-source", "POST", '{"source_path":"books/a b.pdf"}']
+    ]
+    # Nothing is downloaded or shown in a tab while the desktop took the file.
+    assert result["desktop"]["opened"] == []
+    assert result["browser"]["opened"] == ["/api/source-file?path=books%2Fa%20b.pdf"]
+
+
+def test_a_name_links_to_its_source_and_its_place_to_the_passage(
+    tmp_path: Path,
+) -> None:
+    result = _drive_page(
+        tmp_path,
+        """
+state.profile = { capabilities: { sources: true, passage_context: true, source_files: true } };
+state.sources = [];
+const collect = (node, found = []) => {
+  if ((node.className || "").includes("entity-link")) found.push([node.className.trim(), node.textContent, node.href]);
+  (node.children || []).forEach((child) => collect(child, found));
+  return found;
+};
+result.hit = collect(resultCard({
+  rank: 1, title: "Atlas of AI", source_id: "src_1", chunk_id: "chk_1",
+  document_id: "d1", locator: { page: 3 }, text: "The passage.", authors: ["Crawford"],
+}));
+result.source = collect(sourceCard({
+  title: "Atlas of AI", source_id: "src_1", document_id: "d1",
+  source_relative_path: "a.pdf", format: "pdf",
+}));
+state.profile = { capabilities: {} };
+result.unlinked = collect(resultCard({
+  rank: 1, title: "Atlas of AI", source_id: "src_1", chunk_id: "chk_1",
+  locator: { page: 3 }, text: "The passage.",
+}));
+""",
+    )
+
+    assert result["hit"] == [
+        ["entity-link", "Atlas of AI", "#/source?id=src_1"],
+        ["entity-link locator-badge", "Page 3", "#/passage?id=chk_1"],
+    ]
+    assert result["source"] == [["entity-link", "Atlas of AI", "#/source?id=src_1"]]
+    # A host that serves neither view draws plain text, not a link to nowhere.
+    assert result["unlinked"] == []
+
+
+def test_the_source_and_passage_views_are_pages_of_their_own(tmp_path: Path) -> None:
+    result = _drive_page(
+        tmp_path,
+        """
+(async () => {
+const tick = async () => { for (let index = 0; index < 40; index += 1) await Promise.resolve(); };
+state.profile = { application_name: "Research RAG", capabilities: { sources: true, passage_context: true } };
+const asked = [];
+fetch = async (path) => {
+  asked.push(path);
+  if (path.startsWith("/api/source-chunks")) {
+    return { ok: true, status: 200, json: async () => ({
+      page: 2, pages: 5,
+      source: { source_id: "src_1", title: "Atlas of AI", authors: ["Crawford"], year: 2021,
+        source_relative_path: "a.pdf", format: "pdf", passage_count: 93, top_five: 4, rank_one: 1,
+        physical_pages: 40, withheld_units: 2, unclean_character_rate: 0.004 },
+      chunks: [
+        { chunk_id: "chk_21", ordinal: 21, locator: { page: 9 }, text: "First words", truncated: true,
+          characters: 900, embedding_token_count: 210, dense_truncated: false, content_kind: "prose",
+          quality_flags: [], excluded: false, top_five: 3, rank_one: 1 },
+        { chunk_id: "chk_22", ordinal: 22, locator: { page: 9 }, text: "More words", truncated: false,
+          characters: 400, content_kind: "prose", quality_flags: ["very_short"], excluded: true,
+          top_five: 0, rank_one: 0 },
+      ],
+    }) };
+  }
+  return { ok: true, status: 200, json: async () => ({ context: [] }) };
+};
+window.location.hash = "#/source?id=src_1&page=2";
+await applyRoute();
+await tick();
+result.source = {
+  view: state.view,
+  asked: asked.filter((path) => path.startsWith("/api/source-chunks")),
+  hash: window.location.hash,
+  title: document.getElementById("source-view-title").textContent,
+  documentTitle: document.title,
+  chunks: text(document.getElementById("source-chunks")),
+  cards: text(document.getElementById("source-stat-cards")),
+  pager: document.getElementById("source-chunk-pager").children.map((item) => item.textContent),
+};
+goToSourcePage("chunks", 3);
+await tick();
+result.paged = {
+  asked: asked.filter((path) => path.startsWith("/api/source-chunks")).pop(),
+  hash: window.location.hash,
+};
+
+window.location.hash = "#/passage?id=chk_21";
+await applyRoute();
+await tick();
+result.passage = {
+  view: state.view,
+  hash: window.location.hash,
+  asked: asked.filter((path) => path.startsWith("/api/passages")),
+  dialog: document.getElementById("context-dialog").opened,
+};
+
+navigateTo("#/passage?id=chk_22");
+result.pushed = state.passagePushed;
+window.location.hash = "#/source";
+await applyRoute();
+result.withoutId = state.view;
+})()
+""",
+    )
+
+    source = result["source"]
+    assert source["view"] == "source"
+    assert source["asked"] == ["/api/source-chunks?source_id=src_1&page=2&page_size=20"]
+    assert source["hash"] == "#/source?id=src_1&page=2"
+    assert source["title"] == "Atlas of AI"
+    assert source["documentTitle"] == "Atlas of AI · page 2 · Research RAG"
+    assert "#21" in source["chunks"] and "Page 9" in source["chunks"]
+    assert "First words…" in source["chunks"] and "More words…" not in source["chunks"]
+    assert "Top five 3 · rank one 1" in source["chunks"]
+    assert "Not returned by any search" in source["chunks"]
+    assert "Excluded from search" in source["chunks"]
+    assert "210 tokens" in source["chunks"] and "very short" in source["chunks"]
+    assert "93" in source["cards"]
+    assert source["pager"] == ["Previous", "1", "2", "3", "…", "5", "Next"]
+    assert result["paged"] == {
+        "asked": "/api/source-chunks?source_id=src_1&page=3&page_size=20",
+        "hash": "#/source?id=src_1&page=3",
+    }
+    assert result["passage"] == {
+        "view": "passage",
+        "hash": "#/passage?id=chk_21",
+        "asked": ["/api/passages/chk_21?context_chunks=1"],
+        "dialog": True,
+    }
+    assert result["pushed"] is True
+    # A source address with no source in it is not a view of anything.
+    assert result["withoutId"] == "sources"

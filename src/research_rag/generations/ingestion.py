@@ -1260,6 +1260,9 @@ class IngestionWorkflow:
                         document,
                         units,
                         removals=removals,
+                        maximum_unclean_percent=(
+                            self.config.settings.maximum_unclean_percent
+                        ),
                     )
                     atomic_write_json(artifact_root / "document.json", document)
                     atomic_write_jsonl(artifact_root / "units.jsonl", retained)

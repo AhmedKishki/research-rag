@@ -38,6 +38,7 @@ from .text_quality import (
     EXTRACTION_ARTIFACT_TOKEN,
     SOURCE_REASON_NO_TEXT,
     SOURCE_REASON_NO_TEXT_LAYER,
+    SOURCE_REASON_UNCLEAN,
     has_searchable_alphanumeric_content,
     non_argument_removal_flags,
     opens_with_note_marker,
@@ -2205,8 +2206,14 @@ def screen_source_units(
     units: list[dict[str, Any]],
     *,
     removals: dict[str, int] | None = None,
+    maximum_unclean_percent: float | None = None,
 ) -> list[dict[str, Any]]:
     """Withhold the units this source cannot use, and refuse the source if none.
+
+    A source is also refused as not clean when the text it lost is more than
+    `maximum_unclean_percent` of what it extracted, in characters. That check runs
+    here, over every unit and before any is chunked, so a build never spends an
+    embedding on a file that will be refused. `None` makes no such claim.
 
     This is the one gate both extraction paths apply, and it applies the section
     removal as well: a staged build writes a page batch to disk before it knows
@@ -2227,11 +2234,13 @@ def screen_source_units(
     reason_counts: Counter[str] = Counter()
     kept_characters = 0
     letter_characters = 0
+    withheld_characters = 0
     for unit in cleaned:
         text = str(unit.get("contents") or "")
         reasons = text_health_reasons(text)
         kept_characters += len(text)
         if reasons:
+            withheld_characters += len(text)
             reason_counts.update(reasons)
             rejected.append(
                 {
@@ -2261,6 +2270,11 @@ def screen_source_units(
     document.update(counted)
     document["excluded_corrupt_unit_count"] = len(rejected)
     document["excluded_corrupt_units"] = rejected
+    # Measured here and nowhere else, so a source extracted before it was measured
+    # carries no figure rather than a guessed one.
+    document["unclean_character_rate"] = (
+        round(withheld_characters / kept_characters, 6) if kept_characters else 0.0
+    )
     document["extracted_units"] = len(retained)
     if rejected:
         document["metadata_warnings"] = list(
@@ -2283,9 +2297,23 @@ def screen_source_units(
         image_only_pages=int((counted or {}).get("image_only_pages") or 0),
         physical_pages=int(document.get("physical_pages") or 0),
         letter_characters=letter_characters,
+        withheld_characters=withheld_characters,
+        maximum_unclean_percent=maximum_unclean_percent,
     )
     if fatal:
-        raise ExtractionError(_refusal_message(source, fatal, rejected, reason_counts))
+        raise ExtractionError(
+            _refusal_message(
+                source,
+                fatal,
+                rejected,
+                reason_counts,
+                unclean=(
+                    withheld_characters,
+                    kept_characters,
+                    maximum_unclean_percent,
+                ),
+            )
+        )
     if document.get("image_only_pages"):
         document["metadata_warnings"] = list(
             dict.fromkeys(
@@ -2387,6 +2415,8 @@ def _refusal_message(
     reasons: list[str],
     rejected: list[dict[str, Any]],
     reason_counts: Counter[str],
+    *,
+    unclean: tuple[int, int, float | None] = (0, 0, None),
 ) -> str:
     """What a refused source says, in a form a reader can act on.
 
@@ -2408,6 +2438,21 @@ def _refusal_message(
         return (
             _no_text_layer_message(source, "Source")
             + f" Refused for: {', '.join(reasons)}."
+        )
+    if SOURCE_REASON_UNCLEAN in reasons:
+        lost, total, limit = unclean
+        share = 100 * lost / total if total else 0.0
+        return (
+            f"Source is not clean ({', '.join(reasons)}): {source.path}. "
+            f"{share:.1f}% of its extracted text ({lost} of {total} characters, "
+            f"{len(rejected)} units) could not be read, over the {limit:g}% this "
+            "project accepts, so indexing it would lose that text. The file is "
+            "never edited. If it is a scan or carries a poor text layer, run OCR "
+            f"on it first with `research-rag ocr {source.source_relative_path}`: "
+            "OCR is a separate command and is never run automatically. Then "
+            "replace the file, or exclude it with "
+            f"`research-rag exclude {source.source_relative_path} --reason "
+            '"not clean"`, or raise ingestion.maximum_unclean_percent.'
         )
     counts = ", ".join(
         f"{reason}={count}" for reason, count in sorted(reason_counts.items())
@@ -2434,6 +2479,8 @@ def _refusal_message(
 def extract_sources(
     sources: tuple[SourceFile, ...],
     source_digests: dict[str, str] | None = None,
+    *,
+    maximum_unclean_percent: float | None = None,
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     documents: list[dict[str, Any]] = []
     units: list[dict[str, Any]] = []
@@ -2445,7 +2492,12 @@ def extract_sources(
             document, extracted = _extract_epub(source, digest)
         else:  # pragma: no cover
             raise ExtractionError(f"Unsupported source format: {source.path}")
-        retained = screen_source_units(source, document, extracted)
+        retained = screen_source_units(
+            source,
+            document,
+            extracted,
+            maximum_unclean_percent=maximum_unclean_percent,
+        )
         documents.append(document)
         units.extend(retained)
     return documents, units

@@ -557,8 +557,12 @@ def test_an_unserved_search_argument_never_reaches_the_service(
         "agent_entry",
         "check_updates",
         "search_stats",
+        "search_history",
+        "clear_search_history",
+        "source_chunks",
+        "open_source",
     }
-    assert _OPERATION_ARGUMENTS["search_stats"] == frozenset()
+    assert _OPERATION_ARGUMENTS["search_stats"] == frozenset({"days", "top"})
     assert _OPERATION_ARGUMENTS["list_projects"] == frozenset()
     assert _OPERATION_ARGUMENTS["agent_entry"] == frozenset()
     assert _OPERATION_ARGUMENTS["check_updates"] == frozenset()
@@ -940,3 +944,173 @@ def test_the_agent_entry_is_the_text_the_doctor_prints(project: Path) -> None:
     assert "--project-root" not in entry["command"]
     assert str(project) not in result["entry"]
     assert service.calls == []
+
+
+class _CountingService(FakeResearchService):
+    async def search_stats(self, **arguments: Any) -> dict[str, Any]:
+        self._record("search_stats", arguments)
+        return {"searches": {"search_count": 3}}
+
+    async def search_history(self, **arguments: Any) -> dict[str, Any]:
+        self._record("search_history", arguments)
+        return {"count": 1, "searches": [{"query": "labour"}], "recording": True}
+
+    async def clear_search_history(self) -> dict[str, Any]:
+        self._record("clear_search_history", {})
+        return {"cleared": 1, "message": "Forgot 1 kept question."}
+
+    async def source_chunks(self, **arguments: Any) -> dict[str, Any]:
+        self._record("source_chunks", arguments)
+        return {"page": arguments["page"], "pages": 3, "chunks": []}
+
+
+def _counting_client(project: Path) -> tuple[TestClient, _CountingService]:
+    config = resolve_config(project, vanilla_executable=sys.executable)
+    fake = _CountingService()
+    return TestClient(
+        create_ui_app(config, service=fake),
+        base_url=LOOPBACK_BASE_URL,
+        client=LOOPBACK_TEST_CLIENT,
+    ), fake
+
+
+def test_the_stats_routes_pass_their_scope_and_bound_it(project: Path) -> None:
+    client, fake = _counting_client(project)
+    with client:
+        assert client.get("/api/stats?days=7&top=5").json()["searches"] == {
+            "search_count": 3
+        }
+        client.get("/api/stats")
+        history = client.get("/api/stats/history?limit=10&days=1").json()
+        bad = client.get("/api/stats?days=soon")
+        too_many = client.get("/api/stats?top=1000")
+    assert ("search_stats", {"since_days": 7.0, "top": 5}) in fake.calls
+    assert ("search_stats", {"since_days": None, "top": 20}) in fake.calls
+    assert ("search_history", {"limit": 10, "since_days": 1.0}) in fake.calls
+    assert history["recording"] is True
+    assert bad.status_code == 400
+    assert too_many.status_code == 400
+
+
+def test_clearing_the_history_is_a_same_origin_json_write(project: Path) -> None:
+    client, fake = _counting_client(project)
+    with client:
+        refused = client.post(
+            "/api/stats/history/clear",
+            content="{}",
+            headers={"content-type": "text/plain"},
+        )
+        cross = client.post(
+            "/api/stats/history/clear",
+            json={},
+            headers={"origin": "https://elsewhere.example"},
+        )
+        cleared = client.post(
+            "/api/stats/history/clear",
+            json={},
+            headers={"origin": LOOPBACK_BASE_URL},
+        )
+    assert refused.status_code in {403, 415}
+    assert cross.status_code == 403
+    assert cleared.json()["cleared"] == 1
+    assert [name for name, _ in fake.calls].count("clear_search_history") == 1
+
+
+def test_a_source_names_its_passages_by_page(project: Path) -> None:
+    client, fake = _counting_client(project)
+    with client:
+        answered = client.get("/api/source-chunks?source_id=src_1&page=2&page_size=5")
+    assert answered.json()["pages"] == 3
+    assert fake.calls[-1] == (
+        "source_chunks",
+        {"source_id": "src_1", "source_path": None, "page": 2, "page_size": 5},
+    )
+
+
+def test_a_source_opens_in_the_desktop_viewer_and_only_a_source_does(
+    project: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Opening a source hands the file to the desktop, which downloads nothing.
+
+    The path is checked as a source before the desktop sees it, and a machine
+    with no desktop answers 501 so the page can show the file in the browser.
+    """
+
+    from research_rag.runtime import viewer
+
+    (project / "sources" / "evidence.pdf").write_bytes(b"%PDF-1.4\n% test\n")
+    (project / "sources" / "book.epub").write_bytes(b"PK")
+    opened: list[Path] = []
+
+    def hand_over(path: Path) -> str:
+        opened.append(path)
+        return "xdg-open"
+
+    monkeypatch.setattr(viewer, "open_in_default_viewer", hand_over)
+    client, _fake = _client(project)
+    with client:
+        answered = client.post("/api/open-source", json={"source_path": "evidence.pdf"})
+        epub = client.post("/api/open-source", json={"source_path": "book.epub"})
+        traversal = client.post(
+            "/api/open-source", json={"source_path": "../secret.pdf"}
+        )
+        missing = client.post("/api/open-source", json={"source_path": "absent.pdf"})
+        cross = client.post(
+            "/api/open-source",
+            json={"source_path": "evidence.pdf"},
+            headers={"Origin": "https://example.com"},
+        )
+
+        def refuse(_path: Path) -> str:
+            raise viewer.ViewerUnavailable("no desktop")
+
+        monkeypatch.setattr(viewer, "open_in_default_viewer", refuse)
+        headless = client.post("/api/open-source", json={"source_path": "evidence.pdf"})
+
+    assert answered.json() == {
+        "opened": True,
+        "viewer": "xdg-open",
+        "filename": "evidence.pdf",
+    }
+    assert epub.status_code == 200
+    assert [path.name for path in opened] == ["evidence.pdf", "book.epub"]
+    assert traversal.status_code == 400
+    assert missing.status_code == 404
+    assert cross.status_code == 403
+    assert headless.status_code == 501
+    assert "no desktop" in headless.json()["error"]
+    assert len(opened) == 2
+
+
+def test_the_desktop_viewer_is_started_without_a_shell_and_reaped(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from research_rag.runtime import viewer
+
+    target = tmp_path / "a b; rm -rf.pdf"
+    target.write_bytes(b"%PDF")
+    started: list[dict[str, Any]] = []
+
+    class _Process:
+        def wait(self) -> int:
+            return 0
+
+    def popen(command: list[str], **options: Any) -> _Process:
+        started.append({"command": command, **options})
+        return _Process()
+
+    monkeypatch.setattr(viewer.sys, "platform", "linux")
+    monkeypatch.setenv("DISPLAY", ":0")
+    monkeypatch.setattr(viewer.shutil, "which", lambda name: f"/usr/bin/{name}")
+    monkeypatch.setattr(viewer.subprocess, "Popen", popen)
+
+    assert viewer.open_in_default_viewer(target) == "xdg-open"
+    assert started[0]["command"] == ["/usr/bin/xdg-open", str(target)]
+    assert started[0].get("shell") is None
+    assert started[0]["start_new_session"] is True
+
+    monkeypatch.delenv("DISPLAY")
+    monkeypatch.delenv("WAYLAND_DISPLAY", raising=False)
+    with pytest.raises(viewer.ViewerUnavailable, match="no desktop session"):
+        viewer.open_in_default_viewer(target)
+    assert len(started) == 1
