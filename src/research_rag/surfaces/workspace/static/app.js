@@ -8,6 +8,9 @@ const state = {
   sourcesReady: false,
   searchedQuery: "",
   searchKey: "",
+  // The passages on screen, by passage id, so a copy reads the text the server
+  // sent rather than the text the card trimmed to show.
+  hits: new Map(),
   restoringRoute: false,
   sourcePages: { sources: 1, excluded: 1 },
   projects: [],
@@ -278,7 +281,7 @@ function setBusy(active, message = "Working…") {
   state.busy = active;
   byId("busy-bar").hidden = !active;
   byId("busy-message").textContent = message;
-  document.querySelectorAll("button[type='submit']").forEach((element) => {
+  document.querySelectorAll("button[type='submit']:not([data-gated])").forEach((element) => {
     element.disabled = active;
   });
   byId("refresh-button").disabled = active;
@@ -286,11 +289,19 @@ function setBusy(active, message = "Working…") {
   byId("rebuild-button").disabled = active || !hasCapability("force_recompute");
   byId("export-button").disabled = active || !hasCapability("bundle_export");
   byId("import-button").disabled = active || !hasCapability("bundle_import");
-  // The run button is a submit, so re-enabling every submit above would leave it
-  // live with nothing typed in it. Its own gate is the scope and the statement.
+  syncGatedSubmits();
+}
+
+// A submit marked `data-gated` is not switched by the loop above, because its
+// own condition — a statement to run, a changed value, a typed confirmation —
+// is what decides it. Each gate is re-read here instead, so a button that said
+// nothing had been typed does not come back live because a refresh elsewhere
+// finished.
+function syncGatedSubmits() {
   syncSqlControls();
-  // The same applies to the settings submit: its gate is a changed value.
   syncSettingsSubmit();
+  syncGenerationSubmit();
+  syncSettingsConfirmSubmit();
 }
 
 function toast(message, isError = false) {
@@ -865,11 +876,9 @@ function syncFilterSummary() {
 // A value typed into a field the disclosure has closed is invisible, so adding a
 // value from a list opens the drawer that holds it. A reader who selected one of
 // the partitions below then sees where it went.
-function revealFilterField(field) {
+function revealFilterDrawer() {
   const drawer = byId("filter-fields");
   if (drawer && !drawer.open) drawer.open = true;
-  const group = byId(field).closest(".filter-group");
-  if (group) group.dataset.filled = "true";
 }
 
 function addSearchFilter(field, value, label = value) {
@@ -878,7 +887,7 @@ function addSearchFilter(field, value, label = value) {
   const values = listValue(input.value);
   if (!values.includes(value)) values.push(value);
   input.value = values.join(", ");
-  revealFilterField(field);
+  revealFilterDrawer();
   syncFilterSummary();
   recordRoute({ replace: true });
   input.focus();
@@ -1925,7 +1934,6 @@ const STAT_CARDS = [
     title: "Searches",
     source: "stats",
     scopes: ["time"],
-    wide: true,
     render: renderSearchFigures,
   },
   {
@@ -1934,7 +1942,6 @@ const STAT_CARDS = [
     source: "stats",
     scopes: ["time", "size"],
     top: 10,
-    wide: true,
     count: (payload) => (payload.sources || []).length,
     render: (payload) =>
       statTable([{ label: "Source", value: sourceCell }, ...RANK_COLUMNS], payload.sources || [], { bar: "top_five" }),
@@ -1945,7 +1952,6 @@ const STAT_CARDS = [
     source: "stats",
     scopes: ["time", "size"],
     top: 10,
-    wide: true,
     count: (payload) => (payload.passages || []).length,
     render: (payload) =>
       statTable(
@@ -1964,7 +1970,6 @@ const STAT_CARDS = [
     source: "history",
     scopes: ["time", "size"],
     top: 10,
-    wide: true,
     count: (payload) => payload.count || 0,
     clearable: true,
     render: (payload) => historyBody(payload),
@@ -1975,7 +1980,6 @@ const STAT_CARDS = [
     source: "stats",
     scopes: ["time"],
     timeScopes: STAT_TIME_SCOPES.filter((scope) => scope.days !== 1),
-    wide: true,
     render: renderUsage,
   },
   {
@@ -1984,7 +1988,6 @@ const STAT_CARDS = [
     source: "stats",
     scopes: ["size", "by"],
     top: 5,
-    wide: true,
     count: (payload) => (payload.corpus?.largest_sources || []).length,
     render: (payload) => renderLargest(payload.corpus),
   },
@@ -1994,7 +1997,6 @@ const STAT_CARDS = [
     source: "stats",
     scopes: ["size"],
     top: 10,
-    wide: true,
     render: (payload, scope) => renderPeople(payload.corpus, scope.top),
   },
   {
@@ -2003,7 +2005,6 @@ const STAT_CARDS = [
     source: "stats",
     scopes: ["size"],
     top: 5,
-    wide: true,
     render: (payload, scope) => renderCorpus(payload.corpus, scope.top),
   },
   {
@@ -2011,7 +2012,6 @@ const STAT_CARDS = [
     title: "Last build",
     source: "stats",
     scopes: [],
-    wide: true,
     render: (payload) => renderBuild(payload),
   },
 ];
@@ -2094,7 +2094,7 @@ function renderLargest(corpus) {
 
 function renderBuild(payload) {
   const build = payload.last_build;
-  if (!build) return node("p", "form-note", "This project has no generation yet.");
+  if (!build) return node("p", "form-note", NO_GENERATION);
   const phases = Object.entries(build.phase_seconds || {}).map(([phase, seconds]) => ({
     phase: checkLabel(phase),
     seconds,
@@ -2151,7 +2151,7 @@ function scopeSelect(card, field, options) {
 }
 
 function statPanel(card) {
-  const panel = node("article", `stat-panel${card.wide ? " stat-panel-wide" : ""}`);
+  const panel = node("article", "stat-panel");
   panel.dataset.card = card.id;
   const head = node("header", "stat-panel-head");
   head.append(node("h3", "stat-panel-title", card.title));
@@ -2187,8 +2187,6 @@ async function refreshCard(card) {
     parts.body.replaceChildren(card.render(payload, scope));
     parts.count.hidden = !card.count;
     if (card.count) parts.count.textContent = formatNumber(card.count(payload));
-    const message = byId("stats-message");
-    message.hidden = true;
   } catch (error) {
     if (parts.request !== request) return;
     parts.body.replaceChildren(node("p", "form-note", error.message));
@@ -2955,7 +2953,7 @@ function bytes(count) {
 // and ten builds as cards of six labelled lines each were a page of scrolling.
 // The identifier is the row's head because it is what a removal names.
 function generationRow(generation) {
-  const row = node("tr", generation.is_current ? "is-current" : "");
+  const row = node("tr");
   const head = node("th", "record-id-cell");
   head.scope = "row";
   head.append(node("code", "record-id", generation.generation_id));
@@ -3031,11 +3029,17 @@ function renderGenerations(generations) {
   container.append(scroller);
 }
 
+function syncGenerationSubmit() {
+  const typed = byId("generation-confirm").value.trim();
+  byId("generation-submit").disabled =
+    state.busy || !typed || typed !== byId("generation-remove-id").value;
+}
+
 function openGenerationRemoval(generationId) {
   byId("generation-remove-id").value = generationId;
   byId("generation-remove-name").textContent = generationId;
   byId("generation-confirm").value = "";
-  byId("generation-submit").disabled = true;
+  syncGenerationSubmit();
   byId("generation-dialog").showModal();
 }
 
@@ -3570,6 +3574,12 @@ function syncSettingsSubmit() {
   byId("settings-submit").disabled = !settingsDirty() || state.busy;
 }
 
+function syncSettingsConfirmSubmit() {
+  const pending = state.pendingSettings;
+  byId("settings-confirm-submit").disabled =
+    state.busy || !pending || byId("settings-confirm-word").value.trim() !== pending.word;
+}
+
 function changedSettings() {
   const values = {};
   for (const control of settingsControls()) {
@@ -3613,7 +3623,7 @@ function openSettingsConfirmation(values, keys) {
   byId("settings-confirm-label").textContent = `Type ${word} to confirm`;
   byId("settings-confirm-word").value = "";
   byId("settings-confirm-word").placeholder = word;
-  byId("settings-confirm-submit").disabled = true;
+  syncSettingsConfirmSubmit();
   byId("settings-confirm-error").hidden = true;
   byId("settings-confirm-dialog").showModal();
 }
@@ -4032,7 +4042,6 @@ function filterSources() {
 }
 
 function initialize() {
-  state.hits = new Map();
   state.statScopes = readSavedScopes();
   // A name that goes somewhere is followed through the router, so the view it
   // names is drawn in the same pass, and a modified click keeps the browser's own
@@ -4146,10 +4155,7 @@ function initialize() {
   syncFilterSummary();
   byId("excluded-list").addEventListener("click", handleAction);
   byId("generation-form").addEventListener("submit", removeGeneration);
-  byId("generation-confirm").addEventListener("input", (event) => {
-    byId("generation-submit").disabled =
-      event.target.value.trim() !== byId("generation-remove-id").value;
-  });
+  byId("generation-confirm").addEventListener("input", syncGenerationSubmit);
   byId("sql-form").addEventListener("submit", runSql);
   byId("sql-execute-button").addEventListener("click", executeSql);
   byId("sql-statement").addEventListener("input", syncSqlControls);
@@ -4160,11 +4166,7 @@ function initialize() {
   byId("settings-sections").addEventListener("change", syncSettingsSubmit);
   byId("settings-reload").addEventListener("click", reloadSettings);
   byId("settings-confirm-form").addEventListener("submit", confirmSettings);
-  byId("settings-confirm-word").addEventListener("input", (event) => {
-    const pending = state.pendingSettings;
-    byId("settings-confirm-submit").disabled =
-      !pending || event.target.value.trim() !== pending.word;
-  });
+  byId("settings-confirm-word").addEventListener("input", syncSettingsConfirmSubmit);
   byId("chunk-form").addEventListener("submit", saveChunkExclusion);
   byId("chunk-exclusion-list").addEventListener("click", handleAction);
   byId("context-content").addEventListener("click", handleAction);

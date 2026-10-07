@@ -840,8 +840,7 @@ h3 {
 }
 
 .empty-state,
-.no-records,
-.loading-row {
+.no-records {
   margin-top: var(--space-sm);
   padding: var(--space-lg);
   border: 1px dashed var(--border-subtle);
@@ -1591,14 +1590,16 @@ textarea:disabled {
   font-size: var(--text-sm);
 }
 
-.sql-actions {
+/* A row of controls with the sentence that qualifies them beside it. The SQL
+   console, the settings form, and the MCP endpoints all end in one. */
+.action-row {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
   gap: var(--space-2xs);
 }
 
-.sql-write-note {
+.action-note {
   max-width: var(--measure);
   flex: 1 1 20rem;
   color: var(--text-secondary);
@@ -2190,12 +2191,6 @@ textarea:disabled {
 
 /* In a column of the corpus and build groups the label wraps instead, so the
    bar stays inside the column rather than scrolling out of it. */
-/* A card that shares its row has no room for a label column wider than its
-   text, or the bar scrolls out of view. */
-.stat-panel:not(.stat-panel-wide) .stats-table .stat-row-label {
-  min-width: 0;
-}
-
 .stats-group .stats-table .stat-row-label {
   min-width: 0;
 }
@@ -2273,12 +2268,9 @@ textarea:disabled {
   align-items: stretch;
 }
 
-/* A full-width card spans every track if a host gives the board more columns. */
-.stat-panel-wide {
-  grid-column: 1 / -1;
-}
-
+/* A card spans every track if a host gives the board more columns. */
 .stat-panel {
+  grid-column: 1 / -1;
   min-width: 0;
   padding: var(--space-sm) var(--space-md) var(--space-md);
   border: 1px solid var(--border-subtle);
@@ -2585,7 +2577,7 @@ textarea:disabled {
 .dialog {
   width: min(38rem, calc(100% - 2rem));
   max-height: calc(100vh - 2rem);
-  padding: 0;
+  padding: var(--space-lg);
   border: 1px solid var(--border-subtle);
   border-radius: var(--radius-lg);
   background: var(--bg-card);
@@ -2598,15 +2590,12 @@ textarea:disabled {
   background: rgb(0 0 0 / 45%);
 }
 
-.dialog form,
-.dialog-context {
-  padding: var(--space-lg);
-}
-
 .dialog-wide {
   width: min(48rem, calc(100% - 2rem));
 }
 
+/* Width alone. Padding is the dialog's, so a dialog that holds no form pads its
+   heading and its body alike rather than insetting one and not the other. */
 .dialog-context {
   width: min(58rem, calc(100% - 2rem));
 }
@@ -3070,8 +3059,7 @@ textarea:disabled {
     max-height: 16rem;
   }
 
-  .dialog form,
-  .dialog-context {
+  .dialog {
     padding: var(--space-md);
   }
 }
