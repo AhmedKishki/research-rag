@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "research-rag"
-version = "1.2.0"
+version = "1.2.1"
 description = "A browser workspace for reviewing research evidence over a project's own PDF and EPUB corpus, built on vanilla UltraRAG"
 readme = "README.md"
 license = "Apache-2.0"
