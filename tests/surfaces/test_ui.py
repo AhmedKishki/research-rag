@@ -193,6 +193,16 @@ class FakeResearchService:
         )
         return {"status": "removed", "generation_id": generation_id}
 
+    async def use_generation(self, generation_id: str) -> dict[str, Any]:
+        self._record("use_generation", {"generation_id": generation_id})
+        return {
+            "status": "changed",
+            "generation_id": generation_id,
+            "previous_generation_id": "generation-old",
+            "effective_immediately": True,
+            "message": f"Search now reads generation {generation_id}.",
+        }
+
     async def settings_read(self) -> dict[str, Any]:
         self._record("settings_read", {})
         return {
@@ -552,6 +562,7 @@ def test_an_unserved_search_argument_never_reaches_the_service(
         "list_chunk_exclusions",
         "set_source_metadata",
         "remove_generation",
+        "use_generation",
         "settings_read",
         "settings_write",
         "list_projects",
@@ -805,6 +816,52 @@ def test_the_workspace_removes_a_generation_only_with_the_id_repeated(
     ):
         with pytest.raises(UIRequestError):
             asyncio.run(adapter.call("remove_generation", body))
+
+
+def test_the_workspace_loads_a_generation_only_from_a_nonblank_id(
+    project: Path,
+) -> None:
+    """Loading names exactly one retained generation and carries only its id.
+
+    The service validates the id against the builder's own pattern and refuses
+    the current, damaged, and pending cases, so the adapter's job is to refuse a
+    request that named nothing and to forward the id unchanged.
+    """
+
+    from research_rag.surfaces.ui import ResearchUIAdapter
+    from research_rag.surfaces.workspace import UIRequestError
+
+    config = resolve_config(project)
+    service = FakeResearchService()
+    adapter = ResearchUIAdapter(config, service)  # type: ignore[arg-type]
+    generation_id = "20260930T191235Z-45608dc5"
+
+    result = asyncio.run(
+        adapter.call("use_generation", {"generation_id": generation_id})
+    )
+
+    assert result == {
+        "status": "changed",
+        "generation_id": generation_id,
+        "previous_generation_id": "generation-old",
+        "effective_immediately": True,
+        "message": f"Search now reads generation {generation_id}.",
+    }
+    assert service.calls == [("use_generation", {"generation_id": generation_id})]
+    # An argument this operation does not accept never reaches the service.
+    assert adapter._arguments(
+        "use_generation",
+        {"generation_id": generation_id, "confirm": generation_id, "force": True},
+    ) == {"generation_id": generation_id}
+    for body in (
+        {},
+        {"generation_id": ""},
+        {"generation_id": "   "},
+        {"generation_id": 7},
+    ):
+        with pytest.raises(UIRequestError):
+            asyncio.run(adapter.call("use_generation", body))
+    assert [name for name, _ in service.calls] == ["use_generation"]
 
 
 def test_the_workspace_serves_the_generation_panel(project: Path) -> None:

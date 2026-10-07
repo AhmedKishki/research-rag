@@ -817,6 +817,28 @@
       </form>
     </dialog>
 
+    <dialog id="generation-load-dialog" class="dialog">
+      <form id="generation-load-form" method="dialog">
+        <div class="dialog-header">
+          <h2>Load this generation?</h2>
+          <button class="icon-button dialog-close" type="button" aria-label="Close">×</button>
+        </div>
+        <input id="generation-load-id" type="hidden">
+        <p id="generation-load-name" class="dialog-source-name"></p>
+        <p class="dialog-intro">
+          Searches read this generation's indexed evidence instead of the one in
+          use now. Nothing is deleted or rebuilt, the original sources are not
+          touched, and the project's active settings do not change. This changes
+          what a search returns.
+        </p>
+        <p id="generation-load-error" class="dialog-error" hidden></p>
+        <div class="dialog-actions">
+          <button class="button button-quiet dialog-close" type="button">Cancel</button>
+          <button id="generation-load-submit" class="button button-primary" type="submit">Load generation</button>
+        </div>
+      </form>
+    </dialog>
+
     <dialog id="context-dialog" class="dialog dialog-context">
       <div class="dialog-header">
         <h2 id="context-title">Passage context</h2>

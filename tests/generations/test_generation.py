@@ -3,11 +3,15 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
+import pytest
+
 from research_rag.generations.generation import (
     ReuseSnapshot,
     generation_is_reusable,
     source_set_matches,
 )
+from research_rag.generations.generation_inventory import generation_inventory
+from research_rag.project.config import resolve_config
 from research_rag.project.support import (
     ARTIFACT_POLICY_VERSION,
     CLEANING_POLICY_VERSION,
@@ -15,6 +19,7 @@ from research_rag.project.support import (
     SCHEMA_VERSION,
 )
 from research_rag.retrieval.embeddings import EmbeddingModel, resolve_embedding_model
+from research_rag.storage.records import atomic_write_json
 
 _EMBEDDING = resolve_embedding_model("BAAI/bge-small-en-v1.5")
 _PROJECT_ID = "proj_test"
@@ -212,3 +217,87 @@ def test_generation_without_recorded_repository_still_matches() -> None:
     del manifest["retrieval"]["dense"]["embedding_model_repository"]
 
     assert _is_reusable(manifest, model) is True
+
+
+def test_inventory_reports_recorded_configuration_not_active_settings(
+    project: Path,
+) -> None:
+    config = resolve_config(project)
+    generation_id = "20260101T000000Z-aabbccdd"
+    root = config.generations_root / generation_id
+    root.mkdir(parents=True)
+    manifest = _dense_manifest(_EMBEDDING)
+    manifest.update(
+        generation_id=generation_id,
+        retrieval_policy_fingerprint="historical-retrieval-policy",
+        documents=[{"source_relative_path": "private-source.pdf"}],
+    )
+    manifest["retrieval"].update(
+        bm25={"language": "german"},
+        reranker={"model": "historical-reranker", "model_revision": "old-revision"},
+        fusion={"rrf_k": 71, "bm25_weight": 0.25, "dense_weight": 0.75},
+    )
+    path = root / "manifest.json"
+    atomic_write_json(path, manifest)
+    before = path.read_bytes()
+
+    inventory = generation_inventory(config, generation_id)
+
+    record = inventory["generations"][0]
+    assert record["is_current"] is True
+    for key in (
+        "chunking",
+        "retrieval",
+        "retrieval_policy_fingerprint",
+        "extraction_policy_version",
+        "cleaning_policy_version",
+        "artifact_policy_version",
+    ):
+        assert record[key] == manifest[key]
+    assert record["retrieval"]["bm25"]["language"] == "german"
+    assert record["retrieval"]["reranker"]["model"] == "historical-reranker"
+    assert "documents" not in record
+    assert path.read_bytes() == before
+    assert not config.current_path.exists()
+
+
+@pytest.mark.parametrize("block", [None, "not-an-object", [], 42])
+def test_inventory_does_not_invent_missing_or_malformed_configuration(
+    project: Path, block: Any
+) -> None:
+    config = resolve_config(project)
+    root = config.generations_root / "20260101T000000Z-aabbccdd"
+    root.mkdir(parents=True)
+    manifest = {} if block is None else {"chunking": block, "retrieval": block}
+    atomic_write_json(root / "manifest.json", manifest)
+
+    record = generation_inventory(config, None)["generations"][0]
+
+    assert record["chunking"] is None
+    assert record["retrieval"] is None
+    assert record["retrieval_policy_fingerprint"] is None
+    assert "manifest_error" not in record
+
+
+@pytest.mark.parametrize("content", [None, "{not-json", "[]", "null"])
+def test_inventory_marks_unreadable_manifest_configuration_unknown(
+    project: Path, content: str | None
+) -> None:
+    config = resolve_config(project)
+    root = config.generations_root / "20260101T000000Z-aabbccdd"
+    root.mkdir(parents=True)
+    if content is not None:
+        (root / "manifest.json").write_text(content, encoding="utf-8")
+
+    record = generation_inventory(config, None)["generations"][0]
+
+    assert record["manifest_error"]
+    for key in (
+        "chunking",
+        "retrieval",
+        "retrieval_policy_fingerprint",
+        "extraction_policy_version",
+        "cleaning_policy_version",
+        "artifact_policy_version",
+    ):
+        assert record[key] is None

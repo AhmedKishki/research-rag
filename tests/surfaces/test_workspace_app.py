@@ -71,6 +71,13 @@ class FakeAdapter:
                 "generation_id": arguments.get("generation_id"),
                 "freed_bytes": 1024,
             },
+            "use_generation": {
+                "status": "changed",
+                "generation_id": arguments.get("generation_id"),
+                "previous_generation_id": "generation-1",
+                "effective_immediately": True,
+                "message": "Search now reads the selected generation.",
+            },
             "export_bundle": {
                 "bundle_name": "project-generation.research-rag.zip",
                 "sha256": "abc",
@@ -1117,6 +1124,78 @@ def test_a_generation_cannot_be_removed_where_the_capability_is_off(
     assert adapter.calls == []
 
 
+def test_a_generation_is_loaded_only_where_the_capability_is_on(
+    tmp_path: Path,
+) -> None:
+    """Loading names exactly one retained generation, with no other field.
+
+    The route and the adapter both reject anything but the id, because a load
+    that accepted a stray field would be a host deciding what that field meant.
+    """
+
+    source = tmp_path / "evidence.pdf"
+    source.write_bytes(b"%PDF-1.4\n% test\n")
+    adapter = FakeAdapter(source)
+    app = create_ui_app(profile=_profile(generations=True), adapter=adapter)
+    generation_id = "20260930T191235Z-45608dc5"
+
+    with TestClient(
+        app, base_url=LOOPBACK_BASE_URL, client=LOOPBACK_TEST_CLIENT
+    ) as client:
+        loaded = client.post(
+            "/api/generations/use", json={"generation_id": generation_id}
+        )
+        missing = client.post("/api/generations/use", json={})
+        blank = client.post("/api/generations/use", json={"generation_id": "  "})
+        numeric = client.post("/api/generations/use", json={"generation_id": 7})
+        extra = client.post(
+            "/api/generations/use",
+            json={"generation_id": generation_id, "confirm": generation_id},
+        )
+        form = client.post(
+            "/api/generations/use",
+            content=b"generation_id=x",
+            headers={"Content-Type": "application/x-www-form-urlencoded"},
+        )
+        cross_origin = client.post(
+            "/api/generations/use",
+            headers={"Origin": "https://example.com"},
+            json={"generation_id": generation_id},
+        )
+
+    assert loaded.status_code == 200
+    assert loaded.json()["status"] == "changed"
+    assert loaded.json()["generation_id"] == generation_id
+    assert missing.status_code == 400
+    assert blank.status_code == 400
+    assert numeric.status_code == 400
+    assert extra.status_code == 400
+    assert form.status_code == 415
+    assert cross_origin.status_code == 403
+    # Every refusal happened in the workspace, so the adapter saw one call.
+    assert adapter.calls == [("use_generation", {"generation_id": generation_id})]
+
+
+def test_a_generation_cannot_be_loaded_where_the_capability_is_off(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "evidence.pdf"
+    source.write_bytes(b"%PDF-1.4\n% test\n")
+    adapter = FakeAdapter(source)
+    app = create_ui_app(profile=_profile(generations=False), adapter=adapter)
+
+    with TestClient(
+        app, base_url=LOOPBACK_BASE_URL, client=LOOPBACK_TEST_CLIENT
+    ) as client:
+        refused = client.post(
+            "/api/generations/use",
+            json={"generation_id": "20260930T191235Z-45608dc5"},
+        )
+
+    assert refused.status_code == 404
+    assert adapter.calls == []
+
+
 def test_the_status_view_carries_the_generation_panel_and_its_dialog() -> None:
     """The listing is free in the status payload, so the panel needs only markup."""
 
@@ -1131,6 +1210,7 @@ def test_the_status_view_carries_the_generation_panel_and_its_dialog() -> None:
     assert 'id="generation-chips"' in page
     assert 'data-capability="generations"' in page
     assert 'id="generation-dialog"' in page
+    assert 'id="generation-load-dialog"' in page
     # The remove button stays disabled until the typed id matches, so the
     # confirmation is a gate rather than a message.
     assert 'id="generation-submit"' in page and "disabled" in page
@@ -1138,6 +1218,8 @@ def test_the_status_view_carries_the_generation_panel_and_its_dialog() -> None:
     assert "renderGenerations(status.generations || [])" in javascript
     assert 'byId("generation-confirm").addEventListener' in javascript
     assert "/api/generations/remove" in javascript
+    assert "/api/generations/use" in javascript
+    assert 'byId("generation-load-form").addEventListener' in javascript
     # The one a search reads is not offered a removal it would only refuse.
     assert "if (!generation.is_current)" in javascript
 

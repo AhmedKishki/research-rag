@@ -94,13 +94,20 @@ my-research-project/
 - `current.json` names the one generation search uses.
 - Earlier successful generations stay on disk, are not searched, and are not pruned automatically.
 - `research-rag status` reports `retained_generation_count` and `retained_generation_bytes`.
-- `research-rag generations` lists every generation with creation time, chunk and document counts, file count, and size. A generation whose manifest is missing or unreadable shows `manifest_error`.
+- `research-rag generations` lists every generation with creation time, chunk and document counts, file count, and size.
+  - Each record exposes the manifest's `chunking`, `retrieval`, policy versions, and `retrieval_policy_fingerprint`.
+  - These are recorded build facts, including embedding and reranker models and revisions, not current settings.
+  - A missing or malformed configuration block is `null`; today's defaults never fill historical gaps.
+  - A generation whose manifest is missing or unreadable shows `manifest_error`.
 - Both commands that move a generation take the project lock and refuse the generation search reads.
 - Reads take no project lock. A removal waits for a read of the generation it removes, and refuses after the lock wait.
 - `research-rag generations --use GENERATION_ID` points the project at a retained generation.
+  - The workspace's Generations panel exposes the same operation through **Load**.
   - It validates the artifacts and both indexes as a build's activation does.
   - It rewrites `current.json` only after validation succeeds, so a rollback onto a damaged generation fails instead of breaking every read surface.
   - The corpus the pointer now describes is whatever that generation indexed.
+  - Loading does not restore project settings or change generation artifacts.
+  - Current settings still govern model compatibility; incompatible embedding identities restrict search to BM25, and incompatible dimensions fail activation validation.
 - `research-rag remove-generation GENERATION_ID --confirm GENERATION_ID` deletes one generation permanently.
   - The repeated id is the check, because a generation named by a listing and removed from a copy of that listing cannot be recovered.
   - It refuses a generation a pending activation names.
