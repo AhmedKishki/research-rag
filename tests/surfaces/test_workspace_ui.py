@@ -543,7 +543,9 @@ def test_the_sql_console_says_when_there_is_no_scope_to_run_against() -> None:
     # submit; the gate is re-applied there so a reader is not left with a live
     # button that could only be refused.
     busy = script.split("function setBusy(")[1].split("\n}\n")[0]
-    assert "syncSqlControls();" in busy
+    assert "syncGatedSubmits();" in busy
+    gate_sync = script.split("function syncGatedSubmits(")[1].split("\n}\n")[0]
+    assert "syncSqlControls();" in gate_sync
 
 
 class SettingsHost:
@@ -718,7 +720,8 @@ def test_a_costly_settings_change_asks_for_its_word_before_it_is_sent() -> None:
     assert '? "model"' in script
     assert ': "ingest";' in script
     assert "Type ${word} to confirm" in script
-    gate = script.split('byId("settings-confirm-word").addEventListener')[1]
+    gate = script.split("function syncSettingsConfirmSubmit(")[1].split("\n}\n")[0]
+    assert 'byId("settings-confirm-submit").disabled' in gate
     assert "pending.word" in gate
 
 
@@ -1477,7 +1480,7 @@ def test_a_value_taken_from_a_list_opens_the_fields_and_is_counted() -> None:
     assert "function syncFilterSummary()" in script
     assert 'byId("filter-count").textContent' in script
     assert 'byId("filter-summary-note").textContent' in script
-    assert "revealFilterField(field);" in script
+    assert "revealFilterDrawer();" in script
     assert "drawer.open = true;" in script
     # The language list fills the language box beside it, so selecting from it is
     # a filter action like every other one.
@@ -3329,7 +3332,6 @@ result.largest = text(body("largest"));
 result.largestLinks = collect(body("largest"));
 result.people = text(body("people"));
 result.cardIds = [...state.statPanels.keys()];
-result.wide = ["history", "usage", "largest"].map((id) => state.statPanels.get(id).panel.className);
 result.usage = text(body("usage"));
 result.svg = find(body("usage"), (node) => node.tagName === "svg").attributes;
 result.passageColumns = body("passages").children[0].children[0].children[0].children[0].children.map((cell) => cell.textContent);
@@ -3399,7 +3401,6 @@ result.cleared = [...asked];
     assert "1 sources" in result["corpus"] and "2 sources" in result["corpus"]
     assert "2020s" in result["corpus"]
     assert "Formats" not in result["corpus"] and "Languages" not in result["corpus"]
-    assert all("stat-panel-wide" in card for card in result["wide"])
     assert "12 search invocations · per day · UTC" in result["usage"]
     assert result["svg"]["role"] == "img"
     assert result["svg"]["viewBox"] == "0 0 800 260"

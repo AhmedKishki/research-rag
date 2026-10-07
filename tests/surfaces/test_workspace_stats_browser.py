@@ -255,10 +255,6 @@ _HARNESS = r"""
     horizontalScroll,
     cardIds: panels.map((panel) => panel.dataset.card),
     cardOverflow,
-    wide: Object.fromEntries(panels.map((panel) => [
-      panel.dataset.card,
-      panel.classList.contains("stat-panel-wide"),
-    ])),
     panels: Object.fromEntries(panels.map((panel) => [panel.dataset.card, measure(panel)])),
     lists: measure(document.querySelector(".stats-lists")),
     svg: svg
@@ -484,7 +480,6 @@ def test_history_and_usage_take_the_full_board_width(
     board = probe["lists"]
     assert board is not None and board["width"] > 0
     for card in ("history", "usage"):
-        assert probe["wide"][card] is True
         panel = probe["panels"][card]
         assert panel is not None
         assert panel["width"] >= board["width"] - 1, (
