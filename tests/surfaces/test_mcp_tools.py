@@ -145,7 +145,6 @@ class _Service:
                     "chunk_id": "chk_one",
                     "document_id": "doc_one",
                     "source_id": "src_one",
-                    "source_relative_path": "evidence.pdf",
                     "title": "Citable Evidence",
                     "authors": ["A. Researcher"],
                     "year": 2025,
@@ -154,7 +153,6 @@ class _Service:
                     "citation": "A. Researcher, Citable Evidence (2025), p. 3",
                     "text": "cleaned semantic text",
                     "text_fidelity": "cleaned_semantic_text",
-                    "direct_quote_safe": False,
                     "text_notes": [],
                     "dense_truncated": False,
                     "fusion_score": 0.032,
@@ -196,12 +194,10 @@ class _Service:
                 {
                     "chunk_id": "chk_neighbour",
                     "source_id": "src_one",
-                    "source_relative_path": "evidence.pdf",
                     "title": "Citable Evidence",
                     "authors": ["A. Researcher"],
                     "locator": {"page": 4},
                     "text": "the passage before it",
-                    "direct_quote_safe": False,
                 }
             ],
         }
@@ -427,7 +423,8 @@ async def test_the_instructions_explain_no_engine_they_cannot_act_on() -> None:
         assert internal not in lowered, internal
     for tool_name in TOOLS:
         assert tool_name in AGENT_INSTRUCTIONS, tool_name
-    assert "direct_quote_safe" in AGENT_INSTRUCTIONS
+    assert "direct_quote_safe" not in AGENT_INSTRUCTIONS
+    assert "cleaned text, not a transcript" in lowered
     # The reranker falling back leaves the lexical and dense order in place, which is
     # a ranking and not an absence of one.
     assert "unranked" not in lowered
@@ -477,12 +474,10 @@ async def test_a_search_answer_carries_handles_and_never_the_ranking(
         {
             "chunk_id": "chk_one",
             "source_id": "src_one",
-            "source_relative_path": "evidence.pdf",
             "title": "Citable Evidence",
             "authors": ["A. Researcher"],
             "locator": {"page": 3},
             "text": "cleaned semantic text",
-            "direct_quote_safe": False,
         }
     ]
     serialized = json.dumps(answer.data)
@@ -525,7 +520,7 @@ async def test_a_passage_context_carries_the_same_handles_as_a_hit(
     async with _client(project) as client:
         answer = await client.call_tool("get_passage", {"chunk_id": "chk_one"})
 
-    assert answer.data["context"][0]["direct_quote_safe"] is False
+    assert "direct_quote_safe" not in answer.data["context"][0]
     assert answer.data["context"][0]["chunk_id"] == "chk_neighbour"
     assert answer.data["context"][0]["source_id"] == "src_one"
     assert answer.data["context"][0]["locator"] == {"page": 4}

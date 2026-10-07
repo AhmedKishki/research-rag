@@ -50,7 +50,7 @@ research-rag --project-root "/path/to/project" search "How is evidence interpret
 ```
 
 - Search combines lexical and semantic retrieval with reranking.
-- Passages are cleaned text (`direct_quote_safe: false`). Check the original at the locator before quoting.
+- Passages are cleaned text, not a transcript. Check the original at the locator before quoting.
 
 ## Open the workspace
 

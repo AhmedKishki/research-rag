@@ -22,7 +22,7 @@
   - A citation contract, so a generated sentence names the passages it rests on.
 - A local model keeps retrieval offline but needs a GPU and a serving surface.
 - Constraints:
-  - The evidence stays in the payload with its locators and `direct_quote_safe: false`.
+  - The evidence stays in the payload with its locators.
   - A generation is labelled as one.
   - A request for an answer without evidence is refused, not answered from the model's memory.
 - Decisions first:

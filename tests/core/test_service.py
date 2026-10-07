@@ -715,7 +715,6 @@ async def _assert_research_generation_and_structured_search(project: Path) -> No
     assert hit["component_ranks"]["bm25"] == 1
     assert hit["component_ranks"]["dense"] == 1
     assert hit["fusion_score"] is not None
-    assert hit["direct_quote_safe"] is False
     assert hit["text_fidelity"] == "cleaned_semantic_text"
     assert hit["content_kind"] == "prose"
     assert hit["metadata_provenance"]["authors"] == "reviewed_override"
@@ -2527,9 +2526,7 @@ async def _assert_a_short_fragment_is_not_evidence(project: Path) -> None:
     assert everything["passage_length_policy"]["chunk_size"] is None
 
     evidence_only = await search_with(minimum=12)
-    assert [hit["source_relative_path"] for hit in evidence_only["hits"]] == [
-        "prose.pdf"
-    ]
+    assert [hit["title"] for hit in evidence_only["hits"]] == ["prose"]
     assert evidence_only["rejected_candidates"]["bm25_too_short"] == 1
     assert evidence_only["rejected_candidates"]["dense_too_short"] == 1
     assert evidence_only["passage_length_policy"]["minimum_words"] == 12
@@ -2542,7 +2539,7 @@ async def _assert_a_short_fragment_is_not_evidence(project: Path) -> None:
     # The same floor in the unit the chunker counts: half of a 50-token chunk is
     # 25 tokens, which the index line cannot reach while the prose sentence can.
     tokens_only = await search_with(minimum=0, fraction=0.5)
-    assert [hit["source_relative_path"] for hit in tokens_only["hits"]] == ["prose.pdf"]
+    assert [hit["title"] for hit in tokens_only["hits"]] == ["prose"]
     assert tokens_only["rejected_candidates"]["bm25_too_short"] == 1
     assert tokens_only["rejected_candidates"]["dense_too_short"] == 1
     policy = tokens_only["passage_length_policy"]

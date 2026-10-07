@@ -67,7 +67,7 @@
   - Credit THUNLP, NEUIR, OpenBMB, AI9stars, and contributors without implying endorsement.
 - No original source document is edited or written. `sources/` is the authority for a quotation.
 - `text` in a result is cleaned semantic text, never a transcript.
-- `direct_quote_safe` is `false` on every passage the app builds. That flag is the only place the rule appears per passage.
+- A result carries no per-passage quotation flag. The cleaned-text rule is stated once in the contract, not repeated on every passage.
 - An agent gets eight tools and one resource with bounded answers, never a corpus inventory.
   - The workspace and CLI `sources` own inventory access.
 - A generation the app cannot serve is stated as `hybrid_ready: false` beside `generation_upgrade_required`. The old generation stays searchable with a warning.

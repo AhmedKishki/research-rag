@@ -518,25 +518,20 @@ def test_the_serialiser_writes_only_the_fields_the_schema_names(
 def test_an_exclusion_is_a_decision_about_evidence_and_not_about_quoting(
     project: Path,
 ) -> None:
-    """An exclusion is a decision about whether a passage is evidence, not about what may be
-    quoted from it, so `direct_quote_safe` keeps its one meaning and no per-passage field
-    is added for it.
+    """An exclusion decides whether a passage is evidence, not what may be quoted from
+    it, so no passage carries a quotation field and an excluded one adds none.
     """
 
     async def exercise() -> None:
         service, hits = await _service(project, pages=2)
         target, neighbour = (hit["chunk_id"] for hit in hits)
-        assert {hit["direct_quote_safe"] for hit in hits} == {False}
+        assert all("direct_quote_safe" not in hit for hit in hits)
 
         await service.set_chunk_inclusion(
             target, included=False, reason="Reviewed fragment."
         )
         context = await service.get_passage(neighbour, context_chunks=1)
-        returned = {
-            passage["chunk_id"]: passage["direct_quote_safe"]
-            for passage in context["context"]
-        }
-        assert returned[target] is False
+        assert all("direct_quote_safe" not in passage for passage in context["context"])
 
     asyncio.run(exercise())
 
