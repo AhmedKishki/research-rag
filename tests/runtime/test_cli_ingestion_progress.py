@@ -70,22 +70,22 @@ def test_phase_eta_rendering_uses_global_chunks_and_buckets(monkeypatch):
     monkeypatch.setattr(cli.time, "monotonic", lambda: next(clock))
     estimator = cli._PhaseETA()
     progress = _file_phase(0)
-    assert "phase ETA estimating" in cli._ingestion_progress_line(
+    assert "ETA —" in cli._ingestion_progress_line(
         {"ingestion_progress": progress}, estimator
     )
     progress["progress"]["completed"] = 2
     cli._ingestion_progress_line({"ingestion_progress": progress}, estimator)
     progress["progress"]["completed"] = 3
-    assert "phase ETA ~10s" in cli._ingestion_progress_line(
+    assert "ETA ~10s" in cli._ingestion_progress_line(
         {"ingestion_progress": progress}, estimator
     )
     assert progress["eta_seconds"] is None
     progress["eta_seconds"] = 42
     line = cli._ingestion_progress_line({"ingestion_progress": progress}, estimator)
-    assert "phase ETA ~20s" in line
+    assert "ETA ~10s" in line
     progress.pop("overall_progress")
     progress["eta_seconds"] = None
-    assert "phase ETA ~20s" in cli._ingestion_progress_line(
+    assert "ETA ~10s" in cli._ingestion_progress_line(
         {"ingestion_progress": progress}, estimator
     )
 
@@ -104,22 +104,19 @@ def test_passage_eta_supported_phases_and_resume(phase):
 def test_non_passage_phases_never_display_numeric_eta(phase):
     status = {"ingestion_progress": _file_phase(5, phase=phase, eta_seconds=42)}
     line = cli._ingestion_progress_line(status, cli._PhaseETA())
-    assert "unavailable" in line
+    assert "ETA —" in line
     assert "~" not in line
-    assert "ETA" not in cli._ingestion_progress_frame(status, line, 120)
+    assert "ETA —" in cli._ingestion_progress_frame(status, line, 120)
 
 
 def test_unknown_total_and_completed_passages_do_not_claim_deadline():
     unknown = {"ingestion_progress": _phase(0, 0, eta_seconds=42)}
-    assert (
-        "passage ETA unavailable until total is known"
-        in cli._ingestion_progress_line(unknown)
-    )
+    assert "ETA —" in cli._ingestion_progress_line(unknown)
     complete = {"ingestion_progress": _phase(10, 10, eta_seconds=0)}
     line = cli._ingestion_progress_line(complete)
-    assert "phase ETA finalizing" in line
+    assert "Finalizing" in line
     assert "~0s" not in line
-    assert "finalizing" in cli._ingestion_progress_frame(complete, line, 120)
+    assert "Finalizing" in cli._ingestion_progress_frame(complete, line, 120)
 
 
 @pytest.mark.parametrize(
@@ -146,8 +143,66 @@ def test_eta_minute_buckets_are_stable_across_nearby_polls(monkeypatch):
             {"ingestion_progress": _phase(completed, 100)}, estimator
         )
     status = {"ingestion_progress": _phase(20, 100)}
-    assert "phase ETA ~2m 0s" in cli._ingestion_progress_line(status, estimator)
-    assert "phase ETA ~2m 0s" in cli._ingestion_progress_line(status, estimator)
+    assert "ETA ~2m" in cli._ingestion_progress_line(status, estimator)
+    assert "ETA ~2m" in cli._ingestion_progress_line(status, estimator)
+
+
+@pytest.mark.parametrize("phase", ["extraction", "chunking"])
+def test_source_eta_samples_completions_not_snapshots_and_keeps_source_rate(phase):
+    estimator = cli._PhaseETA()
+    assert estimator.observe(_file_phase(5, 30, phase=phase), 100) is None
+    assert estimator.observe(_file_phase(7, 30, phase=phase), 220) is None
+    estimate = estimator.observe(
+        _file_phase(8, 30, phase=phase, source="next.pdf"), 280
+    )
+    assert estimate == 1320
+    assert estimator.start == 100
+    assert estimator.label(estimate, 280) == "ETA 16–32m"
+    # Even a large rate change cannot alter the displayed range inside a minute.
+    assert estimator.label(60, 339) == "ETA 16–32m"
+    assert estimator.label(60, 340) == "ETA 1–2m"
+    assert estimator.label(80, 400) == "ETA 1–2m"
+
+
+@pytest.mark.parametrize(
+    "changes", [{"build_id": "new"}, {"phase": "chunking"}, {"total": 40}]
+)
+def test_source_eta_resets_on_build_phase_or_total(changes):
+    estimator = cli._PhaseETA()
+    estimator.observe(_file_phase(5, 30, phase="extraction"), 100)
+    estimator.observe(_file_phase(8, 30, phase="extraction"), 280)
+    assert (
+        estimator.observe(
+            _file_phase(8, **{"total": 30, "phase": "extraction", **changes}), 300
+        )
+        is None
+    )
+    assert estimator.displayed is None
+
+
+def test_source_counter_regression_resets_sample():
+    estimator = cli._PhaseETA()
+    estimator.observe(_file_phase(5, phase="extraction"), 100)
+    estimator.observe(_file_phase(8, phase="extraction"), 160)
+    assert estimator.observe(_file_phase(2, phase="extraction"), 180) is None
+    assert estimator.observe(_file_phase(4, phase="extraction"), 220) is None
+
+
+def test_stall_is_visible_without_claiming_ready_and_clears_on_progress(monkeypatch):
+    now = 100.0
+    monkeypatch.setattr(cli.time, "monotonic", lambda: now)
+    estimator = cli._PhaseETA()
+    status = {"ingestion_progress": _file_phase(0, phase="extraction")}
+    cli._ingestion_progress_line(status, estimator)
+    now = 159
+    assert "Stalled" not in cli._ingestion_progress_line(status, estimator)
+    now = 160
+    line = cli._ingestion_progress_line(status, estimator)
+    assert "Stalled" in line and "ETA —" in line
+    assert "Stalled" in cli._ingestion_progress_frame(status, line, 120)
+    assert "ready" not in line.lower()
+    status["ingestion_progress"] = _file_phase(1, phase="extraction")
+    assert "Stalled" not in cli._ingestion_progress_line(status, estimator)
 
 
 def test_ingest_progress_is_concurrent_and_stderr_only(monkeypatch, capsys):
@@ -193,7 +248,7 @@ def test_ingest_progress_is_concurrent_and_stderr_only(monkeypatch, capsys):
     assert output.err.count("Extraction") == 1
     assert "book.pdf" in output.err
     assert "2/4 items" not in output.err
-    assert "passage ETA unavailable until total is known" in output.err
+    assert "ETA —" in output.err
     assert "~30s" not in output.err
     assert "source_progress" not in output.err
 
@@ -209,10 +264,7 @@ def test_progress_line_suppresses_duplicate_counters_and_unsafe_source_controls(
         }
     }
     line = cli._ingestion_progress_line(status)
-    assert (
-        line
-        == "Hashing sources | 96/127 sources | book  [31m.pdf | phase ETA unavailable"
-    )
+    assert line == "Hashing sources | 96/127 sources | book  [31m.pdf | ETA —"
     assert "\n" not in line and "\x1b" not in line
 
 
@@ -247,7 +299,7 @@ def test_tty_progress_replaces_one_line_and_finishes_with_newline(monkeypatch):
     output = terminal.getvalue()
     assert output.count("\r\x1b[2K") >= 2
     assert "\r\x1b[1A" in output
-    assert "% | phase ETA" in output
+    assert "% | ETA" in output
     assert output.endswith("\n")
     assert output.count("\n") >= 3
     assert all(
@@ -276,7 +328,7 @@ def test_terminal_frame_uses_phase_percentage_and_eta_without_batch_counts():
     frame = cli._ingestion_progress_frame(status, line, 80)
     assert frame.splitlines()[0] == "Extraction | 3/117 sources | book.pdf"
     assert "  3%" in frame.splitlines()[1]
-    assert "ETA" not in frame
+    assert "ETA —" in frame
     assert "3/12" not in frame
 
 

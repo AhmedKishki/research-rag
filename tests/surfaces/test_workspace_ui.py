@@ -2434,13 +2434,74 @@ def test_source_phase_ingestion_progress_and_eta(tmp_path: Path) -> None:
 })();
 """,
     )
-    assert result["samples"] == [None] * 4
-    assert result["stalled"] is None
+    assert result["samples"] == [None, None, None, "1–2 min"]
+    assert result["stalled"] == "1–2 min"
     assert result["batch"] is None
     assert result["resets"] == [None] * 6
     assert result["invalidHidden"] and result["missingHidden"]
     assert result["fallback"] == {"hidden": False, "value": 2, "max": 10}
-    assert result["summary"] == "extraction · Book.pdf · 8 / 20 sources"
+    assert result["summary"] == "extraction · Book.pdf · 8 / 20 sources · ETA 1–2 min"
+
+
+def test_source_eta_stability_and_independent_stall(tmp_path: Path) -> None:
+    result = _drive_page(
+        tmp_path,
+        r"""
+(() => {
+  const estimate = phaseEtaEstimator();
+  const stalled = ingestionStallDetector();
+  const status = { build_id: 'a', phase: 'chunking', source: 'First.pdf',
+    overall_progress: { completed: 0, total: 100, unit: 'sources' },
+    progress: { completed: 0, total: 10, unit: 'pages' } };
+  estimate(status, 0); stalled(status, 0);
+  const earlyStall = stalled(status, 60000);
+  const earlySummary = liveIngestionSummary(status, estimate(status, 60000), earlyStall);
+  status.overall_progress.completed = 3;
+  const first = estimate(status, 180000);
+  const resumed = stalled(status, 180000);
+  status.source = 'Second.pdf'; status.progress.completed = 5;
+  status.overall_progress.completed = 50;
+  const held = estimate(status, 210000);
+  stalled(status, 210000);
+  const before = stalled(status, 269999);
+  const after = stalled(status, 270000);
+  const revised = estimate(status, 270000);
+  const materialHeld = estimate(status, 330000);
+  result = { earlyStall, earlySummary, first, resumed, held, before, after,
+    revised, materialHeld };
+})();
+""",
+    )
+    assert result["earlyStall"] and "No progress for 60s" in result["earlySummary"]
+    assert "ETA" not in result["earlySummary"]
+    assert result["first"] == result["held"] == "65–130 min"
+    assert not result["resumed"] and not result["before"] and result["after"]
+    assert result["revised"] == result["materialHeld"] == "2–6 min"
+
+
+def test_ingestion_stall_tracks_source_batches_not_only_finished_sources(
+    tmp_path: Path,
+) -> None:
+    result = _drive_page(
+        tmp_path,
+        r"""
+(() => {
+  const stalled = ingestionStallDetector();
+  const status = { build_id: 'a', phase: 'extraction', source: 'Book.pdf',
+    overall_progress: { completed: 2, total: 10, unit: 'sources' },
+    source_progress: { completed: 0, total: 20, unit: 'extraction_units' },
+    progress: { completed: 10, total: 100, unit: 'extraction_units' } };
+  stalled(status, 0);
+  status.source_progress.completed = 1;
+  const advancing = stalled(status, 59000);
+  const notStalled = stalled(status, 60000);
+  const stalledLater = stalled(status, 119000);
+  result = { advancing, notStalled, stalledLater };
+})();
+""",
+    )
+    assert not result["advancing"] and not result["notStalled"]
+    assert result["stalledLater"]
 
 
 def test_phase_local_ingestion_eta(tmp_path: Path) -> None:
@@ -2480,11 +2541,11 @@ def test_phase_local_ingestion_eta(tmp_path: Path) -> None:
 """,
     )
     assert result["samples"] == [None, None, None, 14]
-    assert result["stalled"] == 28
+    assert result["stalled"] == 14
     assert result["resets"] == [None] * 6
-    assert "Phase ETA about 15 sec" in result["summary"]
-    assert "Phase ETA estimating" in result["estimating"]
-    assert "Phase ETA about 16 min 40 sec" in result["backend"]
+    assert "ETA 15 sec" in result["summary"]
+    assert "ETA" not in result["estimating"]
+    assert "ETA 17 min" in result["backend"]
     assert result["fresh"] is None
 
 
@@ -2527,7 +2588,7 @@ def test_passage_eta_scope_completion_and_rounding(tmp_path: Path, phase: str) -
         result["unknown"],
     ]:
         assert "ETA" not in summary
-    assert result["rounded"] == ["5 sec", "55 sec", "1 min", "1 min", "1 min 5 sec"]
+    assert result["rounded"] == ["5 sec", "55 sec", "1 min", "1 min", "1 min"]
 
 
 def test_ingestion_poll_failure_and_pagehide_cleanup(tmp_path: Path) -> None:
@@ -2565,7 +2626,7 @@ def test_ingestion_poll_failure_and_pagehide_cleanup(tmp_path: Path) -> None:
     assert result["retried"] and result["aborted"]
     assert result["message"] == "Building"
     assert result["timers"] == result["listeners"] == 0
-    assert result["fallback"] == "embedding · 3 / 10 chunks · Phase ETA estimating…"
+    assert result["fallback"] == "embedding · 3 / 10 chunks"
 
 
 def _drive_page(tmp_path: Path, scenario: str) -> dict[str, Any]:
