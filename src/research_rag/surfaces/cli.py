@@ -21,6 +21,7 @@ import argparse
 import asyncio
 import contextlib
 import json
+import math
 import os
 import shutil
 import signal
@@ -1935,10 +1936,11 @@ class Remote:
 
 INGEST_PROGRESS_INTERVAL = 2.0
 INGEST_HEARTBEAT_INTERVAL = 15.0
+PASSAGE_ETA_PHASES = frozenset({"embedding", "dense_indexing", "qdrant_indexing"})
 
 
 class _PhaseETA:
-    """Estimate only the current phase from two observed advancing intervals."""
+    """Measure global passage throughput after two positive counter advances."""
 
     def __init__(self) -> None:
         self.key: tuple[Any, ...] | None = None
@@ -1949,7 +1951,12 @@ class _PhaseETA:
 
     def observe(self, progress: dict[str, Any], now: float) -> float | None:
         counts = progress.get("progress")
-        if not isinstance(counts, dict):
+        if (
+            progress.get("phase") not in PASSAGE_ETA_PHASES
+            or not isinstance(counts, dict)
+            or counts.get("unit") != "chunks"
+            or not math.isfinite(now)
+        ):
             self.key = None
             return None
         completed, total = counts.get("completed"), counts.get("total")
@@ -1967,7 +1974,7 @@ class _PhaseETA:
             total,
             counts.get("unit"),
         )
-        if key != self.key or completed < self.previous or now <= self.start:
+        if key != self.key or completed < self.previous or now < self.start:
             self.key = key
             self.start = now
             self.initial = completed
@@ -1977,7 +1984,7 @@ class _PhaseETA:
         if completed > self.previous:
             self.advances += 1
         self.previous = completed
-        if self.advances < 2:
+        if self.advances < 2 or now <= self.start or completed == total:
             return None
         return (total - completed) * (now - self.start) / (completed - self.initial)
 
@@ -2004,14 +2011,14 @@ def _ingestion_progress_line(
     }
     fields = [labels.get(phase, phase.replace("_", " ").capitalize())]
 
-    def count(value: Any, *, source: bool = False) -> str | None:
+    def count(value: Any) -> str | None:
         if not isinstance(value, dict):
             return None
         completed, total = value.get("completed"), value.get("total")
         if type(completed) is not int or type(total) is not int or total <= 0:
             return None
         unit = str(value.get("unit") or "items")
-        if unit == "phase" or (source and unit == "sources" and total == 1):
+        if unit == "phase":
             return None
         units = {
             "pdf_page_batches_or_epub_sections": "extraction batches/sections",
@@ -2027,13 +2034,24 @@ def _ingestion_progress_line(
     if isinstance(source, str) and source:
         # Source names are data, not terminal commands or multiline log records.
         safe_source = "".join(char if char.isprintable() else " " for char in source)
-        detail = count(progress.get("source_progress"), source=True)
-        fields.append(f"{safe_source}: {detail}" if detail else safe_source)
-    eta = progress.get("eta_seconds")
-    if not isinstance(eta, (int, float)) or isinstance(eta, bool) or eta < 0:
-        eta = estimate
-    if isinstance(eta, (int, float)) and eta >= 0:
-        seconds = round(eta)
+        fields.append(safe_source)
+    # Backend/source deadlines cannot describe measured global passage work.
+    counts = progress.get("progress")
+    passage_counts = (
+        phase in PASSAGE_ETA_PHASES
+        and isinstance(counts, dict)
+        and counts.get("unit") == "chunks"
+        and type(counts.get("completed")) is int
+        and type(counts.get("total")) is int
+        and 0 <= counts["completed"] <= counts["total"]
+        and counts["total"] > 0
+    )
+    if passage_counts and counts["completed"] == counts["total"]:
+        fields.append("phase ETA finalizing")
+    elif passage_counts and estimate is not None:
+        # Coarse display buckets prevent small rate changes flickering each poll.
+        bucket = 60 if estimate >= 60 else 10
+        seconds = max(bucket, math.ceil(estimate / bucket) * bucket)
         minutes, seconds = divmod(seconds, 60)
         hours, minutes = divmod(minutes, 60)
         duration = (
@@ -2044,8 +2062,12 @@ def _ingestion_progress_line(
             else f"{seconds}s"
         )
         fields.append(f"phase ETA ~{duration}")
-    else:
+    elif passage_counts:
         fields.append("phase ETA estimating")
+    elif phase in PASSAGE_ETA_PHASES or phase in {"extraction", "chunking"}:
+        fields.append("passage ETA unavailable until total is known")
+    else:
+        fields.append("phase ETA unavailable")
     return " | ".join(fields)
 
 
@@ -2084,6 +2106,59 @@ def _terminal_progress_line(line: str, columns: int) -> str:
         result.append(char)
         remaining -= width
     return "".join(result)
+
+
+def _ingestion_progress_frame(status: dict[str, Any], line: str, columns: int) -> str:
+    """Draw progress across the current phase, never within a source."""
+    progress = status["ingestion_progress"]
+    fields = line.split(" | ")
+    header = fields[0]
+    overall = progress.get("overall_progress")
+    if isinstance(overall, dict) and overall.get("unit") == "sources":
+        header += f" | {overall.get('completed', 0)}/{overall.get('total', 0)} sources"
+    source = progress.get("source")
+    if isinstance(source, str) and source:
+        header += " | " + "".join(
+            char if char.isprintable() else " " for char in source
+        )
+    counts = (
+        overall
+        if isinstance(overall, dict) and overall.get("unit") == "sources"
+        else progress.get("progress")
+    )
+    completed = counts.get("completed") if isinstance(counts, dict) else None
+    total = counts.get("total") if isinstance(counts, dict) else None
+    valid = (
+        type(completed) is int
+        and type(total) is int
+        and total > 0
+        and 0 <= completed <= total
+        and counts.get("unit") != "phase"
+    )
+    percentage = round(100 * completed / total) if valid else None
+    eta = (
+        next(
+            (
+                field
+                for field in fields
+                if field.startswith(("phase ETA ", "passage ETA "))
+            ),
+            "",
+        )
+        if progress.get("phase") in PASSAGE_ETA_PHASES
+        else ""
+    )
+    suffix = f" {percentage:3d}%" if percentage is not None else "  --%"
+    if eta:
+        suffix += f" | {eta}"
+    bar_width = max(0, min(30, columns - len(suffix) - 5))
+    filled = round(bar_width * completed / total) if valid else 0
+    bar = f"[{'#' * filled}{'-' * (bar_width - filled)}]{suffix}"
+    return (
+        _terminal_progress_line(header, columns)
+        + "\n"
+        + _terminal_progress_line(bar, columns)
+    )
 
 
 async def _ingest_with_progress(
@@ -2134,8 +2209,11 @@ async def _ingest_with_progress(
                 # it does not claim that the worker made progress.
                 if redraw:
                     columns = shutil.get_terminal_size(fallback=(80, 24)).columns
+                    frame = _ingestion_progress_frame(status_result, line, columns)
                     sys.stderr.write(
-                        "\r\x1b[2K" + _terminal_progress_line(line, columns)
+                        ("\r\x1b[1A" if drawn else "")
+                        + "\r\x1b[2K"
+                        + frame.replace("\n", "\n\r\x1b[2K", 1)
                     )
                     sys.stderr.flush()
                     drawn = True

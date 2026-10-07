@@ -17,6 +17,13 @@ from ..project.config import ResearchConfig
 from ..storage.records import StorageError, directory_statistics, read_json
 
 
+def skipped_source_count(manifest: dict[str, Any]) -> int:
+    """Count source omissions recorded by the build, without changing artifacts."""
+    metrics = manifest.get("build_metrics")
+    skipped = metrics.get("skipped_sources") if isinstance(metrics, dict) else None
+    return len(skipped) if isinstance(skipped, list) else 0
+
+
 def generation_inventory(
     config: ResearchConfig,
     current_generation_id: str | None,
@@ -55,6 +62,8 @@ def generation_inventory(
             else:
                 if isinstance(manifest, dict):
                     record.update(
+                        partial=bool(skipped_source_count(manifest)),
+                        skipped_source_count=skipped_source_count(manifest),
                         created_at=manifest.get("created_at"),
                         chunk_count=manifest.get("chunk_count"),
                         document_count=manifest.get("document_count"),

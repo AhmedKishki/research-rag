@@ -28,7 +28,10 @@ from ..corpus.sources import (
     scan_sources,
     sha256_file,
 )
-from ..generations.generation_inventory import generation_inventory
+from ..generations.generation_inventory import (
+    generation_inventory,
+    skipped_source_count,
+)
 from ..project.config import ResearchConfig
 from ..project.policy import (
     DEFAULT_RETRIEVAL_METHOD,
@@ -331,7 +334,10 @@ class StatusWorkflow:
             if stored_exclusion_revision is not None
             else bool(exclusions)
         )
-        stale = bool(added or removed or modified or source_exclusions_changed)
+        skipped_count = skipped_source_count(manifest)
+        stale = bool(
+            added or removed or modified or source_exclusions_changed or skipped_count
+        )
         retrieval = manifest.get("retrieval", {})
         upgrade_reasons = self._generation_upgrade_reasons(manifest)
         # The dense vectors were embedded by the model the generation recorded.
@@ -417,6 +423,11 @@ class StatusWorkflow:
                 "before relying on it, and no ingestion restores a removed chunk."
             )
         effective_documents = _effective_documents(manifest, metadata)
+        if skipped_count:
+            status_message += (
+                f" The selected generation is partial: {skipped_count} sources were "
+                "skipped. Call ingest to retry them; existing passages remain searchable."
+            )
         return {
             **_base_payload(self.config, ready=True, stale=stale),
             "generation_id": manifest["generation_id"],
@@ -501,6 +512,14 @@ class StatusWorkflow:
                     payload.get("generation_id"),
                 )
             )
+            if not payload.get("generation_id") and any(
+                item.get("partial") for item in payload.get("generations", [])
+            ):
+                payload["message"] = (
+                    "No generation is selected. A retained partial generation is available; "
+                    "use Load in the workspace generation list to select it manually, "
+                    "or call ingest to retry skipped sources."
+                )
             # Built from the payload this method already produced, so the health
             # answer and the status answer cannot come from two different states
             # of the project.

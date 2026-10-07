@@ -57,6 +57,7 @@ An item is done when the harness has produced its measurement and the validation
 
 ## ingestion
 
+- [ ] **Consider docling for ingestion.** [github.com/docling-project/docling](https://github.com/docling-project/docling)
 - [ ] **Let one `ingest` call name its budget.** Feature. The budget is a runtime setting, so a reader cannot raise it for one call. An argument would let the caller say how long to wait.
 - [ ] **Refuse to start a build that cannot fit.** Feature. `status` and `doctor` report free space against existing generation sizes, but `ingest` ignores the verdict. A build that runs out of room leaves a staging directory and no generation.
 - [ ] **Add an `ingest` dry run.** Feature. Report what would change and what would be reused, and write nothing.
@@ -67,6 +68,8 @@ An item is done when the harness has produced its measurement and the validation
 - [ ] **Refuse a garbage passage, not only a garbage unit.** Feature. `corpus/text_quality.py` judges a unit and extraction withholds one whose text carries a reason. Extend the verdicts to what a reader retrieves — running heads, page numbers, a table of contents, an index, a reference list, boilerplate — and refuse the passage at build time. Measure what it removes, and what it takes with it, against the judged set.
 
 ## chunking
+
+* [ ] **Context-aware chunking.** [github.com/coleam00/ottomator-agents/blob/main/all-rag-strategies/docs/07-context-aware-chunking.md](https://github.com/coleam00/ottomator-agents/blob/main/all-rag-strategies/docs/07-context-aware-chunking.md)
 
 - [ ] **Reuse vectors across a contextual-header change.** Feature. Vector reuse keys on canonical passage text, so turning `chunking.headers` on recomputes every vector.
   - Fix: two hash columns, one canonical and one embedded, plus a lookup-schema bump. The bump rebuilds the sidecar from canonical artifacts, not the corpus.

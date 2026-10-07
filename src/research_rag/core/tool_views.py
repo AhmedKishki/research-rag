@@ -340,10 +340,17 @@ def lean_ingest(payload: Mapping[str, Any]) -> dict[str, Any]:
     if payload.get("activation_recovered"):
         result["activation_recovered"] = True
     _add(result, "next_action", payload.get("next_action"))
+    if payload.get("status") == "partial":
+        result["generation_changed"] = False
+        _add(result, "remedy", payload.get("remedy"))
+        _add(
+            result, "manual_selection_command", payload.get("manual_selection_command")
+        )
     _add_message(
         result,
         payload,
-        explaining=any(payload.get(key) for key in _INGEST_DISCLOSURES)
+        explaining=payload.get("status") == "partial"
+        or any(payload.get(key) for key in _INGEST_DISCLOSURES)
         or bool(payload.get("superseded_build"))
         or bool(payload.get("activation_recovered")),
     )

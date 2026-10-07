@@ -7,7 +7,7 @@ from pathlib import Path
 import pytest
 
 from research_rag.core.service import ResearchError
-from research_rag.core.tool_views import present_tool_response
+from research_rag.core.tool_views import lean_ingest, present_tool_response
 from research_rag.project.config import ConfigurationError, resolve_config
 from research_rag.project.settings import FULL_TOOL_DETAIL, LEAN_TOOL_DETAIL
 from research_rag.retrieval.embeddings import (
@@ -188,6 +188,24 @@ def test_lean_response_never_contains_a_diagnostic_key() -> None:
         assert len(json.dumps(lean, ensure_ascii=False)) < len(
             json.dumps(payload, ensure_ascii=False)
         )
+
+
+def test_partial_ingest_preserves_manual_selection_remedy() -> None:
+    payload = {
+        "status": "partial",
+        "generation_changed": False,
+        "generation_id": "candidate",
+        "message": "Partial generation retained, not selected; retry ingestion.",
+        "remedy": "Use Load to select manually.",
+        "manual_selection_command": "research-rag generations --use candidate",
+        "skipped_sources": [{"source_path": "broken.pdf"}],
+    }
+    result = lean_ingest(payload)
+    assert result["message"] == payload["message"]
+    assert result["remedy"] == payload["remedy"]
+    assert result["manual_selection_command"] == payload["manual_selection_command"]
+    assert result["generation_changed"] is False
+    assert result["skipped_source_count"] == 1
 
 
 def test_full_detail_returns_the_service_payload_unchanged() -> None:

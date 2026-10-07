@@ -126,7 +126,7 @@
   - Vector reuse also requires exact canonical text, model revision, and dimension.
   - `force_recompute=True` disables all reuse.
 - Dispatch dense backends from the manifest. Never substitute one during reuse.
-- An extraction failure for a selected source aborts the new generation and preserves the current one.
+- A source-local PDF/EPUB extraction failure omits that source from a validated partial generation when at least one source remains. Retain the partial generation without selecting it; disclose the omission, mark a selected partial generation stale, and retry omitted sources on ordinary ingestion. Other failures preserve the selected generation.
 
 ### Boundaries a contributor must not cross
 

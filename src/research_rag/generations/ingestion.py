@@ -16,6 +16,7 @@ import numpy as np
 
 from ..corpus.extraction import (
     REMOVAL_FIELDS,
+    ExtractionError,
     UncleanSourceError,
     empty_removal_counts,
     extract_epub_spine_item,
@@ -36,6 +37,7 @@ from ..corpus.sources import (
     sha256_file,
 )
 from ..corpus.text_quality import text_corruption_reasons
+from ..project.config import project_command
 from ..project.policy import (
     DEFAULT_RETRIEVAL_METHOD,
     RETRIEVAL_METHODS,
@@ -194,6 +196,8 @@ class IngestionWorkflow:
                     state = source_states.get(relative)
                 if not isinstance(state, dict):
                     return
+                if state.get("extraction_stage") == "skipped":
+                    continue
 
                 if not state.get("reused"):
                     extraction_stage = str(state.get("extraction_stage") or "")
@@ -643,7 +647,9 @@ class IngestionWorkflow:
             # repair artifacts if necessary.
             shutil.rmtree(generation_root / "work", ignore_errors=True)
             (generation_root / "checkpoint.json").unlink(missing_ok=True)
+            fsync_directory(generation_root)
             journal_path.unlink(missing_ok=True)
+            fsync_directory(journal_path.parent)
             self._loaded_generation = None
             return None
 
@@ -668,10 +674,15 @@ class IngestionWorkflow:
             source_state_matches = False
         baseline_matches = current_id == journal.get("baseline_generation_id")
         valid = bool(
-            isinstance(checkpoint, dict)
-            and isinstance(manifest, dict)
-            and checkpoint.get("build_id") == build_id
-            and checkpoint.get("identity") == expected_identity
+            isinstance(manifest, dict)
+            and (
+                (
+                    isinstance(checkpoint, dict)
+                    and checkpoint.get("build_id") == build_id
+                    and checkpoint.get("identity") == expected_identity
+                )
+                or (root == generation_root and checkpoint is None)
+            )
             and journal.get("identity") == expected_identity
             and manifest.get("generation_id") == build_id
             and manifest.get("project_id") == self.config.project_id
@@ -717,23 +728,42 @@ class IngestionWorkflow:
             os.replace(staging_root, generation_root)
             fsync_directory(self.config.generations_root)
             fsync_directory(self.config.staging_root)
-        atomic_write_json(
-            self.config.current_path,
-            {"schema_version": 1, "generation_id": build_id},
-        )
+        skipped_sources = manifest.get("build_metrics", {}).get("skipped_sources", [])
+        # Legacy journals have no intent. Their manifest must still prevent
+        # automatic selection of incomplete source coverage.
+        select_generation = not skipped_sources and journal.get("select", True) is True
+        if select_generation:
+            atomic_write_json(
+                self.config.current_path,
+                {"schema_version": 1, "generation_id": build_id},
+            )
         (generation_root / "checkpoint.json").unlink(missing_ok=True)
+        fsync_directory(generation_root)
         journal_path.unlink(missing_ok=True)
+        fsync_directory(journal_path.parent)
         self._loaded_generation = None
         return {
-            "status": "ready",
-            "generation_changed": True,
-            "activation_recovered": True,
-            "skipped_sources": manifest.get("build_metrics", {}).get(
-                "skipped_sources", []
+            "status": "partial" if skipped_sources else "ready",
+            "generation_changed": select_generation,
+            "current_generation_id": build_id if select_generation else current_id,
+            **(
+                {
+                    "manual_selection_command": project_command(
+                        self.config.project_root, "generations", "--use", build_id
+                    )
+                }
+                if not select_generation
+                else {}
             ),
+            "activation_recovered": True,
+            "skipped_sources": skipped_sources,
             "generation_id": build_id,
             "generation_root": str(generation_root),
-            "message": "Recovered and selected the completed generation.",
+            "message": (
+                "Recovered and selected the completed generation."
+                if select_generation
+                else "Recovered the partial generation without changing the selected generation."
+            ),
         }
 
     @staticmethod
@@ -944,6 +974,45 @@ class IngestionWorkflow:
         def budget_expired() -> bool:
             return time.perf_counter() >= deadline
 
+        def record_skip(record: dict[str, str]) -> None:
+            relative = record["source_relative_path"]
+            skipped = checkpoint.setdefault("skipped_sources", [])
+            if not any(item["source_relative_path"] == relative for item in skipped):
+                skipped.append(record)
+            for key in ("extracted_source_paths", "chunked_source_paths"):
+                if relative not in checkpoint[key]:
+                    checkpoint[key].append(relative)
+            self._write_checkpoint(staging_root, checkpoint)
+
+        async def extract_source(operation: Any, *args: Any, **kwargs: Any) -> Any:
+            # Only typed failures from the source-local extractor are omissions.
+            # Artifact writes, hashing, chunking and index failures remain fatal.
+            try:
+                return await _atomic_to_thread(operation, *args, **kwargs)
+            except ExtractionError as exc:
+                record = {
+                    "source_relative_path": relative,
+                    "reason": str(exc),
+                    "remedy": (
+                        f"research-rag ocr {shlex.quote(relative)}"
+                        if isinstance(exc, UncleanSourceError)
+                        else "Repair or replace this source, then run research-rag ingest."
+                    ),
+                }
+                skipped_state = {
+                    **(state or {}),
+                    "extraction_stage": "skipped",
+                    "skipped_source": record,
+                }
+                # Commit the source decision first so a lost checkpoint write
+                # can recover it without repeating partially extracted work.
+                atomic_write_json(state_path, skipped_state)
+                self._add_phase_time(
+                    checkpoint, "extraction", time.perf_counter() - started
+                )
+                record_skip(record)
+                return None
+
         def source_records() -> list[dict[str, Any]]:
             digests = checkpoint["source_digests"]
             return [
@@ -1006,12 +1075,20 @@ class IngestionWorkflow:
                     continue
 
                 records = source_records()
-                if snapshot is not None and source_set_matches(
-                    snapshot,
-                    records,
-                    exclusion_revision=str(checkpoint["source_exclusion_revision"]),
-                    retrieval_policy_fingerprint=(self.retrieval_policy_fingerprint),
-                    metadata_storage_policy=METADATA_STORAGE_POLICY,
+                if (
+                    snapshot is not None
+                    and not snapshot.manifest.get("build_metrics", {}).get(
+                        "skipped_sources"
+                    )
+                    and source_set_matches(
+                        snapshot,
+                        records,
+                        exclusion_revision=str(checkpoint["source_exclusion_revision"]),
+                        retrieval_policy_fingerprint=(
+                            self.retrieval_policy_fingerprint
+                        ),
+                        metadata_storage_policy=METADATA_STORAGE_POLICY,
+                    )
                 ):
                     manifest = snapshot.manifest
                     try:
@@ -1140,7 +1217,11 @@ class IngestionWorkflow:
                             int(checkpoint.get("reused_document_count") or 0) + 1
                         )
                     elif source.extension == ".pdf":
-                        total = await _atomic_to_thread(pdf_page_count, source)
+                        total = await extract_source(pdf_page_count, source)
+                        if total is None:
+                            if budget_expired():
+                                return self._in_progress_result(checkpoint)
+                            continue
                         state = {
                             "reused": False,
                             "extraction_stage": "pdf_scan",
@@ -1165,11 +1246,16 @@ class IngestionWorkflow:
                         )
                         atomic_write_json(state_path, state)
                     else:
-                        document, total = await _atomic_to_thread(
+                        prepared = await extract_source(
                             prepare_epub_extraction,
                             source,
                             checkpoint["source_digests"][relative],
                         )
+                        if prepared is None:
+                            if budget_expired():
+                                return self._in_progress_result(checkpoint)
+                            continue
+                        document, total = prepared
                         atomic_write_json(artifact_root / "document.json", document)
                         state = {
                             "reused": False,
@@ -1202,6 +1288,11 @@ class IngestionWorkflow:
                     continue
 
                 extraction_stage = str(state["extraction_stage"])
+                if extraction_stage == "skipped":
+                    record_skip(state["skipped_source"])
+                    if budget_expired():
+                        return self._in_progress_result(checkpoint)
+                    continue
                 if extraction_stage == "complete":
                     document = read_json(artifact_root / "document.json")
                     units = read_jsonl(artifact_root / "units.jsonl")
@@ -1233,12 +1324,16 @@ class IngestionWorkflow:
                     total = int(state["total"])
                     page_batch_size = int(state.get("page_batch_size") or 1)
                     if index < total:
-                        page_scans = await _atomic_to_thread(
+                        page_scans = await extract_source(
                             scan_pdf_pages,
                             source,
                             index,
                             min(page_batch_size, total - index),
                         )
+                        if page_scans is None:
+                            if budget_expired():
+                                return self._in_progress_result(checkpoint)
+                            continue
                         expected_indices = list(
                             range(index, min(index + page_batch_size, total))
                         )
@@ -1269,12 +1364,17 @@ class IngestionWorkflow:
                         read_json(artifact_root / "page-scans" / f"{index:08d}.json")
                         for index in range(int(state["total"]))
                     ]
-                    document, repeated = await _atomic_to_thread(
+                    prepared = await extract_source(
                         prepare_scanned_pdf,
                         source,
                         checkpoint["source_digests"][relative],
                         page_scans,
                     )
+                    if prepared is None:
+                        if budget_expired():
+                            return self._in_progress_result(checkpoint)
+                        continue
+                    document, repeated = prepared
                     atomic_write_json(artifact_root / "document.json", document)
                     state["repeated_margins"] = repeated
                     state["extraction_stage"] = "pdf_pages"
@@ -1300,13 +1400,17 @@ class IngestionWorkflow:
                             )
                             for page_index in range(index, end_index)
                         ]
-                        page_batches = await _atomic_to_thread(
+                        page_batches = await extract_source(
                             extract_scanned_pdf_pages,
                             source,
                             document,
                             page_scans,
                             list(state.get("repeated_margins") or []),
                         )
+                        if page_batches is None:
+                            if budget_expired():
+                                return self._in_progress_result(checkpoint)
+                            continue
                         if [page_index for page_index, *_rest in page_batches] != list(
                             range(index, end_index)
                         ):
@@ -1314,12 +1418,17 @@ class IngestionWorkflow:
                                 f"PDF extraction batch was incomplete: {relative}"
                             )
                     else:
-                        batch, empty, removed = await _atomic_to_thread(
+                        extracted = await extract_source(
                             extract_epub_spine_item,
                             source,
                             document,
                             index,
                         )
+                        if extracted is None:
+                            if budget_expired():
+                                return self._in_progress_result(checkpoint)
+                            continue
+                        batch, empty, removed = extracted
                         page_batches = [(index, batch, empty, removed)]
                     for page_index, batch, empty, removed in page_batches:
                         state["removals"] = merge_removal_counts(
@@ -1357,34 +1466,17 @@ class IngestionWorkflow:
                         for key, value in (state.get("removals") or {}).items()
                         if key in REMOVAL_FIELDS
                     }
-                    # Refuse unclean evidence before chunking, but let clean sources
-                    # finish. Other extraction failures still abort the generation.
-                    try:
-                        retained = screen_source_units(
-                            source,
-                            document,
-                            units,
-                            removals=removals,
-                            maximum_unclean_percent=(
-                                self.config.settings.maximum_unclean_percent
-                            ),
-                        )
-                    except UncleanSourceError as exc:
-                        checkpoint.setdefault("skipped_sources", []).append(
-                            {
-                                "source_relative_path": relative,
-                                "reason": str(exc),
-                                "remedy": f"research-rag ocr {shlex.quote(relative)}",
-                            }
-                        )
-                        checkpoint["extracted_source_paths"].append(relative)
-                        checkpoint["chunked_source_paths"].append(relative)
-                        state["extraction_stage"] = "skipped"
-                        atomic_write_json(state_path, state)
-                        self._add_phase_time(
-                            checkpoint, "extraction", time.perf_counter() - started
-                        )
-                        self._write_checkpoint(staging_root, checkpoint)
+                    retained = await extract_source(
+                        screen_source_units,
+                        source,
+                        document,
+                        units,
+                        removals=removals,
+                        maximum_unclean_percent=(
+                            self.config.settings.maximum_unclean_percent
+                        ),
+                    )
+                    if retained is None:
                         if budget_expired():
                             return self._in_progress_result(checkpoint)
                         continue
@@ -2195,12 +2287,14 @@ class IngestionWorkflow:
                     raise _SourceChangedDuringIngest(
                         "A source changed while final indexes were validated"
                     )
+                select_generation = not build_metrics.get("skipped_sources")
                 atomic_write_json(
                     self._pending_activation_path,
                     {
                         "schema_version": PENDING_ACTIVATION_VERSION,
                         "project_id": self.config.project_id,
                         "build_id": checkpoint["build_id"],
+                        "select": select_generation,
                         "identity": checkpoint["identity"],
                         "baseline_generation_id": checkpoint.get(
                             "baseline_generation_id"
@@ -2218,19 +2312,39 @@ class IngestionWorkflow:
                 os.replace(staging_root, generation_root)
                 fsync_directory(self.config.generations_root)
                 fsync_directory(self.config.staging_root)
-                atomic_write_json(
-                    self.config.current_path,
-                    {
-                        "schema_version": 1,
-                        "generation_id": checkpoint["build_id"],
-                    },
-                )
+                if select_generation:
+                    atomic_write_json(
+                        self.config.current_path,
+                        {
+                            "schema_version": 1,
+                            "generation_id": checkpoint["build_id"],
+                        },
+                    )
                 (generation_root / "checkpoint.json").unlink()
+                fsync_directory(generation_root)
                 self._pending_activation_path.unlink(missing_ok=True)
+                fsync_directory(self._pending_activation_path.parent)
                 self._loaded_generation = None
                 return {
-                    "status": "ready",
-                    "generation_changed": True,
+                    "status": "ready" if select_generation else "partial",
+                    "generation_changed": select_generation,
+                    "current_generation_id": (
+                        checkpoint["build_id"]
+                        if select_generation
+                        else checkpoint.get("baseline_generation_id")
+                    ),
+                    **(
+                        {
+                            "manual_selection_command": project_command(
+                                self.config.project_root,
+                                "generations",
+                                "--use",
+                                str(checkpoint["build_id"]),
+                            )
+                        }
+                        if not select_generation
+                        else {}
+                    ),
                     "generation_id": checkpoint["build_id"],
                     "generation_root": str(generation_root),
                     "source_file_count": len(scan.selected),
