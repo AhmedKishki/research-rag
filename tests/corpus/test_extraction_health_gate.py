@@ -42,6 +42,7 @@ from research_rag.corpus.text_quality import (
     strip_non_argument_sections,
 )
 from research_rag.project.config import resolve_config
+from research_rag.project.policy import ResearchError
 from tests.conftest import write_epub, write_pdf
 from tests.core.test_service import FakeDenseBackend, FakeUltraRAG
 
@@ -1992,7 +1993,7 @@ def test_a_readable_source_with_one_bad_page_is_kept(project: Path) -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_a_refused_source_aborts_the_build_and_preserves_the_current_generation(
+def test_a_refused_source_retains_partial_build_and_preserves_current_generation(
     project: Path,
 ) -> None:
     write_pdf(project / "sources" / "good.pdf", ["Cobalt evidence about labour."])
@@ -2002,20 +2003,20 @@ def test_a_refused_source_aborts_the_build_and_preserves_the_current_generation(
     assert config.current_path.exists()
 
     write_epub(project / "sources" / "corrupt.epub", CORRUPT_PAGE)
-    with pytest.raises(ExtractionError):
-        asyncio.run(service.ingest(chunk_size=50, chunk_overlap=10))
+    partial = asyncio.run(service.ingest(chunk_size=50, chunk_overlap=10))
+    assert partial["status"] == "partial"
+    assert partial["document_count"] == 1
+    assert partial["skipped_sources"][0]["source_relative_path"] == "corrupt.epub"
 
-    # The selected generation is the one that worked, the failed build left the
-    # pointer and the heavy staging data alone, and the record names the file
-    # without quoting text it could not read.
+    # The partial generation is retained, but the working generation remains
+    # selected. The omission record never contains extracted source text.
     assert (
         json.loads(config.current_path.read_text(encoding="utf-8"))["generation_id"]
         == first["generation_id"]
     )
     assert not any(config.staging_root.iterdir())
-    failures = list(config.failures_root.glob("*.json"))
-    assert len(failures) == 1
-    recorded = failures[0].read_text(encoding="utf-8")
+    assert (config.generations_root / partial["generation_id"]).is_dir()
+    recorded = json.dumps(partial["skipped_sources"])
     assert "corrupt.epub" in recorded
     assert CORRUPT_PAGE not in recorded
 
@@ -2028,7 +2029,7 @@ def test_a_refused_source_leaves_no_activation_behind(project: Path) -> None:
     service = _service(project)
     config = service.config
 
-    with pytest.raises(ExtractionError):
+    with pytest.raises(ResearchError, match="No clean sources remain"):
         asyncio.run(service.ingest(chunk_size=50, chunk_overlap=10))
 
     assert not config.current_path.exists()

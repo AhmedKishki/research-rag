@@ -2302,7 +2302,7 @@ process.stdout.write(JSON.stringify(context.result));
 """
 
 
-@pytest.mark.parametrize("outcome", ["ready", "in_progress", "error"])
+@pytest.mark.parametrize("outcome", ["ready", "in_progress", "partial", "error"])
 def test_live_ingestion_polling(tmp_path: Path, outcome: str) -> None:
     result = _drive_page(
         tmp_path,
@@ -2350,6 +2350,8 @@ def test_live_ingestion_polling(tmp_path: Path, outcome: str) -> None:
   }});
   await tick;
   const progress = byId('busy-message').textContent;
+  const bar = { hidden: byId('ingestion-progress').hidden,
+    value: byId('ingestion-progress').value, max: byId('ingestion-progress').max };
   const second = [...timers.values()].find((entry) => entry.delay === 2000);
   timers.clear();
   const late = second.callback();
@@ -2359,7 +2361,8 @@ def test_live_ingestion_polling(tmp_path: Path, outcome: str) -> None:
   const after = byId('busy-message').textContent;
   statusFinish({ ingestion_progress: { phase: 'late' } });
   await late;
-  result = { during, progress, messages, loads, clears, busy: state.busy,
+  result = { during, progress, bar, barHidden: byId('ingestion-progress').hidden,
+    messages, loads, clears, busy: state.busy,
     aborted: signal.aborted, timers: timers.size, listeners: listeners.size,
     lateIgnored: byId('busy-message').textContent === after };
 })();
@@ -2368,9 +2371,11 @@ def test_live_ingestion_polling(tmp_path: Path, outcome: str) -> None:
     assert result["during"]["requests"] == ["/api/ingest", "/api/status"]
     assert result["during"]["loads"] == 0
     assert "Book.pdf" in result["progress"]
-    assert "Source: 2 / 8 pages" in result["progress"]
-    assert "Overall: 1 / 3 sources" in result["progress"]
-    assert "ETA about 2 min" in result["progress"]
+    assert "pages" not in result["progress"]
+    assert "1 / 3 sources" in result["progress"]
+    assert result["bar"] == {"hidden": False, "value": 1, "max": 3}
+    assert result["barHidden"]
+    assert "ETA" not in result["progress"]
     assert result["aborted"] and result["lateIgnored"]
     assert not result["busy"]
     assert result["timers"] == result["listeners"] == 0
@@ -2379,10 +2384,63 @@ def test_live_ingestion_polling(tmp_path: Path, outcome: str) -> None:
     message = result["messages"][0]
     if outcome == "in_progress":
         assert "still in progress" in message and "is ready" not in message
+    elif outcome == "partial":
+        assert "Partial generation" in message
+        assert "not selected" in message and "Load" in message
+        assert "is ready" not in message
     elif outcome == "error":
         assert message == "Build failed"
     else:
         assert "is ready with 12 passages" in message
+
+
+def test_source_phase_ingestion_progress_and_eta(tmp_path: Path) -> None:
+    result = _drive_page(
+        tmp_path,
+        r"""
+(() => {
+  const estimate = phaseEtaEstimator();
+  const status = { build_id: 'a', phase: 'extraction', source: 'Book.pdf',
+    overall_progress: { completed: 5, total: 20, unit: 'sources' },
+    progress: { completed: 100, total: 100, unit: 'pages' },
+    source_progress: { completed: 100, total: 100, unit: 'pages' } };
+  const tick = (completed, time) => {
+    status.overall_progress.completed = completed;
+    renderIngestionProgress(status);
+    return estimate(status, time);
+  };
+  const samples = [tick(5, 0), tick(6, 1000), tick(7, 2000), tick(8, 3000)];
+  const summary = liveIngestionSummary(status, samples[3]);
+  const stalled = tick(8, 6000);
+  const resets = [];
+  status.phase = 'embedding'; resets.push(tick(8, 7000));
+  // Three files in one poll suffice; page changes and source names do not reset it.
+  status.source = 'Other.pdf'; status.progress.completed = 0;
+  const batch = tick(11, 10000);
+  status.build_id = 'b'; resets.push(tick(11, 11000));
+  status.overall_progress.total = 30; resets.push(tick(11, 12000));
+  resets.push(tick(2, 13000));
+  resets.push(tick(3, 12000));
+  resets.push(tick(31, 14000));
+  const invalidHidden = byId('ingestion-progress').hidden;
+  status.overall_progress = null;
+  status.progress = { completed: 2, total: 10, unit: 'chunks' };
+  renderIngestionProgress(status);
+  const fallback = { hidden: byId('ingestion-progress').hidden,
+    value: byId('ingestion-progress').value, max: byId('ingestion-progress').max };
+  renderIngestionProgress({});
+  result = { samples, summary, stalled, batch, resets, invalidHidden, fallback,
+    missingHidden: byId('ingestion-progress').hidden };
+})();
+""",
+    )
+    assert result["samples"] == [None] * 4
+    assert result["stalled"] is None
+    assert result["batch"] is None
+    assert result["resets"] == [None] * 6
+    assert result["invalidHidden"] and result["missingHidden"]
+    assert result["fallback"] == {"hidden": False, "value": 2, "max": 10}
+    assert result["summary"] == "extraction · Book.pdf · 8 / 20 sources"
 
 
 def test_phase_local_ingestion_eta(tmp_path: Path) -> None:
@@ -2404,7 +2462,7 @@ def test_phase_local_ingestion_eta(tmp_path: Path) -> None:
   const resets = [];
   resets.push(tick(5, 9000));
   tick(10, 10000); tick(15, 11000);
-  status.phase = 'indexing'; resets.push(tick(20, 12000));
+  status.phase = 'dense_indexing'; resets.push(tick(20, 12000));
   tick(25, 13000); tick(30, 14000);
   status.build_id = 'b'; resets.push(tick(35, 15000));
   tick(40, 16000); tick(45, 17000);
@@ -2424,11 +2482,52 @@ def test_phase_local_ingestion_eta(tmp_path: Path) -> None:
     assert result["samples"] == [None, None, None, 14]
     assert result["stalled"] == 28
     assert result["resets"] == [None] * 6
-    assert "Phase ETA about 1 min" in result["summary"]
+    assert "Phase ETA about 15 sec" in result["summary"]
     assert "Phase ETA estimating" in result["estimating"]
-    assert "ETA about 2 min" in result["backend"]
-    assert "Phase ETA" not in result["backend"]
+    assert "Phase ETA about 16 min 40 sec" in result["backend"]
     assert result["fresh"] is None
+
+
+@pytest.mark.parametrize("phase", ["embedding", "dense_indexing", "qdrant_indexing"])
+def test_passage_eta_scope_completion_and_rounding(tmp_path: Path, phase: str) -> None:
+    result = _drive_page(
+        tmp_path,
+        r"""
+(() => {
+  const estimate = phaseEtaEstimator();
+  const status = { build_id: 'a', phase: PHASE, source: 'First.pdf',
+    progress: { completed: 40, total: 100, unit: 'chunks' } };
+  const first = estimate(status, 0);
+  status.progress.completed = 50;
+  const second = estimate(status, 10000);
+  status.source = 'Second.pdf';
+  status.progress.completed = 60;
+  const third = estimate(status, 20000);
+  status.progress.completed = 100;
+  const complete = estimate(status, 30000);
+  const completeSummary = liveIngestionSummary(status, 0);
+  const excluded = ['hashing', 'extraction', 'chunking'].map(phase =>
+    liveIngestionSummary({ ...status, phase, eta_seconds: 120 }, 120));
+  status.progress = { completed: 1, total: 10, unit: 'pages' };
+  const pages = liveIngestionSummary(status, 120);
+  status.progress = { completed: 1, unit: 'chunks' };
+  const unknown = liveIngestionSummary(status, 120);
+  result = { first, second, third, complete, completeSummary, excluded, pages, unknown,
+    rounded: [0.1, 54, 58, 61, 64].map(formatPhaseEta) };
+})();
+""".replace("PHASE", json.dumps(phase)),
+    )
+    assert result["first"] is None and result["second"] is None
+    assert result["third"] == 40
+    assert result["complete"] is None
+    for summary in [
+        result["completeSummary"],
+        *result["excluded"],
+        result["pages"],
+        result["unknown"],
+    ]:
+        assert "ETA" not in summary
+    assert result["rounded"] == ["5 sec", "55 sec", "1 min", "1 min", "1 min 5 sec"]
 
 
 def test_ingestion_poll_failure_and_pagehide_cleanup(tmp_path: Path) -> None:

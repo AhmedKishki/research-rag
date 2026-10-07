@@ -42,6 +42,7 @@ research-rag --project-root "/path/to/project" ingest
 ```
 
 - The first build can take time. Repeat `ingest` if it reports an unfinished build.
+- If a PDF or EPUB cannot be extracted, a validated generation containing the remaining sources is retained as **partial**, not selected. Review the omitted sources in the result or generation list. Repair them and run `ingest` again, or select the partial generation with `research-rag --project-root "/path/to/project" generations --use GENERATION_ID`.
 
 ## Read the evidence
 

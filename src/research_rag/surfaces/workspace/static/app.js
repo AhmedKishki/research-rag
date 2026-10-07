@@ -3073,6 +3073,9 @@ function generationRow(generation) {
     head.append(node("p", "record-warning", "Not possible: this generation cannot be loaded."));
   }
   head.append(recordedConfigSummary(generation));
+  if (generation.partial) {
+    head.append(node("p", "record-warning", `Partial: ${formatNumber(generation.skipped_source_count)} sources skipped. Retry ingestion, or use Load to select this generation manually.`));
+  }
   head.append(recordedConfigBlock(generation));
   row.append(head);
   row.append(node("td", "", generation.created_at ? formatDate(generation.created_at) : "Unknown"));
@@ -4081,12 +4084,36 @@ async function restoreSource(path) {
   }
 }
 
-// Each poller owns its samples. Only homogeneous phase counters contribute;
-// source and overall counters never imply a deadline for the whole build.
+// Bars can show source progress; ETA only measures global passages in a phase.
+function ingestionPhaseCount(status) {
+  return status.overall_progress?.unit === "sources"
+    ? status.overall_progress : status.progress;
+}
+
+function renderIngestionProgress(status) {
+  const bar = byId("ingestion-progress");
+  const count = ingestionPhaseCount(status);
+  const valid = count && Number.isFinite(count.completed) && Number.isFinite(count.total)
+    && count.total > 0 && count.completed >= 0 && count.completed <= count.total;
+  bar.hidden = !valid;
+  if (valid) {
+    bar.max = count.total;
+    bar.value = count.completed;
+  }
+}
+
+function ingestionEtaCount(status) {
+  if (!["embedding", "dense_indexing", "qdrant_indexing"].includes(status.phase)) return null;
+  const count = status.progress;
+  return count?.unit === "chunks" && Number.isFinite(count.completed)
+    && Number.isFinite(count.total) && count.total > 0
+    && count.completed >= 0 && count.completed <= count.total ? count : null;
+}
+
 function phaseEtaEstimator() {
   let sample = null;
   return (status, now) => {
-    const count = status.progress;
+    const count = ingestionEtaCount(status);
     if (!count || !Number.isFinite(count.completed) || !Number.isFinite(count.total)
         || count.total <= 0 || count.completed < 0 || count.completed > count.total
         || !Number.isFinite(now)) {
@@ -4105,9 +4132,18 @@ function phaseEtaEstimator() {
     sample.time = now;
     const elapsed = (now - sample.start) / 1000;
     const delta = count.completed - sample.initial;
-    if (sample.advances < 2 || elapsed <= 0 || delta <= 0) return null;
+    if (sample.advances < 2 || elapsed <= 0 || delta <= 0
+        || count.completed === count.total) return null;
     return (count.total - count.completed) * elapsed / delta;
   };
+}
+
+function formatPhaseEta(seconds) {
+  // Use one rounded duration on both sides of the minute boundary.
+  const rounded = Math.max(5, Math.round(seconds / 5) * 5);
+  const minutes = Math.floor(rounded / 60);
+  const remainder = rounded % 60;
+  return minutes ? `${minutes} min${remainder ? ` ${remainder} sec` : ""}` : `${rounded} sec`;
 }
 
 function liveIngestionSummary(progress, localEta = null) {
@@ -4118,15 +4154,14 @@ function liveIngestionSummary(progress, localEta = null) {
     }
   };
   if (progress.source) parts.push(String(progress.source));
-  counts("Source: ", progress.source_progress);
-  counts("", progress.progress);
-  counts("Overall: ", progress.overall_progress);
-  if (Number.isFinite(progress.eta_seconds) && progress.eta_seconds >= 0) {
-    parts.push(`ETA about ${Math.ceil(progress.eta_seconds / 60)} min`);
-  } else if (Number.isFinite(localEta) && localEta >= 0) {
-    parts.push(`Phase ETA about ${Math.ceil(localEta / 60)} min`);
-  } else {
-    parts.push("Phase ETA estimating…");
+  counts("", ingestionPhaseCount(progress));
+  const etaCount = ingestionEtaCount(progress);
+  if (etaCount && etaCount.completed < etaCount.total) {
+    if (Number.isFinite(localEta) && localEta > 0) {
+      parts.push(`Phase ETA about ${formatPhaseEta(localEta)}`);
+    } else {
+      parts.push("Phase ETA estimating…");
+    }
   }
   return parts.join(" · ");
 }
@@ -4146,8 +4181,10 @@ function pollIngestionProgress() {
       const status = await api("/api/status", { signal: controller.signal });
       if (!stopped && status.ingestion_progress) {
         const progress = status.ingestion_progress;
+        renderIngestionProgress(progress);
         byId("busy-message").textContent = `${liveIngestionSummary(progress, estimate(progress, performance.now()))} · Status checked ${new Date().toLocaleTimeString()}`;
       } else if (!stopped) {
+        renderIngestionProgress({});
         estimate({}, performance.now());
       }
     } catch (_error) {
@@ -4160,6 +4197,7 @@ function pollIngestionProgress() {
   timer = window.setTimeout(poll, 2000);
   const stop = () => {
     stopped = true;
+    renderIngestionProgress({});
     window.clearTimeout(timer);
     controller?.abort();
     window.removeEventListener("pagehide", stop);
@@ -4194,6 +4232,8 @@ async function ingest(event) {
     byId("ingest-dialog").close();
     if (result.status === "in_progress") {
       toast("Ingestion is still in progress. The generation is not ready yet.");
+    } else if (result.status === "partial") {
+      toast(`Partial generation ${compactId(result.generation_id)} retained, not selected. Existing results are unchanged. Retry ingestion, or use Load in the generation list to select it manually.`);
     } else {
       clearResults();
       toast(`Generation ${compactId(result.generation_id)} is ready with ${formatNumber(result.chunk_count)} passages.`);

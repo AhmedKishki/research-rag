@@ -33,6 +33,7 @@ from research_rag.corpus.extraction import ExtractionError
 from research_rag.project.config import (
     ConfigurationError,
     ResearchConfig,
+    project_command,
     resolve_config,
 )
 from research_rag.project.policy import DEFAULT_RETRIEVAL_METHOD
@@ -2632,7 +2633,10 @@ def test_ingest_defers_unclean_source_and_commits_clean_evidence(
         config = resolve_config(project, vanilla_executable=sys.executable)
         service = ResearchService(config, FakeUltraRAG(), dense=FakeDenseBackend())
         result = await service.ingest(chunk_size=50, chunk_overlap=10)
-        assert result["status"] == "ready"
+        assert result["status"] == "partial"
+        assert result["generation_changed"] is False
+        assert result["current_generation_id"] is None
+        assert not config.current_path.exists()
         assert result["document_count"] == 1
         assert result["skipped_sources"][0]["source_relative_path"] == "bad.pdf"
         assert "manual OCR" in result["skipped_sources"][0]["reason"]
@@ -2640,20 +2644,192 @@ def test_ingest_defers_unclean_source_and_commits_clean_evidence(
         manifest = json.loads((root / "manifest.json").read_text())
         assert manifest["build_metrics"]["skipped_source_count"] == 1
         unchanged = await service.ingest(chunk_size=50, chunk_overlap=10)
-        assert unchanged["status"] == "unchanged"
+        assert unchanged["status"] == "partial"
+        assert unchanged["generation_id"] != result["generation_id"]
         assert unchanged["skipped_sources"] == result["skipped_sources"]
-        # Repairing a skipped source changes its digest and retries it normally.
+        # An unchanged source is retried after its transient failure is repaired.
         monkeypatch.setattr(ingestion, "screen_source_units", original)
-        write_pdf(project / "sources" / "bad.pdf", ["Repaired readable evidence."])
         repaired = await service.ingest(chunk_size=50, chunk_overlap=10)
+        assert repaired["status"] == "ready"
+        assert repaired["generation_changed"] is True
+        assert repaired["current_generation_id"] == repaired["generation_id"]
+        assert (
+            json.loads(config.current_path.read_text())["generation_id"]
+            == repaired["generation_id"]
+        )
         assert repaired["document_count"] == 2
         assert repaired["skipped_source_count"] == 0
 
     asyncio.run(exercise())
 
 
-def test_all_unclean_sources_preserve_current_generation(
+@pytest.mark.parametrize(
+    "operation",
+    [
+        "pdf_page_count",
+        "scan_pdf_pages",
+        "prepare_scanned_pdf",
+        "extract_scanned_pdf_pages",
+        "prepare_epub_extraction",
+        "extract_epub_spine_item",
+        "screen_source_units",
+    ],
+)
+def test_source_local_extraction_failure_skips_and_retries_unchanged_source(
+    project: Path, monkeypatch: pytest.MonkeyPatch, operation: str
+) -> None:
+    from research_rag.generations import ingestion
+
+    original = getattr(ingestion, operation)
+    calls = 0
+
+    def fail(source, *args, **kwargs):
+        nonlocal calls
+        if source.source_relative_path.startswith("bad."):
+            calls += 1
+            raise ExtractionError("Source-local parser failure")
+        return original(source, *args, **kwargs)
+
+    monkeypatch.setattr(ingestion, operation, fail)
+
+    async def exercise():
+        bad = project / "sources" / ("bad.epub" if "epub" in operation else "bad.pdf")
+        if bad.suffix == ".epub":
+            write_epub(bad, "Readable evidence from an EPUB section.")
+        else:
+            write_pdf(bad, ["Readable evidence from a PDF page."])
+        write_pdf(project / "sources" / "clean.pdf", ["Stable clean evidence."])
+        before = bad.read_bytes()
+        config = resolve_config(project, vanilla_executable=sys.executable)
+        ultrarag = FakeUltraRAG()
+        dense = FakeDenseBackend()
+        service = ResearchService(config, ultrarag, dense=dense)
+        result = await service.ingest(chunk_size=50, chunk_overlap=10)
+        assert result["status"] == "partial"
+        assert result["document_count"] == 1
+        assert result["skipped_sources"] == [
+            {
+                "source_relative_path": bad.name,
+                "reason": "Source-local parser failure",
+                "remedy": "Repair or replace this source, then run research-rag ingest.",
+            }
+        ]
+        assert ultrarag.bm25_build_calls == dense.build_calls == 1
+        assert bad.read_bytes() == before
+        repeated = await service.ingest(chunk_size=50, chunk_overlap=10)
+        assert repeated["status"] == "partial"
+        assert calls == 2
+        monkeypatch.setattr(ingestion, operation, original)
+        repaired = await service.ingest(chunk_size=50, chunk_overlap=10)
+        assert repaired["document_count"] == 2
+        assert repaired["skipped_source_count"] == 0
+        assert bad.read_bytes() == before
+
+    asyncio.run(exercise())
+
+
+@pytest.mark.parametrize(
+    "error",
+    [OSError("filesystem failure"), ValueError("bug"), asyncio.CancelledError()],
+)
+def test_untyped_extraction_failures_do_not_activate_partial_generation(
+    project: Path, monkeypatch: pytest.MonkeyPatch, error: BaseException
+) -> None:
+    from research_rag.generations import ingestion
+
+    async def exercise():
+        write_pdf(project / "sources" / "clean.pdf", ["Stable clean evidence."])
+        config = resolve_config(project, vanilla_executable=sys.executable)
+        service = ResearchService(config, FakeUltraRAG(), dense=FakeDenseBackend())
+        await service.ingest(chunk_size=50, chunk_overlap=10)
+        before = config.current_path.read_bytes()
+
+        def fail(*args, **kwargs):
+            raise error
+
+        monkeypatch.setattr(ingestion, "scan_pdf_pages", fail)
+        with pytest.raises(type(error), match=str(error) or None):
+            await service.ingest(chunk_size=50, chunk_overlap=10, force_recompute=True)
+        assert config.current_path.read_bytes() == before
+
+    asyncio.run(exercise())
+
+
+def test_skipped_source_state_recovers_before_global_checkpoint_commit(
     project: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from research_rag.generations import ingestion
+
+    original = ingestion.scan_pdf_pages
+    calls = 0
+
+    def fail(source, *args, **kwargs):
+        nonlocal calls
+        if source.source_relative_path == "bad.pdf":
+            calls += 1
+            raise ExtractionError("Unusable PDF scan")
+        return original(source, *args, **kwargs)
+
+    monkeypatch.setattr(ingestion, "scan_pdf_pages", fail)
+
+    async def exercise():
+        write_pdf(project / "sources" / "bad.pdf", ["Bad evidence."])
+        write_pdf(project / "sources" / "clean.pdf", ["Stable clean evidence."])
+        config = resolve_config(project, vanilla_executable=sys.executable)
+        service = ResearchService(config, FakeUltraRAG(), dense=FakeDenseBackend())
+        for _ in range(20):
+            result = await service.ingest(
+                chunk_size=50, chunk_overlap=10, work_budget_seconds=0
+            )
+            assert result["status"] == "in_progress"
+            if result["skipped_sources"]:
+                break
+        else:
+            pytest.fail("Source failure was not checkpointed")
+        checkpoint_path = config.staging_root / result["build_id"] / "checkpoint.json"
+        checkpoint = json.loads(checkpoint_path.read_text())
+        # Simulate a process dying between the durable per-source decision and
+        # its global checkpoint commit, without touching originals or artifacts.
+        checkpoint.pop("skipped_sources")
+        checkpoint["extracted_source_paths"].remove("bad.pdf")
+        checkpoint["chunked_source_paths"].remove("bad.pdf")
+        checkpoint_path.write_text(json.dumps(checkpoint))
+        resumed = ResearchService(config, FakeUltraRAG(), dense=FakeDenseBackend())
+        ready = await resumed.ingest(chunk_size=50, chunk_overlap=10)
+        assert ready["status"] == "partial"
+        assert ready["resumed"] is True
+        assert ready["document_count"] == 1
+        assert ready["skipped_source_count"] == 1
+        assert calls == 1
+
+    asyncio.run(exercise())
+
+
+def test_gateway_extraction_error_is_not_a_source_omission(
+    project: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    async def exercise():
+        write_pdf(project / "sources" / "clean.pdf", ["Stable clean evidence."])
+        config = resolve_config(project, vanilla_executable=sys.executable)
+        ultrarag = FakeUltraRAG()
+        service = ResearchService(config, ultrarag, dense=FakeDenseBackend())
+        await service.ingest(chunk_size=50, chunk_overlap=10)
+        before = config.current_path.read_bytes()
+
+        async def fail(*args, **kwargs):
+            raise ExtractionError("Gateway failure")
+
+        monkeypatch.setattr(ultrarag, "chunk", fail)
+        with pytest.raises(ExtractionError, match="Gateway failure"):
+            await service.ingest(chunk_size=50, chunk_overlap=10, force_recompute=True)
+        assert config.current_path.read_bytes() == before
+
+    asyncio.run(exercise())
+
+
+@pytest.mark.parametrize("with_current", [False, True])
+def test_all_unclean_sources_preserve_current_generation(
+    project: Path, monkeypatch: pytest.MonkeyPatch, with_current: bool
 ) -> None:
     from research_rag.corpus.extraction import UncleanSourceError
     from research_rag.generations import ingestion
@@ -2662,8 +2838,12 @@ def test_all_unclean_sources_preserve_current_generation(
         write_pdf(project / "sources" / "article.pdf", ["Stable readable evidence."])
         config = resolve_config(project, vanilla_executable=sys.executable)
         service = ResearchService(config, FakeUltraRAG(), dense=FakeDenseBackend())
-        first = await service.ingest(chunk_size=50, chunk_overlap=10)
-        before = config.current_path.read_bytes()
+        first = (
+            await service.ingest(chunk_size=50, chunk_overlap=10)
+            if with_current
+            else None
+        )
+        before = config.current_path.read_bytes() if with_current else None
 
         def refuse(*args, **kwargs):
             raise UncleanSourceError("unclean_text: manual OCR needed")
@@ -2671,8 +2851,12 @@ def test_all_unclean_sources_preserve_current_generation(
         monkeypatch.setattr(ingestion, "screen_source_units", refuse)
         with pytest.raises(ResearchError, match="No clean sources remain"):
             await service.ingest(chunk_size=50, chunk_overlap=10, force_recompute=True)
-        assert config.current_path.read_bytes() == before
-        assert Path(first["generation_root"]).is_dir()
+        if first:
+            assert config.current_path.read_bytes() == before
+            assert Path(first["generation_root"]).is_dir()
+        else:
+            assert not config.current_path.exists()
+            assert not any(config.generations_root.iterdir())
 
     asyncio.run(exercise())
 
@@ -4140,6 +4324,120 @@ def test_pending_activation_recovers_crash_window(
     asyncio.run(exercise())
 
 
+@pytest.mark.parametrize("failure_point", ["journal", "move", "checkpoint", "cleanup"])
+@pytest.mark.parametrize("with_current", [False, True])
+@pytest.mark.parametrize("legacy_journal", [False, True])
+def test_partial_publication_crash_never_selects_candidate(
+    project: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    failure_point: str,
+    with_current: bool,
+    legacy_journal: bool,
+) -> None:
+    class SimulatedProcessExit(BaseException):
+        pass
+
+    async def exercise() -> None:
+        write_pdf(project / "sources" / "clean.pdf", ["Stable cobalt evidence."])
+        config = resolve_config(project, vanilla_executable=sys.executable)
+        service = ResearchService(config, FakeUltraRAG(), dense=FakeDenseBackend())
+        baseline = (
+            await service.ingest(chunk_size=50, chunk_overlap=10)
+            if with_current
+            else None
+        )
+        pointer = config.current_path.read_bytes() if with_current else None
+        write_pdf(project / "sources" / "bad.pdf", ["Failed source evidence."])
+        original_scan = ingestion_module.scan_pdf_pages
+
+        def fail_source(source, *args, **kwargs):
+            if source.source_relative_path == "bad.pdf":
+                raise ExtractionError("Source-local parser failure")
+            return original_scan(source, *args, **kwargs)
+
+        monkeypatch.setattr(ingestion_module, "scan_pdf_pages", fail_source)
+        journal_path = config.state_root / "pending-activation.json"
+        original_write = ingestion_module.atomic_write_json
+        original_replace = os.replace
+        original_unlink = Path.unlink
+
+        def fail_write(path, value, **kwargs):
+            if path == config.current_path:
+                pytest.fail("Partial publication attempted to write current.json")
+            if failure_point == "journal" and path == journal_path:
+                raise SimulatedProcessExit
+            return original_write(path, value, **kwargs)
+
+        def fail_move(source, destination):
+            if (
+                failure_point == "move"
+                and Path(destination).parent == config.generations_root
+            ):
+                raise SimulatedProcessExit
+            return original_replace(source, destination)
+
+        def fail_unlink(path, *args, **kwargs):
+            if (
+                failure_point == "checkpoint"
+                and path.name == "checkpoint.json"
+                and path.parent.parent == config.generations_root
+            ) or (failure_point == "cleanup" and path == journal_path):
+                raise SimulatedProcessExit
+            return original_unlink(path, *args, **kwargs)
+
+        with monkeypatch.context() as patcher:
+            patcher.setattr(ingestion_module, "atomic_write_json", fail_write)
+            patcher.setattr(os, "replace", fail_move)
+            patcher.setattr(Path, "unlink", fail_unlink)
+            with pytest.raises(SimulatedProcessExit):
+                await service.ingest(chunk_size=50, chunk_overlap=10)
+        if journal_path.exists():
+            journal = json.loads(journal_path.read_text())
+            assert journal["select"] is False
+            if legacy_journal:
+                journal.pop("select")
+                journal_path.write_text(json.dumps(journal))
+        restarted = ResearchService(config, FakeUltraRAG(), dense=FakeDenseBackend())
+        cleanup_syncs = []
+        original_fsync = ingestion_module.fsync_directory
+
+        def record_fsync(path):
+            if (
+                path.parent == config.generations_root
+                and not (path / "checkpoint.json").exists()
+            ):
+                cleanup_syncs.append("generation")
+            if path == config.state_root and not journal_path.exists():
+                cleanup_syncs.append("journal")
+            return original_fsync(path)
+
+        monkeypatch.setattr(ingestion_module, "fsync_directory", record_fsync)
+        recovered = await restarted.ingest(chunk_size=50, chunk_overlap=10)
+        assert recovered["status"] == "partial"
+        assert recovered["generation_changed"] is False
+        assert recovered["current_generation_id"] == (
+            baseline["generation_id"] if baseline else None
+        )
+        assert recovered.get("activation_recovered", False) is (
+            failure_point != "journal"
+        )
+        if pointer is None:
+            assert not config.current_path.exists()
+        else:
+            assert config.current_path.read_bytes() == pointer
+        root = Path(recovered["generation_root"])
+        assert root.parent == config.generations_root
+        assert not (root / "work").exists()
+        assert not (root / "checkpoint.json").exists()
+        assert not journal_path.exists()
+        assert cleanup_syncs[-2:] == ["generation", "journal"]
+        await restarted.use_generation(recovered["generation_id"])
+        search = await restarted.search("cobalt", retrieval_method="bm25")
+        assert search["result_count"] == 1
+
+    asyncio.run(exercise())
+
+
 async def _assert_resumed_dense_batches_are_exactly_once(
     project: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -4330,7 +4628,7 @@ async def _assert_unreadable_source_fails_without_activation(project: Path) -> N
         dense=FakeDenseBackend(),
     )
 
-    with pytest.raises(ExtractionError, match="no readable English-oriented text"):
+    with pytest.raises(ResearchError, match="no readable English-oriented text"):
         await service.ingest(chunk_size=50, chunk_overlap=10)
 
     assert not config.current_path.exists()
@@ -4344,7 +4642,9 @@ def test_unreadable_source_fails_without_activation(project: Path) -> None:
     asyncio.run(_assert_unreadable_source_fails_without_activation(project))
 
 
-def test_health_gate_failure_preserves_searchable_generation(project: Path) -> None:
+def test_health_gate_failure_retains_partial_until_manual_selection(
+    project: Path,
+) -> None:
     async def verify() -> None:
         original = project / "sources" / "article.pdf"
         write_pdf(original, ["Readable cobalt evidence survives a failed rebuild."])
@@ -4364,8 +4664,15 @@ def test_health_gate_failure_preserves_searchable_generation(project: Path) -> N
         broken = project / "sources" / "broken.epub"
         write_epub(broken, CORRUPT_TEXT)
         broken_bytes = broken.read_bytes()
-        with pytest.raises(ExtractionError):
-            await service.ingest(chunk_size=50, chunk_overlap=10)
+        partial = await service.ingest(chunk_size=50, chunk_overlap=10)
+        assert partial["status"] == "partial"
+        assert partial["generation_changed"] is False
+        assert partial["current_generation_id"] == result["generation_id"]
+        assert partial["manual_selection_command"] == (
+            project_command(project, "generations", "--use", partial["generation_id"])
+        )
+        assert partial["document_count"] == 1
+        assert partial["skipped_sources"][0]["source_relative_path"] == "broken.epub"
         assert config.current_path.read_bytes() == pointer
         assert original.read_bytes() == original_bytes
         assert broken.read_bytes() == broken_bytes
@@ -4375,6 +4682,11 @@ def test_health_gate_failure_preserves_searchable_generation(project: Path) -> N
             if path.is_file()
         }
         assert not any(config.staging_root.iterdir())
+        assert not (Path(partial["generation_root"]) / "checkpoint.json").exists()
+        assert not (config.state_root / "pending-activation.json").exists()
+        selected = await service.use_generation(partial["generation_id"])
+        assert selected["generation_id"] == partial["generation_id"]
+        assert config.current_path.read_bytes() != pointer
         search = await service.search("cobalt", retrieval_method="bm25")
         assert search["hits"]
         assert "Readable cobalt evidence" in search["hits"][0]["text"]
