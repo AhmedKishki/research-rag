@@ -286,6 +286,7 @@ async def test_a_write_against_a_revision_the_reader_never_held_is_refused(
     assert not (project / ".research-rag" / "config.toml").exists()
 
 
+@pytest.mark.integration
 async def test_a_write_is_refused_while_another_process_holds_the_project_lock(
     project: Path,
 ) -> None:

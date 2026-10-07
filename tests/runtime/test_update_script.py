@@ -9,6 +9,10 @@ import json
 import subprocess
 from pathlib import Path
 
+import pytest
+
+pytestmark = pytest.mark.integration
+
 SCRIPT = Path(__file__).resolve().parents[2] / "scripts" / "update.sh"
 
 

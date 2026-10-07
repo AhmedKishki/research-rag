@@ -649,13 +649,20 @@ class SearchWorkflow:
         titles_any: list[str] | None = None,
         source_ids: list[str] | None = None,
         exclude_source_ids: list[str] | None = None,
-        retrieval_method: str = DEFAULT_RETRIEVAL_METHOD,
+        retrieval_method: str | None = None,
         rerank: bool = False,
         rerank_model: str | None = None,
         include_staleness: bool = True,
         evaluation_trace: bool = False,
     ) -> dict[str, Any]:
         """Retrieve evidence.
+
+        A caller that names no ``retrieval_method`` asks for the engine's default.
+        A generation whose recorded dense identity does not match the current
+        embedding model cannot serve dense or hybrid, so a default search is
+        answered with BM25 and a ``retrieval_fallback`` disclosure, while an
+        explicit ``dense`` or ``hybrid`` request is refused before any model or
+        backend is used.
 
         The public MCP tool defaults ``rerank`` to true, the largest quality gain the judged
         set showed (``MEASUREMENTS.md``); this API keeps the neutral default. An unloadable
@@ -677,9 +684,19 @@ class SearchWorkflow:
             raise ResearchError("query must not be empty")
         if not 1 <= top_k <= 50:
             raise ResearchError("top_k must be between 1 and 50")
-        retrieval_method = retrieval_method.casefold().strip()
-        if retrieval_method not in RETRIEVAL_METHODS:
-            raise ResearchError("retrieval_method must be one of: bm25, dense, hybrid")
+        if retrieval_method is None:
+            # No surface offers an agent a retrieval mode, so this is the request
+            # the app's own surfaces make. It may be answered with a method other
+            # than the default when the generation cannot serve that one.
+            retrieval_method = DEFAULT_RETRIEVAL_METHOD
+            method_was_default = True
+        else:
+            retrieval_method = retrieval_method.casefold().strip()
+            method_was_default = False
+            if retrieval_method not in RETRIEVAL_METHODS:
+                raise ResearchError(
+                    "retrieval_method must be one of: bm25, dense, hybrid"
+                )
         if rerank_model is not None and not rerank:
             raise ResearchError("rerank_model requires rerank=True")
         applied_reranker = rerank_model or self.config.reranker_model
@@ -715,13 +732,49 @@ class SearchWorkflow:
             excluded_chunk_ids = set(self._chunk_exclusions())
 
             retrieval = manifest.get("retrieval", {})
-            available_methods = set(retrieval.get("available_methods") or ["bm25"])
+            # The dense vectors carry the identity of the model that embedded
+            # them. A generation built with a different model cannot be scored
+            # with the current one, so its dense and hybrid methods are not served
+            # even where the manifest records them. The reasons are computed from
+            # the manifest and the resolved settings only, so a caller that skips
+            # the staleness walk cannot bypass this guard.
+            guard_upgrade_reasons = tuple(self._generation_upgrade_reasons(manifest))
+            embedding_incompatible = "embedding_model" in guard_upgrade_reasons
+            recorded_methods = set(retrieval.get("available_methods") or ["bm25"])
+            if embedding_incompatible:
+                available_methods = {
+                    method for method in recorded_methods if method == "bm25"
+                } or {"bm25"}
+            else:
+                available_methods = recorded_methods
+            retrieval_fallback: dict[str, Any] | None = None
             if retrieval_method not in available_methods:
-                raise ResearchError(
-                    f"Current generation does not support {retrieval_method!r}; "
-                    f"available methods: {', '.join(sorted(available_methods))}. "
-                    "Run ingest to build a hybrid generation."
-                )
+                if (
+                    method_was_default
+                    and embedding_incompatible
+                    and retrieval_method in {"dense", "hybrid"}
+                ):
+                    # BM25 needs no query embeddings. A default request keeps
+                    # answering and discloses why the dense half was skipped.
+                    retrieval_fallback = {
+                        "reason": "embedding_model_mismatch",
+                        "requested_method": retrieval_method,
+                        "served_method": "bm25",
+                        "message": (
+                            "The selected generation's dense index was built with "
+                            "a different embedding model, so it cannot be scored "
+                            "with the current one. BM25 results are returned; run "
+                            "ingest to rebuild the dense index."
+                        ),
+                        "effect": "bm25_results_returned",
+                    }
+                    retrieval_method = "bm25"
+                else:
+                    raise ResearchError(
+                        f"Current generation does not support {retrieval_method!r}; "
+                        f"available methods: {', '.join(sorted(available_methods))}. "
+                        "Run ingest to build a hybrid generation."
+                    )
 
             requested_source_ids = _requested_ids(source_ids)
             requested_exclude_source_ids = _requested_ids(exclude_source_ids)
@@ -1295,7 +1348,7 @@ class SearchWorkflow:
                 upgrade_reasons = list(status["upgrade_reasons"])
             else:
                 stale = None
-                upgrade_reasons = self._generation_upgrade_reasons(manifest)
+                upgrade_reasons = list(guard_upgrade_reasons)
             payload = {
                 "query": query,
                 "generation_id": manifest["generation_id"],
@@ -1341,6 +1394,7 @@ class SearchWorkflow:
                 "reranked": reranked_applied,
                 "rerank_requested": rerank,
                 "rerank_fallback": rerank_fallback,
+                "retrieval_fallback": retrieval_fallback,
                 "rerank_window": rerank_count,
                 "prf_requested": self.config.settings.prf,
                 "prf_terms": prf_terms,

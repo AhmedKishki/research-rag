@@ -5,9 +5,9 @@ a checked setting: every entry declares the languages it covers, and a corpus in
 a language the model was not trained for is reported instead of being silently
 mis-embedded.
 
-FastEmbed resolves a name to whatever the hub serves that day, so each entry pins
-the revision its weights were resolved to, as the reranker table does. A model
-outside this table is refused.
+Each entry pins the download repository and revision of its ONNX weights.
+The model runtime loads that exact snapshot rather than FastEmbed's moving head.
+A model outside this table is refused.
 
 Two facts travel with a model and are easy to get wrong by hand: its vector
 dimension, which the index and every stored vector depend on, and any prefix its
@@ -18,8 +18,11 @@ add them.
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
+from typing import Any
+
+from .model_cache import TOKENIZER_FILES
 
 
 @dataclass(frozen=True, slots=True)
@@ -27,7 +30,9 @@ class EmbeddingModel:
     """One supported embedding model. Every field here is load-bearing."""
 
     name: str
+    repository: str
     revision: str
+    model_file: str
     dimension: int
     maximum_tokens: int
     languages: tuple[str, ...]
@@ -35,6 +40,25 @@ class EmbeddingModel:
     size_gb: float
     query_prefix: str = ""
     passage_prefix: str = ""
+    additional_files: tuple[str, ...] = ()
+
+    @property
+    def required_files(self) -> tuple[str, ...]:
+        return (*TOKENIZER_FILES, self.model_file, *self.additional_files)
+
+    def matches_dense_metadata(self, dense: Mapping[str, Any]) -> bool:
+        """Match recorded vector identity, including repositories when recorded.
+
+        Older manifests lack a repository. Matching name, commit and dimension
+        remain sufficient for the unchanged direct-repository pins.
+        """
+        return (
+            dense.get("embedding_model") == self.name
+            and dense.get("embedding_model_revision") == self.revision
+            and dense.get("embedding_dimension") == self.dimension
+            and dense.get("embedding_model_repository", self.repository)
+            == self.repository
+        )
 
     def covers(self, language: str) -> bool:
         """Whether this model was trained for that language.
@@ -51,7 +75,9 @@ class EmbeddingModel:
 EMBEDDING_MODELS: tuple[EmbeddingModel, ...] = (
     EmbeddingModel(
         name="BAAI/bge-small-en-v1.5",
-        revision="52398278842ec682c6f32300af41344b1c0b0bb2",
+        repository="qdrant/bge-small-en-v1.5-onnx-q",
+        revision="aa8f8b060edb00e03bfdd08813a2949946c8ba55",
+        model_file="model_optimized.onnx",
         dimension=384,
         maximum_tokens=512,
         languages=("en",),
@@ -60,7 +86,9 @@ EMBEDDING_MODELS: tuple[EmbeddingModel, ...] = (
     ),
     EmbeddingModel(
         name="BAAI/bge-base-en-v1.5",
-        revision="a5beb1e3e68b9ab74eb54cfd186867f64f240e1a",
+        repository="qdrant/bge-base-en-v1.5-onnx-q",
+        revision="199291fdd1aa89faf9c20b722dc72ad5e17aa0d0",
+        model_file="model_optimized.onnx",
         dimension=768,
         maximum_tokens=512,
         languages=("en",),
@@ -69,7 +97,9 @@ EMBEDDING_MODELS: tuple[EmbeddingModel, ...] = (
     ),
     EmbeddingModel(
         name="BAAI/bge-large-en-v1.5",
-        revision="d4aa6901d3a41ba39fb536a557fa166f842b0e09",
+        repository="qdrant/bge-large-en-v1.5-onnx",
+        revision="e93b9305e013fdf771b471426516285da0cca188",
+        model_file="model.onnx",
         dimension=1024,
         maximum_tokens=512,
         languages=("en",),
@@ -78,7 +108,9 @@ EMBEDDING_MODELS: tuple[EmbeddingModel, ...] = (
     ),
     EmbeddingModel(
         name="jinaai/jina-embeddings-v2-base-de",
+        repository="jinaai/jina-embeddings-v2-base-de",
         revision="3f9eede875721714945b6a99a3198299243cf2be",
+        model_file="onnx/model_fp16.onnx",
         dimension=768,
         maximum_tokens=8192,
         languages=("de",),
@@ -87,7 +119,9 @@ EMBEDDING_MODELS: tuple[EmbeddingModel, ...] = (
     ),
     EmbeddingModel(
         name="mixedbread-ai/mxbai-embed-large-v1",
+        repository="mixedbread-ai/mxbai-embed-large-v1",
         revision="b33106f585b9ce46904ad7443a3b52b7a63e231c",
+        model_file="onnx/model.onnx",
         dimension=1024,
         maximum_tokens=512,
         languages=("en",),
@@ -96,7 +130,10 @@ EMBEDDING_MODELS: tuple[EmbeddingModel, ...] = (
     ),
     EmbeddingModel(
         name="intfloat/multilingual-e5-large",
-        revision="3d7cfbdacd47fdda877c5cd8a79fbcc4f2a574f3",
+        repository="qdrant/multilingual-e5-large-onnx",
+        revision="ac6781cd1cf88b8306a536d7c9d18a5bd57cc14b",
+        model_file="model.onnx",
+        additional_files=("model.onnx_data",),
         dimension=1024,
         maximum_tokens=512,
         languages=(),

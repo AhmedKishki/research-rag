@@ -84,7 +84,7 @@ class FakeResearchService:
             "query": query,
             "generation_id": "generation-1",
             "stale": False,
-            "retrieval_method": arguments["retrieval_method"],
+            "retrieval_method": arguments.get("retrieval_method"),
             "reranked": arguments["rerank"],
             "result_count": 1,
             "hits": [
@@ -358,7 +358,6 @@ def test_the_workspace_forwards_search_and_the_surviving_mutations(
             "titles_any": None,
             "source_ids": None,
             "exclude_source_ids": None,
-            "retrieval_method": "hybrid",
             "rerank": True,
             "include_staleness": True,
         },
@@ -378,7 +377,6 @@ def test_the_workspace_forwards_search_and_the_surviving_mutations(
             "titles_any": ["Atlas of AI"],
             "source_ids": None,
             "exclude_source_ids": None,
-            "retrieval_method": "hybrid",
             "rerank": True,
             "include_staleness": True,
         },
@@ -474,8 +472,11 @@ def test_the_workspace_refuses_a_chunk_decision_it_cannot_act_on(
     assert not [call for call in fake.calls if call[0] == "set_chunk_inclusion"]
 
 
-def test_a_search_is_always_hybrid_and_always_reranked(project: Path) -> None:
-    """The profile hides both switches, so the workspace fixes them itself."""
+def test_the_workspace_leaves_the_method_to_the_engine_and_always_reranks(
+    project: Path,
+) -> None:
+    """The profile hides both switches, so the workspace fixes reranking and lets
+    the engine resolve the retrieval method the generation can serve."""
 
     client, fake = _client(project)
     with client:
@@ -496,7 +497,7 @@ def test_a_search_is_always_hybrid_and_always_reranked(project: Path) -> None:
     assert accepted.status_code == 200
     assert declined_rerank.status_code == 200
     assert all(
-        arguments["retrieval_method"] == "hybrid"
+        "retrieval_method" not in arguments
         for name, arguments in fake.calls
         if name == "search"
     )

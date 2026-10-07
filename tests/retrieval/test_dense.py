@@ -169,6 +169,10 @@ def test_exact_backend_builds_and_searches_by_cosine(tmp_path: Path) -> None:
     assert metadata["backend"] == "portable float32 vectors (exact cosine scan)"
     assert metadata["point_count"] == 4
     assert metadata["distance"] == "cosine"
+    assert (
+        metadata["embedding_model_repository"]
+        == resolve_embedding_model(DEFAULT_EMBEDDING_MODEL).repository
+    )
     backend.validate_index(index_path, expected_count=4, dimension=384)
 
     backend.runtime._embedder = lambda: _StubQueryEmbedder(_unit(0))
@@ -311,6 +315,10 @@ def test_local_qdrant_batches_resume_without_skips_or_duplicates(
         dimension=384,
     )
     assert metadata["point_count"] == 130
+    assert (
+        metadata["embedding_model_repository"]
+        == resolve_embedding_model(DEFAULT_EMBEDDING_MODEL).repository
+    )
 
 
 def test_rerank_uses_the_configured_model_and_switches_only_on_request(

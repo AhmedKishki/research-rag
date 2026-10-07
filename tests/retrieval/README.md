@@ -3,7 +3,8 @@
 The two retrieval paths, the fusion, the models, chunk identifiers, filters, and exclusions. Most tests stand in for the embedding model, so no download is needed.
 
 - `test_dense.py`: the exact cosine and Qdrant backends, resumable batching, document filters and `top_k`, a rejected or misplaced index, embedding batch size and thread count, the token audit, and reranker defaults.
-- `test_embeddings.py`: every embedding model carries a pinned revision, dimension, token limit, and licence, and none claims a language it does not serve.
+- `test_embeddings.py`: every embedding model carries a download repository, pinned revision, dimension, token limit, and licence, and none claims a language it does not serve.
+- `test_model_runtime.py`: exact repository commits reach the downloader and FastEmbed's snapshot-path interface; incomplete or mismatched snapshots cannot satisfy a pin or trigger a fallback.
 - `test_rerankers.py`: every reranker is pinned to a revision, and an unknown name is refused with the choices.
 - `test_artifact_lookup.py`: UTF-8 offsets, duplicate documents, vectors keyed by contents, the stored verdict against a query-time scan, and rebuilding a missing, corrupt, or stale lookup.
 - `test_search_filters.py`: source selection by stable id, the six reviewed filter layers and their combinations, the candidate ceiling a filter may not widen, and the window an empty answer names.

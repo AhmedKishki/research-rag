@@ -118,7 +118,7 @@ def prefetch_models(config: ResearchConfig) -> tuple[str, ...]:
     _load_cross_encoder(config.model_cache_root, offline=False, model=reranker)
     _count, after = directory_statistics(config.model_cache_root)
     return (
-        f"Cached {embedding.name}@{embedding.revision}.",
+        f"Cached {embedding.name} from {embedding.repository}@{embedding.revision}.",
         f"Cached {reranker}@{revision}.",
         f"{config.model_cache_root} now holds {after - before} more bytes.",
     )

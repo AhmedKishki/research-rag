@@ -176,8 +176,9 @@ async def _search(app: App, request: Request) -> JSONResponse:
     query = body.get("query")
     if not isinstance(query, str) or not query.strip():
         raise ResearchError("search requires a non-empty query")
-    # A control request cannot choose the retrieval: the engine fixes hybrid,
-    # reranking, and the freshness check, so no surface offers a mode.
+    # A control request cannot choose the retrieval: the engine resolves the
+    # method the generation can serve, fixes reranking, and checks freshness, so
+    # no surface offers a mode.
     return _json(
         await app.service.search(
             query,
@@ -197,7 +198,6 @@ async def _search(app: App, request: Request) -> JSONResponse:
             exclude_source_ids=_string_list(
                 body.get("exclude_source_ids"), "exclude_source_ids"
             ),
-            retrieval_method="hybrid",
             rerank=True,
             include_staleness=True,
         )

@@ -17,6 +17,8 @@ def test_every_supported_model_is_pinned_and_described() -> None:
     assert EMBEDDING_MODELS
     for model in EMBEDDING_MODELS:
         assert len(model.revision) == 40 and model.revision.isalnum(), model.name
+        assert model.repository.count("/") == 1, model.name
+        assert model.model_file in model.required_files, model.name
         assert model.dimension > 0, model.name
         assert model.maximum_tokens > 0, model.name
         assert model.license, model.name

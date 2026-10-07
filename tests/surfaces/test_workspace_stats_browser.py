@@ -32,6 +32,8 @@ from typing import Any
 
 import pytest
 
+pytestmark = pytest.mark.integration
+
 STATIC = Path(__file__).parents[2] / "src/research_rag/surfaces/workspace/static"
 WIDTHS = (360, 768, 1440)
 

@@ -148,6 +148,10 @@ def test_the_real_vanilla_research_flow(project: Path) -> None:
             assert ingested["status"] == "ready"
             assert ingested["generation_changed"] is True
             assert ingested["document_count"] == 1
+            inventory = await service.list_sources()
+            assert [item["source_relative_path"] for item in inventory["sources"]] == [
+                "evidence.pdf"
+            ]
 
             current = json.loads(
                 (project / ".research-rag" / "runtime" / "current.json").read_text(
@@ -217,6 +221,14 @@ def test_the_real_vanilla_research_flow(project: Path) -> None:
             assert initial_hit["direct_quote_safe"] is False
             assert initial_hit["rerank_score"] is not None
             assert result["retrieval_method"] == "hybrid"
+
+            from research_rag.surfaces.ui import ResearchUIAdapter
+
+            adapter = ResearchUIAdapter(service.config, service)
+            through_workspace = await adapter.call(
+                "search", {"query": "cobalt heron amber marsh", "top_k": 1}
+            )
+            assert result == dict(through_workspace)
 
             manifest_before_metadata = (generation_root / "manifest.json").read_bytes()
             chunks_before_metadata = (
@@ -388,46 +400,5 @@ def test_a_gateway_that_cannot_start_is_reported_by_the_operation_that_needed_it
         runtime_root = project / ".research-rag" / "runtime"
         assert str(runtime_root / "logs" / "vanilla-gateway-stderr.log") in message
         assert str(runtime_root / "ultrarag-runtime" / "logs") in message
-
-    asyncio.run(scenario())
-
-
-@pytest.mark.integration
-def test_the_terminal_and_the_workspace_answer_the_same_payload(project: Path) -> None:
-    write_pdf(project / "sources" / "evidence.pdf", ["The cobalt heron is evidence."])
-
-    async def scenario() -> None:
-        async with Research(_config(project)) as service:
-            await _ingest_until_complete(service)
-            direct = await service.search(
-                "cobalt heron", top_k=2, retrieval_method="hybrid", rerank=True
-            )
-            from research_rag.surfaces.ui import ResearchUIAdapter
-
-            adapter = ResearchUIAdapter(service.config, service)
-            through_workspace = await adapter.call(
-                "search", {"query": "cobalt heron", "top_k": 2}
-            )
-
-            assert direct == dict(through_workspace)
-
-    asyncio.run(scenario())
-
-
-@pytest.mark.integration
-def test_a_neighbouring_markdown_file_is_not_indexed(project: Path) -> None:
-    write_pdf(project / "sources" / "evidence.pdf", ["The cobalt heron is evidence."])
-    (project / "sources" / "notes.md").write_text(
-        "cobalt heron derived notes", encoding="utf-8"
-    )
-
-    async def scenario() -> None:
-        async with Research(_config(project)) as service:
-            ingested = await _ingest_until_complete(service)
-            assert ingested["document_count"] == 1
-            inventory = await service.list_sources()
-            assert [item["source_relative_path"] for item in inventory["sources"]] == [
-                "evidence.pdf"
-            ]
 
     asyncio.run(scenario())

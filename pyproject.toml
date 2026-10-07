@@ -18,6 +18,8 @@ dependencies = [
     "fastmcp==3.4.0",
     # The control channel between the command line and the running app.
     "httpx>=0.28",
+    # Resolve exact ONNX snapshots before giving their paths to FastEmbed.
+    "huggingface-hub>=0.20,<2",
     "filelock>=3.16,<5",
     "numpy>=1.26,<3",
     # UltraRAG's BM25 backend runs on numba, and its own metadata does not declare
@@ -81,7 +83,7 @@ package = true
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 markers = [
-    "integration: starts the real vanilla UltraRAG stdio gateway",
+    "integration: exercises external runtimes, process contention, live transport waits, or shipped scripts",
 ]
 # A hang has no diagnostic and blocks CI until the GitHub limit, and several
 # tests spawn real subprocesses. The thread method is deliberate: the signal

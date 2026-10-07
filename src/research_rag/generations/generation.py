@@ -48,9 +48,12 @@ def generation_is_reusable(
         # A generation built before contextual headers existed means no headers,
         # which is also the shipped default.
         and chunking.get("headers", False) == chunk_headers
-        and dense.get("embedding_model") == embedding.name
-        and dense.get("embedding_model_revision") == embedding.revision
-        and dense.get("embedding_dimension") == embedding.dimension
+        # The model's repository is checked too when the generation recorded one,
+        # because a revision names a commit inside a repository and a mirror can
+        # serve different weights under the same name. A generation built before
+        # the repository was recorded still matches by name, revision, and
+        # dimension; `EmbeddingModel.matches_dense_metadata` owns that rule.
+        and embedding.matches_dense_metadata(dense)
     )
 
 

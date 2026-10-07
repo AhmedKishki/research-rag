@@ -4,6 +4,7 @@
 - `test_integration.py` (marked `integration`): the real research flow.
   - The gateway launches, BM25 and dense indexes build, and the manifest records the backend.
   - Hybrid and dense search retrieve the fixture's passage, and a neighbouring markdown file is not indexed.
+  - The workspace adapter returns the same search payload as the service.
   - The app restarts offline and repeats a reranked hybrid search from caches.
   - A gateway that cannot start is reported by the operation that needed it.
 

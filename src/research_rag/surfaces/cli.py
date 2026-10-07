@@ -56,7 +56,7 @@ from ..project.config import (
     resolve_config,
     resolve_source_reference,
 )
-from ..project.policy import DEFAULT_RETRIEVAL_METHOD, RETRIEVAL_METHODS, ResearchError
+from ..project.policy import RETRIEVAL_METHODS, ResearchError
 from ..project.registry import (
     account_projects,
     detached_from_terminal,
@@ -770,11 +770,12 @@ def _parser() -> argparse.ArgumentParser:
     find.add_argument(
         "--method",
         choices=sorted(RETRIEVAL_METHODS),
-        default=DEFAULT_RETRIEVAL_METHOD,
+        default=None,
         help=(
-            "Retrieval half to rank with (default: hybrid, what every reader and "
-            "every agent gets). This exists to reproduce a retrieval comparison; "
-            "no reader-facing surface offers the choice."
+            "Retrieval half to rank with (default: hybrid, or BM25 with an "
+            "upgrade warning when the generation's embedding model is incompatible). "
+            "This exists to reproduce a retrieval comparison; no reader-facing "
+            "surface offers the choice."
         ),
     )
     find.add_argument(
@@ -1942,20 +1943,24 @@ async def _operate(
     if command == "ingest":
         return await operations.ingest(force_recompute=args.force_recompute)
     if command == "search":
-        return await operations.search(
-            args.query,
-            top_k=args.top_k,
-            categories_any=args.category,
-            projects_any=args.project,
-            keywords=args.keyword,
-            languages_any=args.language,
-            authors_any=args.author,
-            titles_any=args.title,
-            source_ids=args.source_id,
-            exclude_source_ids=args.exclude_source_id,
-            retrieval_method=args.method,
-            rerank=not args.no_rerank,
-        )
+        search: dict[str, Any] = {
+            "top_k": args.top_k,
+            "categories_any": args.category,
+            "projects_any": args.project,
+            "keywords": args.keyword,
+            "languages_any": args.language,
+            "authors_any": args.author,
+            "titles_any": args.title,
+            "source_ids": args.source_id,
+            "exclude_source_ids": args.exclude_source_id,
+            "rerank": not args.no_rerank,
+        }
+        # A named --method is a diagnostic choice. Leaving it off asks the engine
+        # for the method the generation can serve, which is BM25 with a
+        # disclosure when only the dense half is unavailable.
+        if args.method is not None:
+            search["retrieval_method"] = args.method
+        return await operations.search(args.query, **search)
     if command == "sources":
         return await operations.sources()
     if command == "passage":

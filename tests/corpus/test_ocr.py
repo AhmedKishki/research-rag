@@ -173,6 +173,7 @@ def test_the_command_reads_a_source_and_never_writes_into_the_sources(
         cli._ocr(Args(), config)  # type: ignore[arg-type]
 
 
+@pytest.mark.integration
 def test_the_real_recogniser_reads_a_scanned_page(tmp_path: Path) -> None:
     pytest.importorskip("rapidocr_onnxruntime")
     source = tmp_path / "scan.pdf"

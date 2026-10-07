@@ -47,6 +47,7 @@
 - The reranker orders at most 50 candidates by score, then appends the unreranked tail, so a source whose best passage fell outside the window can still be reached. A string-only reranker cannot express that.
 - The vanilla gateway can start a `reranker` namespace, but this app requests `corpus` and `retriever` only. Adding it would add a second model-serving surface.
 - Six FastEmbed cross-encoders are supported, each pinned to a revision in `rerankers.py`. The default is `Xenova/ms-marco-MiniLM-L-6-v2`. A name outside the table is refused.
+- Embeddings and rerankers load an exact Hugging Face repository commit through FastEmbed's explicit snapshot path. A missing pin never falls back to a repository head or a tarball.
 - Reranking is fixed behaviour. `rerank=false` is reachable only from the engine. When the model cannot load, search falls back to the unranked order and discloses it.
 
 ## The workspace
@@ -86,6 +87,7 @@
 | BM25 lexical search (UltraRAG) | Matches the typed words. Serves exact names, terms, and phrases. |
 | Dense semantic search | FastEmbed `bge-small-en-v1.5`, 384 dimensions, CPU, revision-pinned. Finds passages phrased differently from the question. |
 | Hybrid search | Weighted reciprocal-rank fusion of the two rankings, with an opt-out to inspect either alone. |
+| Incompatible embedding identity | A model, repository, revision, or dimension mismatch disables dense search and vector reuse. Default search uses BM25 with an upgrade warning; an explicit dense or hybrid engine request refuses until ingestion rebuilds the vectors. |
 | Exact dense scan | Scans the generation's portable float32 vectors directly. Above a documented corpus size an embedded index is used, and the manifest records which backend built the generation. |
 | Reranking, always on | A CPU cross-encoder reorders up to 50 fused candidates. When the pinned model cannot load, search returns the unranked order and reports `rerank_fallback`. |
 | Metadata filters | Narrow by project, category, keyword, or document. `status` shows the project and category inventories. |

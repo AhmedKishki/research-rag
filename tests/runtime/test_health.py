@@ -20,8 +20,15 @@ import research_rag.runtime.version as version_module
 from research_rag import gateway as vanilla_package
 from research_rag.gateway import runtime as vanilla_runtime
 from research_rag.project.config import ResearchConfig, resolve_config
-from research_rag.retrieval.embeddings import resolve_embedding_model
-from research_rag.retrieval.rerankers import resolve_reranker_model
+from research_rag.retrieval.embeddings import (
+    EMBEDDING_MODELS,
+    EmbeddingModel,
+    resolve_embedding_model,
+)
+from research_rag.retrieval.rerankers import (
+    RERANKER_REQUIRED_FILES,
+    resolve_reranker_model,
+)
 from research_rag.runtime.health import Check, HealthReport, health_report
 
 # A check that disappears is as much a break as one that changes state.
@@ -58,22 +65,30 @@ def _clear_the_runtime_cache():
     health_module._VANILLA_CACHE.clear()
 
 
-def _cache_model(cache_root: Path, name: str, revision: str) -> Path:
+def _cache_model(
+    cache_root: Path, name: str, revision: str, required_files: tuple[str, ...]
+) -> Path:
     snapshot = (
         cache_root / f"models--{name.replace('/', '--')}" / "snapshots" / revision
     )
     snapshot.mkdir(parents=True, exist_ok=True)
+    for filename in required_files:
+        path = snapshot / filename
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("cached", encoding="utf-8")
     return snapshot
 
 
 def _install_models(config: ResearchConfig) -> None:
+    embedding = resolve_embedding_model(config.settings.embedding_model)
     _cache_model(
         config.model_cache_root,
-        "qdrant/bge-small-en-v1.5-onnx-q",
-        resolve_embedding_model(config.settings.embedding_model).revision,
+        embedding.repository,
+        embedding.revision,
+        embedding.required_files,
     )
     reranker, revision = resolve_reranker_model(config.reranker_model)
-    _cache_model(config.model_cache_root, reranker, revision)
+    _cache_model(config.model_cache_root, reranker, revision, RERANKER_REQUIRED_FILES)
 
 
 def _fake_runtime(root: Path) -> None:
@@ -264,6 +279,48 @@ def test_cached_models_are_not_reported(healthy: ResearchConfig) -> None:
     assert "bge-small-en-v1.5" in report.named("embedding_model").reason
 
 
+@pytest.mark.parametrize("facts", EMBEDDING_MODELS, ids=lambda model: model.name)
+def test_health_checks_each_real_repository_and_its_required_files(
+    config: ResearchConfig, monkeypatch: pytest.MonkeyPatch, facts: EmbeddingModel
+) -> None:
+    monkeypatch.setattr(health_module, "resolve_embedding_model", lambda name: facts)
+    snapshot = _cache_model(
+        config.model_cache_root, facts.repository, facts.revision, facts.required_files
+    )
+    assert _report(config).named("embedding_model").state == "ok"
+    # An empty directory or missing external ONNX data is not a cached model.
+    (snapshot / facts.required_files[-1]).unlink()
+    assert _report(config).named("embedding_model").state == "warn"
+
+
+@pytest.mark.parametrize("offline,state", [(False, "warn"), (True, "blocked")])
+@pytest.mark.parametrize("wrong", ["repository", "revision"])
+def test_a_snapshot_from_another_repository_or_revision_cannot_satisfy_the_pin(
+    config: ResearchConfig,
+    offline: bool,
+    state: str,
+    wrong: str,
+) -> None:
+    config = resolve_config(
+        config.project_root, model_cache_root=config.model_cache_root, offline=offline
+    )
+    facts = resolve_embedding_model(config.settings.embedding_model)
+    _cache_model(
+        config.model_cache_root,
+        facts.name if wrong == "repository" else facts.repository,
+        "52398278842ec682c6f32300af41344b1c0b0bb2"
+        if wrong == "revision"
+        else facts.revision,
+        facts.required_files,
+    )
+    check = _report(config).named("embedding_model")
+    assert check.state == state
+    assert facts.repository in check.reason
+    assert facts.revision in check.reason
+    assert "--prefetch-models" in check.remedy_command
+
+
+@pytest.mark.integration
 def test_another_process_holding_the_project_is_a_degradation(
     healthy: ResearchConfig,
 ) -> None:

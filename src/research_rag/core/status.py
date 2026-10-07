@@ -64,7 +64,7 @@ def generation_upgrade_reasons(
     """
 
     retrieval = manifest.get("retrieval", {})
-    dense_policy = retrieval.get("dense", {})
+    dense_policy = retrieval.get("dense")
     fusion_policy = retrieval.get("fusion", {})
     relevance_policy = retrieval.get("relevance_gates", {})
     reasons: list[str] = []
@@ -80,12 +80,15 @@ def generation_upgrade_reasons(
         reasons.append("metadata_storage")
     if manifest.get("project_id") != config.project_id:
         reasons.append("project_identity")
-    if (
-        dense_policy.get("embedding_model") != config.settings.embedding_model
-        or dense_policy.get("embedding_model_revision")
-        != config.settings.embedding_model_revision
-        or dense_policy.get("embedding_dimension")
-        != config.settings.embedding_dimension
+    # Legacy BM25-only generations have no embedding identity. A generation that
+    # advertises dense retrieval must record a matching identity before queries
+    # can be embedded against its vectors, including when that block is missing.
+    has_dense = bool(
+        {"dense", "hybrid"} & set(retrieval.get("available_methods") or [])
+    )
+    if (dense_policy or has_dense) and (
+        not isinstance(dense_policy, dict)
+        or not config.settings.embedding_facts.matches_dense_metadata(dense_policy)
     ):
         reasons.append("embedding_model")
     if (
@@ -330,9 +333,21 @@ class StatusWorkflow:
         )
         stale = bool(added or removed or modified or source_exclusions_changed)
         retrieval = manifest.get("retrieval", {})
-        available_methods = retrieval.get("available_methods") or ["bm25"]
-        hybrid_ready = "hybrid" in available_methods
         upgrade_reasons = self._generation_upgrade_reasons(manifest)
+        # The dense vectors were embedded by the model the generation recorded.
+        # When the current embedding model has a different identity, scoring those
+        # vectors with it would be a silent comparison of one model's output
+        # against another's, so the dense and hybrid methods are not served. BM25
+        # needs no query embeddings and keeps working.
+        embedding_incompatible = "embedding_model" in upgrade_reasons
+        recorded_methods = list(retrieval.get("available_methods") or ["bm25"])
+        if embedding_incompatible:
+            available_methods = [
+                method for method in recorded_methods if method == "bm25"
+            ] or ["bm25"]
+        else:
+            available_methods = recorded_methods
+        hybrid_ready = "hybrid" in available_methods
         indexed_source_paths = {
             str(document.get("source_relative_path") or "")
             for document in manifest.get("documents", [])
@@ -359,6 +374,12 @@ class StatusWorkflow:
             status_message = (
                 "Source exclusions are already enforced by retrieval; run ingest "
                 "to rebuild the stored indexes without excluded sources."
+            )
+        elif embedding_incompatible:
+            status_message = (
+                "The selected generation was built with a different embedding "
+                "model, so its dense index cannot be served with the current one. "
+                "BM25 remains available; run ingest to rebuild the dense index."
             )
         elif upgrade_reasons:
             status_message = (

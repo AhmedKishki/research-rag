@@ -42,6 +42,7 @@ my-research-project/
 - `~/.config/research-rag/projects.json` is the account's project register.
 - `projects.lock` beside the register serializes read-modify-write operations across processes. Readers use atomic snapshots without the lock.
 - `~/.cache/research-rag/models/` holds the embedding and reranker binaries, about 150 MB in total. It is the only cross-project shared state, because the binaries are immutable once downloaded.
+- Model snapshots use `models--<repository>/snapshots/<commit>`, with `/` in the repository replaced by `--`. Health checks require the pinned repository, commit, ONNX files, and tokenizer files. They do not hash the cached binaries.
 - `tests/project/test_data_roots.py` asserts both roots and why each is named for this app.
 
 ## Portable state
@@ -120,7 +121,9 @@ generations/<generation-id>/
   indexes/qdrant/               the dense index, when the manifest names it
 ```
 
-- `manifest.json` decides what a generation is. It carries the schema version, extraction policy, chunking configuration, retrieval-policy fingerprint, the model and revision that produced the vectors, the dense backend, and the file map.
+- `manifest.json` decides what a generation is. It carries the schema version, extraction policy, chunking configuration, retrieval-policy fingerprint, the model, download repository and revision that produced the vectors, the dense backend, and the file map.
+- `retrieval.dense.embedding_model_repository` records the download repository, which can differ from the configured FastEmbed model name. Older manifests without this field remain compatible only when their model, revision, and dimension match.
+- Correcting a mirror's revision requires re-embedding. Existing generations remain unchanged and searchable through BM25 until ingestion builds a compatible generation.
 - `retrieval.bm25.language` records the stopword list the BM25 index was built with. It is `language.bm25_stopwords` and can differ from `language.corpus`.
 - Two generations are interchangeable only when their manifests agree, which makes reuse safe.
 - A generation whose policy fingerprint does not match current settings requires a new ingestion.

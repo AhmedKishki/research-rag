@@ -132,6 +132,7 @@ def _child_env(home: Path) -> dict[str, str]:
     }
 
 
+@pytest.mark.integration
 def test_a_write_waits_for_the_record_lock_held_by_another_process(
     throwaway_account: Path,
 ) -> None:
@@ -172,6 +173,7 @@ def test_a_write_waits_for_the_record_lock_held_by_another_process(
     assert registry.load() == []
 
 
+@pytest.mark.integration
 def test_a_write_waits_and_then_publishes_what_it_read(
     throwaway_account: Path,
 ) -> None:
@@ -215,6 +217,7 @@ def test_a_write_waits_and_then_publishes_what_it_read(
     ]
 
 
+@pytest.mark.integration
 def test_records_written_by_many_processes_at_once_are_all_kept(
     throwaway_account: Path,
 ) -> None:

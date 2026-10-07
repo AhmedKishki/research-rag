@@ -11,6 +11,10 @@ and FastEmbed rejects anything it does not recognize.
 
 from __future__ import annotations
 
+from .model_cache import TOKENIZER_FILES
+
+RERANKER_REQUIRED_FILES = (*TOKENIZER_FILES, "onnx/model.onnx")
+
 # Model name -> the revision its weights were resolved to. An unpinned reranker
 # would change retrieval quality without changing any recorded input, so a model
 # outside this table is not offered.
