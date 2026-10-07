@@ -66,10 +66,17 @@ What is on disk, how it is read, and what a file's text says about itself.
 - Cleanup counts are recorded per source in `REMOVAL_FIELDS`.
   `removed_non_argument_characters` includes geometric furniture removals and
   reference/note section removals. A source that lost
-  some units says so on `excluded_corrupt_unit_count` with each unit's locator and
+  whole units says so on `excluded_corrupt_unit_count` with each unit's locator and
   reason. A source with image-only pages records the count and adds the
   `image_only_pages_present` warning even when it is indexed, because a mixed file
   is a fact about it rather than a refusal.
+- A unit is a page or a section holding several independent blocks, so corruption
+  evidence withholds the damaged paragraphs and keeps the readable blocks printed
+  beside them. `extraction._readable_unit_text` withholds the unit whole instead
+  when nothing readable survives, when what survives still carries a reason, or
+  when the damage took at least half the unit, because a fragment beside a broken
+  majority is not the document. `unclean_character_rate` records the share lost,
+  whether whole units or single paragraphs.
 - A source is refused on evidence about the whole file: nothing readable left, a
   text layer that is absent, no letters in retained text, almost nothing retained,
   text dominated by symbols,

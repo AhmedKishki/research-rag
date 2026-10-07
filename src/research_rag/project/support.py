@@ -912,9 +912,9 @@ SCHEMA_VERSION = 5
 # Extraction decides which blocks and units exist; semantic cleaning decides the
 # text of a unit that survived. Bumping extraction alone would report a generation
 # as needing only `layout_extraction` when its unit text also changed, so both move.
-EXTRACTION_POLICY_VERSION = 8
+EXTRACTION_POLICY_VERSION = 9
 
-CLEANING_POLICY_VERSION = 4
+CLEANING_POLICY_VERSION = 5
 
 ARTIFACT_POLICY_VERSION = 3
 
