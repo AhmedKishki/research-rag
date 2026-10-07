@@ -1940,7 +1940,7 @@ PASSAGE_ETA_PHASES = frozenset({"embedding", "dense_indexing", "qdrant_indexing"
 
 
 class _PhaseETA:
-    """Measure global passage throughput after two positive counter advances."""
+    """Measure current-phase throughput, with bounded display updates."""
 
     def __init__(self) -> None:
         self.key: tuple[Any, ...] | None = None
@@ -1948,13 +1948,24 @@ class _PhaseETA:
         self.initial = 0
         self.previous = 0
         self.advances = 0
+        self.last_progress = 0.0
+        self.displayed: float | None = None
+        self.display_time = 0.0
+        self.stalled = False
+        self.sources = False
+        self.activity: tuple[Any, ...] | None = None
 
     def observe(self, progress: dict[str, Any], now: float) -> float | None:
-        counts = progress.get("progress")
+        activity = _ingestion_progress_key({"ingestion_progress": progress})
+        if activity != self.activity:
+            self.activity = activity
+            self.last_progress = now
+        self.sources = progress.get("phase") in {"extraction", "chunking"}
+        counts = progress.get("overall_progress" if self.sources else "progress")
         if (
-            progress.get("phase") not in PASSAGE_ETA_PHASES
+            (not self.sources and progress.get("phase") not in PASSAGE_ETA_PHASES)
             or not isinstance(counts, dict)
-            or counts.get("unit") != "chunks"
+            or counts.get("unit") != ("sources" if self.sources else "chunks")
             or not math.isfinite(now)
         ):
             self.key = None
@@ -1980,13 +1991,42 @@ class _PhaseETA:
             self.initial = completed
             self.previous = completed
             self.advances = 0
+            self.last_progress = now
+            self.displayed = None
+            self.display_time = now
+            self.stalled = False
             return None
         if completed > self.previous:
             self.advances += 1
+            self.last_progress = now
         self.previous = completed
-        if self.advances < 2 or now <= self.start or completed == total:
+        self.stalled = now - self.last_progress >= 60
+        sampled = completed - self.initial >= 3 if self.sources else self.advances >= 2
+        if not sampled or now <= self.start or completed == total:
+            self.displayed = None
             return None
         return (total - completed) * (now - self.start) / (completed - self.initial)
+
+    def label(self, estimate: float | None, now: float) -> str:
+        if estimate is None:
+            return "ETA —"
+        if self.sources:
+            # Power-of-two minute ranges are intentionally coarse for unequal books.
+            upper = 2 ** max(1, math.ceil(math.log2(max(1, estimate / 60))))
+            candidate = float(upper * 60)
+        else:
+            bucket = 60 if estimate >= 60 else 10
+            candidate = float(max(bucket, math.ceil(estimate / bucket) * bucket))
+        if self.displayed is None or (
+            now - self.display_time >= 60
+            and (candidate >= self.displayed * 1.5 or candidate <= self.displayed / 1.5)
+        ):
+            self.displayed = candidate
+            self.display_time = now
+        minutes = int(self.displayed / 60)
+        if self.sources:
+            return f"ETA {minutes // 2}–{minutes}m"
+        return f"ETA ~{minutes}m" if minutes else f"ETA ~{int(self.displayed)}s"
 
 
 def _ingestion_progress_line(
@@ -1998,9 +2038,8 @@ def _ingestion_progress_line(
         if estimator is not None:
             estimator.key = None
         return None
-    estimate = (
-        estimator.observe(progress, time.monotonic()) if estimator is not None else None
-    )
+    now = time.monotonic()
+    estimate = estimator.observe(progress, now) if estimator is not None else None
     phase = str(progress.get("phase") or "unknown")
     labels = {
         "source_hashing": "Hashing sources",
@@ -2046,28 +2085,11 @@ def _ingestion_progress_line(
         and 0 <= counts["completed"] <= counts["total"]
         and counts["total"] > 0
     )
+    fields.append(estimator.label(estimate, now) if estimator else "ETA —")
     if passage_counts and counts["completed"] == counts["total"]:
-        fields.append("phase ETA finalizing")
-    elif passage_counts and estimate is not None:
-        # Coarse display buckets prevent small rate changes flickering each poll.
-        bucket = 60 if estimate >= 60 else 10
-        seconds = max(bucket, math.ceil(estimate / bucket) * bucket)
-        minutes, seconds = divmod(seconds, 60)
-        hours, minutes = divmod(minutes, 60)
-        duration = (
-            f"{hours}h {minutes}m"
-            if hours
-            else f"{minutes}m {seconds}s"
-            if minutes
-            else f"{seconds}s"
-        )
-        fields.append(f"phase ETA ~{duration}")
-    elif passage_counts:
-        fields.append("phase ETA estimating")
-    elif phase in PASSAGE_ETA_PHASES or phase in {"extraction", "chunking"}:
-        fields.append("passage ETA unavailable until total is known")
-    else:
-        fields.append("phase ETA unavailable")
+        fields.append("Finalizing")
+    if estimator is not None and estimator.stalled and estimator.key is not None:
+        fields.append("Stalled: no progress for ≥60s")
     return " | ".join(fields)
 
 
@@ -2136,21 +2158,16 @@ def _ingestion_progress_frame(status: dict[str, Any], line: str, columns: int) -
         and counts.get("unit") != "phase"
     )
     percentage = round(100 * completed / total) if valid else None
-    eta = (
-        next(
-            (
-                field
-                for field in fields
-                if field.startswith(("phase ETA ", "passage ETA "))
-            ),
-            "",
-        )
-        if progress.get("phase") in PASSAGE_ETA_PHASES
-        else ""
+    eta = next(
+        (field for field in fields if field.startswith("ETA ")),
+        "",
     )
     suffix = f" {percentage:3d}%" if percentage is not None else "  --%"
     if eta:
         suffix += f" | {eta}"
+    for field in fields:
+        if field.startswith(("Stalled:", "Finalizing")):
+            suffix += f" | {field}"
     bar_width = max(0, min(30, columns - len(suffix) - 5))
     filled = round(bar_width * completed / total) if valid else 0
     bar = f"[{'#' * filled}{'-' * (bar_width - filled)}]{suffix}"
