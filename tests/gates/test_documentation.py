@@ -169,7 +169,7 @@ def test_the_readme_offers_the_three_front_ends_to_one_app() -> None:
 def test_the_readme_keeps_the_original_the_quote_authority() -> None:
     """Cleaned text is not a transcript, and a reader must be sent to the source."""
 
-    assert "direct_quote_safe" in README
+    assert "transcript" in README
     assert "locator" in README
     assert "sources" in README
     assert "cleaned" in README

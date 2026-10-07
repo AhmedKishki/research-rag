@@ -78,21 +78,17 @@ def test_lean_passage_shape() -> None:
         {
             "chunk_id": "chk_one",
             "source_id": "src_one",
-            "source_relative_path": "evidence.pdf",
             "title": "Citable Evidence",
             "authors": ["A. Researcher"],
             "locator": {"page": 3},
             "text": "cleaned semantic text",
-            "direct_quote_safe": False,
         },
         {
             "chunk_id": "chk_two",
             "source_id": "src_two",
-            "source_relative_path": "anonymous.pdf",
             "title": "anonymous",
             "locator": {"section": "chapter.xhtml"},
             "text": "second passage",
-            "direct_quote_safe": False,
         },
     ]
 
@@ -109,27 +105,62 @@ def test_lean_passage_shape() -> None:
         assert key not in json.dumps(lean)
 
 
-def test_every_passage_carries_the_quotation_safeguard() -> None:
-    """`direct_quote_safe: false` is the one place the rule appears per passage.
+def test_no_passage_carries_a_quotation_flag() -> None:
+    """The cleaned-text rule is stated once in the contract, never per passage.
 
-    The flag is the machine-readable form of the rule that a quotation is taken from
-    the original, so it belongs on a hit and on every context passage alike, and a
-    passage that arrives without it must not be projected as quote-safe.
+    A passage that still carries the removed field must not project it into a lean
+    hit or a lean context passage.
     """
 
-    hit = present_tool_response("search", _search_payload(), detail=LEAN_TOOL_DETAIL)
-    assert {passage["direct_quote_safe"] for passage in hit["hits"]} == {False}
+    hit = present_tool_response(
+        "search",
+        _search_payload(hits=[{**_hit(), "direct_quote_safe": True}]),
+        detail=LEAN_TOOL_DETAIL,
+    )
+    assert "direct_quote_safe" not in json.dumps(hit)
 
     context = present_tool_response(
         "get_passage",
         {
             "generation_id": "20260101T000000Z-abcdef",
             "requested_chunk_id": "chk_one",
-            "context": [{"chunk_id": "chk_one", "text": "cleaned semantic text"}],
+            "context": [
+                {
+                    "chunk_id": "chk_one",
+                    "text": "cleaned semantic text",
+                    "direct_quote_safe": True,
+                }
+            ],
         },
         detail=LEAN_TOOL_DETAIL,
     )
-    assert context["context"][0]["direct_quote_safe"] is False
+    assert "direct_quote_safe" not in json.dumps(context)
+
+
+def test_a_passage_projection_keeps_no_source_path_handle() -> None:
+    """A result names its source by `source_id` and `title`; the path handle
+    belongs to `find_source` and the workspace source list, not to every passage.
+    """
+
+    hit = present_tool_response(
+        "search",
+        _search_payload(hits=[{**_hit(), "source_relative_path": "evidence.pdf"}]),
+        detail=LEAN_TOOL_DETAIL,
+    )["hits"][0]
+    assert "source_relative_path" not in hit
+    assert hit["source_id"] == "src_one"
+    assert hit["title"] == "Citable Evidence"
+
+    context = present_tool_response(
+        "get_passage",
+        {
+            "generation_id": "20260101T000000Z-abcdef",
+            "requested_chunk_id": "chk_one",
+            "context": [{**_hit(), "source_relative_path": "evidence.pdf"}],
+        },
+        detail=LEAN_TOOL_DETAIL,
+    )["context"][0]
+    assert "source_relative_path" not in context
 
 
 def test_a_passage_the_embedder_could_only_read_in_part_says_so() -> None:
@@ -259,7 +290,6 @@ def test_passage_context_is_lean_and_keeps_no_rank() -> None:
     assert set(lean) == {"generation_id", "context"}
     assert "rank" not in lean["context"][0]
     assert lean["context"][0]["source_id"] == "src_one"
-    assert lean["context"][0]["direct_quote_safe"] is False
 
 
 def test_an_empty_search_answer_says_which_finding_it_is() -> None:
@@ -1030,7 +1060,6 @@ def _hit() -> dict[str, object]:
         "document_id": "doc_one",
         "source_id": "src_one",
         "source_path": "sources/evidence.pdf",
-        "source_relative_path": "evidence.pdf",
         "title": "Citable Evidence",
         "authors": ["A. Researcher"],
         "year": 2025,
@@ -1042,7 +1071,6 @@ def _hit() -> dict[str, object]:
         "citation": "A. Researcher, Citable Evidence (2025), p. 3",
         "text": "cleaned semantic text",
         "text_fidelity": "cleaned_semantic_text",
-        "direct_quote_safe": False,
         "text_notes": [],
         "embedding_token_count": 120,
         "dense_truncated": False,
@@ -1069,7 +1097,6 @@ def _anonymous_hit() -> dict[str, object]:
         "document_id": "doc_two",
         "source_id": "src_two",
         "source_path": "sources/anonymous.pdf",
-        "source_relative_path": "anonymous.pdf",
         "title": "anonymous",
         "authors": [],
         "year": None,

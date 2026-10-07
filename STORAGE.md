@@ -163,9 +163,10 @@ generations/<generation-id>/
 - A `document_id` identifies one path-and-content version. It changes between generations and is never reported in an answer.
 - A `chunk_id` belongs to the generation that returned it and can change after a rebuild.
 - A locator is a position only: a page, or a section for an EPUB. It carries `page_label` only where the printed label differs from the physical page.
-- Search returns, and the index holds, cleaned semantic text. It is not a transcript, so `text` is not quotable. `direct_quote_safe` is `false` on every passage the app builds.
+- Search returns, and the index holds, cleaned semantic text. It is not a transcript, so `text` is not quotable.
 - In passage context, `excluded_from_search: true` marks a reviewed excluded neighbour. It is context, not an eligible hit.
-- The untouched original at `source_relative_path` and `locator` is the quote authority.
+- A result names its source by `source_id` and `title`. A path handle (`source_relative_path`) is returned by `find_source` and the workspace source list, not repeated on every passage.
+- The untouched original, found through `find_source`, and the `locator` are the quote authority.
 
 ## Review state
 

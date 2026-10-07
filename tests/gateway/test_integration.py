@@ -39,7 +39,6 @@ FULL_HIT_KEYS = (
     "citation",
     "component_ranks",
     "component_scores",
-    "direct_quote_safe",
     "doi",
     "document_id",
     "fusion_score",
@@ -212,13 +211,12 @@ def test_the_real_vanilla_research_flow(project: Path) -> None:
                 rerank=True,
             )
             initial_hit = result["hits"][0]
-            assert initial_hit["source_relative_path"] == "evidence.pdf"
+            assert "source_relative_path" not in initial_hit
             assert initial_hit["locator"]["page"] == 1
             assert "cobalt heron" in initial_hit["text"].lower()
             assert "notes" not in initial_hit["text"].lower()
             for key in FULL_HIT_KEYS:
                 assert key in initial_hit, key
-            assert initial_hit["direct_quote_safe"] is False
             assert initial_hit["rerank_score"] is not None
             assert result["retrieval_method"] == "hybrid"
 
@@ -285,7 +283,7 @@ def test_the_real_vanilla_research_flow(project: Path) -> None:
 
             context = await service.get_passage(hit["chunk_id"])
             passage = context["context"][0]
-            assert passage["source_relative_path"] == "evidence.pdf"
+            assert "source_relative_path" not in passage
             assert passage["authors"] == ["Field Researcher"]
 
             filtered_out = await service.search(

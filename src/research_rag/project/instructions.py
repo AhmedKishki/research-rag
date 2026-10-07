@@ -16,7 +16,7 @@ Workflow:
    source_id narrows searches; chunk_id addresses a passage in the selected generation.
 
 Safeguards:
-- Every passage is cleaned text, not a transcript (direct_quote_safe: false).
+- Every passage is cleaned text, not a transcript.
   Verify exact quotations in the original at the locator, and cite the source.
 - Bibliography is best-effort. Never invent sources, authors, years, DOIs, pages,
   or quotations; report missing or questionable metadata.

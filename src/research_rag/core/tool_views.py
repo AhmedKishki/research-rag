@@ -1,6 +1,6 @@
 """Bounded replies with follow-up IDs, evidence, and actionable conditions.
 
-Keep quote safeguards and partial-result disclosures; omit ordinary confirmations,
+Keep partial-result disclosures; omit ordinary confirmations,
 query echoes, scores, timings, inventories, and inferable counts. The workspace
 and explicit full-detail mode retain complete service payloads.
 """
@@ -88,13 +88,12 @@ def lean_passage(passage: Mapping[str, Any]) -> dict[str, Any]:
     """
 
     result: dict[str, Any] = {}
-    for key in ("chunk_id", "source_id", "source_relative_path", "title", "authors"):
+    for key in ("chunk_id", "source_id", "title", "authors"):
         _add(result, key, passage.get(key))
     locator = _lean_locator(passage.get("locator") or {})
     if locator:
         result["locator"] = locator
     result["text"] = passage.get("text")
-    result["direct_quote_safe"] = passage.get("direct_quote_safe", False)
     if passage.get("dense_truncated"):
         result["dense_truncated"] = True
     if passage.get("excluded_from_search"):

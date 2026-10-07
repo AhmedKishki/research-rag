@@ -186,7 +186,6 @@ def _payload(
                 "chunk_id": chunk_id,
                 "document_id": f"doc-{chunk_id}",
                 "text": f"Passage {chunk_id} about cobalt and labour.",
-                "direct_quote_safe": False,
             }
             for chunk_id in chunk_ids
         ],

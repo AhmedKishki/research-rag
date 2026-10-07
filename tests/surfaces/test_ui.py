@@ -101,7 +101,6 @@ class FakeResearchService:
                     "locator": {"type": "pdf_page", "page": 1, "page_label": "1"},
                     "citation": "Researcher, Evidence (2026), p. 1",
                     "text": "A cleaned semantic passage.",
-                    "direct_quote_safe": False,
                     "component_ranks": {"bm25": 1, "dense": 1},
                     "component_scores": {
                         "dense_cosine_similarity": 0.8,
