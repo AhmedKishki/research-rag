@@ -120,7 +120,9 @@ class _Service:
         }
 
     def _search(self, arguments: dict[str, Any]) -> dict[str, Any]:
-        assert arguments["retrieval_method"] == "hybrid"
+        # No method reaches the engine: an agent gets no retrieval mode, so the
+        # engine resolves the method the generation can serve.
+        assert "retrieval_method" not in arguments
         assert arguments["rerank"] is True
         return {
             "query": arguments["query"],
@@ -510,7 +512,6 @@ async def test_a_search_answer_carries_handles_and_never_the_ranking(
                 "titles_any": None,
                 "source_ids": None,
                 "exclude_source_ids": None,
-                "retrieval_method": "hybrid",
                 "rerank": True,
                 "include_staleness": True,
             },

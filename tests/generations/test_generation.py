@@ -1,8 +1,65 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Any
 
-from research_rag.generations.generation import ReuseSnapshot, source_set_matches
+from research_rag.generations.generation import (
+    ReuseSnapshot,
+    generation_is_reusable,
+    source_set_matches,
+)
+from research_rag.project.support import (
+    ARTIFACT_POLICY_VERSION,
+    CLEANING_POLICY_VERSION,
+    EXTRACTION_POLICY_VERSION,
+    SCHEMA_VERSION,
+)
+from research_rag.retrieval.embeddings import EmbeddingModel, resolve_embedding_model
+
+_EMBEDDING = resolve_embedding_model("BAAI/bge-small-en-v1.5")
+_PROJECT_ID = "proj_test"
+_CHUNK_SIZE = 100
+_CHUNK_OVERLAP = 10
+
+
+def _dense_manifest(model: EmbeddingModel) -> dict[str, Any]:
+    return {
+        "schema_version": SCHEMA_VERSION,
+        "extraction_policy_version": EXTRACTION_POLICY_VERSION,
+        "cleaning_policy_version": CLEANING_POLICY_VERSION,
+        "artifact_policy_version": ARTIFACT_POLICY_VERSION,
+        "project_id": _PROJECT_ID,
+        "chunking": {
+            "backend": "UltraRAG token chunker",
+            "tokenizer": "gpt2",
+            "chunk_size": _CHUNK_SIZE,
+            "chunk_overlap": _CHUNK_OVERLAP,
+            "headers": False,
+        },
+        "retrieval": {
+            "dense": {
+                "embedding_model": model.name,
+                "embedding_model_revision": model.revision,
+                "embedding_dimension": model.dimension,
+                "embedding_model_repository": model.repository,
+            }
+        },
+    }
+
+
+def _is_reusable(manifest: dict[str, Any], model: EmbeddingModel) -> bool:
+    return generation_is_reusable(
+        manifest,
+        schema_version=SCHEMA_VERSION,
+        extraction_policy_version=EXTRACTION_POLICY_VERSION,
+        cleaning_policy_version=CLEANING_POLICY_VERSION,
+        artifact_policy_version=ARTIFACT_POLICY_VERSION,
+        project_id=_PROJECT_ID,
+        chunk_size=_CHUNK_SIZE,
+        chunk_overlap=_CHUNK_OVERLAP,
+        chunk_headers=False,
+        embedding=model,
+    )
 
 
 def _snapshot(
@@ -132,3 +189,26 @@ def test_source_set_match_rejects_legacy_metadata_storage_policy(
         retrieval_policy_fingerprint="retrieval-v1",
         metadata_storage_policy="automatic-only-v1",
     )
+
+
+def test_generation_is_reusable_requires_matching_dense_identity() -> None:
+    model = _EMBEDDING
+    assert _is_reusable(_dense_manifest(model), model) is True
+
+    for field, wrong in (
+        ("embedding_model", "BAAI/bge-base-en-v1.5"),
+        ("embedding_model_revision", "0" * 40),
+        ("embedding_dimension", model.dimension + 1),
+        ("embedding_model_repository", "some/other-mirror"),
+    ):
+        manifest = _dense_manifest(model)
+        manifest["retrieval"]["dense"][field] = wrong
+        assert _is_reusable(manifest, model) is False, field
+
+
+def test_generation_without_recorded_repository_still_matches() -> None:
+    model = _EMBEDDING
+    manifest = _dense_manifest(model)
+    del manifest["retrieval"]["dense"]["embedding_model_repository"]
+
+    assert _is_reusable(manifest, model) is True

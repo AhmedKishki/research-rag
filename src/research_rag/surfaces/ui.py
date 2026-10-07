@@ -448,9 +448,9 @@ class ResearchUIAdapter:
                 titles_any=_string_list(arguments.get("titles_any")),
                 source_ids=_string_list(arguments.get("source_ids")),
                 exclude_source_ids=_string_list(arguments.get("exclude_source_ids")),
-                # Hybrid retrieval with reranking is the only way this app
-                # searches, and it is the way the measurements were taken.
-                retrieval_method="hybrid",
+                # The engine chooses the method: hybrid when the generation can
+                # serve it, and BM25 with a disclosure when only its dense half
+                # cannot. This app never offers a reader the choice.
                 rerank=True,
                 include_staleness=True,
             )

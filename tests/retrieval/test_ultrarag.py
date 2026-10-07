@@ -110,6 +110,7 @@ def test_a_call_that_never_answered_names_the_component(config: ResearchConfig) 
     assert str(TRANSPORT_TIMEOUT_SECONDS) in message
 
 
+@pytest.mark.integration
 def test_a_gateway_that_exits_is_a_tool_error_naming_its_log(project: Path) -> None:
     broken = _failing_gateway(project)
     config = resolve_config(project, vanilla_executable=broken)
@@ -153,6 +154,7 @@ def test_the_handshake_is_bounded_by_its_own_timeout(config: ResearchConfig) -> 
     assert GATEWAY_INIT_TIMEOUT_SECONDS < TRANSPORT_TIMEOUT_SECONDS
 
 
+@pytest.mark.integration
 def test_a_gateway_that_never_starts_is_reported_within_the_handshake_bound(
     config: ResearchConfig,
 ) -> None:

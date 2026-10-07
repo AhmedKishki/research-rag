@@ -557,7 +557,6 @@ def create_mcp(
                     titles_any=titles_any,
                     source_ids=source_ids,
                     exclude_source_ids=exclude_source_ids,
-                    retrieval_method="hybrid",
                     rerank=True,
                     include_staleness=True,
                 )

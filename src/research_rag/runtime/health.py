@@ -18,7 +18,8 @@ from typing import Any
 from ..project.config import ResearchConfig, project_command, runtime_root_claim_problem
 from ..project.state_files import LOCK_FILE, process_alive
 from ..retrieval.embeddings import resolve_embedding_model
-from ..retrieval.rerankers import resolve_reranker_model
+from ..retrieval.model_cache import snapshot_is_complete, snapshot_path
+from ..retrieval.rerankers import RERANKER_REQUIRED_FILES, resolve_reranker_model
 from . import version as version_module
 
 OK = "ok"
@@ -138,40 +139,14 @@ def _marker_key(runtime: Any, root: Path, offline: bool) -> tuple[Any, ...]:
     return (str(root), offline, observed.st_mtime_ns, observed.st_size)
 
 
-def _hub_directory(repository: str) -> str:
-    return f"models--{repository.replace('/', '--')}"
-
-
-def _cached_snapshot(
-    cache_root: Path,
-    revision: str,
-    repository: str | None,
-) -> Path | None:
-    """The cached snapshot of a pinned revision, or None when absent.
-
-    A reranker name is the repository it is fetched from, so its cache directory
-    follows from that name. The embedding model's repository is FastEmbed's own
-    registry entry, and reading that would import the whole embedding stack for
-    one directory name, so a pinned revision is looked up across the cached
-    repositories.
-    """
-
-    if repository is not None:
-        candidate = cache_root / _hub_directory(repository) / "snapshots" / revision
-        return candidate if candidate.is_dir() else None
-    for snapshot in sorted(cache_root.glob(f"models--*/snapshots/{revision}")):
-        if snapshot.is_dir():
-            return snapshot
-    return None
-
-
 def _model_check(
     config: ResearchConfig,
     name: str,
     revision: str,
     label: str,
     *,
-    repository: str | None,
+    repository: str,
+    required_files: tuple[str, ...],
     consequence: str,
     offline_state: str,
 ) -> Check:
@@ -181,19 +156,19 @@ def _model_check(
     it differs per model: no embedding model, no dense build; no reranker, an
     unranked answer.
     """
-    snapshot = _cached_snapshot(config.model_cache_root, revision, repository)
-    if snapshot is not None:
+    snapshot = snapshot_path(config.model_cache_root, repository, revision)
+    if snapshot_is_complete(snapshot, required_files):
         return Check(
             label,
             OK,
-            f"The pinned {name} is cached at {snapshot}.",
+            f"The pinned {name} ({repository}@{revision}) is cached at {snapshot}.",
         )
     prefetch = doctor_command(config, "--prefetch-models")
     if not config.offline:
         return Check(
             label,
             WARN,
-            f"The pinned {name} is not cached at {config.model_cache_root}; "
+            f"The pinned {name} ({repository}@{revision}) is not fully cached at {snapshot}; "
             f"the first call that needs it downloads it, and until then {consequence}.",
             prefetch,
         )
@@ -201,13 +176,13 @@ def _model_check(
         return Check(
             label,
             WARN,
-            f"The pinned {name} is not cached; {consequence}.",
+            f"The pinned {name} ({repository}@{revision}) is not fully cached at {snapshot}; {consequence}.",
             prefetch,
         )
     return Check(
         label,
         offline_state,
-        f"The pinned {name} is not cached at {config.model_cache_root}, and "
+        f"The pinned {name} ({repository}@{revision}) is not fully cached at {snapshot}, and "
         f"offline mode forbids downloading it, so {consequence}.",
         prefetch,
     )
@@ -512,7 +487,8 @@ def health_report(
                 embedding.name,
                 embedding.revision,
                 "embedding_model",
-                repository=None,
+                repository=embedding.repository,
+                required_files=embedding.required_files,
                 consequence="no build can be dense",
                 offline_state=BLOCKED,
             ),
@@ -522,6 +498,7 @@ def health_report(
                 reranker_revision,
                 "reranker_model",
                 repository=reranker,
+                required_files=RERANKER_REQUIRED_FILES,
                 consequence="every search falls back to the unranked order",
                 offline_state=OK,
             ),

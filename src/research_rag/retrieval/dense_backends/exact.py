@@ -245,6 +245,7 @@ class LocalVectorDenseBackend:
             "distance": "cosine",
             "embedding_runtime": "FastEmbed ONNX Runtime (CPU)",
             "embedding_model": self.embedding_facts.name,
+            "embedding_model_repository": self.embedding_facts.repository,
             "embedding_model_revision": self.embedding_facts.revision,
             "embedding_dimension": dimension,
             "point_count": expected_count,

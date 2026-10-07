@@ -192,6 +192,8 @@ async def test_the_terminal_signals_are_handled_while_attached_and_released_afte
     assert after == before, "a handler outlived the attached run"
 
 
+# project_app_state probes the live control endpoint with its production timeout.
+@pytest.mark.integration
 async def test_a_project_state_names_the_terminal_its_app_is_attached_to(
     project: Path,
 ) -> None:

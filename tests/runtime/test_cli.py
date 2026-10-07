@@ -480,7 +480,6 @@ def test_search_carries_its_filters_and_reranks_by_default() -> None:
         "titles_any": ["Atlas of AI"],
         "source_ids": None,
         "exclude_source_ids": ["sid-1"],
-        "retrieval_method": "hybrid",
         "rerank": True,
     }
 

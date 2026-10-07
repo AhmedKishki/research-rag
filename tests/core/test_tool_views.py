@@ -10,6 +10,10 @@ from research_rag.core.service import ResearchError
 from research_rag.core.tool_views import present_tool_response
 from research_rag.project.config import ConfigurationError, resolve_config
 from research_rag.project.settings import FULL_TOOL_DETAIL, LEAN_TOOL_DETAIL
+from research_rag.retrieval.embeddings import (
+    DEFAULT_EMBEDDING_MODEL,
+    resolve_embedding_model,
+)
 
 # Keys the service builds for ranking, extraction, and storage diagnostics. Two are
 # absent because a lean answer now carries them as conditions rather than
@@ -173,6 +177,23 @@ def test_search_reports_rerank_state_and_unknown_ids() -> None:
     assert lean["rerank_fallback"]["reason"] == "reranker_model_unavailable"
     assert lean["unresolved_source_ids"] == ["src_missing"]
     assert "unresolved_exclude_source_ids" not in lean
+
+
+def test_lean_search_discloses_bm25_fallback_for_incompatible_embeddings() -> None:
+    fallback = {
+        "reason": "embedding_model_mismatch",
+        "requested_method": "hybrid",
+        "served_method": "bm25",
+        "message": "Run ingest to rebuild compatible dense vectors.",
+        "effect": "bm25_results_returned",
+    }
+    lean = present_tool_response(
+        "search",
+        _search_payload(retrieval_fallback=fallback, generation_upgrade_required=True),
+        detail=LEAN_TOOL_DETAIL,
+    )
+    assert lean["retrieval_fallback"] == fallback
+    assert lean["generation_upgrade_required"] is True
 
 
 def test_search_reports_every_filter_it_applied() -> None:
@@ -1112,7 +1133,9 @@ def _search_payload(**overrides: object) -> dict[str, object]:
         "withheld_candidates": {"policy": "corruption_evidence_only", "total": 0},
         "dense_fidelity": {"embedding_maximum_tokens": 512},
         "embedding_model": "BAAI/bge-small-en-v1.5",
-        "embedding_model_revision": "52398278842ec682c6f32300af41344b1c0b0bb2",
+        "embedding_model_revision": resolve_embedding_model(
+            DEFAULT_EMBEDDING_MODEL
+        ).revision,
         "reranker_model": "Xenova/ms-marco-MiniLM-L-6-v2",
         "reranker_model_revision": "a09144355adeed5f58c8ed011d209bf8ee5a1fec",
         "result_count": 2,

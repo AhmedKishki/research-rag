@@ -130,6 +130,7 @@ def lean_search(payload: Mapping[str, Any]) -> dict[str, Any]:
     if payload.get("reranked") is False:
         result["reranked"] = False
     _add(result, "rerank_fallback", payload.get("rerank_fallback"))
+    _add(result, "retrieval_fallback", payload.get("retrieval_fallback"))
     _add(
         result,
         "generation_upgrade_required",

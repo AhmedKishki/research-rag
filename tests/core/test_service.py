@@ -845,6 +845,135 @@ def test_search_can_skip_the_staleness_walk(
     asyncio.run(_assert_search_can_skip_the_staleness_walk(project, monkeypatch))
 
 
+async def _assert_incompatible_embedding_generation_serves_bm25(
+    project: Path,
+) -> None:
+    """A generation whose dense vectors belong to another model is BM25-only."""
+
+    write_pdf(
+        project / "sources" / "article.pdf",
+        ["Cobalt evidence about labour and artificial intelligence."],
+        title="Research Article",
+    )
+    config = resolve_config(project, vanilla_executable=sys.executable)
+    service = ResearchService(  # type: ignore[arg-type]
+        config,
+        FakeUltraRAG(),
+        dense=FakeDenseBackend(),
+    )
+    ingested = await service.ingest(chunk_size=100, chunk_overlap=10)
+    assert (await service.status())["hybrid_ready"] is True
+
+    generation_root = Path(ingested["generation_root"])
+    manifest_path = generation_root / "manifest.json"
+    baseline = json.loads(manifest_path.read_text(encoding="utf-8"))
+
+    def manifest_with(**changes: Any) -> dict[str, Any]:
+        manifest = json.loads(json.dumps(baseline))
+        for key, value in changes.items():
+            if value is None:
+                manifest["retrieval"]["dense"].pop(key, None)
+            else:
+                manifest["retrieval"]["dense"][key] = value
+        return manifest
+
+    def write_manifest(manifest: dict[str, Any]) -> None:
+        manifest_path.write_text(
+            json.dumps(manifest, ensure_ascii=False, indent=2) + "\n",
+            encoding="utf-8",
+        )
+
+    # Each recorded identity field, alone, makes the dense half unservable.
+    for changes in (
+        {"embedding_model": "BAAI/bge-base-en-v1.5"},
+        {"embedding_model_revision": "0" * 40},
+        {"embedding_dimension": 768},
+        {"embedding_model_repository": "some/other-mirror"},
+    ):
+        write_manifest(manifest_with(**changes))
+        status = await service.status()
+        assert "embedding_model" in status["upgrade_reasons"], changes
+        assert status["hybrid_ready"] is False
+        assert status["hybrid_upgrade_required"] is True
+        assert status["available_retrieval_methods"] == ["bm25"]
+        assert status["default_retrieval_method"] == "bm25"
+
+        # Explicit dense or hybrid refuses, and skipping the staleness walk does
+        # not bypass the guard: the reasons come from the manifest, not the scan.
+        for method in ("dense", "hybrid"):
+            with pytest.raises(ResearchError, match=f"does not support '{method}'"):
+                await service.search("cobalt labour", top_k=1, retrieval_method=method)
+            with pytest.raises(ResearchError, match=f"does not support '{method}'"):
+                await service.search(
+                    "cobalt labour",
+                    top_k=1,
+                    retrieval_method=method,
+                    include_staleness=False,
+                )
+
+        # A search that names no method is answered with BM25 and says why.
+        fell_back = await service.search("cobalt labour", top_k=1)
+        assert fell_back["retrieval_method"] == "bm25"
+        assert fell_back["hits"]
+        assert fell_back["retrieval_fallback"] == {
+            "reason": "embedding_model_mismatch",
+            "requested_method": "hybrid",
+            "served_method": "bm25",
+            "message": (
+                "The selected generation's dense index was built with a different "
+                "embedding model, so it cannot be scored with the current one. "
+                "BM25 results are returned; run ingest to rebuild the dense index."
+            ),
+            "effect": "bm25_results_returned",
+        }
+        assert fell_back["generation_upgrade_required"] is True
+
+        # Explicit BM25 remains available.
+        bm25 = await service.search("cobalt labour", top_k=1, retrieval_method="bm25")
+        assert bm25["hits"][0]["retrieval_method"] == "bm25"
+
+    # Advertising dense search without an identity cannot bypass the guard.
+    for missing_identity in (None, {}):
+        manifest = json.loads(json.dumps(baseline))
+        if missing_identity is None:
+            del manifest["retrieval"]["dense"]
+        else:
+            manifest["retrieval"]["dense"] = missing_identity
+        write_manifest(manifest)
+        assert (await service.status())["hybrid_ready"] is False
+        with pytest.raises(ResearchError, match="does not support 'dense'"):
+            await service.search(
+                "cobalt labour", retrieval_method="dense", include_staleness=False
+            )
+        assert (await service.search("cobalt labour"))["retrieval_method"] == "bm25"
+
+    # A generation that recorded the right repository, then lost the key, is the
+    # legacy shape and still matches the current pin.
+    write_manifest(manifest_with(embedding_model_repository="some/other-mirror"))
+    assert (await service.status())["hybrid_ready"] is False
+    write_manifest(manifest_with(embedding_model_repository=None))
+    legacy = await service.status()
+    assert legacy["hybrid_ready"] is True
+    assert "embedding_model" not in legacy["upgrade_reasons"]
+
+    # A changed model rebuilds the dense vectors instead of reusing them.
+    write_manifest(manifest_with(embedding_model_revision="0" * 40))
+    dense = FakeDenseBackend()
+    rebuilt_service = ResearchService(  # type: ignore[arg-type]
+        config,
+        FakeUltraRAG(),
+        dense=dense,
+    )
+    rebuilt = await rebuilt_service.ingest(chunk_size=100, chunk_overlap=10)
+    assert rebuilt["generation_changed"] is True
+    assert rebuilt["created_vector_count"] == rebuilt["chunk_count"]
+    assert rebuilt["reused_vector_count"] == 0
+
+
+def test_incompatible_embedding_generation_serves_bm25(project: Path) -> None:
+    asyncio.run(_assert_incompatible_embedding_generation_serves_bm25(project))
+
+
 async def _assert_reviewed_metadata_is_a_runtime_overlay(project: Path) -> None:
     source = project / "sources" / "article.pdf"
     write_pdf(
@@ -1878,8 +2007,12 @@ def test_ingest_records_the_exact_backend_and_its_index_path(project: Path) -> N
     asyncio.run(exercise())
 
 
+@pytest.mark.parametrize(
+    "explicit_stopwords", [False, True], ids=["corpus-derived", "explicit"]
+)
 def test_the_manifest_records_the_bm25_language_the_index_was_built_with(
     project: Path,
+    explicit_stopwords: bool,
 ) -> None:
     """A manifest names the artifact it describes, and this one is the BM25 index.
 
@@ -1889,11 +2022,18 @@ def test_the_manifest_records_the_bm25_language_the_index_was_built_with(
     """
 
     async def exercise() -> None:
-        write_pdf(project / "sources" / "article.pdf", ["Stable cobalt evidence."])
+        write_pdf(
+            project / "sources" / "artikel.pdf",
+            ["Ein deutscher Absatz ueber Arbeit und Technik."],
+            title="Aufsatz",
+        )
+        settings = ["language.corpus=de"]
+        if explicit_stopwords:
+            settings.append("language.bm25_stopwords=de")
         config = resolve_config(
             project,
             vanilla_executable=sys.executable,
-            settings_overrides=["language.corpus=de", "language.bm25_stopwords=de"],
+            settings_overrides=settings,
         )
         ultrarag = FakeUltraRAG()
         service = ResearchService(  # type: ignore[arg-type]
@@ -1901,9 +2041,11 @@ def test_the_manifest_records_the_bm25_language_the_index_was_built_with(
             ultrarag,
             dense=FakeDenseBackend(),
         )
+        assert config.settings.language_corpus == "de"
         assert config.settings.bm25_stopwords_language == "de"
 
         result = await service.ingest(chunk_size=50, chunk_overlap=10)
+        assert ultrarag.bm25_language == "de"
 
         manifest = json.loads(
             (Path(result["generation_root"]) / "manifest.json").read_text(
@@ -4493,33 +4635,6 @@ async def _assert_search_rejects_an_unsupported_reranker_model(project: Path) ->
 
 def test_search_rejects_an_unsupported_reranker_model(project: Path) -> None:
     asyncio.run(_assert_search_rejects_an_unsupported_reranker_model(project))
-
-
-async def _assert_the_bm25_language_reaches_the_gateway(project: Path) -> None:
-    write_pdf(
-        project / "sources" / "artikel.pdf",
-        ["Ein deutscher Absatz ueber Arbeit und Technik."],
-        title="Aufsatz",
-    )
-    config = resolve_config(
-        project,
-        vanilla_executable=sys.executable,
-        settings_overrides=["language.corpus=de"],
-    )
-    gateway = FakeUltraRAG()
-    service = ResearchService(  # type: ignore[arg-type]
-        config,
-        gateway,
-        dense=FakeDenseBackend(),
-    )
-    await service.ingest(chunk_size=50, chunk_overlap=10)
-
-    assert gateway.bm25_language == "de"
-    assert config.settings.language_corpus == "de"
-
-
-def test_the_bm25_language_reaches_the_gateway(project: Path) -> None:
-    asyncio.run(_assert_the_bm25_language_reaches_the_gateway(project))
 
 
 def test_dense_backends_embed_with_the_configured_model(tmp_path: Path) -> None:

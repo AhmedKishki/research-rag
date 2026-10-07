@@ -49,14 +49,20 @@ def healthy(config: ResearchConfig, monkeypatch: pytest.MonkeyPatch) -> Research
     """A project whose dependencies are all in place."""
 
     from research_rag.retrieval.embeddings import resolve_embedding_model
-    from research_rag.retrieval.rerankers import resolve_reranker_model
+    from research_rag.retrieval.rerankers import (
+        RERANKER_REQUIRED_FILES,
+        resolve_reranker_model,
+    )
 
-    for name, revision in (
+    embedding = resolve_embedding_model(config.settings.embedding_model)
+    reranker, reranker_revision = resolve_reranker_model(config.reranker_model)
+    for name, revision, required_files in (
         (
-            "qdrant/bge-small-en-v1.5-onnx-q",
-            resolve_embedding_model(config.settings.embedding_model).revision,
+            embedding.repository,
+            embedding.revision,
+            embedding.required_files,
         ),
-        resolve_reranker_model(config.reranker_model),
+        (reranker, reranker_revision, RERANKER_REQUIRED_FILES),
     ):
         snapshot = (
             config.model_cache_root
@@ -65,6 +71,10 @@ def healthy(config: ResearchConfig, monkeypatch: pytest.MonkeyPatch) -> Research
             / revision
         )
         snapshot.mkdir(parents=True, exist_ok=True)
+        for filename in required_files:
+            path = snapshot / filename
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text("cached", encoding="utf-8")
     root = Path(config.runtime_cache_root) / "runtime" / "UltraRAG-test"
     root.mkdir(parents=True, exist_ok=True)
     (root / vanilla_runtime.MARKER_FILENAME).write_text("{}\n", encoding="utf-8")
@@ -283,6 +293,37 @@ def test_prefetch_reports_what_it_cached(
     assert len(loaded) == 2
     assert any("bge-small-en-v1.5" in line for line in lines)
     assert any("MiniLM" in line for line in lines)
+
+
+def test_prefetch_clears_the_model_cache_warnings(
+    config: ResearchConfig, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import research_rag.retrieval.model_runtime as runtime
+    from research_rag.retrieval.model_cache import snapshot_path
+    from research_rag.runtime.health import health_report
+
+    calls: list[dict[str, Any]] = []
+
+    def download(**kwargs: Any) -> str:
+        calls.append(kwargs)
+        snapshot = snapshot_path(
+            Path(kwargs["cache_dir"]), kwargs["repo_id"], kwargs["revision"]
+        )
+        for filename in kwargs["allow_patterns"]:
+            path = snapshot / filename
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text("cached", encoding="utf-8")
+        return str(snapshot)
+
+    monkeypatch.setattr(runtime, "snapshot_download", download)
+    monkeypatch.setattr(runtime, "TextEmbedding", lambda **kwargs: object())
+    monkeypatch.setattr(runtime, "TextCrossEncoder", lambda **kwargs: object())
+    assert health_report(config, READY_STATUS).named("embedding_model").state == "warn"
+    assert health_report(config, READY_STATUS).named("reranker_model").state == "warn"
+    doctor_module.prefetch_models(config)
+    assert len(calls) == 2
+    assert health_report(config, READY_STATUS).named("embedding_model").state == "ok"
+    assert health_report(config, READY_STATUS).named("reranker_model").state == "ok"
 
 
 def _entry_file(tmp_path: Path, body: str) -> Path:

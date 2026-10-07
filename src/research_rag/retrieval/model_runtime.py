@@ -16,10 +16,16 @@ from typing import Any
 import numpy as np
 from fastembed import TextEmbedding
 from fastembed.rerank.cross_encoder import TextCrossEncoder
+from huggingface_hub import snapshot_download
 from tokenizers import Tokenizer
 
 from .embeddings import DEFAULT_EMBEDDING_MODEL, EmbeddingModel, resolve_embedding_model
-from .rerankers import DEFAULT_RERANKER_MODEL, resolve_reranker_model
+from .model_cache import snapshot_is_complete, snapshot_path
+from .rerankers import (
+    DEFAULT_RERANKER_MODEL,
+    RERANKER_REQUIRED_FILES,
+    resolve_reranker_model,
+)
 
 
 class DenseTokenAuditUnavailable(RuntimeError):
@@ -32,6 +38,47 @@ class RerankerUnavailable(RuntimeError):
     The service treats this as recoverable: reranking is skipped and the response
     discloses the fallback.
     """
+
+
+def _load_pinned_snapshot(
+    cache_root: Path,
+    repository: str,
+    revision: str,
+    required_files: tuple[str, ...],
+    *,
+    offline: bool,
+) -> Path:
+    """Fetch one immutable commit; never fall back to a head or tarball.
+
+    FastEmbed 0.8.0 discards constructor revision kwargs. Resolve the snapshot
+    ourselves and give its path to FastEmbed's explicit local-path interface.
+    Complete cached snapshots need neither a network request nor a hub ref.
+    """
+    expected = snapshot_path(cache_root, repository, revision)
+    if snapshot_is_complete(expected, required_files):
+        return expected
+    downloaded = Path(
+        snapshot_download(
+            repo_id=repository,
+            revision=revision,
+            cache_dir=str(cache_root),
+            allow_patterns=list(required_files),
+            local_files_only=offline,
+        )
+    )
+    if downloaded.resolve() != expected.resolve():
+        raise RuntimeError(
+            f"Expected pinned model {repository}@{revision} at {expected}, "
+            f"but the hub returned {downloaded}."
+        )
+    missing = [name for name in required_files if not (downloaded / name).is_file()]
+    if missing:
+        raise RuntimeError(
+            f"Pinned model {repository}@{revision} is incomplete at {downloaded}; "
+            f"missing: {', '.join(missing)}. Prefetch the models with doctor "
+            "--prefetch-models."
+        )
+    return downloaded
 
 
 def _load_embedder(
@@ -48,13 +95,19 @@ def _load_embedder(
     """
 
     facts = resolve_embedding_model(model)
-    cache_root.mkdir(parents=True, exist_ok=True)
+    snapshot = _load_pinned_snapshot(
+        cache_root,
+        facts.repository,
+        facts.revision,
+        facts.required_files,
+        offline=offline,
+    )
     return TextEmbedding(
         model_name=facts.name,
         cache_dir=str(cache_root),
         cuda=False,
-        local_files_only=offline,
-        revision=facts.revision,
+        local_files_only=True,
+        specific_model_path=str(snapshot),
         threads=threads,
     )
 
@@ -72,14 +125,16 @@ def _load_cross_encoder(
     """
 
     name, revision = resolve_reranker_model(model)
-    cache_root.mkdir(parents=True, exist_ok=True)
     try:
+        snapshot = _load_pinned_snapshot(
+            cache_root, name, revision, RERANKER_REQUIRED_FILES, offline=offline
+        )
         return TextCrossEncoder(
             model_name=name,
             cache_dir=str(cache_root),
             cuda=False,
-            local_files_only=offline,
-            revision=revision,
+            local_files_only=True,
+            specific_model_path=str(snapshot),
         )
     except Exception as exc:
         hint = (

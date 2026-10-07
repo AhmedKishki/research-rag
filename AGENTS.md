@@ -214,6 +214,12 @@ Terminal ── control ───┘      ├── the workspace and its adapte
 
 ## Validation
 
+- During ordinary edits, run `uv run pytest -q -m "not integration"`.
+- `integration` covers external runtimes, process contention, live transport waits, and shipped scripts.
+  - Cheap interpreter checks and shortened in-process waits stay in the fast subset.
+- Run `uv run pytest -q -m integration` when changing an integration boundary.
+- The full suite remains required before committing. CI runs both subsets.
+
 ```bash
 uv lock --check
 uv run ruff format --check .
