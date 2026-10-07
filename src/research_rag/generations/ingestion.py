@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import os
 import re
+import shlex
 import shutil
 import time
 import uuid
@@ -15,6 +16,7 @@ import numpy as np
 
 from ..corpus.extraction import (
     REMOVAL_FIELDS,
+    UncleanSourceError,
     empty_removal_counts,
     extract_epub_spine_item,
     extract_scanned_pdf_pages,
@@ -155,6 +157,8 @@ class IngestionWorkflow:
     def _reconcile_checkpoint_progress(
         root: Path,
         checkpoint: dict[str, Any],
+        *,
+        source_states: dict[str, dict[str, Any]] | None = None,
     ) -> None:
         """Rebuild split progress counters from committed per-source state."""
 
@@ -182,9 +186,12 @@ class IngestionWorkflow:
         try:
             for relative in selected_paths:
                 state_path = sources_root / _source_work_key(relative) / "state.json"
-                if not state_path.is_file():
-                    continue
-                state = read_json(state_path)
+                if source_states is None:
+                    if not state_path.is_file():
+                        continue
+                    state = read_json(state_path)
+                else:
+                    state = source_states.get(relative)
                 if not isinstance(state, dict):
                     return
 
@@ -341,9 +348,50 @@ class IngestionWorkflow:
             completed = int(phase in {"complete"})
             total = 1
             unit = "phase"
+        source: str | None = None
+        source_progress: dict[str, Any] | None = None
+        overall_progress = {"completed": completed, "total": total, "unit": unit}
+        if phase in {"source_hashing", "source_revalidation", "extraction", "chunking"}:
+            paths = (
+                [
+                    record["source_relative_path"]
+                    for record in inventory
+                    if isinstance(record, dict)
+                    and isinstance(record.get("source_relative_path"), str)
+                ]
+                if phase in {"source_hashing", "source_revalidation"}
+                else selected
+            )
+            finished_key = {
+                "source_hashing": "source_digests",
+                "source_revalidation": "revalidation_digests",
+                "extraction": "extracted_source_paths",
+                "chunking": "chunked_source_paths",
+            }[phase]
+            finished = set(checkpoint.get(finished_key) or [])
+            overall_progress = {
+                "completed": sum(path in finished for path in paths),
+                "total": len(paths),
+                "unit": "sources",
+            }
+            source = next((path for path in paths if path not in finished), None)
+            if source is not None:
+                if phase in {"source_hashing", "source_revalidation"}:
+                    source_progress = {"completed": 0, "total": 1, "unit": "sources"}
+                else:
+                    source_progress = self._source_ingestion_progress(
+                        checkpoint, source, phase
+                    )
         return {
             "build_id": str(checkpoint["build_id"]),
             "phase": phase,
+            "source": source,
+            "source_progress": source_progress,
+            "overall_progress": overall_progress,
+            # Durable phase timings do not record a homogeneous work rate:
+            # sources vary in size, and reused work changes batch costs. Do not
+            # extrapolate these counters into a build or phase deadline.
+            "eta_seconds": None,
             "progress": {
                 "completed": completed,
                 "total": total,
@@ -353,6 +401,58 @@ class IngestionWorkflow:
             "created_at": checkpoint.get("created_at"),
             "checkpointed_at": checkpoint.get("updated_at"),
         }
+
+    def _source_ingestion_progress(
+        self, checkpoint: dict[str, Any], source: str, phase: str
+    ) -> dict[str, Any] | None:
+        """Read only the pending source's small, committed staging state."""
+
+        build_id = str(checkpoint.get("build_id") or "")
+        if not re.fullmatch(GENERATION_ID_PATTERN, build_id):
+            return None
+        root = self.config.staging_root / build_id
+        source_root = root / "work" / "sources" / _source_work_key(source)
+        state_path = source_root / "state.json"
+        # Never follow staging symlinks, including intermediate directories.
+        if any(
+            path.is_symlink()
+            for path in (
+                self.config.staging_root,
+                root,
+                root / "work",
+                source_root.parent,
+                source_root,
+                state_path,
+            )
+        ):
+            return None
+        try:
+            if not state_path.is_file() or state_path.stat().st_size > 64 * 1024:
+                return None
+            state = read_json(state_path)
+            if not isinstance(state, dict) or state.get("reused"):
+                return None
+            if phase == "chunking":
+                total = int(state.get("chunking_work_total") or 0)
+                completed = int(state.get("chunked_unit_count") or 0)
+                unit = "extraction_units"
+            else:
+                # Use the same durable extraction-stage accounting as status,
+                # restricted to one selected path (no corpus/artifact scan).
+                view = {**checkpoint, "selected_source_paths": [source]}
+                view.pop("extraction_work_total", None)
+                view.pop("extraction_work_completed", None)
+                self._reconcile_checkpoint_progress(
+                    root, view, source_states={source: state}
+                )
+                total = int(view.get("extraction_work_total") or 0)
+                completed = int(view.get("extraction_work_completed") or 0)
+                unit = "pdf_page_batches_or_epub_sections"
+            if total <= 0 or completed < 0:
+                return None
+            return {"completed": min(completed, total), "total": total, "unit": unit}
+        except (OSError, StorageError, TypeError, ValueError, OverflowError):
+            return None
 
     @staticmethod
     def _write_checkpoint(root: Path, checkpoint: dict[str, Any]) -> None:
@@ -628,6 +728,9 @@ class IngestionWorkflow:
             "status": "ready",
             "generation_changed": True,
             "activation_recovered": True,
+            "skipped_sources": manifest.get("build_metrics", {}).get(
+                "skipped_sources", []
+            ),
             "generation_id": build_id,
             "generation_root": str(generation_root),
             "message": "Recovered and selected the completed generation.",
@@ -783,6 +886,7 @@ class IngestionWorkflow:
         progress = self._ingestion_progress(checkpoint)
         return {
             "status": "in_progress",
+            "skipped_sources": checkpoint.get("skipped_sources", []),
             "generation_changed": False,
             **progress,
             "next_action": "call_ingest_again",
@@ -923,6 +1027,9 @@ class IngestionWorkflow:
                         shutil.rmtree(staging_root, ignore_errors=True)
                         return {
                             "status": "unchanged",
+                            "skipped_sources": manifest.get("build_metrics", {}).get(
+                                "skipped_sources", []
+                            ),
                             "generation_changed": False,
                             "generation_id": manifest["generation_id"],
                             "generation_root": str(snapshot.root),
@@ -1250,20 +1357,37 @@ class IngestionWorkflow:
                         for key, value in (state.get("removals") or {}).items()
                         if key in REMOVAL_FIELDS
                     }
-                    # The same gate a direct build applies. A staged build writes each
-                    # page batch before it knows the whole file, so withholding happens
-                    # here over every unit the file produced; a source a direct build
-                    # would refuse therefore fails here too, before any unit of it
-                    # reaches a chunk.
-                    retained = screen_source_units(
-                        source,
-                        document,
-                        units,
-                        removals=removals,
-                        maximum_unclean_percent=(
-                            self.config.settings.maximum_unclean_percent
-                        ),
-                    )
+                    # Refuse unclean evidence before chunking, but let clean sources
+                    # finish. Other extraction failures still abort the generation.
+                    try:
+                        retained = screen_source_units(
+                            source,
+                            document,
+                            units,
+                            removals=removals,
+                            maximum_unclean_percent=(
+                                self.config.settings.maximum_unclean_percent
+                            ),
+                        )
+                    except UncleanSourceError as exc:
+                        checkpoint.setdefault("skipped_sources", []).append(
+                            {
+                                "source_relative_path": relative,
+                                "reason": str(exc),
+                                "remedy": f"research-rag ocr {shlex.quote(relative)}",
+                            }
+                        )
+                        checkpoint["extracted_source_paths"].append(relative)
+                        checkpoint["chunked_source_paths"].append(relative)
+                        state["extraction_stage"] = "skipped"
+                        atomic_write_json(state_path, state)
+                        self._add_phase_time(
+                            checkpoint, "extraction", time.perf_counter() - started
+                        )
+                        self._write_checkpoint(staging_root, checkpoint)
+                        if budget_expired():
+                            return self._in_progress_result(checkpoint)
+                        continue
                     atomic_write_json(artifact_root / "document.json", document)
                     atomic_write_jsonl(artifact_root / "units.jsonl", retained)
                     units = retained
@@ -1472,6 +1596,11 @@ class IngestionWorkflow:
                 discarded_symbol_only_chunks = 0
                 discarded_corrupt_chunks = 0
                 for relative in selected_paths:
+                    if relative in {
+                        item["source_relative_path"]
+                        for item in checkpoint.get("skipped_sources", [])
+                    }:
+                        continue
                     artifact_root = self._source_artifact_root(staging_root, relative)
                     document = read_json(artifact_root / "document.json")
                     state = read_json(artifact_root / "state.json")
@@ -1488,6 +1617,14 @@ class IngestionWorkflow:
                         state.get("discarded_corrupt_chunks") or 0
                     )
                 extracted_path = staging_root / "corpus" / "extracted-units.jsonl"
+                if not documents:
+                    raise ResearchError(
+                        "No clean sources remain; the current generation is unchanged. "
+                        + " ".join(
+                            item["reason"]
+                            for item in checkpoint.get("skipped_sources", [])
+                        )
+                    )
                 chunks_path = staging_root / "chunks" / "chunks.jsonl"
 
                 record_counts = {"units": 0, "chunks": 0}
@@ -1498,6 +1635,11 @@ class IngestionWorkflow:
                     counts: dict[str, int],
                 ) -> Iterator[dict[str, Any]]:
                     for source_relative_path in selected_paths:
+                        if source_relative_path in {
+                            item["source_relative_path"]
+                            for item in checkpoint.get("skipped_sources", [])
+                        }:
+                            continue
                         path = (
                             self._source_artifact_root(
                                 staging_root,
@@ -1846,6 +1988,11 @@ class IngestionWorkflow:
                         / "document.json"
                     )
                     for relative in selected_paths
+                    if relative
+                    not in {
+                        item["source_relative_path"]
+                        for item in checkpoint.get("skipped_sources", [])
+                    }
                 ]
                 content_kinds: Counter[str] = Counter()
                 withheld_chunk_count = 0
@@ -1877,6 +2024,8 @@ class IngestionWorkflow:
                     for key, value in checkpoint["phase_timings_seconds"].items()
                 }
                 build_metrics = {
+                    "skipped_sources": checkpoint.get("skipped_sources", []),
+                    "skipped_source_count": len(checkpoint.get("skipped_sources", [])),
                     "forced": force_recompute,
                     "resumed": bool(checkpoint.get("resume_count")),
                     "reused_document_count": int(

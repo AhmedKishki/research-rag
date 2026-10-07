@@ -22,10 +22,12 @@ import asyncio
 import contextlib
 import json
 import os
+import shutil
 import signal
 import sys
 import textwrap
 import time
+import unicodedata
 from collections.abc import AsyncIterator, Iterator, Sequence
 from contextlib import (
     AbstractContextManager,
@@ -1850,10 +1852,12 @@ class Remote:
         self.control.close()
 
     async def status(self) -> dict[str, Any]:
-        return self.control.status()
+        return await asyncio.to_thread(self.control.status)
 
     async def ingest(self, *, force_recompute: bool) -> dict[str, Any]:
-        return self.control.ingest(force_recompute=force_recompute)
+        return await asyncio.to_thread(
+            self.control.ingest, force_recompute=force_recompute
+        )
 
     async def search(self, query: str, **arguments: Any) -> dict[str, Any]:
         return self.control.search(query, **arguments)
@@ -1929,6 +1933,237 @@ class Remote:
         return self.control.remove_generation(generation_id, confirm=confirm)
 
 
+INGEST_PROGRESS_INTERVAL = 2.0
+INGEST_HEARTBEAT_INTERVAL = 15.0
+
+
+class _PhaseETA:
+    """Estimate only the current phase from two observed advancing intervals."""
+
+    def __init__(self) -> None:
+        self.key: tuple[Any, ...] | None = None
+        self.start = 0.0
+        self.initial = 0
+        self.previous = 0
+        self.advances = 0
+
+    def observe(self, progress: dict[str, Any], now: float) -> float | None:
+        counts = progress.get("progress")
+        if not isinstance(counts, dict):
+            self.key = None
+            return None
+        completed, total = counts.get("completed"), counts.get("total")
+        if (
+            type(completed) is not int
+            or type(total) is not int
+            or not 0 <= completed <= total
+            or total <= 0
+        ):
+            self.key = None
+            return None
+        key = (
+            progress.get("build_id"),
+            progress.get("phase"),
+            total,
+            counts.get("unit"),
+        )
+        if key != self.key or completed < self.previous or now <= self.start:
+            self.key = key
+            self.start = now
+            self.initial = completed
+            self.previous = completed
+            self.advances = 0
+            return None
+        if completed > self.previous:
+            self.advances += 1
+        self.previous = completed
+        if self.advances < 2:
+            return None
+        return (total - completed) * (now - self.start) / (completed - self.initial)
+
+
+def _ingestion_progress_line(
+    status: dict[str, Any], estimator: _PhaseETA | None = None
+) -> str | None:
+    """Render a compact human-readable snapshot, not the backend payload."""
+    progress = status.get("ingestion_progress")
+    if not isinstance(progress, dict) or not progress:
+        if estimator is not None:
+            estimator.key = None
+        return None
+    estimate = (
+        estimator.observe(progress, time.monotonic()) if estimator is not None else None
+    )
+    phase = str(progress.get("phase") or "unknown")
+    labels = {
+        "source_hashing": "Hashing sources",
+        "source_revalidation": "Rechecking sources",
+        "dense_indexing": "Building dense index",
+        "qdrant_indexing": "Building dense index",
+        "bm25_indexing": "Building search index",
+    }
+    fields = [labels.get(phase, phase.replace("_", " ").capitalize())]
+
+    def count(value: Any, *, source: bool = False) -> str | None:
+        if not isinstance(value, dict):
+            return None
+        completed, total = value.get("completed"), value.get("total")
+        if type(completed) is not int or type(total) is not int or total <= 0:
+            return None
+        unit = str(value.get("unit") or "items")
+        if unit == "phase" or (source and unit == "sources" and total == 1):
+            return None
+        units = {
+            "pdf_page_batches_or_epub_sections": "extraction batches/sections",
+            "extraction_units": "extraction units",
+        }.get(unit, unit.replace("_", " "))
+        return f"{completed:,}/{total:,} {units}"
+
+    overall = progress.get("overall_progress")
+    aggregate = count(overall) or count(progress.get("progress"))
+    if aggregate:
+        fields.append(aggregate)
+    source = progress.get("source")
+    if isinstance(source, str) and source:
+        # Source names are data, not terminal commands or multiline log records.
+        safe_source = "".join(char if char.isprintable() else " " for char in source)
+        detail = count(progress.get("source_progress"), source=True)
+        fields.append(f"{safe_source}: {detail}" if detail else safe_source)
+    eta = progress.get("eta_seconds")
+    if not isinstance(eta, (int, float)) or isinstance(eta, bool) or eta < 0:
+        eta = estimate
+    if isinstance(eta, (int, float)) and eta >= 0:
+        seconds = round(eta)
+        minutes, seconds = divmod(seconds, 60)
+        hours, minutes = divmod(minutes, 60)
+        duration = (
+            f"{hours}h {minutes}m"
+            if hours
+            else f"{minutes}m {seconds}s"
+            if minutes
+            else f"{seconds}s"
+        )
+        fields.append(f"phase ETA ~{duration}")
+    else:
+        fields.append("phase ETA estimating")
+    return " | ".join(fields)
+
+
+def _ingestion_progress_key(status: dict[str, Any]) -> tuple[Any, ...] | None:
+    progress = status.get("ingestion_progress")
+    if not isinstance(progress, dict):
+        return None
+    counters = []
+    for name in ("progress", "overall_progress", "source_progress"):
+        value = progress.get(name)
+        counters.append(
+            (value.get("completed"), value.get("total"), value.get("unit"))
+            if isinstance(value, dict)
+            else None
+        )
+    return (
+        progress.get("build_id"),
+        progress.get("phase"),
+        progress.get("source"),
+        *counters,
+    )
+
+
+def _terminal_progress_line(line: str, columns: int) -> str:
+    """Clip by terminal cell width, reserving one cell against line wrapping."""
+    remaining = max(0, columns - 1)
+    result: list[str] = []
+    for char in line:
+        width = (
+            0
+            if unicodedata.combining(char)
+            else (2 if unicodedata.east_asian_width(char) in {"F", "W"} else 1)
+        )
+        if width > remaining:
+            break
+        result.append(char)
+        remaining -= width
+    return "".join(result)
+
+
+async def _ingest_with_progress(
+    operations: Local | Remote, *, force_recompute: bool
+) -> dict[str, Any]:
+    """Poll read-only status while the single ingestion request is outstanding."""
+    ingest = asyncio.create_task(operations.ingest(force_recompute=force_recompute))
+    status_task: asyncio.Task[dict[str, Any]] | None = None
+    estimator = _PhaseETA()
+    previous_key: tuple[Any, ...] | None = None
+    last_printed = 0.0
+    redraw = (
+        bool(getattr(sys.stderr, "isatty", lambda: False)())
+        and os.environ.get("TERM") != "dumb"
+    )
+    drawn = False
+    try:
+        while not ingest.done():
+            done, _ = await asyncio.wait({ingest}, timeout=INGEST_PROGRESS_INTERVAL)
+            if done:
+                break
+            status_task = asyncio.create_task(operations.status())
+            await asyncio.wait(
+                {ingest, status_task}, return_when=asyncio.FIRST_COMPLETED
+            )
+            if ingest.done():
+                break
+            # Progress is advisory; a failed read must not abandon a build.
+            status_result = (await asyncio.gather(status_task, return_exceptions=True))[
+                0
+            ]
+            line = (
+                _ingestion_progress_line(status_result, estimator)
+                if isinstance(status_result, dict)
+                else None
+            )
+            key = (
+                _ingestion_progress_key(status_result)
+                if isinstance(status_result, dict)
+                else None
+            )
+            now = time.monotonic()
+            changed = key != previous_key
+            if line is not None and (
+                changed or now - last_printed >= INGEST_HEARTBEAT_INTERVAL
+            ):
+                # Only an unchanged heartbeat claims the status endpoint answered;
+                # it does not claim that the worker made progress.
+                if redraw:
+                    columns = shutil.get_terminal_size(fallback=(80, 24)).columns
+                    sys.stderr.write(
+                        "\r\x1b[2K" + _terminal_progress_line(line, columns)
+                    )
+                    sys.stderr.flush()
+                    drawn = True
+                else:
+                    print(
+                        line
+                        if changed
+                        else f"{line} | status checked {time.strftime('%H:%M:%S')}",
+                        file=sys.stderr,
+                        flush=True,
+                    )
+                previous_key = key
+                last_printed = now
+            status_task = None
+        return await ingest
+    finally:
+        if drawn:
+            sys.stderr.write("\n")
+            sys.stderr.flush()
+        # Drain an already-started HTTP read before Remote closes its client.
+        # Do not start a final status request or print after ingestion returns.
+        if status_task is not None:
+            await asyncio.gather(status_task, return_exceptions=True)
+        if not ingest.done():
+            ingest.cancel()
+            await asyncio.gather(ingest, return_exceptions=True)
+
+
 async def _operate(
     args: argparse.Namespace,
     operations: Local | Remote,
@@ -1945,7 +2180,9 @@ async def _operate(
 
         return dict(payload) if args.verbose else lean_status(payload)
     if command == "ingest":
-        return await operations.ingest(force_recompute=args.force_recompute)
+        return await _ingest_with_progress(
+            operations, force_recompute=args.force_recompute
+        )
     if command == "search":
         search: dict[str, Any] = {
             "top_k": args.top_k,

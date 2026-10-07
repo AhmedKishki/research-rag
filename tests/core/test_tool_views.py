@@ -819,6 +819,21 @@ def test_a_lookup_with_nothing_searchable_keeps_its_reason() -> None:
     assert lean["message"].startswith("1 source matches 'crawford' and none is")
 
 
+def test_ingest_lean_bounds_skipped_sources() -> None:
+    skipped = [
+        {"source_relative_path": f"bad-{index}.pdf", "reason": "unclean_text"}
+        for index in range(12)
+    ]
+    result = present_tool_response(
+        "ingest",
+        {"status": "ready", "skipped_sources": skipped},
+        detail=LEAN_TOOL_DETAIL,
+    )
+    assert result["skipped_source_count"] == 12
+    assert result["skipped_sources"] == skipped[:10]
+    assert result["skipped_sources_truncated"] is True
+
+
 def test_ingest_lean_discloses_anomalies_only_when_they_happened() -> None:
     lean = present_tool_response("ingest", _ingest_payload(), detail=LEAN_TOOL_DETAIL)
 

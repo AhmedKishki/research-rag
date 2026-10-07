@@ -2302,6 +2302,173 @@ process.stdout.write(JSON.stringify(context.result));
 """
 
 
+@pytest.mark.parametrize("outcome", ["ready", "in_progress", "error"])
+def test_live_ingestion_polling(tmp_path: Path, outcome: str) -> None:
+    result = _drive_page(
+        tmp_path,
+        r"""
+(async () => {
+  globalThis.performance = { now: () => 1000 };
+  const timers = new Map();
+  let next = 0;
+  const listeners = new Map();
+  window.setTimeout = (callback, delay) => { timers.set(++next, { callback, delay }); return next; };
+  window.clearTimeout = (id) => timers.delete(id);
+  window.addEventListener = (name, callback) => listeners.set(name, callback);
+  window.removeEventListener = (name) => listeners.delete(name);
+  globalThis.AbortController = class {
+    constructor() { this.signal = { aborted: false }; }
+    abort() { this.signal.aborted = true; }
+  };
+  state.capabilities = {};
+  state.status = null;
+  let finish;
+  let statusFinish;
+  let signal;
+  let loads = 0;
+  let clears = 0;
+  const messages = [];
+  loadWorkspace = async () => { loads++; };
+  clearResults = () => { clears++; };
+  toast = (message) => messages.push(message);
+  api = (path, options) => {
+    requests.push(path);
+    if (path === '/api/ingest') return new Promise((resolve, reject) => { finish = { resolve, reject }; });
+    signal = options.signal;
+    return new Promise((resolve) => { statusFinish = resolve; });
+  };
+  const run = ingest({ preventDefault() {} });
+  await ingest({ preventDefault() {} });
+  const first = [...timers.values()].find((entry) => entry.delay === 2000);
+  timers.clear();
+  const tick = first.callback();
+  const during = { requests: [...requests], loads, timers: timers.size };
+  statusFinish({ ingestion_progress: {
+    phase: 'extraction', source: 'Book.pdf',
+    source_progress: { completed: 2, total: 8, unit: 'pages' },
+    overall_progress: { completed: 1, total: 3, unit: 'sources' }, eta_seconds: 120,
+  }});
+  await tick;
+  const progress = byId('busy-message').textContent;
+  const second = [...timers.values()].find((entry) => entry.delay === 2000);
+  timers.clear();
+  const late = second.callback();
+  if (OUTCOME === 'error') finish.reject(new Error('Build failed'));
+  else finish.resolve({ status: OUTCOME, generation_id: 'gen_abc', chunk_count: 12 });
+  await run;
+  const after = byId('busy-message').textContent;
+  statusFinish({ ingestion_progress: { phase: 'late' } });
+  await late;
+  result = { during, progress, messages, loads, clears, busy: state.busy,
+    aborted: signal.aborted, timers: timers.size, listeners: listeners.size,
+    lateIgnored: byId('busy-message').textContent === after };
+})();
+""".replace("OUTCOME", json.dumps(outcome)),
+    )
+    assert result["during"]["requests"] == ["/api/ingest", "/api/status"]
+    assert result["during"]["loads"] == 0
+    assert "Book.pdf" in result["progress"]
+    assert "Source: 2 / 8 pages" in result["progress"]
+    assert "Overall: 1 / 3 sources" in result["progress"]
+    assert "ETA about 2 min" in result["progress"]
+    assert result["aborted"] and result["lateIgnored"]
+    assert not result["busy"]
+    assert result["timers"] == result["listeners"] == 0
+    assert result["loads"] == (0 if outcome == "error" else 1)
+    assert result["clears"] == (1 if outcome == "ready" else 0)
+    message = result["messages"][0]
+    if outcome == "in_progress":
+        assert "still in progress" in message and "is ready" not in message
+    elif outcome == "error":
+        assert message == "Build failed"
+    else:
+        assert "is ready with 12 passages" in message
+
+
+def test_phase_local_ingestion_eta(tmp_path: Path) -> None:
+    result = _drive_page(
+        tmp_path,
+        r"""
+(() => {
+  const estimate = phaseEtaEstimator();
+  const status = { build_id: 'a', phase: 'embedding', eta_seconds: null,
+    progress: { completed: 10, total: 100, unit: 'chunks' },
+    overall_progress: { completed: 999, total: 1000 } };
+  const tick = (completed, time) => {
+    status.progress.completed = completed;
+    return estimate(status, time);
+  };
+  const samples = [tick(10, 0), tick(10, 1000), tick(20, 2000), tick(30, 4000)];
+  const summary = liveIngestionSummary(status, samples[3]);
+  const stalled = tick(30, 8000);
+  const resets = [];
+  resets.push(tick(5, 9000));
+  tick(10, 10000); tick(15, 11000);
+  status.phase = 'indexing'; resets.push(tick(20, 12000));
+  tick(25, 13000); tick(30, 14000);
+  status.build_id = 'b'; resets.push(tick(35, 15000));
+  tick(40, 16000); tick(45, 17000);
+  status.progress.total = 200; resets.push(tick(50, 18000));
+  tick(55, 19000); tick(60, 20000);
+  status.progress = null; resets.push(estimate(status, 21000));
+  status.progress = { completed: 65, total: 200, unit: 'chunks' };
+  resets.push(estimate(status, 22000));
+  const estimating = liveIngestionSummary(status);
+  status.eta_seconds = 120;
+  result = { samples, stalled, resets, summary, estimating,
+    backend: liveIngestionSummary(status, 999),
+    fresh: phaseEtaEstimator()(status, 23000) };
+})();
+""",
+    )
+    assert result["samples"] == [None, None, None, 14]
+    assert result["stalled"] == 28
+    assert result["resets"] == [None] * 6
+    assert "Phase ETA about 1 min" in result["summary"]
+    assert "Phase ETA estimating" in result["estimating"]
+    assert "ETA about 2 min" in result["backend"]
+    assert "Phase ETA" not in result["backend"]
+    assert result["fresh"] is None
+
+
+def test_ingestion_poll_failure_and_pagehide_cleanup(tmp_path: Path) -> None:
+    result = _drive_page(
+        tmp_path,
+        r"""
+(async () => {
+  const timers = new Map();
+  const listeners = new Map();
+  let next = 0;
+  window.setTimeout = (callback, delay) => { timers.set(++next, { callback, delay }); return next; };
+  window.clearTimeout = (id) => timers.delete(id);
+  window.addEventListener = (name, callback) => listeners.set(name, callback);
+  window.removeEventListener = (name) => listeners.delete(name);
+  globalThis.AbortController = class {
+    constructor() { this.signal = { aborted: false }; }
+    abort() { this.signal.aborted = true; }
+  };
+  let signal;
+  api = async (path, options) => { signal = options.signal; throw new Error('Unavailable'); };
+  byId('busy-message').textContent = 'Building';
+  const stop = pollIngestionProgress();
+  const first = [...timers.values()][0];
+  timers.clear();
+  await first.callback();
+  const retried = [...timers.values()].some((entry) => entry.delay === 2000);
+  listeners.get('pagehide')();
+  stop();
+  result = { retried, message: byId('busy-message').textContent,
+    timers: timers.size, listeners: listeners.size, aborted: signal.aborted,
+    fallback: liveIngestionSummary({ phase: 'embedding', progress: { completed: 3, total: 10, unit: 'chunks' } }) };
+})();
+""",
+    )
+    assert result["retried"] and result["aborted"]
+    assert result["message"] == "Building"
+    assert result["timers"] == result["listeners"] == 0
+    assert result["fallback"] == "embedding · 3 / 10 chunks · Phase ETA estimating…"
+
+
 def _drive_page(tmp_path: Path, scenario: str) -> dict[str, Any]:
     """Run the page script under the stub document, then one scenario after it."""
 

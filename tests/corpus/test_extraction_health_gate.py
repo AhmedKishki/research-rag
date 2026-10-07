@@ -765,10 +765,12 @@ def test_a_source_losing_more_than_the_accepted_share_is_refused_as_not_clean() 
     The message says a loss is expected and names OCR, which is never run here.
     """
 
+    from research_rag.corpus.extraction import UncleanSourceError
+
     ordinary = "A page that reads as ordinary argument about labour and time. " * 12
     units = [_unit(1, ordinary), _unit(2, ordinary), _unit(3, CORRUPT_PAGE)]
 
-    with pytest.raises(ExtractionError) as failure:
+    with pytest.raises(UncleanSourceError) as failure:
         screen_source_units(
             _named_source("poor-layer.pdf"),
             {"title": "Poor layer"},

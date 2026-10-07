@@ -2611,6 +2611,72 @@ def test_no_change_ingest_is_noop_and_force_rebuilds(project: Path) -> None:
     asyncio.run(_assert_no_change_ingest_is_noop_and_force_rebuilds(project))
 
 
+def test_ingest_defers_unclean_source_and_commits_clean_evidence(
+    project: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from research_rag.corpus.extraction import UncleanSourceError
+    from research_rag.generations import ingestion
+
+    original = ingestion.screen_source_units
+
+    def screen(source, *args, **kwargs):
+        if source.source_relative_path == "bad.pdf":
+            raise UncleanSourceError("unclean_text: manual OCR needed; never automatic")
+        return original(source, *args, **kwargs)
+
+    monkeypatch.setattr(ingestion, "screen_source_units", screen)
+
+    async def exercise():
+        write_pdf(project / "sources" / "bad.pdf", ["Bad evidence."])
+        write_pdf(project / "sources" / "clean.pdf", ["Stable clean evidence."])
+        config = resolve_config(project, vanilla_executable=sys.executable)
+        service = ResearchService(config, FakeUltraRAG(), dense=FakeDenseBackend())
+        result = await service.ingest(chunk_size=50, chunk_overlap=10)
+        assert result["status"] == "ready"
+        assert result["document_count"] == 1
+        assert result["skipped_sources"][0]["source_relative_path"] == "bad.pdf"
+        assert "manual OCR" in result["skipped_sources"][0]["reason"]
+        root = Path(result["generation_root"])
+        manifest = json.loads((root / "manifest.json").read_text())
+        assert manifest["build_metrics"]["skipped_source_count"] == 1
+        unchanged = await service.ingest(chunk_size=50, chunk_overlap=10)
+        assert unchanged["status"] == "unchanged"
+        assert unchanged["skipped_sources"] == result["skipped_sources"]
+        # Repairing a skipped source changes its digest and retries it normally.
+        monkeypatch.setattr(ingestion, "screen_source_units", original)
+        write_pdf(project / "sources" / "bad.pdf", ["Repaired readable evidence."])
+        repaired = await service.ingest(chunk_size=50, chunk_overlap=10)
+        assert repaired["document_count"] == 2
+        assert repaired["skipped_source_count"] == 0
+
+    asyncio.run(exercise())
+
+
+def test_all_unclean_sources_preserve_current_generation(
+    project: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from research_rag.corpus.extraction import UncleanSourceError
+    from research_rag.generations import ingestion
+
+    async def exercise():
+        write_pdf(project / "sources" / "article.pdf", ["Stable readable evidence."])
+        config = resolve_config(project, vanilla_executable=sys.executable)
+        service = ResearchService(config, FakeUltraRAG(), dense=FakeDenseBackend())
+        first = await service.ingest(chunk_size=50, chunk_overlap=10)
+        before = config.current_path.read_bytes()
+
+        def refuse(*args, **kwargs):
+            raise UncleanSourceError("unclean_text: manual OCR needed")
+
+        monkeypatch.setattr(ingestion, "screen_source_units", refuse)
+        with pytest.raises(ResearchError, match="No clean sources remain"):
+            await service.ingest(chunk_size=50, chunk_overlap=10, force_recompute=True)
+        assert config.current_path.read_bytes() == before
+        assert Path(first["generation_root"]).is_dir()
+
+    asyncio.run(exercise())
+
+
 @pytest.mark.parametrize(
     "artifact",
     ["chunks", "vectors", "bm25", "dense"],

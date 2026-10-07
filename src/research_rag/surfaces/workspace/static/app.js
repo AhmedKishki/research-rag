@@ -4081,8 +4081,96 @@ async function restoreSource(path) {
   }
 }
 
+// Each poller owns its samples. Only homogeneous phase counters contribute;
+// source and overall counters never imply a deadline for the whole build.
+function phaseEtaEstimator() {
+  let sample = null;
+  return (status, now) => {
+    const count = status.progress;
+    if (!count || !Number.isFinite(count.completed) || !Number.isFinite(count.total)
+        || count.total <= 0 || count.completed < 0 || count.completed > count.total
+        || !Number.isFinite(now)) {
+      sample = null;
+      return null;
+    }
+    const key = JSON.stringify([status.build_id, status.phase, count.unit, count.total]);
+    if (!sample || sample.key !== key || count.completed < sample.completed || now < sample.time) {
+      sample = { key, completed: count.completed, time: now,
+        start: now, initial: count.completed, advances: 0 };
+      return null;
+    }
+    if (now === sample.time) return null;
+    if (count.completed > sample.completed) sample.advances++;
+    sample.completed = count.completed;
+    sample.time = now;
+    const elapsed = (now - sample.start) / 1000;
+    const delta = count.completed - sample.initial;
+    if (sample.advances < 2 || elapsed <= 0 || delta <= 0) return null;
+    return (count.total - count.completed) * elapsed / delta;
+  };
+}
+
+function liveIngestionSummary(progress, localEta = null) {
+  const parts = [String(progress.phase || "Building indexes").replaceAll("_", " ")];
+  const counts = (label, value) => {
+    if (value && Number.isFinite(value.completed) && Number.isFinite(value.total) && value.total > 0) {
+      parts.push(`${label}${formatNumber(value.completed)} / ${formatNumber(value.total)} ${String(value.unit || "").replaceAll("_", " ")}`.trim());
+    }
+  };
+  if (progress.source) parts.push(String(progress.source));
+  counts("Source: ", progress.source_progress);
+  counts("", progress.progress);
+  counts("Overall: ", progress.overall_progress);
+  if (Number.isFinite(progress.eta_seconds) && progress.eta_seconds >= 0) {
+    parts.push(`ETA about ${Math.ceil(progress.eta_seconds / 60)} min`);
+  } else if (Number.isFinite(localEta) && localEta >= 0) {
+    parts.push(`Phase ETA about ${Math.ceil(localEta / 60)} min`);
+  } else {
+    parts.push("Phase ETA estimating…");
+  }
+  return parts.join(" · ");
+}
+
+// One bounded status request at a time; never reload the source inventory while
+// the single ingest POST owns the build. Late responses cannot overwrite the UI.
+function pollIngestionProgress() {
+  const estimate = phaseEtaEstimator();
+  let stopped = false;
+  let timer;
+  let controller;
+  const poll = async () => {
+    if (stopped) return;
+    controller = new AbortController();
+    const timeout = window.setTimeout(() => controller.abort(), 10000);
+    try {
+      const status = await api("/api/status", { signal: controller.signal });
+      if (!stopped && status.ingestion_progress) {
+        const progress = status.ingestion_progress;
+        byId("busy-message").textContent = `${liveIngestionSummary(progress, estimate(progress, performance.now()))} · Status checked ${new Date().toLocaleTimeString()}`;
+      } else if (!stopped) {
+        estimate({}, performance.now());
+      }
+    } catch (_error) {
+      // Status failures do not cancel ingestion or replace its result.
+    } finally {
+      window.clearTimeout(timeout);
+      if (!stopped) timer = window.setTimeout(poll, 2000);
+    }
+  };
+  timer = window.setTimeout(poll, 2000);
+  const stop = () => {
+    stopped = true;
+    window.clearTimeout(timer);
+    controller?.abort();
+    window.removeEventListener("pagehide", stop);
+  };
+  window.addEventListener("pagehide", stop, { once: true });
+  return stop;
+}
+
 async function ingest(event) {
   event.preventDefault();
+  if (state.busy) return;
   const chunkSize = Number(byId("chunk-size").value);
   const chunkOverlap = Number(byId("chunk-overlap").value);
   if (hasCapability("chunk_settings") && chunkOverlap >= chunkSize) {
@@ -4090,6 +4178,7 @@ async function ingest(event) {
     return;
   }
   setBusy(true, state.profile?.ingest_busy_message || "Building the indexes. This can take several minutes…");
+  const stopProgress = pollIngestionProgress();
   try {
     const request = {};
     if (hasCapability("chunk_settings")) {
@@ -4101,13 +4190,19 @@ async function ingest(event) {
       method: "POST",
       body: JSON.stringify(request),
     });
+    stopProgress();
     byId("ingest-dialog").close();
-    clearResults();
-    toast(`Generation ${compactId(result.generation_id)} is ready with ${formatNumber(result.chunk_count)} passages.`);
+    if (result.status === "in_progress") {
+      toast("Ingestion is still in progress. The generation is not ready yet.");
+    } else {
+      clearResults();
+      toast(`Generation ${compactId(result.generation_id)} is ready with ${formatNumber(result.chunk_count)} passages.`);
+    }
     await loadWorkspace();
   } catch (error) {
     toast(error.message, true);
   } finally {
+    stopProgress();
     setBusy(false);
     if (state.status) configureRetrieval(state.status);
   }

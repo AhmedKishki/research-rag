@@ -330,6 +330,12 @@ def lean_ingest(payload: Mapping[str, Any]) -> dict[str, Any]:
     for key in _INGEST_DISCLOSURES:
         _add(result, key, payload.get(key))
     _add(result, "withheld_chunk_reasons", payload.get("withheld_chunk_reasons"))
+    skipped = payload.get("skipped_sources") or []
+    if skipped:
+        result["skipped_source_count"] = len(skipped)
+        result["skipped_sources"] = skipped[:10]
+        if len(skipped) > 10:
+            result["skipped_sources_truncated"] = True
     _add(result, "superseded_build", payload.get("superseded_build"))
     if payload.get("activation_recovered"):
         result["activation_recovered"] = True

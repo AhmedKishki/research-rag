@@ -54,6 +54,10 @@ class ExtractionError(RuntimeError):
     pass
 
 
+class UncleanSourceError(ExtractionError):
+    """The source health gate refused unreadable evidence, not an I/O failure."""
+
+
 _DOI = re.compile(r"\b10\.\d{4,9}/[-._;()/:A-Z0-9]+", re.IGNORECASE)
 _URL = re.compile(r"^(?:https?://|www\.|(?:dx\.)?doi\.org/)", re.IGNORECASE)
 _PAGE_NUMBER = re.compile(
@@ -2346,7 +2350,10 @@ def screen_source_units(
         maximum_unclean_percent=maximum_unclean_percent,
     )
     if fatal:
-        raise ExtractionError(
+        error_type = (
+            UncleanSourceError if SOURCE_REASON_UNCLEAN in fatal else ExtractionError
+        )
+        raise error_type(
             _refusal_message(
                 source,
                 fatal,
