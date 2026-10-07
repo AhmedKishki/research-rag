@@ -24,8 +24,9 @@ def generation_inventory(
     """Describe every retained generation on disk without validating it.
 
     These are exactly the directories a prune would consider, so `status`
-    reports them with their size and file count. A generation whose manifest is
-    missing, unreadable, or not JSON is reported with a ``manifest_error``
+    reports them with their size, file count, and recorded build configuration.
+    Model and configuration facts come from that manifest, never today's settings.
+    A missing, unreadable, or non-JSON manifest is reported with a ``manifest_error``
     instead of raising: the report must answer when one retained generation is
     damaged. This runs only on the read-only ``status`` surface, never on the
     search path, because it walks each generation's files.
@@ -40,6 +41,12 @@ def generation_inventory(
             record: dict[str, Any] = {
                 "generation_id": entry.name,
                 "is_current": entry.name == current_generation_id,
+                "chunking": None,
+                "retrieval": None,
+                "retrieval_policy_fingerprint": None,
+                "extraction_policy_version": None,
+                "cleaning_policy_version": None,
+                "artifact_policy_version": None,
             }
             try:
                 manifest = read_json(entry / "manifest.json")
@@ -52,6 +59,24 @@ def generation_inventory(
                         chunk_count=manifest.get("chunk_count"),
                         document_count=manifest.get("document_count"),
                         schema_version=manifest.get("schema_version"),
+                        extraction_policy_version=manifest.get(
+                            "extraction_policy_version"
+                        ),
+                        cleaning_policy_version=manifest.get("cleaning_policy_version"),
+                        artifact_policy_version=manifest.get("artifact_policy_version"),
+                        retrieval_policy_fingerprint=manifest.get(
+                            "retrieval_policy_fingerprint"
+                        ),
+                        chunking=(
+                            manifest["chunking"]
+                            if isinstance(manifest.get("chunking"), dict)
+                            else None
+                        ),
+                        retrieval=(
+                            manifest["retrieval"]
+                            if isinstance(manifest.get("retrieval"), dict)
+                            else None
+                        ),
                     )
                 else:
                     record["manifest_error"] = "manifest.json is not a JSON object"

@@ -20,6 +20,7 @@ const state = {
   memoryRounds: new Map(),
   memoryStanding: new Map(),
   standingScope: null,
+  generationActions: [],
   busy: false,
   forceRecompute: false,
   settingsRevision: "",
@@ -289,6 +290,13 @@ function setBusy(active, message = "Working…") {
   byId("rebuild-button").disabled = active || !hasCapability("force_recompute");
   byId("export-button").disabled = active || !hasCapability("bundle_export");
   byId("import-button").disabled = active || !hasCapability("bundle_import");
+  // A generation's Load and Remove are ordinary buttons rather than gated
+  // submits, so the loop above does not reach them. They are held here, where
+  // the busy state is decided, so one operation cannot start while another is
+  // changing which generation searches read.
+  state.generationActions.forEach((control) => {
+    control.disabled = active;
+  });
   syncGatedSubmits();
 }
 
@@ -2949,9 +2957,105 @@ function bytes(count) {
   return `${unit === 0 ? value : value.toFixed(1)} ${units[unit]}`;
 }
 
+// A recorded fact is stated when the manifest carried it and named as missing
+// when it did not. A generation that recorded no model must never be shown
+// today's default beside it: the reader asked what this build used, and a
+// substituted value would answer a different question.
+const RECORDED_MISSING = "Not recorded";
+
+function recordedObject(value) {
+  return value && typeof value === "object" && !Array.isArray(value) ? value : null;
+}
+
+function recordedText(value) {
+  if (typeof value === "string" && value.trim()) return value.trim();
+  if (typeof value === "number" && Number.isFinite(value)) return String(value);
+  return RECORDED_MISSING;
+}
+
+function recordedList(value) {
+  const items = Array.isArray(value)
+    ? value.filter((item) => typeof item === "string" && item.trim())
+    : [];
+  return items.length ? items.join(", ") : RECORDED_MISSING;
+}
+
+// The facts a reader compares between builds, each read from the manifest this
+// generation recorded. Every value is a string by the time it is drawn, so a
+// manifest that carried markup is shown as the text it is.
+function recordedConfigFacts(generation) {
+  const chunking = recordedObject(generation.chunking);
+  const retrieval = recordedObject(generation.retrieval);
+  const dense = recordedObject(retrieval && retrieval.dense);
+  const bm25 = recordedObject(retrieval && retrieval.bm25);
+  const reranker = recordedObject(retrieval && retrieval.reranker);
+  return [
+    ["Embedding model", dense ? recordedText(dense.embedding_model) : RECORDED_MISSING],
+    ["Embedding revision", dense ? recordedText(dense.embedding_model_revision) : RECORDED_MISSING],
+    ["Embedding dimension", dense ? recordedText(dense.embedding_dimension) : RECORDED_MISSING],
+    ["Embedding backend", dense ? recordedText(dense.backend) : RECORDED_MISSING],
+    ["Reranker model", reranker ? recordedText(reranker.model) : RECORDED_MISSING],
+    ["Reranker revision", reranker ? recordedText(reranker.model_revision) : RECORDED_MISSING],
+    ["Chunk size", chunking ? recordedText(chunking.chunk_size) : RECORDED_MISSING],
+    ["Chunk overlap", chunking ? recordedText(chunking.chunk_overlap) : RECORDED_MISSING],
+    ["Chunk tokenizer", chunking ? recordedText(chunking.tokenizer) : RECORDED_MISSING],
+    ["BM25 language", bm25 ? recordedText(bm25.language) : RECORDED_MISSING],
+    ["Retrieval methods", retrieval ? recordedList(retrieval.available_methods) : RECORDED_MISSING],
+  ];
+}
+
+function policyFacts(generation) {
+  return [
+    ["Retrieval policy fingerprint", recordedText(generation.retrieval_policy_fingerprint)],
+    ["Extraction policy", recordedText(generation.extraction_policy_version)],
+    ["Cleaning policy", recordedText(generation.cleaning_policy_version)],
+    ["Artifact policy", recordedText(generation.artifact_policy_version)],
+  ];
+}
+
+// The summary is one line so a table of builds stays comparable down a column,
+// and the full blocks below it open on request.
+function recordedConfigSummary(generation) {
+  return node(
+    "p",
+    "recorded-config-summary",
+    recordedConfigFacts(generation)
+      .map(([label, value]) => `${label}: ${value}`)
+      .join(" · "),
+  );
+}
+
+// The expandable form states the whole recorded configuration: every fact
+// above, the policy versions, and the raw chunking and retrieval blocks as
+// text. It is labelled as the configuration this build recorded rather than
+// the settings in force, because selection never restores a recorded config.
+function recordedConfigBlock(generation) {
+  const details = node("details", "recorded-config");
+  details.append(node("summary", "recorded-config-title", "Recorded build configuration"));
+  details.append(
+    node(
+      "p",
+      "form-note",
+      "Facts this build recorded. They are not the project's active settings; "
+        + "loading a generation does not restore them.",
+    ),
+  );
+  details.append(factList(recordedConfigFacts(generation), "fact-list recorded-config-facts"));
+  details.append(node("p", "recorded-config-label", "Policy facts (recorded)"));
+  details.append(factList(policyFacts(generation), "fact-list recorded-config-facts"));
+  [
+    ["Chunking", recordedObject(generation.chunking)],
+    ["Retrieval", recordedObject(generation.retrieval)],
+  ].forEach(([label, value]) => {
+    details.append(node("p", "recorded-config-label", `${label} (recorded)`));
+    details.append(node("pre", "recorded-config-json", JSON.stringify(value ?? null, null, 2)));
+  });
+  return details;
+}
+
 // One row per build, in a table: a reader comparing builds reads down a column,
 // and ten builds as cards of six labelled lines each were a page of scrolling.
-// The identifier is the row's head because it is what a removal names.
+// The identifier is the row's head because it is what a removal or a load names.
 function generationRow(generation) {
   const row = node("tr");
   const head = node("th", "record-id-cell");
@@ -2966,21 +3070,38 @@ function generationRow(generation) {
   // because a reader deciding what to remove needs to know which rows are facts.
   if (generation.manifest_error) {
     head.append(node("p", "record-warning", `Manifest unreadable: ${generation.manifest_error}`));
+    head.append(node("p", "record-warning", "Not possible: this generation cannot be loaded."));
   }
+  head.append(recordedConfigSummary(generation));
+  head.append(recordedConfigBlock(generation));
   row.append(head);
   row.append(node("td", "", generation.created_at ? formatDate(generation.created_at) : "Unknown"));
   row.append(node("td", "number-cell", formatNumber(generation.chunk_count ?? 0)));
   row.append(node("td", "number-cell", formatNumber(generation.document_count ?? 0)));
   row.append(node("td", "number-cell", bytes(generation.size_bytes)));
   const action = node("td", "action-cell");
-  // The one a search reads cannot be removed, so the action is not offered
-  // rather than offered and refused: a button that always fails is a button
-  // that teaches a reader to click through the answers.
+  // The one a search reads offers no action: a load would be a no-op and a
+  // removal is refused, so neither is offered rather than offered and refused.
+  // A damaged manifest row keeps its removal because that is how the reader
+  // reclaims the space, but it is never offered a load it could not survive.
   if (!generation.is_current) {
+    if (!generation.manifest_error) {
+      const load = node("button", "text-button", "Load");
+      load.type = "button";
+      load.className = "text-button generation-action";
+      load.setAttribute("aria-label", `Load ${generation.generation_id}`);
+      load.disabled = state.busy;
+      load.addEventListener("click", () => openGenerationLoad(generation.generation_id));
+      state.generationActions.push(load);
+      action.append(load);
+    }
     const drop = node("button", "text-button", "Remove");
     drop.type = "button";
+    drop.className = "text-button generation-action";
     drop.setAttribute("aria-label", `Remove ${generation.generation_id}`);
+    drop.disabled = state.busy;
     drop.addEventListener("click", () => openGenerationRemoval(generation.generation_id));
+    state.generationActions.push(drop);
     action.append(drop);
   }
   row.append(action);
@@ -2993,6 +3114,9 @@ function renderGenerations(generations) {
   // The id stays the container hook other code and tests already read.
   const container = byId("generation-chips");
   container.replaceChildren();
+  // The buttons the busy state holds are rebuilt with the rows, so a refresh
+  // never leaves a stale control in the list.
+  state.generationActions = [];
   byId("generation-count").textContent = formatNumber(generations.length);
   foldList(byId("generation-fold"), generations.length);
   if (!generations.length) {
@@ -3063,6 +3187,51 @@ async function removeGeneration(event) {
     toast(error.message, true);
   } finally {
     setBusy(false);
+  }
+}
+
+// Loading a generation is a deliberate choice about which indexed evidence a
+// search reads, so it is confirmed before the request is sent. The dialog says
+// what changes and what does not: the corpus on disk and the active settings
+// are untouched.
+function openGenerationLoad(generationId) {
+  byId("generation-load-id").value = generationId;
+  byId("generation-load-name").textContent = generationId;
+  byId("generation-load-error").hidden = true;
+  byId("generation-load-error").textContent = "";
+  byId("generation-load-submit").disabled = state.busy;
+  byId("generation-load-dialog").showModal();
+}
+
+async function loadGeneration(event) {
+  event.preventDefault();
+  const generationId = byId("generation-load-id").value;
+  if (!generationId) return;
+  setBusy(true, "Loading the generation…");
+  try {
+    const result = await api("/api/generations/use", {
+      method: "POST",
+      body: JSON.stringify({ generation_id: generationId }),
+    });
+    byId("generation-load-dialog").close();
+    // Discard cached passages after selection, including a server no-op: another
+    // client may already have switched the generation since this page searched.
+    clearResults();
+    toast(result.message || `Search now reads generation ${compactId(generationId)}.`);
+    // The whole status is refreshed so the corpus counts, the retrieval methods,
+    // and any BM25-only warning describe the generation now selected.
+    await loadWorkspace();
+  } catch (error) {
+    // A generation that cannot be loaded is refused, not repaired. The dialog
+    // stays open and carries the server's own reason, so the reader learns the
+    // selection is not possible beside the choice that caused it. The current
+    // generation, its results, and the settings are untouched.
+    const line = byId("generation-load-error");
+    line.hidden = false;
+    line.textContent = `Not possible: ${error.message}`;
+  } finally {
+    setBusy(false);
+    if (state.status) configureRetrieval(state.status);
   }
 }
 
@@ -4156,6 +4325,7 @@ function initialize() {
   byId("excluded-list").addEventListener("click", handleAction);
   byId("generation-form").addEventListener("submit", removeGeneration);
   byId("generation-confirm").addEventListener("input", syncGenerationSubmit);
+  byId("generation-load-form").addEventListener("submit", loadGeneration);
   byId("sql-form").addEventListener("submit", runSql);
   byId("sql-execute-button").addEventListener("click", executeSql);
   byId("sql-statement").addEventListener("input", syncSqlControls);

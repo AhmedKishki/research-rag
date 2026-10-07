@@ -162,7 +162,10 @@ HELP_GROUPS: tuple[tuple[str, tuple[tuple[str, str], ...]], ...] = (
             ),
             (
                 "generations",
-                "Every generation on disk with its size, and the one search reads.",
+                (
+                    "Every generation with its size, recorded models and build configuration. "
+                    "--use ID loads one for subsequent searches."
+                ),
             ),
             (
                 "stats",
@@ -991,8 +994,9 @@ def _parser() -> argparse.ArgumentParser:
     generations = add(
         "generations",
         description=(
-            "List the generations on disk with their size, and which one search "
-            "reads. A rebuild writes a new one and switches to it only when every "
+            "List the generations on disk with their size, recorded models and "
+            "build configuration, and which one search reads. A rebuild writes "
+            "a new one and switches to it only when every "
             "index is complete, so the earlier ones stay here to be searched "
             "instead or to be removed."
         ),

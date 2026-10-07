@@ -2879,6 +2879,233 @@ result.oldRemovable = Boolean(find(rows[1], (item) => item.textContent === "Remo
     assert result["oldRemovable"] is True
 
 
+def test_a_retained_generation_offers_load_and_a_damaged_one_does_not(
+    tmp_path: Path,
+) -> None:
+    """Load is offered on a valid non-current row, never on the current one or a
+    row whose manifest could not be read, and the recorded configuration is
+    stated as what the build recorded."""
+
+    result = _drive_page(
+        tmp_path,
+        r"""
+state.profile = { capabilities: { generations: true } };
+const chunking = { backend: "UltraRAG token chunker", tokenizer: "gpt2", unit: "tokens", chunk_size: 512, chunk_overlap: 64 };
+const retrieval = {
+  default_method: "hybrid",
+  available_methods: ["bm25", "dense", "hybrid"],
+  bm25: { backend: "UltraRAG BM25", language: "en", tokenizer: "default" },
+  dense: { backend: "portable float32 vectors (exact cosine scan)", embedding_model: "BAAI/bge-small-en-v1.5", embedding_model_revision: "rev-1", embedding_dimension: 384 },
+  reranker: { optional: true, model: "BAAI/bge-reranker-base", model_revision: "rev-2" },
+};
+renderGenerations([
+  { generation_id: "g-current", is_current: true, created_at: "2026-10-05T08:38:11Z", chunk_count: 10, document_count: 2, size_bytes: 1024, chunking, retrieval, retrieval_policy_fingerprint: "fp-1", extraction_policy_version: 3, cleaning_policy_version: 2, artifact_policy_version: 1 },
+  { generation_id: "g-old", is_current: false, created_at: "2026-10-02T08:08:53Z", chunk_count: 9, document_count: 2, size_bytes: 1024, chunking, retrieval, retrieval_policy_fingerprint: "fp-2", extraction_policy_version: 3, cleaning_policy_version: 2, artifact_policy_version: 1 },
+  { generation_id: "g-damaged", is_current: false, manifest_error: "truncated", size_bytes: 10 },
+]);
+const container = document.getElementById("generation-chips");
+const body = container.children[1].children[0].children[1];
+const actionLabels = (row) => row.children[row.children.length - 1].children.map((button) => button.textContent);
+result.currentActions = actionLabels(body.children[0]);
+result.oldActions = actionLabels(body.children[1]);
+result.damagedActions = actionLabels(body.children[2]);
+result.damagedText = text(body.children[2]);
+const row = body.children[1];
+result.summary = find(row, (item) => item.className === "recorded-config-summary").textContent;
+result.buttons = row.children[row.children.length - 1].children.map((button) => [button.textContent, button.disabled]);
+setBusy(true, "Loading the generation…");
+result.busyButtons = row.children[row.children.length - 1].children.map((button) => button.disabled);
+setBusy(false);
+const config = find(row, (item) => item.className === "recorded-config");
+result.configTitle = config.children[0].textContent;
+result.configNote = config.children[1].textContent;
+result.facts = text(config.children[2]);
+result.blocks = config.children.filter((item) => item.tagName === "pre").map((item) => JSON.parse(item.textContent));
+const policyLabel = config.children.find((item) => item.textContent === "Policy facts (recorded)");
+result.policies = text(config.children[config.children.indexOf(policyLabel) + 1]);
+""",
+    )
+
+    assert result["currentActions"] == []
+    assert result["oldActions"] == ["Load", "Remove"]
+    assert result["damagedActions"] == ["Remove"]
+    assert "Not possible" in result["damagedText"]
+    assert "Embedding model: BAAI/bge-small-en-v1.5" in result["summary"]
+    assert "Embedding revision: rev-1" in result["summary"]
+    assert "Embedding dimension: 384" in result["summary"]
+    assert "Reranker model: BAAI/bge-reranker-base" in result["summary"]
+    assert "Reranker revision: rev-2" in result["summary"]
+    assert "Chunk size: 512" in result["summary"]
+    assert "Chunk overlap: 64" in result["summary"]
+    assert "Chunk tokenizer: gpt2" in result["summary"]
+    assert "BM25 language: en" in result["summary"]
+    assert "Retrieval methods: bm25, dense, hybrid" in result["summary"]
+    assert result["buttons"] == [["Load", False], ["Remove", False]]
+    # A generation action is held while another is running, so two operations
+    # cannot change which generation a search reads at once.
+    assert result["busyButtons"] == [True, True]
+    assert result["configTitle"] == "Recorded build configuration"
+    assert "not the project's active settings" in result["configNote"]
+    assert result["blocks"][0]["chunk_size"] == 512
+    assert result["blocks"][1]["dense"]["embedding_model"] == "BAAI/bge-small-en-v1.5"
+    assert "Retrieval policy fingerprint fp-2" in result["policies"]
+    assert "Not recorded" not in result["policies"]
+
+
+def test_a_generations_recorded_config_is_text_not_markup(tmp_path: Path) -> None:
+    """A manifest that carried markup is shown as the text it is, never drawn."""
+
+    result = _drive_page(
+        tmp_path,
+        r"""
+state.profile = { capabilities: { generations: true } };
+const payload = "<img src=x onerror=alert(1)>";
+renderGenerations([{ generation_id: "g-x", is_current: false, chunking: { tokenizer: payload }, retrieval: { dense: { embedding_model: payload } } }]);
+const row = document.getElementById("generation-chips").children[1].children[0].children[1].children[0];
+result.summary = find(row, (item) => item.className === "recorded-config-summary").textContent;
+const found = [];
+const walk = (item) => { if (item.tagName === "img") found.push(item); (item.children || []).forEach(walk); };
+walk(row);
+result.images = found.length;
+""",
+    )
+
+    assert "<img src=x onerror=alert(1)>" in result["summary"]
+    assert result["images"] == 0
+
+
+def test_a_generation_that_recorded_nothing_says_so(tmp_path: Path) -> None:
+    """A legacy record with no chunking or retrieval never borrows today's
+    defaults; every fact it did not record is named as missing."""
+
+    result = _drive_page(
+        tmp_path,
+        r"""
+state.profile = { capabilities: { generations: true } };
+renderGenerations([
+  { generation_id: "g-legacy", is_current: false, chunking: null, retrieval: null },
+  { generation_id: "g-partial", is_current: false, retrieval: { available_methods: ["bm25"] } },
+]);
+const body = document.getElementById("generation-chips").children[1].children[0].children[1];
+const summaryOf = (row) => find(row, (item) => item.className === "recorded-config-summary").textContent;
+result.legacy = summaryOf(body.children[0]);
+result.partial = summaryOf(body.children[1]);
+const config = find(body.children[0], (item) => item.className === "recorded-config");
+result.legacyFacts = text(config.children[2]);
+const policyLabel = config.children.find((item) => item.textContent === "Policy facts (recorded)");
+result.legacyPolicies = text(config.children[config.children.indexOf(policyLabel) + 1]);
+result.legacyBlocks = config.children.filter((item) => item.tagName === "pre").map((item) => item.textContent);
+""",
+    )
+
+    assert "Embedding model: Not recorded" in result["legacy"]
+    assert "Reranker model: Not recorded" in result["legacy"]
+    assert "Chunk size: Not recorded" in result["legacy"]
+    assert "BM25 language: Not recorded" in result["legacy"]
+    assert "Retrieval methods: Not recorded" in result["legacy"]
+    assert "Not recorded" in result["legacyFacts"]
+    assert "Not recorded" in result["legacyPolicies"]
+    assert result["legacyBlocks"] == ["null", "null"]
+    assert "Embedding model: Not recorded" in result["partial"]
+    assert "Retrieval methods: bm25" in result["partial"]
+
+
+@pytest.mark.parametrize("outcome", ["changed", "unchanged"])
+def test_loading_a_generation_confirms_then_refreshes_the_workspace(
+    tmp_path: Path,
+    outcome: str,
+) -> None:
+    """A load asks once, changes the selected generation, clears the old results,
+    and refreshes the whole status so the corpus facts follow the selection."""
+
+    result = _drive_page(
+        tmp_path,
+        r"""
+(async () => {
+state.profile = { capabilities: { generations: true, sources: true } };
+const asked = [];
+fetch = async (path, options = {}) => {
+  asked.push({ path, method: options.method || "GET", body: options.body || null });
+  if (path === "/api/generations/use") {
+    return { ok: true, status: 200, json: async () => ({ status: "changed", generation_id: "g-old", message: "Search now reads generation g-old." }) };
+  }
+  if (path === "/api/status") {
+    return { ok: true, status: 200, json: async () => ({ ready: true, generation_id: "g-old", available_retrieval_methods: ["bm25"], message: "Current generation is BM25-only." }) };
+  }
+  return { ok: true, status: 200, json: async () => ({}) };
+};
+openGenerationLoad("g-old");
+result.dialogOpen = document.getElementById("generation-load-dialog").opened;
+result.name = document.getElementById("generation-load-name").textContent;
+document.getElementById("generation-load-id").value = "g-old";
+document.getElementById("search-summary").hidden = false;
+const connection = document.getElementById("connection-state");
+connection.append(document.createElement("span"));
+connection.lastElementChild = connection.children[0];
+await loadGeneration({ preventDefault() {} });
+result.dialogClosed = !document.getElementById("generation-load-dialog").opened;
+result.cleared = document.getElementById("search-summary").hidden;
+const loadCall = asked.find((call) => call.path === "/api/generations/use");
+result.loadBody = JSON.parse(loadCall.body);
+result.loadMethod = loadCall.method;
+result.refreshed = asked.some((call) => call.path === "/api/status" && call.method === "GET");
+result.sources = asked.some((call) => call.path === "/api/sources");
+result.toast = text(document.getElementById("toast-region"));
+})();
+""".replace('status: "changed"', f"status: {json.dumps(outcome)}"),
+    )
+
+    assert result["dialogOpen"] is True
+    assert result["name"] == "g-old"
+    assert result["dialogClosed"] is True
+    assert result["loadMethod"] == "POST"
+    assert result["loadBody"] == {"generation_id": "g-old"}
+    assert result["refreshed"] is True
+    assert result["sources"] is True
+    assert result["cleared"] is True
+    assert "Search now reads generation g-old." in result["toast"]
+
+
+def test_a_refused_load_keeps_the_dialog_and_does_not_refresh(
+    tmp_path: Path,
+) -> None:
+    """The server's refusal is shown beside the choice that caused it, and the
+    page does not pretend the selection happened."""
+
+    result = _drive_page(
+        tmp_path,
+        r"""
+(async () => {
+state.profile = { capabilities: { generations: true } };
+const asked = [];
+fetch = async (path, options = {}) => {
+  asked.push(path);
+  return { ok: false, status: 400, json: async () => ({ error: "Generation g-old failed validation and was not selected: damaged." }) };
+};
+openGenerationLoad("g-old");
+document.getElementById("generation-load-id").value = "g-old";
+await loadGeneration({ preventDefault() {} });
+result.dialogOpen = document.getElementById("generation-load-dialog").opened;
+result.statusCalls = asked.filter((path) => path === "/api/status").length;
+result.errorHidden = document.getElementById("generation-load-error").hidden;
+result.error = document.getElementById("generation-load-error").textContent;
+result.toastCount = document.getElementById("toast-region").children.length;
+result.currentResults = document.getElementById("search-summary").hidden;
+})();
+""",
+    )
+
+    assert result["dialogOpen"] is True
+    assert result["statusCalls"] == 0
+    assert result["errorHidden"] is False
+    assert result["error"].startswith("Not possible: ")
+    assert "failed validation" in result["error"]
+    # The refusal is shown where the choice was made, not also as a toast.
+    assert result["toastCount"] == 0
+    # The current generation and what a search returned are untouched.
+    assert result["currentResults"] is False
+
+
 def test_small_layout_and_keyboard_fixes_hold() -> None:
     """Three small faults: a page number broke onto two lines beside a long
     title, Ctrl+Enter did nothing in the query box, and the clients summary put

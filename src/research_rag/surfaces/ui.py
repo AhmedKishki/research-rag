@@ -137,6 +137,7 @@ _OPERATION_ARGUMENTS: Mapping[str, frozenset[str]] = {
     "list_chunk_exclusions": frozenset(),
     "set_source_metadata": frozenset({"source_path", "metadata"}),
     "remove_generation": frozenset({"generation_id", "confirm"}),
+    "use_generation": frozenset({"generation_id"}),
     "settings_read": frozenset(),
     "settings_write": frozenset({"values", "expected_revision", "confirm"}),
     "list_projects": frozenset(),
@@ -490,20 +491,8 @@ class ResearchUIAdapter:
                 metadata=dict(metadata),
                 source_path=_source_path(arguments),
             )
-        if operation == "remove_generation":
-            generation_id = arguments.get("generation_id")
-            if not isinstance(generation_id, str) or not generation_id:
-                raise UIRequestError(
-                    "A generation removal needs a generation_id string"
-                )
-            # The confirmation is carried, not defaulted. The shared workspace
-            # already refuses a mismatch before it gets here. Forwarding anything
-            # but the id the reader typed is how a browser would come to mean
-            # "yes" on a click.
-            confirm = arguments.get("confirm")
-            if not isinstance(confirm, str):
-                raise UIRequestError("A generation removal needs a confirm string")
-            return await self.service.remove_generation(generation_id, confirm=confirm)
+        if operation in ("remove_generation", "use_generation"):
+            return await self._generation_operation(operation, arguments)
         if operation == "settings_read":
             return await self.service.settings_read()
         if operation == "settings_write":
@@ -521,6 +510,41 @@ class ResearchUIAdapter:
             f"Research operation {operation!r} is not available",
             status_code=404,
         )
+
+    async def _generation_operation(
+        self, operation: str, arguments: Mapping[str, Any]
+    ) -> Mapping[str, Any]:
+        """Carry a generation selection or removal, with its arguments checked."""
+
+        if operation == "use_generation":
+            return await self._use_generation(arguments)
+        generation_id = arguments.get("generation_id")
+        if not isinstance(generation_id, str) or not generation_id:
+            raise UIRequestError("A generation removal needs a generation_id string")
+        # The confirmation is carried, not defaulted. The shared workspace
+        # already refuses a mismatch before it gets here. Forwarding anything
+        # but the id the reader typed is how a browser would come to mean
+        # "yes" on a click.
+        confirm = arguments.get("confirm")
+        if not isinstance(confirm, str):
+            raise UIRequestError("A generation removal needs a confirm string")
+        return await self.service.remove_generation(generation_id, confirm=confirm)
+
+    async def _use_generation(self, arguments: Mapping[str, Any]) -> Mapping[str, Any]:
+        """Carry one generation selection to the service, with its id checked.
+
+        The id is required and non-blank rather than defaulted. The service
+        validates it against the builder's own pattern and refuses damaged
+        targets or pending-activation conflicts. An already-current id is a
+        no-op. This surface adds no compatibility workaround.
+        """
+
+        generation_id = arguments.get("generation_id")
+        if not isinstance(generation_id, str) or not generation_id.strip():
+            raise UIRequestError(
+                "A generation selection needs a non-empty generation_id string"
+            )
+        return await self.service.use_generation(generation_id)
 
     async def _settings_write(self, arguments: Mapping[str, Any]) -> Mapping[str, Any]:
         """Carry one settings change to the service, with its three fields checked.

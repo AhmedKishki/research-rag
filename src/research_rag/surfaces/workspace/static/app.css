@@ -1291,6 +1291,7 @@ textarea:disabled {
 
 .record-id-cell {
   font-weight: 400;
+  white-space: normal;
 }
 
 .record-id-cell .state-badge {
@@ -1299,6 +1300,59 @@ textarea:disabled {
 
 .record-id-cell .record-warning {
   white-space: normal;
+}
+
+/* Two actions on one retained build sit side by side in the row's last cell. */
+.action-cell .generation-action + .generation-action {
+  margin-left: var(--space-2xs);
+}
+
+/* The recorded configuration is read, not acted on: a one-line summary for
+   comparing builds, and the whole of it behind a disclosure. */
+.recorded-config-summary {
+  margin: var(--space-2xs) 0 0;
+  color: var(--text-secondary);
+  font-size: var(--text-xs);
+  line-height: var(--leading-normal);
+  overflow-wrap: anywhere;
+}
+
+.recorded-config {
+  margin-top: var(--space-2xs);
+  font-size: var(--text-sm);
+}
+
+.recorded-config-title {
+  cursor: pointer;
+  color: var(--text-secondary);
+  font-size: var(--text-xs);
+  font-weight: 600;
+}
+
+.recorded-config .fact-list {
+  margin: var(--space-2xs) 0;
+}
+
+.recorded-config-label {
+  margin: var(--space-2xs) 0 0;
+  color: var(--text-secondary);
+  font-size: var(--text-xs);
+  font-weight: 600;
+}
+
+.recorded-config-json {
+  margin: var(--space-2xs) 0 0;
+  padding: var(--space-2xs) var(--space-xs);
+  max-height: 18rem;
+  overflow: auto;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  background: var(--bg-surface);
+  color: var(--text-secondary);
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
 }
 
 .generation-total {

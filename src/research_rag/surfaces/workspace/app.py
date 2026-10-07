@@ -40,6 +40,7 @@ _OPERATION_CAPABILITY = {
     "set_source_metadata": "metadata",
     "set_source_inclusion": "source_inclusion",
     "remove_generation": "generations",
+    "use_generation": "generations",
     "export_bundle": "bundle_export",
     "import_bundle": "bundle_import",
     "memory_status": "memory",
@@ -348,6 +349,29 @@ async def _remove_generation(request: Request) -> Response:
             detail="The confirmation must repeat the generation_id",
         )
     return JSONResponse(await _adapter_call(request, "remove_generation", body))
+
+
+async def _use_generation(request: Request) -> Response:
+    """Select one retained generation for search, which changes indexed evidence.
+
+    The body names exactly the one generation to load. Selection is not removal:
+    the generation already on disk is validated and becomes the one a search
+    reads, and nothing is deleted or rebuilt. An operation the host does not
+    serve is refused by the capability gate in `_adapter_call`, not here.
+    """
+
+    body = await _json_body(request)
+    if set(body) != {"generation_id"}:
+        raise HTTPException(
+            status_code=400,
+            detail="Generation selection requires only generation_id",
+        )
+    if not isinstance(body["generation_id"], str) or not body["generation_id"].strip():
+        raise HTTPException(
+            status_code=400,
+            detail="generation_id must be a non-empty string",
+        )
+    return JSONResponse(await _adapter_call(request, "use_generation", body))
 
 
 async def _export_bundle(request: Request) -> Response:
@@ -824,6 +848,7 @@ def create_ui_app(
         Route("/api/source-metadata", _set_metadata, methods=["POST"]),
         Route("/api/source-inclusion", _set_inclusion, methods=["POST"]),
         Route("/api/generations/remove", _remove_generation, methods=["POST"]),
+        Route("/api/generations/use", _use_generation, methods=["POST"]),
         Route("/api/bundles/export", _export_bundle, methods=["POST"]),
         Route("/api/bundles/import", _import_bundle, methods=["POST"]),
         Route("/api/clients", _clients),

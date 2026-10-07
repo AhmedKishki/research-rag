@@ -4476,6 +4476,19 @@ async def _assert_status_lists_retained_generations(project: Path) -> None:
     assert len(current) == 1
     assert current[0]["generation_id"] == second["generation_id"]
     assert current[0]["schema_version"] is not None
+    for record in records:
+        manifest = read_json(
+            config.generations_root / record["generation_id"] / "manifest.json"
+        )
+        assert record["chunking"] == manifest["chunking"]
+        assert record["retrieval"] == manifest["retrieval"]
+        assert (
+            record["retrieval_policy_fingerprint"]
+            == manifest["retrieval_policy_fingerprint"]
+        )
+        assert record["retrieval"]["dense"]["embedding_model"]
+        assert record["retrieval"]["dense"]["embedding_model_revision"]
+        assert record["retrieval"]["reranker"]["model"]
 
     # The inventory is to show what occupies disk.
     damaged = config.generations_root / "20260101T000000Z-orphan"
@@ -4491,6 +4504,8 @@ async def _assert_status_lists_retained_generations(project: Path) -> None:
     )
     assert orphan["is_current"] is False
     assert "manifest_error" in orphan
+    assert orphan["chunking"] is None
+    assert orphan["retrieval"] is None
     assert orphan["size_bytes"] > 0
     assert after["retained_generation_bytes"] == sum(
         item["size_bytes"] for item in after["generations"]
@@ -5583,6 +5598,16 @@ async def _assert_use_generation_rolls_the_pointer_back(project: Path) -> None:
     assert second != first
     before = await service.status()
     assert before["generation_id"] == second
+    manifests = {
+        generation_id: (
+            config.generations_root / generation_id / "manifest.json"
+        ).read_bytes()
+        for generation_id in (first, second)
+    }
+    settings = config.settings
+    newer_hits = await service.search("amber", retrieval_method="bm25")
+    assert newer_hits["hits"]
+    assert newer_hits["generation_id"] == second
 
     switched = await service.use_generation(first)
 
@@ -5600,6 +5625,19 @@ async def _assert_use_generation_rolls_the_pointer_back(project: Path) -> None:
     # disk, which is what makes the switch reversible.
     assert status["retained_generation_count"] == 2
     assert read_json(config.current_path)["generation_id"] == first
+    older_hits = await service.search("amber", retrieval_method="bm25")
+    assert older_hits["generation_id"] == first
+    assert older_hits["hits"] == []
+    assert config.settings == settings
+    for generation_id, contents in manifests.items():
+        assert (
+            config.generations_root / generation_id / "manifest.json"
+        ).read_bytes() == contents
+
+    await service.use_generation(second)
+    restored_hits = await service.search("amber", retrieval_method="bm25")
+    assert restored_hits["generation_id"] == second
+    assert restored_hits["hits"]
 
 
 async def _assert_use_generation_reports_an_already_selected_generation(
