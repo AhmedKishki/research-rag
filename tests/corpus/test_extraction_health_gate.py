@@ -804,6 +804,49 @@ def test_a_source_within_the_accepted_share_is_kept_and_its_rate_is_recorded() -
     assert 0 < document["unclean_character_rate"] < 0.05
 
 
+def test_a_damaged_block_is_withheld_within_a_readable_unit() -> None:
+    """A page's readable argument survives a damaged block printed beside it.
+
+    A PDF page holds several unrelated blocks, and a broken character map damages
+    one of them. Withholding the whole page would drop the argument and count it
+    as text the file never gave, so only the damaged paragraph is lost.
+    """
+
+    argument = " ".join(
+        "The council minute book records the wage the quay paid each season."
+        for _ in range(20)
+    )
+    document: dict = {"title": "Mixed page"}
+    unit = _unit(1, _paragraphs(argument, CORRUPT_PAGE, argument))
+
+    retained = screen_source_units(_named_source("mixed-page.pdf"), document, [unit])
+
+    assert len(retained) == 1
+    assert CORRUPT_PAGE not in retained[0]["contents"]
+    assert argument in retained[0]["contents"]
+    assert document["excluded_corrupt_unit_count"] == 0
+    assert document["extracted_units"] == 1
+    assert 0 < document["unclean_character_rate"] < 0.05
+
+
+def test_a_unit_whose_corruption_covers_the_majority_is_withheld_whole() -> None:
+    """A heading beside a corrupt body is not a document, so the unit goes.
+
+    Keeping the heading alone would publish a fragment as the section's own text,
+    which is a worse answer than refusing the file.
+    """
+
+    document: dict = {"title": "Broken body"}
+    unit = _unit(1, _paragraphs("Opening Chapter", CORRUPT_PAGE))
+
+    with pytest.raises(ExtractionError) as failure:
+        screen_source_units(_named_source("broken-section.pdf"), document, [unit])
+
+    message = str(failure.value)
+    assert "replacement_characters" in message
+    assert CORRUPT_PAGE not in message
+
+
 def test_the_source_gate_states_no_share_unless_asked() -> None:
     assert SOURCE_REASON_UNCLEAN not in source_health_reasons(
         unit_count=10,

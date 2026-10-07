@@ -43,6 +43,7 @@ from .text_quality import (
     non_argument_removal_flags,
     opens_with_note_marker,
     source_health_reasons,
+    text_corruption_reasons,
     text_health_reasons,
 )
 
@@ -2200,6 +2201,44 @@ def extract_epub_spine_item(
     return units, not units, removals
 
 
+# Corruption that takes at least this share of a unit leaves too little of the
+# unit to read: what remains is a fragment beside a damaged block, not the
+# document, and the unit is withheld whole. Below it the damaged block is the
+# minority, and the readable paragraphs are still what the page or section said.
+# The share mirrors the cleaning rule, which also refuses to trust a unit whose
+# own text was mostly taken by a rule that removed it.
+_MINIMUM_READABLE_PERCENT = 50
+
+
+def _readable_unit_text(text: str) -> str | None:
+    """One unit's paragraphs without the corrupt ones, or `None` to withhold it.
+
+    A unit is a page or a section and holds several independent blocks. When a
+    broken character map damages some of them, the readable blocks are still the
+    document, so they are kept and only the damaged text is lost. The unit is
+    withheld whole when nothing readable survives, when what survives still
+    carries a reason, or when the damage took at least half the unit, because a
+    fragment beside a broken majority is not the document. A unit with no
+    corruption evidence is never split by this.
+    """
+
+    if not text_corruption_reasons(text):
+        return None
+    kept: list[str] = []
+    for paragraph in text.split("\n\n"):
+        if not paragraph.strip():
+            continue
+        if text_corruption_reasons(paragraph):
+            continue
+        kept.append(paragraph)
+    readable = "\n\n".join(kept)
+    if not readable or text_health_reasons(readable):
+        return None
+    if len(readable) * 100 < len(text) * _MINIMUM_READABLE_PERCENT:
+        return None
+    return readable
+
+
 def screen_source_units(
     source: SourceFile,
     document: dict[str, Any],
@@ -2240,6 +2279,12 @@ def screen_source_units(
         reasons = text_health_reasons(text)
         kept_characters += len(text)
         if reasons:
+            readable = _readable_unit_text(text)
+            if readable is not None:
+                retained.append({**unit, "contents": readable})
+                letter_characters += sum(character.isalpha() for character in readable)
+                withheld_characters += len(text) - len(readable)
+                continue
             withheld_characters += len(text)
             reason_counts.update(reasons)
             rejected.append(
