@@ -15,6 +15,7 @@ An item is done when the harness has produced its measurement and the validation
 
 - [ ] **Let a command start the app when the corpus is not ready.** Decision. A command that touches the corpus goes to the running app. With no app up, it is answered in process, which opens a second service nobody serves. Starting an app instead makes `status` leave a process behind. App should be started explicitly for any process.
 - [ ] **Decide whether `search --method` and `--no-rerank` stay.** Decision. They reproduce a `MEASUREMENTS.md` row on demand, and no reader-facing surface offers either. Removing them is a deliberate simplification.
+  - The running app's control route ignores both flags and returns hybrid, reranked results. Forward the diagnostic choices if retained, or reject unsupported flags explicitly. Test local and running-app behavior.
 
 ## agents
 
@@ -51,6 +52,7 @@ An item is done when the harness has produced its measurement and the validation
 
 ## reporting
 
+- [ ] **Show ingestion and generation activity in the workspace.** Feature. Show the active phase, completed and total work where available, elapsed time, and the last progress update so a user can distinguish a working server from a stalled operation. Show an activity indicator during phases without measurable progress. Distinguish waiting, running, failed, and completed states; do not imply that animation alone proves progress. Test long phases and stale or disconnected status updates.
 - [ ] **Give `stale` one meaning.** Feature. With no generation it doubles as "ready to build", so a caller cannot tell a changed corpus from a never-built one.
 - [ ] **Report activation failures as structured values.** Feature. A failed activation does not say which step failed or what it left on disk.
 - [ ] **Decide how the source inventory exposes the keyword vocabulary.** Feature. The keyword layer is all-of, and the vocabulary exists only across sources, so a reader cannot discover which keywords exist. Report counts in `status` or reduce the list to handles.
@@ -71,6 +73,7 @@ An item is done when the harness has produced its measurement and the validation
 
 * [ ] **Context-aware chunking.** [github.com/coleam00/ottomator-agents/blob/main/all-rag-strategies/docs/07-context-aware-chunking.md](https://github.com/coleam00/ottomator-agents/blob/main/all-rag-strategies/docs/07-context-aware-chunking.md)
 
+- [ ] **Enforce the embedding model's token limit when chunking.** Feature. GPT-2-sized chunks can exceed the embedding model's WordPiece limit, especially on table-of-contents dot leaders. Count the actual embedding input, including headers and special tokens, and split oversized chunks without dropping text. Test punctuation-heavy input and ordinary prose. Measure retrieval quality and rebuild cost before changing generation artifacts.
 - [ ] **Reuse vectors across a contextual-header change.** Feature. Vector reuse keys on canonical passage text, so turning `chunking.headers` on recomputes every vector.
   - Fix: two hash columns, one canonical and one embedded, plus a lookup-schema bump. The bump rebuilds the sidecar from canonical artifacts, not the corpus.
   - `generation_is_reusable` validates the sidecar before anything ensures it, so a version bump denies reuse to the first ingest after it.
@@ -88,6 +91,7 @@ An item is done when the harness has produced its measurement and the validation
 
 ## retrieval
 
+- [ ] **Report weak relevance separately from candidate availability.** Feature. An unrelated query can return a full result set with uniformly poor reranker scores while `relevance_limited` remains false. Measure a low-relevance warning or abstention policy against judged relevant and unrelated queries. Do not assume raw reranker scores share a universal cutoff. Preserve the evidence-only contract and expose the condition consistently across surfaces.
 - [ ] **Make duplicate handling a stated, measured policy.** Feature. `retrieval.duplicate_cosine` already suppresses a passage a search has shown, at search time. Name every case it must cover — one essay alone and inside a book, a byte-identical source under two names, a passage repeated across a generation — and measure what still appears twice on a large corpus.
   - Keep suppression at search time, never at chunk- or record-time, so a duplicate keeps the rank the next query could use.
 - [ ] **Improve paraphrase matching, and price each lever.** Feature. Measure the levers the app already reaches — the pseudo-relevance expansion, the CPU reranker, and a larger embedding model from the pinned registry — against the pooled judgments once they exist. Keep only a lever whose pooled result improves and whose cost is stated.

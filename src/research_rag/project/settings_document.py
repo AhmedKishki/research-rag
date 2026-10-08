@@ -320,6 +320,9 @@ def _recorded_identity(settings: EffectiveSettings) -> dict[str, Any]:
             settings.chunk_overlap,
             settings.chunk_headers,
         ),
+        # A generation records the PDF passage-cleaning threshold, and a rebuild
+        # reads it, so a change here moves what the generation holds.
+        "passage_cleaning": (settings.maximum_unclean_percent,),
         "embedding_model": (facts.name, facts.revision, facts.dimension),
         "reranker_model": settings.reranker_model,
     }

@@ -424,6 +424,16 @@ class StatsWorkflow:
                 "physical_pages": stored.get("physical_pages"),
                 "extracted_units": stored.get("extracted_units"),
                 "withheld_units": stored.get("excluded_corrupt_unit_count"),
+                "withheld_passages": stored.get("excluded_corrupt_passage_count"),
+                "omitted_symbol_only_units": stored.get(
+                    "excluded_symbol_only_unit_count"
+                ),
+                "omitted_symbol_only_passages": stored.get(
+                    "excluded_symbol_only_passage_count"
+                ),
+                "cleaned_passages": stored.get("cleaned_passage_count"),
+                "pdf_text_recovery_pages": stored.get("pdf_text_recovery_pages"),
+                "recovered_pdf_blocks": stored.get("recovered_pdf_blocks"),
                 "unclean_character_rate": stored.get("unclean_character_rate"),
                 "metadata_warnings": list(stored.get("metadata_warnings") or []),
                 "top_five": top_five,
@@ -552,5 +562,17 @@ class StatsWorkflow:
             "reused_document_count": metrics.get("reused_document_count"),
             "rebuilt_document_count": metrics.get("rebuilt_document_count"),
             "excluded_corrupt_unit_count": metrics.get("excluded_corrupt_unit_count"),
+            "excluded_corrupt_passage_count": metrics.get(
+                "excluded_corrupt_passage_count"
+            ),
+            "excluded_symbol_only_unit_count": metrics.get(
+                "excluded_symbol_only_unit_count"
+            ),
+            "excluded_symbol_only_passage_count": metrics.get(
+                "excluded_symbol_only_passage_count"
+            ),
+            "cleaned_passage_count": metrics.get("cleaned_passage_count"),
+            "pdf_text_recovery_pages": metrics.get("pdf_text_recovery_pages"),
+            "recovered_pdf_blocks": metrics.get("recovered_pdf_blocks"),
             "dense_truncated_chunk_count": metrics.get("dense_truncated_chunk_count"),
         }

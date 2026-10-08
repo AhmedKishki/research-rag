@@ -17,6 +17,7 @@ import math
 import re
 from collections import Counter
 from dataclasses import dataclass
+from pathlib import Path
 from statistics import median
 from typing import Any
 
@@ -26,13 +27,17 @@ from bs4 import BeautifulSoup, Comment, NavigableString, Tag
 from ebooklib import epub
 
 from ..project.settings import BM25_STOPWORD_LANGUAGES, bm25_stopwords
+from .pdf_text_recovery import PdfRecoveryCache, recover_pdf_blocks
 from .sources import SourceFile, sha256_file
 from .text_normalization import (
     HORIZONTAL_SPACE,
     LIST_ITEM_PATTERN,
+    clean_unclean_passage,
     ends_sentence,
+    is_control_character,
     normalize_inline_text,
     normalize_reading_text,
+    recover_formatting_glyphs,
 )
 from .text_quality import (
     EXTRACTION_ARTIFACT_TOKEN,
@@ -42,6 +47,7 @@ from .text_quality import (
     has_searchable_alphanumeric_content,
     non_argument_removal_flags,
     opens_with_note_marker,
+    passage_health_reasons,
     source_health_reasons,
     text_corruption_reasons,
     text_health_reasons,
@@ -128,6 +134,8 @@ class _TextBlock:
     lines: tuple[str, ...]
     text: str
     font_size: float
+    recovery_attempted: bool = False
+    recovered: bool = False
 
     @property
     def width(self) -> float:
@@ -161,6 +169,8 @@ class _PageRemovals:
     removed_note_segments: int = 0
     removed_text_characters: int = 0
     image_only_pages: int = 0
+    pdf_text_recovery_pages: int = 0
+    recovered_pdf_blocks: int = 0
 
     def with_counts(self, counts: dict[str, int]) -> _PageRemovals:
         """Add a whole-source pass's counters into these page totals.
@@ -194,6 +204,10 @@ class _PageRemovals:
                 self.removed_text_characters + other.removed_text_characters
             ),
             image_only_pages=self.image_only_pages + other.image_only_pages,
+            pdf_text_recovery_pages=(
+                self.pdf_text_recovery_pages + other.pdf_text_recovery_pages
+            ),
+            recovered_pdf_blocks=self.recovered_pdf_blocks + other.recovered_pdf_blocks,
         )
 
     def record_fields(self) -> dict[str, int]:
@@ -205,6 +219,8 @@ class _PageRemovals:
             "removed_note_segments": self.removed_note_segments,
             "removed_non_argument_characters": self.removed_text_characters,
             "image_only_pages": self.image_only_pages,
+            "pdf_text_recovery_pages": self.pdf_text_recovery_pages,
+            "recovered_pdf_blocks": self.recovered_pdf_blocks,
         }
 
 
@@ -217,6 +233,8 @@ REMOVAL_FIELDS = (
     "removed_non_argument_characters",
     "removed_epub_furniture_elements",
     "image_only_pages",
+    "pdf_text_recovery_pages",
+    "recovered_pdf_blocks",
 )
 
 
@@ -522,12 +540,29 @@ def _pdf_author_list(metadata: dict[str, Any]) -> list[str]:
 
 
 def _pdf_line_text(spans: list[dict[str, Any]]) -> str:
-    """Join extracted spans, guessing no replacement for an ambiguous glyph."""
+    """Join extracted spans, guessing no replacement for an ambiguous glyph.
 
-    return "".join(str(span.get("text") or "") for span in spans)
+    A span's own font decides whether a private-use glyph is recovered: a symbol
+    face is decoded with Adobe's published encoding, and a recognised dingbat,
+    icon, or mathematics face has its non-prose glyphs removed. Text from any
+    other face is joined as it arrived, so an unknown private-use glyph is
+    preserved for the quality rules to judge rather than trusted as prose.
+    """
+
+    return "".join(
+        recover_formatting_glyphs(
+            str(span.get("text") or ""), str(span.get("font") or "")
+        )
+        for span in spans
+    )
 
 
-def _page_blocks(page: pymupdf.Page) -> list[_TextBlock]:
+def _page_blocks(
+    page: pymupdf.Page,
+    *,
+    source_path: Path | None = None,
+    recovery_cache: PdfRecoveryCache | None = None,
+) -> list[_TextBlock]:
     result: list[_TextBlock] = []
     payload = page.get_text("dict", sort=False, flags=pymupdf.TEXTFLAGS_TEXT)
     for number, block in enumerate(payload.get("blocks", [])):
@@ -537,6 +572,15 @@ def _page_blocks(page: pymupdf.Page) -> list[_TextBlock]:
         sizes: list[float] = []
         for line in block.get("lines", []):
             value = _pdf_line_text(line.get("spans", []))
+            # A bad font map can expose a control code as a glyph. Preserve its
+            # unreadability through normalization instead of silently joining
+            # the words on either side after stripping the code.
+            value = "".join(
+                "\ufffd"
+                if is_control_character(character) and character not in "\v\f"
+                else character
+                for character in value
+            )
             value = HORIZONTAL_SPACE.sub(" ", value).strip()
             if value:
                 lines.append(value)
@@ -557,7 +601,70 @@ def _page_blocks(page: pymupdf.Page) -> list[_TextBlock]:
                 font_size=max(sizes, default=0.0),
             )
         )
-    return result
+    if source_path is None:
+        return result
+    unhealthy = {
+        block.number: block.bbox
+        for block in result
+        if passage_health_reasons(block.text, maximum_unclean_percent=0.0)
+    }
+    if not result:
+        # A different text interpreter can find an existing layer that PyMuPDF
+        # missed. This reads content streams only; an image yields no text.
+        unhealthy[0] = tuple(page.rect)
+    if not unhealthy:
+        return result
+    candidates, _warning = recover_pdf_blocks(
+        source_path, int(page.number) + 1, unhealthy, recovery_cache
+    )
+    recovered: list[_TextBlock] = []
+    for block in result:
+        if block.number not in unhealthy:
+            recovered.append(block)
+            continue
+        candidate = candidates.get(block.number, "")
+        usable = bool(candidate) and not passage_health_reasons(
+            candidate, maximum_unclean_percent=0.0
+        )
+        if usable:
+            # Native font metrics can disagree with the primary block box.
+            # Do not accept a geometric retry that loses a line we already read,
+            # including a readable raised marker beside the damaged line.
+            covered = re.sub(r"\s+", "", normalize_inline_text(candidate))
+            usable = all(
+                re.sub(r"\s+", "", normalize_inline_text(line)) in covered
+                for line in block.lines
+                if not passage_health_reasons(line, maximum_unclean_percent=0.0)
+                and has_searchable_alphanumeric_content(line)
+            )
+        recovered.append(
+            _TextBlock(
+                number=block.number,
+                bbox=block.bbox,
+                lines=tuple(candidate.splitlines()) if usable else block.lines,
+                text=candidate if usable else block.text,
+                font_size=block.font_size,
+                recovery_attempted=True,
+                recovered=usable,
+            )
+        )
+    if (
+        not result
+        and (candidate := candidates.get(0, ""))
+        and not passage_health_reasons(candidate, maximum_unclean_percent=0.0)
+    ):
+        recovered.append(
+            _TextBlock(
+                number=0,
+                bbox=unhealthy[0],
+                lines=tuple(candidate.splitlines()),
+                text=candidate,
+                font_size=0.0,
+                recovery_attempted=True,
+                recovered=True,
+            )
+        )
+    return recovered
 
 
 def _front_matter_identity(
@@ -1252,7 +1359,11 @@ def _pdf_page_units(
     title: str,
 ) -> tuple[list[dict[str, Any]], bool, _PageRemovals]:
     locator = _pdf_locator(page, page_number)
-    removals = _PageRemovals(image_only_pages=int(_image_only_page(page, blocks)))
+    removals = _PageRemovals(
+        image_only_pages=int(_image_only_page(page, blocks)),
+        pdf_text_recovery_pages=int(any(block.recovery_attempted for block in blocks)),
+        recovered_pdf_blocks=sum(block.recovered for block in blocks),
+    )
     filtered: list[_TextBlock] = []
     for block in blocks:
         in_margin = (
@@ -1294,9 +1405,8 @@ def _pdf_page_units(
         removals.footnote_blocks += len(footnote_numbers)
         removed_numbers = sidebar_numbers | footnote_numbers
         # What the geometry removed is text the file did hold, so it is counted
-        # with the prose the section rules removed. A source whose furniture is
-        # most of what its text layer carried is refused by `unsafe_to_clean`,
-        # which is the only guard that sees a rule which is wrong about a page.
+        # with the prose the section rules removed. These counts disclose loss;
+        # they do not veto the readable passages elsewhere in the source.
         removals.removed_text_characters += sum(
             _block_characters(block)
             for block in filtered
@@ -1383,8 +1493,15 @@ def _extract_pdf(
                 f"Password-protected PDF is unsupported: {source.path}"
             )
         metadata = document.metadata or {}
+        recovery_cache: PdfRecoveryCache = {}
         pages: list[tuple[list[_TextBlock], float, float]] = [
-            (_page_blocks(page), float(page.rect.width), float(page.rect.height))
+            (
+                _page_blocks(
+                    page, source_path=source.path, recovery_cache=recovery_cache
+                ),
+                float(page.rect.width),
+                float(page.rect.height),
+            )
             for page in document
         ]
         automatic, provenance, warnings = _front_matter_identity(
@@ -1585,10 +1702,13 @@ def scan_pdf_pages(
                 f"Password-protected PDF is unsupported: {source.path}"
             )
         end_index = min(start_index + page_count, document.page_count)
+        recovery_cache: PdfRecoveryCache = {}
         scans: list[dict[str, Any]] = []
         for page_index in range(start_index, end_index):
             page = document.load_page(page_index)
-            blocks = _page_blocks(page)
+            blocks = _page_blocks(
+                page, source_path=source.path, recovery_cache=recovery_cache
+            )
             scans.append(
                 {
                     "page_index": page_index,
@@ -1601,6 +1721,8 @@ def scan_pdf_pages(
                             "lines": list(block.lines),
                             "text": block.text,
                             "font_size": block.font_size,
+                            "recovery_attempted": block.recovery_attempted,
+                            "recovered": block.recovered,
                         }
                         for block in blocks
                     ],
@@ -1619,6 +1741,8 @@ def _blocks_from_scan(scan: dict[str, Any]) -> list[_TextBlock]:
             lines=tuple(str(value) for value in item["lines"]),
             text=str(item["text"]),
             font_size=float(item["font_size"]),
+            recovery_attempted=bool(item.get("recovery_attempted")),
+            recovered=bool(item.get("recovered")),
         )
         for item in scan["blocks"]
     ]
@@ -2205,40 +2329,19 @@ def extract_epub_spine_item(
     return units, not units, removals
 
 
-# Corruption that takes at least this share of a unit leaves too little of the
-# unit to read: what remains is a fragment beside a damaged block, not the
-# document, and the unit is withheld whole. Below it the damaged block is the
-# minority, and the readable paragraphs are still what the page or section said.
-# The share mirrors the cleaning rule, which also refuses to trust a unit whose
-# own text was mostly taken by a rule that removed it.
-_MINIMUM_READABLE_PERCENT = 50
-
-
-def _readable_unit_text(text: str) -> str | None:
-    """One unit's paragraphs without the corrupt ones, or `None` to withhold it.
-
-    A unit is a page or a section and holds several independent blocks. When a
-    broken character map damages some of them, the readable blocks are still the
-    document, so they are kept and only the damaged text is lost. The unit is
-    withheld whole when nothing readable survives, when what survives still
-    carries a reason, or when the damage took at least half the unit, because a
-    fragment beside a broken majority is not the document. A unit with no
-    corruption evidence is never split by this.
-    """
+def _readable_epub_unit_text(text: str) -> str | None:
+    """Preserve EPUB's existing majority-readable unit cleanup."""
 
     if not text_corruption_reasons(text):
         return None
-    kept: list[str] = []
-    for paragraph in text.split("\n\n"):
-        if not paragraph.strip():
-            continue
-        if text_corruption_reasons(paragraph):
-            continue
-        kept.append(paragraph)
-    readable = "\n\n".join(kept)
+    readable = "\n\n".join(
+        paragraph
+        for paragraph in text.split("\n\n")
+        if paragraph.strip() and not text_corruption_reasons(paragraph)
+    )
     if not readable or text_health_reasons(readable):
         return None
-    if len(readable) * 100 < len(text) * _MINIMUM_READABLE_PERCENT:
+    if len(readable) * 100 < len(text) * 50:
         return None
     return readable
 
@@ -2251,12 +2354,16 @@ def screen_source_units(
     removals: dict[str, int] | None = None,
     maximum_unclean_percent: float | None = None,
 ) -> list[dict[str, Any]]:
-    """Withhold the units this source cannot use, and refuse the source if none.
+    """Repair unhealthy passages and withhold only those still unreadable.
 
-    A source is also refused as not clean when the text it lost is more than
-    `maximum_unclean_percent` of what it extracted, in characters. That check runs
-    here, over every unit and before any is chunked, so a build never spends an
-    embedding on a file that will be refused. `None` makes no such claim.
+    For PDFs, `maximum_unclean_percent` applies to each paragraph, never the source.
+    Clean paragraphs bypass repair. No retained-share or cleanup-share rule can
+    veto readable neighbours, even when they are a small part of the file.
+
+    A paragraph that carries no alphanumeric content and no corruption evidence is
+    non-evidence: it is omitted and recorded on `excluded_symbol_only_passages`,
+    never on the corrupt counters. A documented formatting glyph, such as a symbol
+    font's bullet, is not corruption either, so it does not withhold its passage.
 
     This is the one gate both extraction paths apply, and it applies the section
     removal as well: a staged build writes a page batch to disk before it knows
@@ -2271,37 +2378,103 @@ def screen_source_units(
     """
 
     cleaned, section_counts = strip_non_argument_units(units)
+    passage_level = source.extension == ".pdf"
 
     retained: list[dict[str, Any]] = []
     rejected: list[dict[str, Any]] = []
+    rejected_passages: list[dict[str, Any]] = []
+    repaired_passages: list[dict[str, Any]] = []
+    omitted_symbol_only_units: list[dict[str, Any]] = []
+    omitted_symbol_only_passages: list[dict[str, Any]] = []
     reason_counts: Counter[str] = Counter()
     kept_characters = 0
-    letter_characters = 0
     withheld_characters = 0
     for unit in cleaned:
         text = str(unit.get("contents") or "")
-        reasons = text_health_reasons(text)
         kept_characters += len(text)
-        if reasons:
-            readable = _readable_unit_text(text)
-            if readable is not None:
-                retained.append({**unit, "contents": readable})
-                letter_characters += sum(character.isalpha() for character in readable)
-                withheld_characters += len(text) - len(readable)
+        if not passage_level:
+            # EPUB is outside the PDF recovery change. Preserve its unit and
+            # source-level acceptance rules, including the majority guard.
+            reasons = text_health_reasons(text)
+            if not reasons:
+                retained.append(unit)
+            elif (readable_epub := _readable_epub_unit_text(text)) is not None:
+                retained.append({**unit, "contents": readable_epub})
+                withheld_characters += len(text) - len(readable_epub)
+            else:
+                withheld_characters += len(text)
+                reason_counts.update(reasons)
+                rejected.append(
+                    {
+                        "unit_id": str(unit.get("id") or ""),
+                        "locator": dict(unit.get("locator") or {}),
+                        "reasons": reasons,
+                    }
+                )
+            continue
+        readable: list[str] = []
+        unit_reasons: list[str] = []
+        unit_symbol_only = False
+        for passage_index, paragraph in enumerate(text.split("\n\n")):
+            if not paragraph.strip():
                 continue
-            withheld_characters += len(text)
-            reason_counts.update(reasons)
+            reasons = passage_health_reasons(
+                paragraph, maximum_unclean_percent=maximum_unclean_percent
+            )
+            if not reasons:
+                readable.append(paragraph)
+                continue
+            decision = {
+                "unit_id": str(unit.get("id") or ""),
+                "passage_index": passage_index,
+                "locator": dict(unit.get("locator") or {}),
+                "reasons": reasons,
+            }
+            if set(reasons) == {"symbol_only"}:
+                # A punctuation-only fragment carries no searchable content and
+                # no corruption evidence. It is non-evidence and omitted without
+                # a corruption verdict, so it never reaches the corrupt counters.
+                omitted_symbol_only_passages.append(decision)
+                unit_symbol_only = True
+                continue
+            repaired = clean_unclean_passage(paragraph)
+            remaining = passage_health_reasons(
+                repaired, maximum_unclean_percent=maximum_unclean_percent
+            )
+            if repaired.strip() and not remaining:
+                readable.append(repaired)
+                repaired_passages.append(decision)
+                continue
+            withheld_characters += len(paragraph)
+            excluded_reasons = remaining or reasons
+            reason_counts.update(excluded_reasons)
+            unit_reasons.extend(excluded_reasons)
+            rejected_passages.append({**decision, "reasons": excluded_reasons})
+        if readable:
+            retained.append({**unit, "contents": "\n\n".join(readable)})
+        elif unit_reasons:
             rejected.append(
                 {
                     "unit_id": str(unit.get("id") or ""),
                     "locator": dict(unit.get("locator") or {}),
-                    "reasons": reasons,
+                    "reasons": list(dict.fromkeys(unit_reasons)),
+                }
+            )
+        elif unit_symbol_only:
+            omitted_symbol_only_units.append(
+                {
+                    "unit_id": str(unit.get("id") or ""),
+                    "locator": dict(unit.get("locator") or {}),
+                    "reasons": ["symbol_only"],
                 }
             )
         else:
-            retained.append(unit)
-            letter_characters += sum(
-                character.isalpha() for character in str(unit.get("contents") or "")
+            rejected.append(
+                {
+                    "unit_id": str(unit.get("id") or ""),
+                    "locator": dict(unit.get("locator") or {}),
+                    "reasons": [],
+                }
             )
     # A direct build has already written its counters onto the document and passes
     # nothing here; a staged build holds them in its checkpoint and passes them in.
@@ -2319,18 +2492,31 @@ def screen_source_units(
     document.update(counted)
     document["excluded_corrupt_unit_count"] = len(rejected)
     document["excluded_corrupt_units"] = rejected
+    document["excluded_corrupt_passage_count"] = len(rejected_passages)
+    document["excluded_corrupt_passages"] = rejected_passages
+    document["excluded_symbol_only_unit_count"] = len(omitted_symbol_only_units)
+    document["excluded_symbol_only_units"] = omitted_symbol_only_units
+    document["excluded_symbol_only_passage_count"] = len(omitted_symbol_only_passages)
+    document["excluded_symbol_only_passages"] = omitted_symbol_only_passages
+    document["cleaned_passage_count"] = len(repaired_passages)
+    document["cleaned_passages"] = repaired_passages
     # Measured here and nowhere else, so a source extracted before it was measured
     # carries no figure rather than a guessed one.
     document["unclean_character_rate"] = (
         round(withheld_characters / kept_characters, 6) if kept_characters else 0.0
     )
     document["extracted_units"] = len(retained)
-    if rejected:
+    if rejected_passages or rejected:
         document["metadata_warnings"] = list(
             dict.fromkeys(
                 [
                     *document.get("metadata_warnings", []),
-                    "corrupt_extraction_units_excluded",
+                    *(
+                        ["corrupt_extraction_passages_excluded"]
+                        if rejected_passages
+                        else []
+                    ),
+                    *(["corrupt_extraction_units_excluded"] if rejected else []),
                 ]
             )
         )
@@ -2345,25 +2531,31 @@ def screen_source_units(
         ),
         image_only_pages=int((counted or {}).get("image_only_pages") or 0),
         physical_pages=int(document.get("physical_pages") or 0),
-        letter_characters=letter_characters,
+        letter_characters=sum(
+            character.isalpha()
+            for unit in retained
+            for character in str(unit.get("contents") or "")
+        ),
         withheld_characters=withheld_characters,
         maximum_unclean_percent=maximum_unclean_percent,
+        passage_level=passage_level,
     )
     if fatal:
         error_type = (
             UncleanSourceError if SOURCE_REASON_UNCLEAN in fatal else ExtractionError
         )
+        # The refusal names where the unreadable material sat. A punctuation-only
+        # unit is not corrupt, but it is why nothing survived, so it is reported
+        # here for its locator and its reason without entering the corrupt counts.
+        reported_units = [*rejected, *omitted_symbol_only_units]
+        reported_counts = Counter(reason_counts)
+        reported_counts["symbol_only"] += len(omitted_symbol_only_units)
         raise error_type(
             _refusal_message(
                 source,
                 fatal,
-                rejected,
-                reason_counts,
-                unclean=(
-                    withheld_characters,
-                    kept_characters,
-                    maximum_unclean_percent,
-                ),
+                reported_units,
+                reported_counts,
             )
         )
     if document.get("image_only_pages"):
@@ -2456,7 +2648,8 @@ def _no_text_layer_message(source: SourceFile, label: str) -> str:
         f"{label} yielded no text layer ({SOURCE_REASON_NO_TEXT_LAYER}): "
         f"{source.path}. Every page carried an image or a drawing and no "
         "extractable text. No OCR is performed, so nothing here can be read. "
-        "Supply a text-layer PDF or an EPUB, or exclude "
+        "Run OCR yourself outside research-rag and supply a text-layer PDF, "
+        "or supply an EPUB, or exclude "
         f"the source with `research-rag exclude {source.source_relative_path}"
         ' --reason "no text layer"`.'
     )
@@ -2467,8 +2660,6 @@ def _refusal_message(
     reasons: list[str],
     rejected: list[dict[str, Any]],
     reason_counts: Counter[str],
-    *,
-    unclean: tuple[int, int, float | None] = (0, 0, None),
 ) -> str:
     """What a refused source says, in a form a reader can act on.
 
@@ -2492,17 +2683,10 @@ def _refusal_message(
             + f" Refused for: {', '.join(reasons)}."
         )
     if SOURCE_REASON_UNCLEAN in reasons:
-        lost, total, limit = unclean
-        share = 100 * lost / total if total else 0.0
         return (
             f"Source is not clean ({', '.join(reasons)}): {source.path}. "
-            f"{share:.1f}% of its extracted text ({lost} of {total} characters, "
-            f"{len(rejected)} units) could not be read, over the {limit:g}% this "
-            "project accepts, so indexing it would lose that text. The file is "
-            "never edited. If it is a scan or carries a poor text layer, run OCR "
-            f"on it first with `research-rag ocr {source.source_relative_path}`: "
-            "OCR is a separate command and is never run automatically. Then "
-            "replace the file, or exclude it with "
+            "No readable text was recovered within this project's EPUB loss limit. "
+            "The file is never edited. Supply a readable EPUB, or exclude it with "
             f"`research-rag exclude {source.source_relative_path} --reason "
             '"not clean"`, or raise ingestion.maximum_unclean_percent.'
         )
@@ -2522,7 +2706,8 @@ def _refusal_message(
     detail = f" Reasons on excluded units: {counts}." if counts else ""
     return (
         f"{lead}: {source.path}.{location}{detail}"
-        " No text layer is OCRed, and the file is never edited."
+        " Automatic text extraction and cleaning could not recover these passages."
+        " The file is never edited. If it needs OCR, run that outside research-rag."
         f" Exclude it with `research-rag exclude {source.source_relative_path}"
         ' --reason "text could not be read"`, or open the file and check it.'
     )

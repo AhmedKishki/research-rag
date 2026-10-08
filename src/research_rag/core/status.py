@@ -77,6 +77,10 @@ def generation_upgrade_reasons(
         reasons.append("layout_extraction")
     if int(manifest.get("cleaning_policy_version") or 0) != CLEANING_POLICY_VERSION:
         reasons.append("semantic_cleaning")
+    if manifest.get("passage_cleaning", {}).get("maximum_unclean_percent", 1.0) != (
+        config.settings.maximum_unclean_percent
+    ):
+        reasons.append("passage_cleaning")
     if int(manifest.get("artifact_policy_version") or 0) != ARTIFACT_POLICY_VERSION:
         reasons.append("generation_artifacts")
     if manifest.get("metadata_storage_policy") != METADATA_STORAGE_POLICY:

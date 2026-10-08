@@ -17,10 +17,22 @@ import unicodedata
 from collections import Counter
 from collections.abc import Sequence
 
-from .text_normalization import normalize_inline_text
+from .text_normalization import (
+    is_control_character,
+    is_known_formatting_glyph,
+    normalize_inline_text,
+)
 
 _MOJIBAKE_MARKERS = ("â€", "ï¿½", "ðŸ")
 _MOJIBAKE_LATIN1_PAIR = re.compile(r"(?:Ã|Â)[\u0080-\u00bf]")
+
+# The code-point categories no character map is supposed to produce in prose: a
+# private-use codepoint, an unassigned codepoint, and a lone surrogate. Together
+# with a replacement character and a stray C0 control they are the characters a
+# passage's unreadable share is counted over. A private-use codepoint that is a
+# documented formatting glyph (a symbol font's bullet, a tall delimiter piece) is
+# not counted: it is what the source printed, not corruption.
+_CORRUPT_CHARACTER_CATEGORIES = frozenset({"Co", "Cn", "Cs"})
 
 
 def _script_family(character: str) -> str | None:
@@ -68,6 +80,25 @@ def _script_family(character: str) -> str | None:
     return name.split(" ", 1)[0].casefold() if name else "unknown"
 
 
+def _counts_as_unreadable(character: str) -> bool:
+    """Whether one character is evidence a passage is not readable prose.
+
+    The categories no character map produces in prose count, except a private-use
+    code point that is a documented formatting glyph: a symbol font's bullet and
+    a tall delimiter piece are what the source drew, so they never withhold text.
+    A replacement character and a stray control character count as well.
+    """
+
+    return (
+        character == "\ufffd"
+        or (
+            unicodedata.category(character) in _CORRUPT_CHARACTER_CATEGORIES
+            and not is_known_formatting_glyph(character)
+        )
+        or is_control_character(character)
+    )
+
+
 def _text_signals(value: str) -> tuple[list[str], list[str]]:
     raw = unicodedata.normalize("NFC", value)
     normalized = normalize_inline_text(raw)
@@ -76,6 +107,7 @@ def _text_signals(value: str) -> tuple[list[str], list[str]]:
     replacement_count = normalized.count("\ufffd")
     private_or_unassigned = sum(
         unicodedata.category(character) in {"Co", "Cn", "Cs"}
+        and not is_known_formatting_glyph(character)
         for character in normalized
     )
     alphabetic = [character for character in normalized if character.isalpha()]
@@ -116,9 +148,11 @@ def _text_signals(value: str) -> tuple[list[str], list[str]]:
 def text_corruption_reasons(value: str) -> list[str]:
     """The corruption evidence that withholds extraction text.
 
-    Only incoherent output is withheld: replacement characters, private-use or
-    unassigned code points, and known damaged encoding sequences. Script mixing and
-    non-Latin dominance are notes, so quotations stay retrievable.
+    Only incoherent output is withheld: replacement characters, unassigned or
+    surrogate code points, an unrecognised private-use glyph, and known damaged
+    encoding sequences. A documented formatting glyph from a symbol face and
+    script mixing are not corruption, so a quotation and a bulleted passage stay
+    retrievable.
     """
 
     return _text_signals(value)[0]
@@ -140,6 +174,40 @@ def text_health_reasons(value: str) -> list[str]:
     if normalized and not has_searchable_alphanumeric_content(normalized):
         reasons.append("symbol_only")
     return reasons
+
+
+def _unclean_character_count(value: str) -> int:
+    """The characters in a passage that no readable text is expected to carry."""
+
+    return sum(_counts_as_unreadable(character) for character in value)
+
+
+def passage_health_reasons(
+    value: str, *, maximum_unclean_percent: float | None = None
+) -> list[str]:
+    """One passage's verdict: its mechanical reasons, and its unreadable share.
+
+    The mechanical reasons are `text_health_reasons`' own: replacement
+    characters, private, unassigned, or surrogate code points, a known damaged
+    encoding sequence, and text with no alphanumeric content. They are always
+    returned, so a share of unreadable text never waives them, not even at 100.
+
+    `maximum_unclean_percent` adds `unclean_text` when the share of characters
+    that are a replacement, a private, unassigned, or surrogate code point, or a
+    stray control exceeds it. `None` makes no such claim and returns the
+    mechanical reasons alone. Quality is judged here, per passage: a readable
+    unit survives whatever share the whole source lost, because the unit rule
+    already withholds what it cannot use.
+    """
+
+    reasons = text_health_reasons(value)
+    if maximum_unclean_percent is not None:
+        total = len(value)
+        if total > 0:
+            unreadable = _unclean_character_count(value)
+            if unreadable * 100 > total * maximum_unclean_percent:
+                reasons.append(SOURCE_REASON_UNCLEAN)
+    return list(dict.fromkeys(reasons))
 
 
 # Retrieval rejects a candidate for exactly two reasons, and both are properties
@@ -397,49 +465,20 @@ def strip_non_argument_sections(
 # Refusing a source whose own text says it is unreadable
 # ---------------------------------------------------------------------------
 #
-# A unit is withheld on its own evidence and the source survives without it: a
-# corrupt page in an otherwise readable paper is a hole, not a rejection. A
-# source is a different question, because the evidence is now about the whole
-# file rather than one page, and the remedy is a decision the reader makes about
-# the file. Every reason below is one a reader can check by opening the source.
+# PDF quality is assessed per passage. EPUB keeps its existing aggregate policy.
 
 # No unit carried searchable text, so the file holds images or drawings only.
 SOURCE_REASON_NO_TEXT = "no_readable_text"
 # Every page was a scan, so the file has no text layer anywhere.
 SOURCE_REASON_NO_TEXT_LAYER = "no_text_layer"
-# Almost every unit was withheld, so what survived is not the document.
-SOURCE_REASON_ALMOST_ALL_WITHHELD = "almost_all_units_withheld"
-# The text is dominated by symbols, digits, and layout marks rather than words.
-SOURCE_REASON_ARTIFACT_LADEN = "artifact_laden_text"
-# Cleaning removed more of the file than it kept, so its own text cannot be
-# trusted to say what the document argued.
-SOURCE_REASON_UNSAFE_TO_CLEAN = "unsafe_to_clean"
-# No retained unit held a letter at all, so what the file gave is digits, table
-# rules, and layout marks. Digits are searchable text and a numeric table is a
-# document, so this fires only where the whole file is numbers: a page of
-# numbers beside a labelled paragraph has letters somewhere in the source, and
-# that source is kept.
-SOURCE_REASON_NO_LETTER_TEXT = "no_letter_text"
-# More of the file's text was unreadable than this project accepts, so indexing
-# it would lose that text. Unlike the reasons above it needs a caller that
-# states how much loss it accepts: no share is evidence on its own.
+# More of a passage's text was unreadable than a caller accepts. It is a
+# PDF passage-level reason; EPUB retains its source-level use.
 SOURCE_REASON_UNCLEAN = "unclean_text"
-
-# Below this share of retained units the source is a document with damaged
-# pages rather than a damaged document. The existing policy withholds a corrupt
-# unit and keeps the source; refusing the file instead would make one bad scan
-# page cost a reader the whole paper, so the bar sits where nearly everything
-# has to be unreadable before the file is refused.
-_MINIMUM_RETAINED_PERCENT = 10
-# Above this share of a file's characters the cleanup removed — running furniture,
-# a sidebar, a note block, a confirmed section — the heuristics that removed them
-# cannot be trusted to have left the argument. The threshold sits above half
-# because a reference list or a note apparatus can legitimately be most of a short
-# work — a bibliography is the whole of a reading list — and this must refuse only a
-# file whose own text no longer reads as a document.
-_MAXIMUM_CLEANED_PERCENT = 50
-# Below this many removed characters the share is not evidence about anything.
-_MINIMUM_CLEANED_CHARACTERS = 500
+# Aggregate reasons apply only to the legacy EPUB policy.
+SOURCE_REASON_ALMOST_ALL_WITHHELD = "almost_all_units_withheld"
+SOURCE_REASON_ARTIFACT_LADEN = "artifact_laden_text"
+SOURCE_REASON_UNSAFE_TO_CLEAN = "unsafe_to_clean"
+SOURCE_REASON_NO_LETTER_TEXT = "no_letter_text"
 
 
 def source_health_reasons(
@@ -454,35 +493,23 @@ def source_health_reasons(
     letter_characters: int | None = None,
     withheld_characters: int = 0,
     maximum_unclean_percent: float | None = None,
+    passage_level: bool = False,
 ) -> list[str]:
-    """The reasons a whole source is refused, from evidence about the whole file.
+    """Refuse an empty PDF or apply the unchanged EPUB source-level policy.
 
-    A source with at least one readable unit is never refused for what it lost:
-    the unit rule already withholds what it cannot use, and a reader who wants the
-    file indexed anyway can exclude the parts they do not want instead. The three
-    exceptions are a file whose text layer is absent, which no amount of
-    excluding makes readable, a file whose cleaning removed more than it kept,
-    where what remains cannot be said to be the document's argument, and a file
-    whose every retained unit is digits and layout marks, which is a table with
-    nothing around it to say what the numbers are.
-
-    `letter_characters` is the count of letters in the retained units' text, and
-    it is `None` when the caller has not measured it. Only a measured zero is
-    evidence, so an unmeasured call makes no claim about letters.
-
-    A page is judged a scan by the extractor, which can see the page's images; a
-    share of digits is not a scan. A file with only some scanned pages is not
-    refused for them — the readable pages are the document, and the scans are
-    recorded on it.
+    With `passage_level=True`, readable passages survive regardless of source
+    loss ratios. The extractor uses this for PDFs only. The default preserves
+    the aggregate checks used by EPUB ingestion and existing callers.
     """
 
     if unit_count <= 0 or retained_count <= 0:
         if physical_pages > 0 and image_only_pages >= physical_pages:
             return [SOURCE_REASON_NO_TEXT_LAYER]
         return [SOURCE_REASON_NO_TEXT]
-
+    if passage_level:
+        return []
     reasons: list[str] = []
-    if retained_count * 100 < unit_count * _MINIMUM_RETAINED_PERCENT:
+    if retained_count * 100 < unit_count * 10:
         reasons.append(SOURCE_REASON_ALMOST_ALL_WITHHELD)
         if withheld_reasons.get("symbol_only", 0) * 100 >= unit_count * 50:
             reasons.append(SOURCE_REASON_ARTIFACT_LADEN)
@@ -490,19 +517,14 @@ def source_health_reasons(
         reasons.append(SOURCE_REASON_NO_LETTER_TEXT)
     if physical_pages > 0 and image_only_pages >= physical_pages:
         reasons.append(SOURCE_REASON_NO_TEXT_LAYER)
-
     if (
         maximum_unclean_percent is not None
         and withheld_characters > 0
         and withheld_characters * 100 > kept_characters * maximum_unclean_percent
     ):
         reasons.append(SOURCE_REASON_UNCLEAN)
-
     total = kept_characters + removed_characters
-    if (
-        removed_characters >= _MINIMUM_CLEANED_CHARACTERS
-        and removed_characters * 100 > total * _MAXIMUM_CLEANED_PERCENT
-    ):
+    if removed_characters >= 500 and removed_characters * 100 > total * 50:
         reasons.append(SOURCE_REASON_UNSAFE_TO_CLEAN)
     return reasons
 

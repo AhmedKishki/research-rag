@@ -57,7 +57,6 @@ from ..project.config import (
     configured_source_directory,
     project_command,
     resolve_config,
-    resolve_source_reference,
 )
 from ..project.policy import RETRIEVAL_METHODS, ResearchError
 from ..project.registry import (
@@ -225,13 +224,6 @@ HELP_GROUPS: tuple[tuple[str, tuple[tuple[str, str], ...]], ...] = (
             (
                 "include",
                 "Put an excluded source or passage back into retrieval.",
-            ),
-            (
-                "ocr",
-                (
-                    "Give a scanned PDF a text layer, as a new file. Never run by "
-                    "ingestion, an agent, or the workspace."
-                ),
             ),
         ),
     ),
@@ -868,49 +860,6 @@ def _parser() -> argparse.ArgumentParser:
             "been decided about it. This is the inventory the workspace's Sources "
             "view reads, and it is not on the agent surface."
         ),
-    )
-
-    ocr = add(
-        "ocr",
-        description=(
-            "Recognise the text on the scanned pages of one PDF and write a copy "
-            "that carries it as an invisible text layer. The original is never "
-            "edited, and nothing is written into the sources directory: move the "
-            "copy in yourself if it should replace the original, then run "
-            "`ingest`. This is the only OCR here. Ingestion never runs it, and no "
-            "agent tool or workspace action reaches it. It needs the optional "
-            "recognition backend, `uv sync --extra ocr`. Pages that already carry "
-            "text are copied untouched unless --all-pages is given."
-        ),
-    )
-    ocr.add_argument(
-        "source",
-        metavar="SOURCE",
-        help="The PDF, relative to the sources directory, as `sources` reports it.",
-    )
-    ocr.add_argument(
-        "-o",
-        "--output",
-        metavar="PATH",
-        help=(
-            "Where to write the copy. Default: SOURCE's name with `.ocr.pdf` in "
-            "the current directory. It may not be inside the sources directory."
-        ),
-    )
-    ocr.add_argument(
-        "--force", action="store_true", help="Replace the output if it exists."
-    )
-    ocr.add_argument(
-        "--all-pages",
-        action="store_true",
-        help="Recognise every page, including those that already carry text.",
-    )
-    ocr.add_argument(
-        "--dpi",
-        type=int,
-        default=200,
-        metavar="N",
-        help="Resolution pages are rendered at for recognition (default 200).",
     )
 
     stats = add(
@@ -2725,48 +2674,6 @@ def _open_browser(url: str) -> None:
     print(f"Open {url} in a browser.", file=sys.stderr)
 
 
-def _ocr(args: argparse.Namespace, config: ResearchConfig) -> dict[str, Any]:
-    """Write an OCR copy of one source PDF, outside the sources directory.
-
-    Local by design: ingestion does not call it, the agent surface has no tool for
-    it, and the workspace has no action for it, so a recognised text layer is
-    always something a person asked for and then placed where they wanted it.
-    """
-
-    from ..corpus.ocr import OcrError, check_output_path, ocr_pdf
-
-    source = resolve_source_reference(config, args.source)
-    if source.suffix.lower() != ".pdf" or not source.is_file():
-        raise ConfigurationError(f"Not a PDF in the sources directory: {args.source}")
-    if source.is_symlink():
-        raise ConfigurationError(f"A symlink is not read: {args.source}")
-    output = (
-        Path(args.output).expanduser()
-        if args.output
-        else Path.cwd() / f"{source.stem}.ocr.pdf"
-    )
-    try:
-        check_output_path(
-            source, output, sources_root=config.source_root, force=args.force
-        )
-        written = ocr_pdf(
-            source,
-            output,
-            dpi=args.dpi,
-            every_page=args.all_pages,
-            progress=lambda done, total: sys.stderr.write(
-                f"\rpage {done} of {total}" + ("\n" if done == total else "")
-            ),
-        )
-    except OcrError as exc:
-        raise ResearchError(str(exc)) from exc
-    written["next"] = (
-        "Move the copy into the sources directory yourself if it should replace the "
-        f"original, then run `{CLI_NAME} ingest`. The original was not touched."
-    )
-    return written
-
-
 def _clients(config: ResearchConfig) -> dict[str, Any]:
 
     with _control(config) as control:
@@ -3242,8 +3149,6 @@ async def _run(args: argparse.Namespace) -> CommandResult:
         return CommandResult(payload=_stop(args, config))
     if args.command == "doctor":
         return await _doctor(args, config)
-    if args.command == "ocr":
-        return CommandResult(payload=await asyncio.to_thread(_ocr, args, config))
     async with _operations(config) as operations:
         payload = await _operate(args, operations)
     return CommandResult(payload=payload)

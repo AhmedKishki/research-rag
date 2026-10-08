@@ -62,6 +62,15 @@ The hybrid retrieval implementation also depends on:
 
 DOCUMENT EXTRACTION COMPONENTS
 
+The text-only PDF fallback in src/research_rag/corpus/pdf_native/ is adapted from
+the same author's pdf-tools content-stream interpreter with the author's permission:
+
+    pdf-tools
+    https://github.com/AhmedKishki/pdf-tools
+
+This copy is maintained and licensed as part of research-rag. It resolves no
+dependency on pdf-tools and includes no OCR, rendering, or image export.
+
 PDF page extraction and EPUB section extraction depend on components that are
 NOT permissively licensed. A recipient or redistributor must satisfy their
 terms, which are separate from whatever license this repository's own code

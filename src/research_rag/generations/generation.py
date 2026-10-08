@@ -32,6 +32,7 @@ def generation_is_reusable(
     chunk_overlap: int,
     chunk_headers: bool,
     embedding: EmbeddingModel,
+    maximum_unclean_percent: float = 1.0,
 ) -> bool:
     chunking = manifest.get("chunking", {})
     dense = manifest.get("retrieval", {}).get("dense", {})
@@ -48,6 +49,8 @@ def generation_is_reusable(
         # A generation built before contextual headers existed means no headers,
         # which is also the shipped default.
         and chunking.get("headers", False) == chunk_headers
+        and manifest.get("passage_cleaning", {}).get("maximum_unclean_percent", 1.0)
+        == maximum_unclean_percent
         # The model's repository is checked too when the generation recorded one,
         # because a revision names a commit inside a repository and a mirror can
         # serve different weights under the same name. A generation built before
@@ -101,6 +104,7 @@ def load_reuse_snapshot(
     chunk_overlap: int,
     chunk_headers: bool,
     embedding: EmbeddingModel,
+    maximum_unclean_percent: float = 1.0,
     load_units: bool = True,
     load_chunks: bool = True,
     load_vectors: bool = True,
@@ -121,6 +125,7 @@ def load_reuse_snapshot(
         chunk_overlap=chunk_overlap,
         chunk_headers=chunk_headers,
         embedding=embedding,
+        maximum_unclean_percent=maximum_unclean_percent,
     ):
         return None
     try:

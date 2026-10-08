@@ -302,6 +302,12 @@ _INGEST_DISCLOSURES = (
     "discarded_symbol_only_chunk_count",
     "discarded_corrupt_chunk_count",
     "excluded_corrupt_unit_count",
+    "excluded_corrupt_passage_count",
+    "excluded_symbol_only_unit_count",
+    "excluded_symbol_only_passage_count",
+    "cleaned_passage_count",
+    "pdf_text_recovery_pages",
+    "recovered_pdf_blocks",
     "dense_truncated_chunk_count",
     "withheld_chunk_count",
 )

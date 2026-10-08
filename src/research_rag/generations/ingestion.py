@@ -3,7 +3,6 @@ from __future__ import annotations
 import asyncio
 import os
 import re
-import shlex
 import shutil
 import time
 import uuid
@@ -17,7 +16,6 @@ import numpy as np
 from ..corpus.extraction import (
     REMOVAL_FIELDS,
     ExtractionError,
-    UncleanSourceError,
     empty_removal_counts,
     extract_epub_spine_item,
     extract_scanned_pdf_pages,
@@ -806,6 +804,7 @@ class IngestionWorkflow:
             chunk_headers=self.config.settings.chunk_headers,
             force_recompute=force_recompute,
             embedding=self.config.settings.embedding_facts,
+            maximum_unclean_percent=self.config.settings.maximum_unclean_percent,
         )
         now = _utc_now()
         checkpoint: dict[str, Any] = {
@@ -823,6 +822,7 @@ class IngestionWorkflow:
                 "chunk_size": chunk_size,
                 "chunk_overlap": chunk_overlap,
                 "chunk_headers": self.config.settings.chunk_headers,
+                "maximum_unclean_percent": self.config.settings.maximum_unclean_percent,
                 "force_recompute": force_recompute,
             },
             "source_inventory": inventory,
@@ -963,6 +963,7 @@ class IngestionWorkflow:
                 chunk_size=chunk_size,
                 chunk_overlap=chunk_overlap,
                 chunk_headers=self.config.settings.chunk_headers,
+                maximum_unclean_percent=self.config.settings.maximum_unclean_percent,
                 load_units=False,
                 load_chunks=False,
                 load_vectors=False,
@@ -993,11 +994,9 @@ class IngestionWorkflow:
                 record = {
                     "source_relative_path": relative,
                     "reason": str(exc),
-                    "remedy": (
-                        f"research-rag ocr {shlex.quote(relative)}"
-                        if isinstance(exc, UncleanSourceError)
-                        else "Repair or replace this source, then run research-rag ingest."
-                    ),
+                    # OCR is performed outside this app, so the remedy is the same
+                    # for every source-local failure: repair or replace the file.
+                    "remedy": "Repair or replace this source, then run research-rag ingest.",
                 }
                 skipped_state = {
                     **(state or {}),
@@ -1145,6 +1144,7 @@ class IngestionWorkflow:
                         chunk_size=chunk_size,
                         chunk_overlap=chunk_overlap,
                         chunk_headers=self.config.settings.chunk_headers,
+                        maximum_unclean_percent=self.config.settings.maximum_unclean_percent,
                         load_units=True,
                         load_chunks=True,
                         load_vectors=False,
@@ -1518,6 +1518,7 @@ class IngestionWorkflow:
                         chunk_size=chunk_size,
                         chunk_overlap=chunk_overlap,
                         chunk_headers=self.config.settings.chunk_headers,
+                        maximum_unclean_percent=self.config.settings.maximum_unclean_percent,
                         load_units=True,
                         load_chunks=True,
                         load_vectors=False,
@@ -1810,6 +1811,7 @@ class IngestionWorkflow:
                         chunk_size=chunk_size,
                         chunk_overlap=chunk_overlap,
                         chunk_headers=self.config.settings.chunk_headers,
+                        maximum_unclean_percent=self.config.settings.maximum_unclean_percent,
                         load_units=False,
                         load_chunks=True,
                         load_vectors=True,
@@ -2141,6 +2143,17 @@ class IngestionWorkflow:
                     "excluded_corrupt_unit_count": int(
                         checkpoint.get("excluded_corrupt_unit_count") or 0
                     ),
+                    **{
+                        key: sum(int(document.get(key) or 0) for document in documents)
+                        for key in (
+                            "excluded_corrupt_passage_count",
+                            "excluded_symbol_only_unit_count",
+                            "excluded_symbol_only_passage_count",
+                            "cleaned_passage_count",
+                            "pdf_text_recovery_pages",
+                            "recovered_pdf_blocks",
+                        )
+                    },
                     "discarded_symbol_only_chunk_count": int(
                         checkpoint.get("discarded_symbol_only_chunk_count") or 0
                     ),
@@ -2205,6 +2218,9 @@ class IngestionWorkflow:
                     "excluded_corrupt_unit_count": int(
                         checkpoint.get("excluded_corrupt_unit_count") or 0
                     ),
+                    "passage_cleaning": {
+                        "maximum_unclean_percent": self.config.settings.maximum_unclean_percent,
+                    },
                     "chunking": {
                         "backend": "UltraRAG token chunker",
                         "tokenizer": "gpt2",
@@ -2642,6 +2658,7 @@ class IngestionWorkflow:
                 chunk_headers=self.config.settings.chunk_headers,
                 force_recompute=force_recompute,
                 embedding=self.config.settings.embedding_facts,
+                maximum_unclean_percent=self.config.settings.maximum_unclean_percent,
             )
             recovered = await self._recover_pending_activation(
                 expected_identity=identity,
