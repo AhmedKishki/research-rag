@@ -58,6 +58,9 @@ def is_loopback_client(request: Request) -> bool:
 def served_authority(request: Request) -> SplitResult | None:
     """Return the requested loopback authority, or None."""
 
+    policy = getattr(request.app.state, "workspace_network_access", None)
+    if policy is not None:
+        return policy.served_authority(request)
     parsed = _split("//" + request.headers.get("host", ""))
     if parsed is None or not _loopback_name(parsed.hostname):
         return None
@@ -67,6 +70,9 @@ def served_authority(request: Request) -> SplitResult | None:
 def write_refusal(request: Request) -> tuple[int, str] | None:
     """Return a refusal or None; local terminal requests may omit Origin."""
 
+    policy = getattr(request.app.state, "workspace_network_access", None)
+    if policy is not None:
+        return policy.write_refusal(request)
     if not is_loopback_client(request):
         return 403, "Writes are refused from another host"
     authority = served_authority(request)

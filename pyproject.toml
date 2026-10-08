@@ -32,6 +32,8 @@ dependencies = [
     "pydantic>=2.12,<3",
     "pymupdf>=1.26,<2",
     "qdrant-client==1.19.1",
+    # Generate phone-access QR codes locally, without sending URLs to a service.
+    "qrcode>=8.2,<9",
     "uvicorn>=0.53,<1",
     # The pinned UltraRAG the gateway proxies. The managed snapshot under the runtime
     # cache supplies each server's entry point, and those entry points import the

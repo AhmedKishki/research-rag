@@ -3192,3 +3192,15 @@ textarea:disabled {
     white-space: pre-wrap;
   }
 }
+/* The remote landing page shares local assets and remains readable on a phone. */
+.remote-content { max-width: 48rem; margin: 2rem auto; padding: 1rem; }
+.remote-content > p { line-height: 1.6; }
+.remote-card { margin: 1.5rem 0; padding: 1.25rem; border: 1px solid currentColor; border-radius: 1rem; }
+.remote-url { display: block; overflow-wrap: anywhere; padding: .75rem 0; }
+.remote-qr { background: white; color: black; width: fit-content; max-width: 100%; margin: 1rem auto; }
+.remote-qr svg { display: block; width: 18rem; max-width: 100%; height: auto; }
+@media (max-width: 600px) {
+  .header-actions { flex-wrap: wrap; }
+  .remote-content { margin: 0 auto; }
+  .remote-content .button { min-height: 44px; }
+}

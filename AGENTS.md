@@ -3,7 +3,7 @@
 ## Scope
 
 - Project-scoped PDF/EPUB evidence retrieval, not answer generation.
-- One process and loopback port per project, shared by the workspace, MCP, and CLI.
+- One process and port per project, shared by the workspace, MCP, and CLI. Loopback is the default; explicit home-LAN mode exposes only the workspace.
 - Ship the gateway, workspace, and settings layer here. Do not depend on a sibling project.
 
 ## Documentation
@@ -136,8 +136,9 @@
 - Ship the workspace in `surfaces/workspace/` with its adapter, source authorization, and host.
   - Hide unsupported capabilities. `ResearchUIAdapter._arguments` removes unsupported arguments.
   - Call `ResearchService`. Never read generation artifacts directly. Allowlisted originals are the sole file-serving exception.
-- Browser and control writes must be same-origin, JSON-only, and loopback-only, with no caller-selected output paths.
-  - Remote exposure requires an explicit security design.
+- Browser and control writes must be same-origin and JSON-only, with no caller-selected output paths. Control and MCP remain loopback-only.
+  - Explicit home-LAN mode accepts private IPv4 peers and detected local-interface hosts. Remote browser writes require an exact validated HTTP origin; cross-site writes are refused.
+  - Home-LAN HTTP has no authentication or encryption. Other remote exposure requires an explicit security design.
 - Ingest only regular PDF/EPUB files beneath the configured source root. Reject symlinks and traversal.
 - Do not patch UltraRAG, expose vanilla operations, or move dense backends into the gateway.
 - Preserve CLI access to every workspace capability.

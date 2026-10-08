@@ -669,6 +669,7 @@ def create_ui_app(
     service: ResearchService,
     clients: ClientRegistry | None = None,
     app_state: Callable[[], Mapping[str, Any]] | None = None,
+    network_access: Any = None,
 ) -> Starlette:
     """Create the shared workspace over the app's one service.
 
@@ -688,4 +689,5 @@ def create_ui_app(
         adapter=ResearchUIAdapter(
             config, service, clients=clients, app_state=app_state
         ),
+        network_access=network_access,
     )

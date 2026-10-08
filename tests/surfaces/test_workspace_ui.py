@@ -4141,6 +4141,61 @@ result.browser = { posted: [...posted], opened: [...opened] };
     assert result["browser"]["opened"] == ["/api/source-file?path=books%2Fa%20b.pdf"]
 
 
+def test_remote_sources_open_on_the_visiting_device(tmp_path: Path) -> None:
+    result = _drive_page(
+        tmp_path,
+        """
+(async () => {
+state.profile = { source_open_mode: "browser", capabilities: { source_files: true } };
+result.opened = [];
+window.open = (url) => result.opened.push(url);
+fetch = async () => { throw new Error("Desktop viewer must not be requested"); };
+await openSource("books/a b.pdf");
+})()
+""",
+    )
+    assert result["opened"] == ["/api/source-file?path=books%2Fa%20b.pdf"]
+
+
+def test_http_copy_offers_selectable_text_without_clipboard(tmp_path: Path) -> None:
+    result = _drive_page(
+        tmp_path,
+        """
+(async () => {
+navigator.clipboard = undefined;
+document.body = { append(field) { field.remove = () => {}; } };
+result.prompts = [];
+window.prompt = (message, text) => result.prompts.push([message, text]);
+await copyText("A passage to copy", "Copied");
+})()
+""",
+    )
+    assert result["prompts"] == [["Select and copy this text:", "A passage to copy"]]
+
+
+def test_http_copy_can_use_a_user_gesture_fallback(tmp_path: Path) -> None:
+    result = _drive_page(
+        tmp_path,
+        """
+(async () => {
+navigator.clipboard = undefined;
+document.body = { append(field) {
+  field.select = () => {};
+  field.setSelectionRange = () => {};
+  field.remove = () => { result.removed = true; };
+} };
+document.execCommand = (command) => { result.command = command; return true; };
+window.prompt = () => { throw new Error("Copy succeeded; no prompt needed"); };
+await copyText("A passage to copy", "Copied passage");
+result.toast = text(document.getElementById("toast-region"));
+})()
+""",
+    )
+    assert result["command"] == "copy"
+    assert result["removed"] is True
+    assert "Copied passage" in result["toast"]
+
+
 def test_a_name_links_to_its_source_and_its_place_to_the_passage(
     tmp_path: Path,
 ) -> None:

@@ -248,6 +248,159 @@ def _profile(**capabilities: bool) -> UIProfile:
     )
 
 
+def test_remote_page_is_local_and_preserves_workspace(tmp_path: Path) -> None:
+    app = create_ui_app(
+        profile=_profile(), adapter=FakeAdapter(tmp_path / "source.pdf")
+    )
+    with TestClient(
+        app, base_url=LOOPBACK_BASE_URL, client=LOOPBACK_TEST_CLIENT
+    ) as client:
+        remote = client.get("/remote")
+        assert remote.status_code == 200
+        assert "LAN access is off" in remote.text
+        assert "start --lan" in remote.text
+        assert 'href="/next/"' in remote.text
+        assert "http://" not in remote.text
+        legacy = client.get("/")
+        assert 'href="/remote"' in legacy.text
+        assert client.get("/next/").text == legacy.text
+        assert client.get("/next").text == legacy.text
+
+
+def test_remote_qr_encodes_workspace_url_from_policy(
+    tmp_path: Path, monkeypatch: Any
+) -> None:
+    from urllib.parse import urlsplit
+
+    import qrcode
+
+    encoded = []
+    original = qrcode.make
+
+    def capture(data: str, **kwargs: Any) -> Any:
+        encoded.append(data)
+        return original(data, **kwargs)
+
+    monkeypatch.setattr(qrcode, "make", capture)
+
+    class Policy:
+        def report(self) -> dict[str, Any]:
+            return {"enabled": True, "urls": ["http://192.168.1.20:5051/"]}
+
+        def served_authority(self, request: Any) -> Any:
+            return urlsplit("//" + request.headers["host"])
+
+        def request_refusal(self, request: Any) -> None:
+            return None
+
+        def is_local(self, request: Any) -> bool:
+            return False
+
+    app = create_ui_app(
+        profile=_profile(clients=True, projects=True),
+        adapter=FakeAdapter(tmp_path / "source.pdf"),
+        network_access=Policy(),
+    )
+    with TestClient(
+        app, base_url="http://192.168.1.20:5051", client=("192.168.1.30", 50000)
+    ) as client:
+        response = client.get("/remote")
+        assert response.status_code == 200
+        assert encoded == ["http://192.168.1.20:5051/next/"]
+        assert "<svg" in response.text
+        assert 'href="http://192.168.1.20:5051/next/"' in response.text
+        assert "https://" not in response.text
+        assert not client.get("/api/ui").json()["capabilities"]["clients"]
+        assert not client.get("/api/ui").json()["capabilities"]["projects"]
+        assert client.get("/api/ui").json()["source_open_mode"] == "browser"
+
+
+def test_lan_policy_enforces_workspace_routes_writes_and_originals(
+    tmp_path: Path,
+) -> None:
+    from research_rag.runtime.network import NetworkAccess
+
+    source = tmp_path / "source.pdf"
+    source.write_bytes(b"%PDF-1.7 authorized original")
+    adapter = FakeAdapter(source)
+    app = create_ui_app(
+        profile=_profile(documents=True, source_files=True),
+        adapter=adapter,
+        network_access=NetworkAccess(5051, lan=True, addresses=("192.168.1.20",)),
+    )
+    with TestClient(
+        app, base_url="http://192.168.1.20:5051", client=("192.168.1.30", 50000)
+    ) as client:
+        assert client.get("/next/").status_code == 200
+        for path in (
+            "/api/projects",
+            "/api/clients",
+            "/api/agent-entry",
+            "/api/health",
+            "/api/sql/query",
+        ):
+            assert client.get(path).status_code == 403
+        assert (
+            client.get("/remote", headers={"Host": "192.168.1.21:5051"}).status_code
+            == 403
+        )
+        assert client.post("/api/search", json={"query": "evidence"}).status_code == 403
+        assert (
+            client.post(
+                "/api/search",
+                json={"query": "evidence"},
+                headers={"Origin": "http://evil.example"},
+            ).status_code
+            == 403
+        )
+        assert (
+            client.post(
+                "/api/search",
+                json={"query": "evidence"},
+                headers={"Origin": "http://192.168.1.20:5051"},
+            ).status_code
+            == 200
+        )
+        original = client.get("/api/source-file", params={"path": "evidence.pdf"})
+        assert original.status_code == 200
+        assert original.content == source.read_bytes()
+        assert (
+            client.get("/api/source-file", params={"path": "../secret.pdf"}).status_code
+            == 404
+        )
+
+
+def test_policy_does_not_relax_shared_control_guard() -> None:
+    from starlette.applications import Starlette
+    from starlette.requests import Request
+
+    from research_rag.runtime.network import NetworkAccess
+    from research_rag.surfaces.workspace.write_guard import write_refusal
+
+    app = Starlette()
+    app.state.network_access = NetworkAccess(
+        5051, lan=True, addresses=("192.168.1.20",)
+    )
+    request = Request(
+        {
+            "type": "http",
+            "app": app,
+            "method": "POST",
+            "scheme": "http",
+            "path": "/control/status",
+            "query_string": b"",
+            "client": ("192.168.1.30", 50000),
+            "server": ("192.168.1.20", 5051),
+            "headers": [
+                (b"host", b"192.168.1.20:5051"),
+                (b"origin", b"http://192.168.1.20:5051"),
+                (b"content-type", b"application/json"),
+            ],
+        }
+    )
+    assert write_refusal(request) == (403, "Writes are refused from another host")
+
+
 class SqlRecordAdapter(FakeAdapter):
     """A corpus fake that also runs statements against the records it stores."""
 

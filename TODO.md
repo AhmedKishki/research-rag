@@ -7,6 +7,14 @@ An item is done when the harness has produced its measurement and the validation
 * [arxiv.org/pdf/2602.07297](https://arxiv.org/pdf/2602.07297)
 * Hierarchical Navigable Small World and KNN
 
+## generating
+
+* [ ] White box LLM with API generation. The generate request goes to an LLM under the hood, and the LLM is responsible for assembling the evidence and formulating the reply. The LLM can have a prompt ready to help it know how to produce the output, how to best search, and so on. Additionally we can add a white box option, where the LLM must utilise the outputs from the RAG for the answer, and never invent a connection. Invented wording must enter via [AI authored: here is the ai authored content].
+* [ ] Use the white-box-synthesis: [github.com/AhmedKishki/draft-writing-skill/blob/main/references/tools/white-box-synthesis.md](https://github.com/AhmedKishki/draft-writing-skill/blob/main/references/tools/white-box-synthesis.md)
+* [ ] For white box synthesis, the user question, the RAG search results enter as synthesis materials. Note that the RAG may be queried as many times as desired to fomulate a solution. Also note that synthesis can not be mindless but must preserve causality, and the answer must follow a clear logical chain.
+* [ ] Alternatively a default black box synthesis can just give the LLM full authority
+* [ ] For all generation modes, citation to the sources is a must, and the citation must be inferred from the RAG outputs. Apply citations only when a source carries a strong claim.
+
 ## method
 
 * [ ] **Scalability of embeddings is questioned.** if most results are concentrated between 0.7 and 0.9 - there is not so much possibility to differentiate between good and better matches.
@@ -42,12 +50,11 @@ An item is done when the harness has produced its measurement and the validation
   - Record the terminal as deliberately none, because an absent terminal file cannot tell the two cases apart.
   - `stop` needs the same ownership proof plus the flag, and a plain `stop` must never end a detached app.
   - `doctor` and the project selector must learn that a detached app outlives its terminal.
-- [ ] **Serve beyond loopback with an explicit security design.** Feature. The workspace binds one loopback port and refuses every other peer, `Host`, and `Origin`; it has no authentication, so `AGENTS.md` requires a design before remote exposure.
+- [ ] **Authenticated, encrypted remote serving.** Feature. Home-LAN mode has no login and uses unencrypted HTTP; it is not a public or multi-user deployment.
 
-  - Choose the shape: a first-party remote mode, or an authenticated proxy that terminates on loopback and is documented as the supported way to reach a phone or another machine.
-  - A first-party mode needs a configured bind address and allowed `Host` and `Origin`, an access token, TLS or a trusted TLS terminator, and CSRF handling.
-  - State a threat model for every write surface it would expose: settings, ingestion, source and passage exclusions, generation removal, the SQL console, and memory writes.
-  - Keep loopback the default. `doctor` and `README.md` state when remote serving is on and what protects it.
+  - Design authentication, session expiry, TLS trust, and permissions before supporting untrusted networks or public exposure.
+  - Preserve local-only CLI control, MCP, and installation management.
+  - Keep loopback the default. Extend the explicit host, peer, and browser-origin policies rather than disabling them.
 - [ ] **A connection an unnamed client opened cannot be dropped.** Limit. A client that declared nothing is one client per MCP session, so a hand-written HTTP client has only its sessions refused. `RESEARCH_RAG_CLIENT_NAME` fixes it, and the stdio bridge always sets it.
 
 ## reporting
