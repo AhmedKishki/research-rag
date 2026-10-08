@@ -45,6 +45,24 @@ def test_clean_and_multilingual_text_is_unchanged() -> None:
     assert clean_damaged_pdf_passage(value) == (value, 0, [])
 
 
+def test_a_bad_glyph_in_unspaced_text_does_not_erase_the_paragraph() -> None:
+    left, right = "日本語" * 200, "中文" * 200
+    value = left + "\ufffd" + right
+    record = {"physical_pages": 1}
+    retained = screen_source_units(
+        _source(), record, [_unit(value)], maximum_unclean_percent=2.0
+    )
+    assert retained[0]["contents"] == left + " [...] " + right
+    assert record["discarded_corrupt_character_count"] == 1
+    assert record["substantive_character_count"] == 1001
+
+
+def test_latin_word_inside_unspaced_text_is_not_partially_completed() -> None:
+    value, lost, _ = clean_damaged_pdf_passage("中文bro\ufffdken日本語")
+    assert value == "中文 [...] 日本語"
+    assert lost == 7
+
+
 def test_pdf_uses_document_loss_not_a_short_paragraph_share() -> None:
     record = {"physical_pages": 2}
     retained = screen_source_units(

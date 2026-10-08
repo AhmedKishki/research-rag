@@ -74,6 +74,10 @@ An item is done when the harness has produced its measurement and the validation
 * [ ] **Context-aware chunking.** [github.com/coleam00/ottomator-agents/blob/main/all-rag-strategies/docs/07-context-aware-chunking.md](https://github.com/coleam00/ottomator-agents/blob/main/all-rag-strategies/docs/07-context-aware-chunking.md)
 
 - [ ] **Enforce the embedding model's token limit when chunking.** Feature. GPT-2-sized chunks can exceed the embedding model's WordPiece limit, especially on table-of-contents dot leaders. Count the actual embedding input, including headers and special tokens, and split oversized chunks without dropping text. Test punctuation-heavy input and ordinary prose. Measure retrieval quality and rebuild cost before changing generation artifacts.
+  - Investigate the observed overflow before choosing the fix. A live build produced 36,358 chunks; 15 exceeded the embedding model's 512-token limit, and the maximum actual input was 3,417 tokens. Their canonical text remains stored, but their vectors represent truncated input.
+  - Identify every affected chunk through the generation's dense-token audit. Record its source locator, content kind, canonical text length, chunker token count, embedding token count, and exact embedding input.
+  - Determine whether each overflow comes from tokenizer mismatch, punctuation or dot leaders, lost word boundaries, preprocessing, headers or special tokens, or a chunk-boundary defect. Do not assume one cause covers all 15.
+  - Reproduce the largest case and each distinct cause. Acceptance: every actual embedding input fits the model limit without losing source text, with preserved locators and explicit regeneration cost.
 - [ ] **Reuse vectors across a contextual-header change.** Feature. Vector reuse keys on canonical passage text, so turning `chunking.headers` on recomputes every vector.
   - Fix: two hash columns, one canonical and one embedded, plus a lookup-schema bump. The bump rebuilds the sidecar from canonical artifacts, not the corpus.
   - `generation_is_reusable` validates the sidecar before anything ensures it, so a version bump denies reuse to the first ingest after it.
