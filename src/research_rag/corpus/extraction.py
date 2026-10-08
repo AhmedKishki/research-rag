@@ -15,7 +15,7 @@ from __future__ import annotations
 import hashlib
 import math
 import re
-from collections import Counter
+from collections import Counter, defaultdict
 from dataclasses import dataclass
 from pathlib import Path
 from statistics import median
@@ -48,6 +48,7 @@ from .text_quality import (
     SOURCE_REASON_NO_TEXT,
     SOURCE_REASON_NO_TEXT_LAYER,
     SOURCE_REASON_UNCLEAN,
+    clean_damaged_pdf_passage,
     has_searchable_alphanumeric_content,
     non_argument_removal_flags,
     opens_with_note_marker,
@@ -1002,7 +1003,27 @@ def _repeated_margin_signatures(
         )
     counts = Counter(signature for values in page_sets for signature in values)
     threshold = max(3, math.ceil(len(pages) * 0.30))
-    return {signature for signature, count in counts.items() if count >= threshold}
+    confirmed = {signature for signature, count in counts.items() if count >= threshold}
+    positions: defaultdict[str, list[int]] = defaultdict(list)
+    for page_index, signatures in enumerate(page_sets):
+        for signature in signatures:
+            positions[signature].append(page_index)
+    for signature, indices in positions.items():
+        # A book's chapter header may occupy much less than 30% of the book.
+        # Confirm a damaged separator as furniture only with repeated marginal
+        # placement, a folio, and dense repetition within its local page span.
+        # This classifies the whole header, never guesses the missing glyph or
+        # converts its printed folio into a locator.
+        if (
+            len(indices) >= 3
+            and "#" in signature
+            and len(signature) <= 160
+            and sum(character.isalpha() for character in signature) >= 6
+            and passage_health_reasons(signature, maximum_unclean_percent=0.0)
+            and len(indices) / (indices[-1] - indices[0] + 1) >= 0.35
+        ):
+            confirmed.add(signature)
+    return confirmed
 
 
 def _sidebar_blocks(
@@ -2367,11 +2388,12 @@ def screen_source_units(
     removals: dict[str, int] | None = None,
     maximum_unclean_percent: float | None = None,
 ) -> list[dict[str, Any]]:
-    """Repair unhealthy passages and withhold only those still unreadable.
+    """Repair PDF passages locally, then enforce their document-wide loss budget.
 
-    For PDFs, `maximum_unclean_percent` applies to each paragraph, never the source.
-    Clean paragraphs bypass repair. No retained-share or cleanup-share rule can
-    veto readable neighbours, even when they are a small part of the file.
+    For PDFs, `maximum_unclean_percent` caps irreversible substantive-character
+    loss over the document after confirmed furniture and non-evidence are omitted.
+    Clean paragraphs bypass repair. Damaged tokens leave visible gaps, not guessed
+    letters or silently joined words. EPUB retains its existing screening policy.
 
     A paragraph that carries no alphanumeric content and no corruption evidence is
     non-evidence: it is omitted and recorded on `excluded_symbol_only_passages`,
@@ -2402,12 +2424,14 @@ def screen_source_units(
     reason_counts: Counter[str] = Counter()
     kept_characters = 0
     withheld_characters = 0
+    cleaned_corrupt_spans = 0
+    partially_cleaned_passages = 0
     for unit in cleaned:
         text = str(unit.get("contents") or "")
-        kept_characters += len(text)
         if not passage_level:
             # EPUB is outside the PDF recovery change. Preserve its unit and
             # source-level acceptance rules, including the majority guard.
+            kept_characters += len(text)
             reasons = text_health_reasons(text)
             if not reasons:
                 retained.append(unit)
@@ -2431,11 +2455,12 @@ def screen_source_units(
         for passage_index, paragraph in enumerate(text.split("\n\n")):
             if not paragraph.strip():
                 continue
-            reasons = passage_health_reasons(
-                paragraph, maximum_unclean_percent=maximum_unclean_percent
-            )
+            reasons = passage_health_reasons(paragraph, maximum_unclean_percent=0.0)
             if not reasons:
                 readable.append(paragraph)
+                kept_characters += sum(
+                    not character.isspace() for character in paragraph
+                )
                 continue
             decision = {
                 "unit_id": str(unit.get("id") or ""),
@@ -2451,14 +2476,33 @@ def screen_source_units(
                 unit_symbol_only = True
                 continue
             repaired = clean_unclean_passage(paragraph)
-            remaining = passage_health_reasons(
-                repaired, maximum_unclean_percent=maximum_unclean_percent
-            )
+            remaining = passage_health_reasons(repaired, maximum_unclean_percent=0.0)
             if repaired.strip() and not remaining:
                 readable.append(repaired)
                 repaired_passages.append(decision)
+                kept_characters += sum(
+                    not character.isspace() for character in repaired
+                )
                 continue
-            withheld_characters += len(paragraph)
+            if set(remaining) == {"symbol_only"}:
+                omitted_symbol_only_passages.append({**decision, "reasons": remaining})
+                unit_symbol_only = True
+                continue
+            meaningful_size = sum(not character.isspace() for character in repaired)
+            kept_characters += meaningful_size
+            local_text, local_loss, spans = clean_damaged_pdf_passage(repaired)
+            if has_searchable_alphanumeric_content(
+                local_text
+            ) and not passage_health_reasons(local_text, maximum_unclean_percent=0.0):
+                readable.append(local_text)
+                withheld_characters += local_loss
+                cleaned_corrupt_spans += len(spans)
+                partially_cleaned_passages += 1
+                repaired_passages.append(
+                    {**decision, "lost_characters": local_loss, "removed_spans": spans}
+                )
+                continue
+            withheld_characters += meaningful_size
             excluded_reasons = remaining or reasons
             reason_counts.update(excluded_reasons)
             unit_reasons.extend(excluded_reasons)
@@ -2513,17 +2557,27 @@ def screen_source_units(
     document["excluded_symbol_only_passages"] = omitted_symbol_only_passages
     document["cleaned_passage_count"] = len(repaired_passages)
     document["cleaned_passages"] = repaired_passages
+    if passage_level:
+        document["substantive_character_count"] = kept_characters
+        document["discarded_corrupt_character_count"] = withheld_characters
+        document["cleaned_corrupt_span_count"] = cleaned_corrupt_spans
+        document["partially_cleaned_passage_count"] = partially_cleaned_passages
     # Measured here and nowhere else, so a source extracted before it was measured
     # carries no figure rather than a guessed one.
     document["unclean_character_rate"] = (
         round(withheld_characters / kept_characters, 6) if kept_characters else 0.0
     )
     document["extracted_units"] = len(retained)
-    if rejected_passages or rejected:
+    if rejected_passages or rejected or cleaned_corrupt_spans:
         document["metadata_warnings"] = list(
             dict.fromkeys(
                 [
                     *document.get("metadata_warnings", []),
+                    *(
+                        ["corrupt_extraction_spans_excluded"]
+                        if cleaned_corrupt_spans
+                        else []
+                    ),
                     *(
                         ["corrupt_extraction_passages_excluded"]
                         if rejected_passages
@@ -2561,6 +2615,12 @@ def screen_source_units(
         # unit is not corrupt, but it is why nothing survived, so it is reported
         # here for its locator and its reason without entering the corrupt counts.
         reported_units = [*rejected, *omitted_symbol_only_units]
+        if passage_level:
+            reported_units.extend(
+                decision
+                for decision in repaired_passages
+                if decision.get("lost_characters")
+            )
         reported_counts = Counter(reason_counts)
         reported_counts["symbol_only"] += len(omitted_symbol_only_units)
         raise error_type(
@@ -2569,6 +2629,9 @@ def screen_source_units(
                 fatal,
                 reported_units,
                 reported_counts,
+                loss=(withheld_characters, kept_characters, maximum_unclean_percent)
+                if passage_level
+                else None,
             )
         )
     if document.get("image_only_pages"):
@@ -2579,6 +2642,10 @@ def screen_source_units(
                     "image_only_pages_present",
                 ]
             )
+        )
+    if passage_level and document.get("metadata_warnings"):
+        document["metadata_warnings"] = sorted(
+            set(document.get("metadata_warnings", []))
         )
     return retained
 
@@ -2673,6 +2740,8 @@ def _refusal_message(
     reasons: list[str],
     rejected: list[dict[str, Any]],
     reason_counts: Counter[str],
+    *,
+    loss: tuple[int, int, float | None] | None = None,
 ) -> str:
     """What a refused source says, in a form a reader can act on.
 
@@ -2696,6 +2765,22 @@ def _refusal_message(
             + f" Refused for: {', '.join(reasons)}."
         )
     if SOURCE_REASON_UNCLEAN in reasons:
+        if source.extension == ".pdf" and loss is not None:
+            lost, total, limit = loss
+            percent = 100 * lost / total if total else 100.0
+            location = ""
+            if rejected:
+                locator = rejected[0].get("locator") or {}
+                if locator.get("page"):
+                    location = f" First loss at physical PDF page {locator['page']}."
+            return (
+                f"PDF substantive-text loss exceeds the document budget: {source.path}. "
+                f"Lost {lost} of {total} substantive characters ({percent:.2f}%), "
+                f"above ingestion.maximum_unclean_percent={limit:g}.{location} "
+                "This source is omitted from the validated partial generation; "
+                "the original and selected generation are unchanged. Repair or "
+                "replace the text layer, or explicitly review the loss budget."
+            )
         return (
             f"Source is not clean ({', '.join(reasons)}): {source.path}. "
             "No readable text was recovered within this project's EPUB loss limit. "

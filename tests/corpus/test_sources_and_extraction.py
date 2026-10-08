@@ -228,6 +228,10 @@ def test_pdf_page_batches_share_handles_and_preserve_extraction_output(
             "extracted_units",
             "removed_repeated_margin_blocks",
             "unclean_character_rate",
+            "substantive_character_count",
+            "discarded_corrupt_character_count",
+            "cleaned_corrupt_span_count",
+            "partially_cleaned_passage_count",
         }:
             assert document[key] == value
 
@@ -628,8 +632,8 @@ def test_pdf_span_text_does_not_guess_replacements_for_ambiguous_overlays() -> N
 
     extracted = _pdf_line_text(spans)
 
-    assert extracted == "before*/after post\x01/cold"
-    assert normalize_reading_text(extracted) == "before*/after post/cold"
+    assert extracted == "before*/after post /cold"
+    assert normalize_reading_text(extracted) == "before*/after post /cold"
 
 
 def test_marker_legend_detection_requires_explicit_legend_syntax() -> None:

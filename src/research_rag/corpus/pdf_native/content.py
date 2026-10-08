@@ -22,7 +22,9 @@ placement are omitted: this package recovers text only.
 """
 
 import re
+import unicodedata
 
+from ..text_normalization import formatting_font_kind
 from .geometry import mat_mul
 from .objects import Name, Stream, decode_name
 
@@ -90,6 +92,13 @@ def _cp1252_map():
             except UnicodeDecodeError:
                 _CP1252[i] = "\ufffd"
     return _CP1252
+
+
+def _cp1252_char(code):
+    """The Windows-1252 character for a code, or None where it assigns none."""
+
+    value = _cp1252_map().get(code)
+    return value if value and value != "\ufffd" else None
 
 
 GLYPH_NAMES = {}
@@ -406,6 +415,154 @@ for _c, _n in [
 del _c, _n
 
 
+# Documented Adobe glyph names for Greek letters and mathematical or formatting
+# symbols. A TeX mathematics font names its glyphs this way in /Differences, and
+# a symbol face does too. Without this table every such name decodes to nothing,
+# which is what turns a formula into replacement characters. Only names Adobe's
+# own glyph list assigns a character are here; a name no list documents is left
+# out, so an unknown glyph is missing text rather than a guess.
+_AGL_GLYPH_CHAR = {
+    # Greek letters. `Delta` and `Omega` are Adobe's own mappings, which prefer
+    # the mathematical and ohm signs, so they are kept as documented.
+    "Alpha": "\u0391",
+    "Beta": "\u0392",
+    "Gamma": "\u0393",
+    "Delta": "\u2206",
+    "Epsilon": "\u0395",
+    "Zeta": "\u0396",
+    "Eta": "\u0397",
+    "Theta": "\u0398",
+    "Iota": "\u0399",
+    "Kappa": "\u039a",
+    "Lambda": "\u039b",
+    "Mu": "\u039c",
+    "Nu": "\u039d",
+    "Xi": "\u039e",
+    "Omicron": "\u039f",
+    "Pi": "\u03a0",
+    "Rho": "\u03a1",
+    "Sigma": "\u03a3",
+    "Tau": "\u03a4",
+    "Upsilon": "\u03a5",
+    "Phi": "\u03a6",
+    "Chi": "\u03a7",
+    "Psi": "\u03a8",
+    "Omega": "\u2126",
+    "alpha": "\u03b1",
+    "beta": "\u03b2",
+    "gamma": "\u03b3",
+    "delta": "\u03b4",
+    "epsilon": "\u03b5",
+    "zeta": "\u03b6",
+    "eta": "\u03b7",
+    "theta": "\u03b8",
+    "iota": "\u03b9",
+    "kappa": "\u03ba",
+    "lambda": "\u03bb",
+    "nu": "\u03bd",
+    "xi": "\u03be",
+    "omicron": "\u03bf",
+    "pi": "\u03c0",
+    "rho": "\u03c1",
+    "sigma": "\u03c3",
+    "sigma1": "\u03c2",
+    "tau": "\u03c4",
+    "upsilon": "\u03c5",
+    "phi": "\u03c6",
+    "chi": "\u03c7",
+    "psi": "\u03c8",
+    "omega": "\u03c9",
+    "theta1": "\u03d1",
+    "phi1": "\u03d5",
+    "omega1": "\u03d6",
+    # Large delimiters. Adobe maps the pieces to its Corporate Use Subarea,
+    # which is where a recognised face's non-prose glyphs already live.
+    "parenlefttp": "\uf8eb",
+    "parenleftex": "\uf8ec",
+    "parenleftbt": "\uf8ed",
+    "parenrighttp": "\uf8f6",
+    "parenrightex": "\uf8f7",
+    "parenrightbt": "\uf8f8",
+    "bracketlefttp": "\uf8ee",
+    "bracketleftex": "\uf8ef",
+    "bracketleftbt": "\uf8f0",
+    "bracketrighttp": "\uf8f9",
+    "bracketrightex": "\uf8fa",
+    "bracketrightbt": "\uf8fb",
+    "bracelefttp": "\uf8f1",
+    "braceleftmid": "\uf8f2",
+    "braceleftbt": "\uf8f3",
+    "braceex": "\uf8f4",
+    "bracerighttp": "\uf8fc",
+    "bracerightmid": "\uf8fd",
+    "bracerightbt": "\uf8fe",
+    # Operators and relations
+    "lessequal": "\u2264",
+    "greaterequal": "\u2265",
+    "similar": "\u223c",
+    "approxequal": "\u2248",
+    "equivalence": "\u2261",
+    "asteriskmath": "\u2217",
+    "circlemultiply": "\u2297",
+    "circleplus": "\u2295",
+    "openbullet": "\u25e6",
+    "reflexsubset": "\u2286",
+    "reflexsuperset": "\u2287",
+    "propersubset": "\u2282",
+    "propersuperset": "\u2283",
+    "precedes": "\u227a",
+    "perpendicular": "\u22a5",
+    "element": "\u2208",
+    "universal": "\u2200",
+    "existential": "\u2203",
+    "emptyset": "\u2205",
+    "nabla": "\u2207",
+    "infinity": "\u221e",
+    "proportional": "\u221d",
+    "partialdiff": "\u2202",
+    "gradient": "\u2207",
+    "integral": "\u222b",
+    "summation": "\u2211",
+    "product": "\u220f",
+    "radical": "\u221a",
+    "angle": "\u2220",
+    "union": "\u222a",
+    "intersection": "\u2229",
+    "logicaland": "\u2227",
+    "logicalor": "\u2228",
+    "spade": "\u2660",
+    "diamond": "\u2666",
+    "club": "\u2663",
+    "heart": "\u2665",
+    "aleph": "\u2135",
+    "weierstrass": "\u2118",
+    "arrowleft": "\u2190",
+    "arrowup": "\u2191",
+    "arrowright": "\u2192",
+    "arrowdown": "\u2193",
+    "arrowboth": "\u2194",
+    "arrowdblleft": "\u21d0",
+    "arrowdblup": "\u21d1",
+    "arrowdblright": "\u21d2",
+    "arrowdbldown": "\u21d3",
+    "arrowdblboth": "\u21d4",
+}
+
+
+def _is_broken_unicode_map(value):
+    """Whether a ToUnicode value names no character.
+
+    A map that returns a control code or a private-use code point has not named
+    a character the font can have meant: it is the notdef a broken or inverse
+    map exposes. Such a value is rejected only when the font's own /Differences
+    documents the code, which `Font._differences_glyph` checks.
+    """
+
+    if not value:
+        return False
+    return all(unicodedata.category(ch) in ("Cc", "Co") for ch in value)
+
+
 def name_to_unicode(nm):
     nm = str(nm)
     m = re.fullmatch(r"u([0-9A-Fa-f]{4,6})", nm)
@@ -419,7 +576,9 @@ def name_to_unicode(nm):
         return "\u00a0"
     if nm in _LIG:
         return _LIG[nm]
-    return _GLYPH_CHAR.get(nm, "")
+    if nm in _GLYPH_CHAR:
+        return _GLYPH_CHAR[nm]
+    return _AGL_GLYPH_CHAR.get(nm, "")
 
 
 class Font:
@@ -439,6 +598,18 @@ class Font:
         self.widths = {}
         self.default_width = 500
         self._load()
+        self.formatting_kind = formatting_font_kind(self.name)
+
+    def _unmapped(self):
+        """What an undocumented code decodes to for this face.
+
+        A recognised symbol, dingbat, icon, or mathematics face draws a glyph at
+        every code it uses, so an undocumented one is non-evidence and reads as a
+        space. Any other face's undocumented code is missing text and stays
+        unreadable, which never manufactures a healthy-looking word.
+        """
+
+        return " " if self.formatting_kind else "\ufffd"
 
     def _load(self):
         d, doc = self.d, self.doc
@@ -528,29 +699,55 @@ class Font:
             ) + ("\ufffd" if len(bs) % 2 else "")
         return "".join(self._unicode(b) for b in bs)
 
+    def _differences_glyph(self, code):
+        """The character the font's own /Differences documents for a code.
+
+        Returns None when the encoding names no code or names an undocumented
+        glyph, so a caller never turns an unknown name into a guessed character.
+        """
+
+        name = self.diff.get(code)
+        if name is None:
+            return None
+        return name_to_unicode(name) or None
+
     def _unicode(self, code):
         if code in self.tounicode:
-            return self.tounicode[code] or "\ufffd"
+            mapped = self.tounicode[code]
+            if mapped:
+                # A ToUnicode map that returns a control or private-use code
+                # point has not named a character. The font's /Differences is
+                # the reliable source, but only where it documents the code;
+                # otherwise the broken mapping is kept rather than replaced with
+                # a guess.
+                if _is_broken_unicode_map(mapped):
+                    documented = self._differences_glyph(code)
+                    if documented is not None:
+                        return documented
+                return mapped
+            return self._unmapped()
         if self.two_byte:
             # An undecodable CID is missing text, not a character we can omit
             # to manufacture a healthy-looking word beside it.
             return "\ufffd"
         if code in self.diff:
-            return name_to_unicode(self.diff[code]) or "\ufffd"
+            return name_to_unicode(self.diff[code]) or self._unmapped()
         if self.base_encoding == "WinAnsiEncoding":
-            return _cp1252_map().get(code, "\ufffd")
+            value = _cp1252_char(code)
+            return value if value is not None else self._unmapped()
         if self.base_encoding == "MacRomanEncoding":
-            return bytes([code]).decode("mac_roman") if code >= 32 else "\ufffd"
+            return bytes([code]).decode("mac_roman") if code >= 32 else self._unmapped()
         if self.base_encoding != "StandardEncoding" or self.name in {
             "Symbol",
             "ZapfDingbats",
         }:
-            return "\ufffd"
+            return self._unmapped()
         if code in GLYPH_NAMES:
             return name_to_unicode(GLYPH_NAMES[code])
         if 32 <= code < 127:
             return chr(code)
-        return _cp1252_map().get(code, "\ufffd")
+        value = _cp1252_char(code)
+        return value if value is not None else self._unmapped()
 
     def width(self, code):
         return self.widths.get(code, self.default_width)

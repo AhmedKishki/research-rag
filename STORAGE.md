@@ -132,7 +132,7 @@ generations/<generation-id>/
 - `retrieval.dense.embedding_model_repository` records the download repository, which can differ from the configured FastEmbed model name. Older manifests without this field remain compatible only when their model, revision, and dimension match.
 - Correcting a mirror's revision requires re-embedding. Existing generations remain unchanged and searchable through BM25 until ingestion builds a compatible generation.
 - `retrieval.bm25.language` records the stopword list the BM25 index was built with. It is `language.bm25_stopwords` and can differ from `language.corpus`.
-- `passage_cleaning.maximum_unclean_percent` records the per-passage quality threshold. Extraction reuse requires the same threshold.
+- `passage_cleaning.maximum_unclean_percent` records the per-document substantive-loss cap. The name is preserved; its meaning is the share of a PDF's substantive text it may lose to unrecoverable corruption. Extraction reuse requires the same threshold.
 - Two generations are interchangeable only when their manifests agree, which makes reuse safe.
 - A generation whose policy fingerprint does not match current settings requires a new ingestion.
 - Directory names under `indexes/` vary by backend. No reader may assume a fixed name.
@@ -165,7 +165,7 @@ generations/<generation-id>/
 - A `chunk_id` belongs to the generation that returned it and can change after a rebuild.
 - A locator is a position only: a page, or a section for an EPUB. It carries `page_label` only where the printed label differs from the physical page.
 - Search returns, and the index holds, cleaned semantic text. It is not a transcript, so `text` is not quotable.
-- Document records keep `cleaned_passage_count`, `excluded_corrupt_passage_count`, and the corresponding `cleaned_passages` and `excluded_corrupt_passages` decisions. Each decision carries a unit ID, a zero-based paragraph index, a locator, and reasons, never damaged passage text.
+- Document records keep `cleaned_passage_count`, `partially_cleaned_passage_count`, `excluded_corrupt_passage_count`, `substantive_character_count`, `discarded_corrupt_character_count`, `cleaned_corrupt_span_count`, `unclean_character_rate`, and the corresponding `cleaned_passages` and `excluded_corrupt_passages` decisions. Each decision carries a unit ID, a zero-based paragraph index, a locator, its reasons, the span offsets it covers, and the characters it lost, never damaged passage text.
 - `pdf_text_recovery_pages` counts PDF pages retried through the bundled text interpreter. `recovered_pdf_blocks` counts accepted replacements. Build metrics aggregate these counts.
 - In passage context, `excluded_from_search: true` marks a reviewed excluded neighbour. It is context, not an eligible hit.
 - A result names its source by `source_id` and `title`. A path handle (`source_relative_path`) is returned by `find_source` and the workspace source list, not repeated on every passage.

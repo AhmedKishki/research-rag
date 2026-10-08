@@ -172,8 +172,9 @@
   - The gateway holds one BM25 retriever. A build and a search take it in turn.
 - Search counts store ranks, ids, times, result counts, and who asked. They store the question and its filters only while `runtime.search_history` is on, and `history --clear` removes them and leaves the counts. A measurement does not count.
 - Extraction reads a PDF or EPUB text layer only. Scanned PDFs need OCR performed outside this app; no OCR command, agent tool, control route, or workspace action exists.
-- PDF cleaning runs per passage. Unhealthy PDF blocks trigger the bundled native text extractor automatically; irreparable passages are withheld and reported.
-  - `ingestion.maximum_unclean_percent` bounds unreadable characters per PDF passage. No aggregate loss ratio vetoes a readable PDF passage.
+- PDF cleaning runs locally. Unhealthy PDF blocks trigger the bundled native text extractor automatically; irrecoverable lexical tokens are omitted with visible gaps and loss diagnostics.
+  - `ingestion.maximum_unclean_percent` caps cumulative substantive-character loss per PDF document after confirmed furniture and non-evidence are removed.
+  - Over-budget or completely unreadable PDFs are omitted through the source-local partial-generation path. They never alter the selected generation automatically.
   - Preserve EPUB's existing unit and source quality rules.
   - Keep physical PDF page locators. Do not infer printed numbers from recovered text.
 - Opening a source asks the desktop's own viewer through an authorised path, and falls back to the browser only where there is no desktop.
@@ -206,6 +207,32 @@ Terminal ── control ───┘      ├── the workspace and its adapte
 - Error types, schema versions, and boundary names must be importable without fastembed.
 
 ## Working rules
+
+### Active PDF recovery coordination
+
+- This work fixes false-positive PDF corruption detection and safety/correctness issues in automatic native text recovery.
+- Ordinary figures, bullets, icons, and formatting symbols must not count as text corruption.
+- Damaged text must trigger bounded recovery or local cleaning, not rejection of an otherwise readable PDF.
+- Completely unreadable documents remain ineligible.
+- Harmless symbol-only fragments may be omitted as non-evidence, but must not be reported as corrupt.
+- Current changes cover:
+  - `corpus/text_normalization.py`: font-aware recovery of recognised Symbol/dingbat glyphs.
+  - `corpus/text_quality.py`: recognised formatting glyphs do not trigger corruption checks; genuinely unknown glyphs and damaged characters still do.
+  - `corpus/extraction.py`: span-font glyph recovery and separate benign symbol-only omission and corrupt-passage counters.
+  - `generations/ingestion.py`, `core/stats.py`, and `core/tool_views.py`: propagation of separate omission counters.
+  - `project/support.py`: extraction and cleaning policy versions bumped to 11 and 7 to prevent reuse of old extraction results.
+  - `corpus/pdf_native/objects.py`: bounded decompression and document resource budgets, validated predictor dimensions, bounded xref counts and EOF handling, and linear-time stream trimming.
+  - `corpus/extraction.py`, `corpus/pdf_text_recovery.py`, and `generations/ingestion.py`: one source-scoped native-reader cache reused across staged page batches, with cleanup.
+  - `corpus/pdf_native/extract.py`: column-aware recovery ordering.
+  - `project/settings_document.py`: combined reranker-plus-threshold changes preserve `requires_ingest: true`; threshold-only rebuild costing was already correct.
+- Separating columns before line merging when both columns have identical baselines remains in progress.
+  - This may also affect `corpus/pdf_native/lines.py` or geometry helpers.
+- Regression tests accompany these changes. Earlier test results do not validate the current combined tree.
+- Do not run further validation while concurrent edits are being applied.
+- Ingestion is stopped. Keep the previous generation selected and retain the unfinished checkpoint.
+  - Do not restart ingestion or delete its checkpoint.
+- Do not commit or push on behalf of this session. This restriction overrides the ordinary recording rules for this active work.
+- Preserve concurrent edits, especially in `generations/ingestion.py`, `corpus/extraction.py`, `corpus/pdf_text_recovery.py`, and `corpus/pdf_native/lines.py`.
 
 - Use `pathlib.Path`, type hints, and JSON-serializable payloads.
 - A file under `evaluation/` changes only with the protocol it describes.
