@@ -164,10 +164,10 @@ batch_units = 16
 # one call per slice, so a client that stops repeating identical calls needs this
 # below its own request timeout, high enough that one call carries the build.
 work_budget_seconds = 1800
-# A source whose extracted text is more than this share unreadable, in characters,
-# is refused before it is chunked, because indexing it would lose that text. The
-# message names OCR, which is a separate command and never runs automatically.
-# Applies when a source is extracted; 100 accepts every source.
+# Maximum unreadable character share in each PDF passage. Unhealthy passages trigger
+# automatic text recovery and cleaning; irreparable passages alone are withheld.
+# Independent corruption checks still apply at 100. (identity: recorded in the
+# generation, so a change rebuilds extraction.) EPUB keeps its source-level limit.
 maximum_unclean_percent = 1.0
 # Chunks embedded per gateway call, and PDF pages extracted per call. Throughput only.
 embedding_batch_size = 64

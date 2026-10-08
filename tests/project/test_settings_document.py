@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import sys
 import tomllib
+from dataclasses import replace
 from pathlib import Path
 from typing import Any, cast
 
@@ -20,6 +21,7 @@ from research_rag.project.settings import (
     packaged_defaults,
 )
 from research_rag.project.settings_document import (
+    change_cost,
     merged_document,
     render_project_document,
     setting_cost,
@@ -586,6 +588,104 @@ async def test_a_key_that_changes_the_reranker_keeps_the_stored_vectors(
     assert cost["level"] == "model"
     assert cost["moved"] == ["reranker_model"]
     assert cost["requires_ingest"] is False
+
+
+def test_a_change_to_the_passage_cleaning_threshold_costs_a_regeneration(
+    project: Path,
+) -> None:
+    """The threshold is recorded in the generation, so moving it rebuilds text."""
+
+    service = _service(project)
+    before = service.config.settings
+
+    cost = change_cost(before, replace(before, maximum_unclean_percent=2.0))
+
+    assert cost["level"] == "regeneration"
+    assert cost["moved"] == ["passage_cleaning"]
+    assert cost["requires_ingest"] is True
+
+
+def test_setting_cost_names_a_proposed_passage_cleaning_threshold(
+    project: Path,
+) -> None:
+    """An explicit value and the inferred probe both read the recorded field."""
+
+    service = _service(project)
+    key = SETTINGS_BY_KEY["ingestion.maximum_unclean_percent"]
+
+    explicit = setting_cost(service.config.settings, key, value=2.0)
+    inferred = setting_cost(service.config.settings, key)
+
+    for cost in (explicit, inferred):
+        assert cost["level"] == "regeneration"
+        assert cost["moved"] == ["passage_cleaning"]
+        assert cost["requires_ingest"] is True
+
+
+def test_a_passage_cleaning_threshold_that_does_not_move_costs_nothing(
+    project: Path,
+) -> None:
+    service = _service(project)
+    unchanged = service.config.settings.maximum_unclean_percent
+
+    cost = setting_cost(
+        service.config.settings,
+        SETTINGS_BY_KEY["ingestion.maximum_unclean_percent"],
+        value=unchanged,
+    )
+
+    assert cost["level"] == "none"
+    assert cost["moved"] == []
+    assert cost["requires_ingest"] is False
+
+
+def test_a_threshold_change_beside_an_embedding_change_keeps_the_model_cost(
+    project: Path,
+) -> None:
+    """A model change outranks the regeneration the threshold alone would cost."""
+
+    service = _service(project)
+    before = service.config.settings
+
+    cost = change_cost(
+        before,
+        replace(
+            before,
+            maximum_unclean_percent=2.0,
+            embedding_model="intfloat/multilingual-e5-large",
+        ),
+    )
+
+    assert cost["level"] == "model"
+    assert set(cost["moved"]) == {"embedding_model", "passage_cleaning"}
+    assert cost["requires_ingest"] is True
+
+
+async def test_a_passage_cleaning_change_warns_then_writes_with_ingest(
+    project: Path,
+) -> None:
+    service = _service(project)
+    before = await service.settings_read()
+
+    with pytest.raises(ResearchError) as refusal:
+        await service.settings_write(
+            {"ingestion.maximum_unclean_percent": 2.0},
+            expected_revision=before["revision"],
+        )
+
+    assert "ingestion.maximum_unclean_percent" in str(refusal.value)
+    assert "confirm" in str(refusal.value)
+    assert not (project / ".research-rag" / "config.toml").exists()
+
+    result = await service.settings_write(
+        {"ingestion.maximum_unclean_percent": 2.0},
+        expected_revision=before["revision"],
+        confirm=True,
+    )
+
+    assert result["changed"] == ["ingestion.maximum_unclean_percent"]
+    assert result["requires_ingest"] is True
+    assert _document(project)["ingestion"]["maximum_unclean_percent"] == 2.0
 
 
 def test_a_value_the_registry_does_not_declare_is_refused_rather_than_dropped(

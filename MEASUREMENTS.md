@@ -213,3 +213,40 @@ uv run python scripts/evaluate_retrieval.py --project /mnt/data/my-project \
 | Raising the source penalty from zero to the shipped value does not reduce cross-family repetition | Partition A stays at 2/140 repeated slots. Partition B rises from 2/160 to 4/160. Fewer repeats within one question family do not mean fewer generic leaders. |
 
 - The next quality test needs blinded author judgments of relevance, usability, independent evidence, contradictions, and no-answer cases.
+
+## Cosine-validity probes
+
+`scripts/audit_cosine_validity.py` measures constructed semantic contrasts with the
+pinned embedding model. Its optional project input supplies the existing judged
+target texts. It embeds those texts afresh in memory and never mixes new query
+vectors with stored generation vectors.
+
+- Pair suppression calls the engine's collapse function.
+- Admission is a score-only projection of the configured rule, not a production search.
+- Constructed answer-selection expectations are not corpus relevance judgments.
+- Other known-item targets remain unjudged competitors, not assumed negatives.
+- The report records model identities, input token counts, scores, and scope limits.
+- Engine fingerprints cover the executed collapse and equality-key modules.
+- Canonical project file hashes must agree before and after the run.
+- The diagnostic initializes no project, downloads no model, and records no searches.
+
+The exploratory run used generation `20261007T061545Z-6bbae6e2` and the current
+pinned BGE-small ONNX snapshot. Its older stored embedding revision prevents a
+current dense production search. No generation was rebuilt or activated.
+
+| Observation | Scope and interpretation |
+|---|---|
+| Target resolution scans 32,368 chunks and retains 36 records | The 18 targets use streamed snippet matches and source witnesses, not a full in-memory chunk list. |
+| Reversed actors have passage cosine 0.994545 | “The managers monitor the workers” and “The workers monitor the managers” collapse as `same_meaning` at the configured threshold. |
+| A negated claim in shared background has passage cosine 0.996666 | The engine suppresses one of two constructed passages that disagree about whether automation increased wages. |
+| A changed quantity in shared background has passage cosine 0.994618 | The engine suppresses one of two constructed passages reporting 10 versus 90 percent. |
+| The sign contrast collapses as `same_words` | Dropping `+` and `-` from the equality key loses the distinction. This is not a cosine-based collapse. |
+| Cosine selects the constructed answer in eight of nine contrast-ranking cases | The sign case fails. These cases are inspected probes, not independent held-out judgments. |
+| Cosine ranks the designated target first in 29 of 30 queries | The pool holds only 18 freshly embedded judged passages. This is not full-corpus recall. The same-pool cross-encoder comparison also ranks 29 targets first. |
+| The admission projection rejects eight designated targets | The simulated best score comes from the bounded pool. A full-corpus candidate set can change relative rescue, so this is not a measured production loss rate. |
+| 24 of 30 designated-target scores lie between 0.7 and 0.9 | Only 25 of all 540 pool comparisons lie in that band. Selecting top results changes the apparent distribution. The comparisons are not independent samples. |
+
+None of the constructed or judged passage inputs exceeded the model's token limit.
+These observations disprove semantic-equivalence guarantees for this cosine
+threshold. They do not establish corpus-wide false-collapse incidence, safe
+admission thresholds, or superiority of a replacement model or scoring method.

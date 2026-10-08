@@ -217,6 +217,14 @@ def test_pdf_page_batches_share_handles_and_preserve_extraction_output(
             "empty_units",
             "excluded_corrupt_unit_count",
             "excluded_corrupt_units",
+            "excluded_corrupt_passage_count",
+            "excluded_corrupt_passages",
+            "excluded_symbol_only_unit_count",
+            "excluded_symbol_only_units",
+            "excluded_symbol_only_passage_count",
+            "excluded_symbol_only_passages",
+            "cleaned_passage_count",
+            "cleaned_passages",
             "extracted_units",
             "removed_repeated_margin_blocks",
             "unclean_character_rate",
@@ -1380,3 +1388,26 @@ def test_language_detection_is_conservative() -> None:
     # text to judge a language the lists do cover.
     assert extraction_module._detect_language(arabic) == ""
     assert extraction_module._detect_language("yes no maybe") == ""
+
+
+def test_pdf_span_font_decides_a_private_use_glyph_recovery() -> None:
+    """A private-use glyph is decoded only through the font that drew it.
+
+    A Symbol face is decoded with Adobe's published encoding, a known dingbat,
+    icon, or mathematics face has its non-prose glyphs removed, and any other
+    face keeps the glyph so the quality rules judge it instead of trusting it.
+    """
+
+    assert _pdf_line_text([{"font": "SymbolMT", "text": "\uf0b7"}]) == "•"
+    assert _pdf_line_text([{"font": "CMEX10", "text": "σ2\uf8ed"}]) == "σ2 "
+    assert (
+        _pdf_line_text([{"font": "FontAwesome", "text": "\uf002Search"}]) == " Search"
+    )
+    assert (
+        _pdf_line_text([{"font": "university-press-fonts", "text": "\uf16d"}])
+        == "\uf16d"
+    )
+    # A span with no private-use glyph is joined exactly as it arrived.
+    assert (
+        _pdf_line_text([{"font": "SymbolMT", "text": "plain ASCII"}]) == "plain ASCII"
+    )

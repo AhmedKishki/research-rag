@@ -198,6 +198,7 @@ def _checkpoint_identity(
     chunk_headers: bool,
     force_recompute: bool,
     embedding: EmbeddingModel,
+    maximum_unclean_percent: float = 1.0,
 ) -> str:
     """Fingerprint the inputs a staged build may resume from.
 
@@ -217,6 +218,7 @@ def _checkpoint_identity(
             "chunk_size": chunk_size,
             "chunk_overlap": chunk_overlap,
             "chunk_headers": chunk_headers,
+            "maximum_unclean_percent": maximum_unclean_percent,
             "force_recompute": force_recompute,
             "generation_schema_version": SCHEMA_VERSION,
             "extraction_policy_version": EXTRACTION_POLICY_VERSION,
@@ -910,9 +912,11 @@ SCHEMA_VERSION = 5
 # Extraction decides which blocks and units exist; semantic cleaning decides the
 # text of a unit that survived. Bumping extraction alone would report a generation
 # as needing only `layout_extraction` when its unit text also changed, so both move.
-EXTRACTION_POLICY_VERSION = 9
+# Version 11 recovers documented symbol-font glyphs and stops a formatting glyph
+# or a punctuation-only fragment from withholding or corrupting a passage.
+EXTRACTION_POLICY_VERSION = 11
 
-CLEANING_POLICY_VERSION = 5
+CLEANING_POLICY_VERSION = 7
 
 ARTIFACT_POLICY_VERSION = 3
 

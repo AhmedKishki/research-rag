@@ -40,12 +40,6 @@ dependencies = [
     "ultrarag @ https://github.com/OpenBMB/UltraRAG/archive/3a709a2aea3fbe46acca59c422621c94b6e86857.tar.gz",
 ]
 
-[project.optional-dependencies]
-# Text recognition for `research-rag ocr`, which is a separate command and is
-# never run automatically. The base install indexes text layers and needs none of
-# this; the command names this extra when it is missing.
-ocr = ["rapidocr-onnxruntime>=1.4,<2"]
-
 [project.scripts]
 research-rag = "research_rag.surfaces.cli:main"
 # The gateway this app spawns to reach UltraRAG's own stages, and the runtime

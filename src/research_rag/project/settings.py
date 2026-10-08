@@ -658,13 +658,14 @@ SETTINGS: tuple[Setting, ...] = (
         key="ingestion.maximum_unclean_percent",
         field="maximum_unclean_percent",
         kind=float,
-        layer="runtime",
+        layer="identity",
         doc=(
-            "The share of a source's extracted text, in characters, that may be "
-            "unreadable before the source is refused as not clean. A refused "
-            "source fails the build before it is chunked and names OCR, which "
-            "is never run automatically. Applies to a source when it is "
-            "extracted; 100 accepts every source."
+            "The maximum share of identifiable unreadable characters in one "
+            "PDF passage. Unhealthy PDF passages trigger automatic text recovery and "
+            "cleaning; passages still unreadable are withheld and reported, "
+            "not used to refuse readable neighbours. Independent corruption "
+            "checks still apply at 100. EPUB keeps its source-level loss limit. "
+            "Changing this rebuilds extraction."
         ),
         minimum=0.0,
         maximum=100.0,

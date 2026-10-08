@@ -6,9 +6,10 @@ What is on disk, how it is read, and what a file's text says about itself.
 |---|---|
 | `sources.py` | The scan of `sources/`, the policy that decides what is a source, and the stable source ID |
 | `extraction.py` | PDF page extraction, EPUB traversal, the units they yield, the stripping of non-argument sections across a source, and the gate both build paths apply |
-| `text_normalization.py` | Reading text as it is read: compatibility characters, whitespace, sentence ends |
-| `ocr.py` | `research-rag ocr` alone: a copy of one PDF whose scanned pages carry a recognised text layer |
+| `text_normalization.py` | Reading text as it is read: compatibility characters, whitespace, sentence ends, and the formatting glyphs a symbol face exposed as private use |
 | `text_quality.py` | Whether a string is usable: corruption, scripts, the flags a chunk carries, which paragraphs belong to a non-argument section, and whether a whole source is readable |
+| `pdf_text_recovery.py` | Automatic native-text retries for unhealthy PDF blocks, matched by page geometry |
+| `pdf_native/` | The bundled text-only PDF content-stream interpreter adapted from pdf-tools; no OCR, rendering, or image export |
 
 ## Rules
 
@@ -19,7 +20,7 @@ What is on disk, how it is read, and what a file's text says about itself.
   `extraction.py` writes into `quality_flags` are one contract:
   `EXTRACTION_ARTIFACT_TOKEN` is its name and lives in `text_quality.py`.
 - `extraction.screen_source_units` is the one gate. It strips non-argument
-  sections, withholds the units a source cannot use, and refuses the source if
+  sections, screens text, and refuses the source if
   none survive, in that order and over the whole source's units. `extract_sources`
   calls it, and a staged build calls the same function at finalize, because a
   staged build writes a page batch to disk before it knows the whole file. A
@@ -63,6 +64,14 @@ What is on disk, how it is read, and what a file's text says about itself.
   scholarship produces; combining marks, accents, superscripts, and subscripts are
   preserved, so a script or a diacritic that a query cannot type is not made
   unreadable by normalization.
+- A PDF font with no usable `ToUnicode` exposes a glyph as the private-use code
+  point `0xF000 + code`. `text_normalization.recover_formatting_glyphs` decodes a
+  Symbol face with Adobe's published encoding, so a bullet written as U+F0B7
+  becomes U+2022, and removes the non-prose glyphs of a recognised dingbat, icon,
+  or mathematics face. Any other face keeps its glyph, which `text_quality` then
+  judges. `text_quality.is_known_formatting_glyph` recognises the Symbol encoding's
+  symbol codes and Adobe's delimiter extenders wherever they appear, so a
+  documented formatting glyph never withholds a readable passage on its own.
 - Cleanup counts are recorded per source in `REMOVAL_FIELDS`.
   `removed_non_argument_characters` includes geometric furniture removals and
   reference/note section removals. A source that lost
@@ -70,23 +79,33 @@ What is on disk, how it is read, and what a file's text says about itself.
   reason. A source with image-only pages records the count and adds the
   `image_only_pages_present` warning even when it is indexed, because a mixed file
   is a fact about it rather than a refusal.
-- A unit is a page or a section holding several independent blocks, so corruption
-  evidence withholds the damaged paragraphs and keeps the readable blocks printed
-  beside them. `extraction._readable_unit_text` withholds the unit whole instead
-  when nothing readable survives, when what survives still carries a reason, or
-  when the damage took at least half the unit, because a fragment beside a broken
-  majority is not the document. `unclean_character_rate` records the share lost,
-  whether whole units or single paragraphs.
-- A source is refused on evidence about the whole file: nothing readable left, a
-  text layer that is absent, no letters in retained text, almost nothing retained,
-  text dominated by symbols,
-  or a cleaning that removed more than it kept. The last of those is
-  `unsafe_to_clean`, and it exists because a rule that is wrong about a document is
-  worse than no rule. `text_quality.source_health_reasons` owns the verdicts.
-  Mixed image-only and readable pages produce a warning rather than a scan-only refusal.
-- Extraction performs no OCR, and `ocr.py` is not reached from it. `ocr.py` serves `research-rag ocr` alone and writes a copy of one PDF. A page is judged a scan by
-  `extraction._image_only_page`, which asks whether the page has no text and an
-  image covering most of it; a share of digits or symbols is not a scan.
-  An existing OCR text layer must pass the same health checks as other text.
+- `extraction._page_blocks` automatically retries unhealthy PDF blocks with the
+  bundled content-stream interpreter. It retries only affected pages and replaces
+  only blocks whose recovered text passes the quality checks. Clean blocks keep
+  their original text and geometry. Images contribute no text.
+- `screen_source_units` evaluates each PDF paragraph before chunking. Clean paragraphs
+  bypass repair. `clean_unclean_passage` reverses recognizable UTF-8 mojibake without
+  inventing missing glyphs. Paragraphs still unreadable are withheld individually.
+- `excluded_corrupt_passages` records unit IDs, paragraph offsets, locators, and
+  reasons without repeating damaged text. `cleaned_passage_count` records repairs.
+  `unclean_character_rate` records the share lost across the source for disclosure,
+  not acceptance. A unit is withheld whole only when it has no readable paragraph.
+- A paragraph with no alphanumeric content and no corruption evidence is
+  non-evidence, not corruption: `excluded_symbol_only_passages` records its unit,
+  offset, and locator, and `excluded_symbol_only_units` does the same for a unit
+  left with only such paragraphs. Neither enters `excluded_corrupt_*`. EPUB keeps
+  its existing unit and source quality rules, so its symbol-only units stay on the
+  corrupt counters.
+- For PDFs, `ingestion.maximum_unclean_percent` applies to one paragraph's identifiable
+  unreadable characters. Independent corruption checks remain in force at 100.
+  The generation and checkpoint record the threshold so changing it rebuilds text.
+- A PDF is refused only when no readable text survives. No aggregate loss or
+  cleaning ratio vetoes readable passages. Mixed image-only and readable pages
+  produce a warning rather than a scan-only refusal.
+- EPUB keeps its existing majority-readable unit and aggregate source checks.
+- Extraction performs no OCR. It reads a PDF or EPUB text layer only, so a scanned
+  source needs OCR performed outside this app before it is added. A page is judged
+  a scan by `extraction._image_only_page`, which asks whether the page has no text
+  and an image covering most of it; a share of digits or symbols is not a scan.
   A PDF with no readable text is refused with the remedy to exclude it or open it.
 - No judged precision or recall exists for these cleanup rules. Garbled text without detectable corruption or structure can pass the gate.
