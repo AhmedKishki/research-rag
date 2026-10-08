@@ -22,6 +22,7 @@ from research_rag.core.service import ResearchService
 from research_rag.corpus.extraction import (
     REMOVAL_FIELDS,
     ExtractionError,
+    UncleanSourceError,
     empty_removal_counts,
     extract_sources,
     merge_removal_counts,
@@ -711,7 +712,15 @@ def test_a_numeric_table_beside_a_labelled_body_is_not_refused() -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_the_gate_records_every_exclusion_with_its_locator_and_reason() -> None:
+def test_the_gate_records_a_cleaned_span_and_an_omitted_symbol_passage() -> None:
+    """A damaged token is dropped whole, with its offset and its size recorded.
+
+    Replacement characters inside a token invalidate that token and leave an
+    explicit gap, while the valid words beside it are kept. The record names the
+    span, the characters lost, and where the passage sat, and never stores the
+    removed text.
+    """
+
     document: dict = {"title": "Recording"}
     units = [
         _unit(1, "A page that reads as ordinary argument about labour and time."),
@@ -722,18 +731,31 @@ def test_the_gate_records_every_exclusion_with_its_locator_and_reason() -> None:
     retained = screen_source_units(_named_source("recording.pdf"), document, units)
 
     assert [unit["contents"] for unit in retained] == [
-        "A page that reads as ordinary argument about labour and time."
+        "A page that reads as ordinary argument about labour and time.",
+        "[...] corrupted ൠ؞༽൷㜭ᡀ࣏",
     ]
-    assert document["excluded_corrupt_unit_count"] == 1
-    assert document["extracted_units"] == 1
-    assert [
-        entry["locator"]["page"] for entry in document["excluded_corrupt_units"]
-    ] == [2]
+    # The irrecoverable token and its replacement marks are gone; the valid
+    # words that shared the passage are not.
+    assert "\ufffd" not in _combined(retained)
+    assert "corrupted" in _combined(retained)
+    assert document["excluded_corrupt_unit_count"] == 0
+    assert document["excluded_corrupt_passage_count"] == 0
+    assert document["cleaned_corrupt_span_count"] == 1
+    assert document["partially_cleaned_passage_count"] == 1
+    assert document["extracted_units"] == 2
+    cleaned = document["cleaned_passages"][0]
+    assert cleaned["unit_id"] == units[1]["id"]
+    assert cleaned["passage_index"] == 0
+    assert cleaned["locator"] == units[1]["locator"]
+    assert cleaned["lost_characters"] == 10
+    assert cleaned["removed_spans"][0]["start"] == 0
+    assert cleaned["removed_spans"][0]["end"] == 10
+    assert "contents" not in cleaned and "text" not in cleaned
     assert document["excluded_symbol_only_unit_count"] == 1
     assert document["excluded_symbol_only_units"][0]["locator"]["page"] == 3
     assert document["excluded_symbol_only_units"][0]["reasons"] == ["symbol_only"]
     assert document["excluded_symbol_only_passage_count"] == 1
-    assert "corrupt_extraction_units_excluded" in document["metadata_warnings"]
+    assert "corrupt_extraction_spans_excluded" in document["metadata_warnings"]
 
 
 def test_the_gate_keeps_a_source_it_can_read_and_records_no_warning() -> None:
@@ -764,12 +786,13 @@ def test_the_gate_names_a_refused_file_its_own_locator_and_a_remedy() -> None:
     assert SYMBOLS_ONLY not in message
 
 
-def test_a_bad_passage_in_a_long_source_is_withheld_and_not_refused() -> None:
-    """The share the caller accepts is judged on the paragraph, not the file.
+def test_a_damaged_passage_in_a_long_source_is_cleaned_locally_not_refused() -> None:
+    """The share the caller accepts is measured over the whole document.
 
-    One page of garbage in a long paper is a hole the passage rule handles; the
-    readable units around it survive and the source is kept. No share of the file,
-    and no OCR step that does not exist, is involved in the outcome.
+    One page of damaged text in a long paper loses a single token; the readable
+    words on that page and the pages around it survive, and the document's own
+    loss stays under the accepted share. No share of units, and no OCR step that
+    does not exist, is involved in the outcome.
     """
 
     ordinary = "A page that reads as ordinary argument about labour and time. " * 12
@@ -783,14 +806,17 @@ def test_a_bad_passage_in_a_long_source_is_withheld_and_not_refused() -> None:
         maximum_unclean_percent=1.0,
     )
 
-    assert [unit["contents"] for unit in retained] == [ordinary, ordinary]
-    assert document["excluded_corrupt_unit_count"] == 1
-    assert document["excluded_corrupt_passage_count"] == 1
-    assert document["unclean_character_rate"] > 0
-    assert document["excluded_corrupt_passages"][0]["reasons"] == [
-        "replacement_characters",
-        SOURCE_REASON_UNCLEAN,
+    assert [unit["contents"] for unit in retained] == [
+        ordinary,
+        ordinary,
+        "[...] corrupted ൠ؞༽൷㜭ᡀ࣏",
     ]
+    assert "\ufffd" not in _combined(retained)
+    assert document["excluded_corrupt_unit_count"] == 0
+    assert document["excluded_corrupt_passage_count"] == 0
+    assert document["cleaned_corrupt_span_count"] == 1
+    assert document["partially_cleaned_passage_count"] == 1
+    assert 0 < document["unclean_character_rate"] < 0.01
 
 
 def test_a_source_within_the_accepted_share_is_kept_and_its_rate_is_recorded() -> None:
@@ -808,7 +834,9 @@ def test_a_source_within_the_accepted_share_is_kept_and_its_rate_is_recorded() -
         _named_source("any.pdf"), {"title": "Any"}, units, maximum_unclean_percent=None
     )
 
-    assert len(retained) == len(unlimited) == 1
+    assert len(retained) == len(unlimited) == 2
+    assert "\ufffd" not in _combined(retained)
+    assert "corrupted" in retained[1]["contents"]
     assert 0 < document["unclean_character_rate"] < 0.05
 
 
@@ -837,12 +865,13 @@ def test_a_damaged_block_is_withheld_within_a_readable_unit() -> None:
     assert 0 < document["unclean_character_rate"] < 0.05
 
 
-def test_a_readable_heading_survives_a_corrupt_body_in_the_same_unit() -> None:
-    """A unit keeps the passages it can read and withholds only the ones it cannot.
+def test_a_readable_heading_survives_a_locally_cleaned_body() -> None:
+    """A unit keeps the passages it can read, even when a body beside them is damaged.
 
-    A heading beside a corrupt body is the heading's own text, and it is kept. The
-    unit is withheld whole only when no readable paragraph remains, so the corrupt
-    paragraph is what is lost, not the section's readable structure.
+    A heading beside a damaged body is the heading's own text, and it is kept. The
+    damaged body is not dropped whole because readable words remain in it; its
+    irrecoverable token leaves a gap and the rest of the passage is indexed. The
+    unit is withheld whole only when no readable paragraph remains.
     """
 
     document: dict = {"title": "Broken body"}
@@ -852,49 +881,54 @@ def test_a_readable_heading_survives_a_corrupt_body_in_the_same_unit() -> None:
         _named_source("broken-section.pdf"),
         document,
         [unit],
-        maximum_unclean_percent=1.0,
+        maximum_unclean_percent=50.0,
     )
 
-    assert [item["contents"] for item in retained] == ["Opening Chapter"]
+    assert len(retained) == 1
+    contents = retained[0]["contents"]
+    assert "Opening Chapter" in contents
+    assert "\ufffd" not in contents
+    assert "corrupted" in contents
+    assert "[...]" in contents
     assert document["excluded_corrupt_unit_count"] == 0
-    assert document["excluded_corrupt_passage_count"] == 1
-    passage = document["excluded_corrupt_passages"][0]
-    assert passage["passage_index"] == 1
-    assert "replacement_characters" in passage["reasons"]
-    assert CORRUPT_PAGE not in json.dumps(passage, ensure_ascii=False)
+    assert document["excluded_corrupt_passage_count"] == 0
+    assert document["cleaned_corrupt_span_count"] == 1
+    assert document["partially_cleaned_passage_count"] == 1
 
 
-def test_a_healthy_small_unit_survives_a_huge_broken_block() -> None:
-    """A readable minority keeps its source however many units were withheld.
+def test_a_huge_cumulative_loss_refuses_a_source_with_a_readable_minority() -> None:
+    """A document whose loss dwarfs what survived is over its own budget.
 
-    Twenty broken pages beside one short readable page is a hole in a file, not a
-    reason to refuse it. No count or share of damaged units is a source verdict.
+    Twenty damaged pages beside one readable page leave a readable minority, and
+    the old unit rule kept the file for it. The budget now states what the file
+    cost: 200 of 563 substantive characters were discarded, far over one percent,
+    so the source is omitted rather than published with the hole in it.
     """
 
     document: dict = {"title": "Tiny survivor"}
     units = [_unit(index, CORRUPT_PAGE) for index in range(1, 21)]
     units.append(_unit(21, "A short but readable page of evidence about labour."))
 
-    retained = screen_source_units(
-        _named_source("survivor.pdf"),
-        document,
-        units,
-        maximum_unclean_percent=1.0,
-    )
+    with pytest.raises(UncleanSourceError) as failure:
+        screen_source_units(
+            _named_source("survivor.pdf"),
+            document,
+            units,
+            maximum_unclean_percent=1.0,
+        )
 
-    assert [unit["contents"] for unit in retained] == [
-        "A short but readable page of evidence about labour."
-    ]
-    assert document["excluded_corrupt_unit_count"] == 20
-    assert document["extracted_units"] == 1
+    assert "document budget" in str(failure.value)
+    assert document["substantive_character_count"] == 563
+    assert document["discarded_corrupt_character_count"] == 200
 
 
-def test_wholly_damaged_units_beside_a_clean_unit_do_not_refuse_the_source() -> None:
-    """The ingestion default share never turns a withheld unit into a refusal.
+def test_a_clean_unit_does_not_excuse_a_loss_over_the_budget() -> None:
+    """A clean unit beside a damaged one does not dilute the document's loss.
 
-    A corrupt page and a symbols-only page are both withheld on their own evidence,
-    and the clean unit between them keeps the file. Passing the configured one
-    percent changes nothing about that outcome.
+    A damaged page and a symbols-only page are both handled on their own evidence,
+    and the clean unit between them is kept. The damaged token's loss is still
+    fifteen percent of the document's substantive text, over the accepted one
+    percent, so the source is omitted rather than activated.
     """
 
     document: dict = {"title": "Mixed"}
@@ -904,20 +938,18 @@ def test_wholly_damaged_units_beside_a_clean_unit_do_not_refuse_the_source() -> 
         _unit(3, SYMBOLS_ONLY),
     ]
 
-    retained = screen_source_units(
-        _named_source("mixed.pdf"),
-        document,
-        units,
-        maximum_unclean_percent=1.0,
-    )
+    with pytest.raises(UncleanSourceError) as failure:
+        screen_source_units(
+            _named_source("mixed.pdf"),
+            document,
+            units,
+            maximum_unclean_percent=1.0,
+        )
 
-    assert [unit["contents"] for unit in retained] == [
-        "A readable page about the council and the quay."
-    ]
-    assert document["excluded_corrupt_unit_count"] == 1
-    assert document["excluded_corrupt_passage_count"] == 1
+    assert "document budget" in str(failure.value)
+    assert document["discarded_corrupt_character_count"] == 10
     assert document["excluded_symbol_only_unit_count"] == 1
-    assert document["excluded_symbol_only_passage_count"] == 1
+    assert document["excluded_corrupt_passage_count"] == 0
 
 
 def test_a_repaired_mojibake_passage_is_indexed_without_loss() -> None:
@@ -973,12 +1005,13 @@ def test_a_clean_passage_never_reaches_the_repair(
     assert calls == []
 
 
-def test_the_unclean_share_is_judged_per_passage_not_per_source() -> None:
-    """A short bad paragraph is not diluted by a long clean neighbour.
+def test_a_local_token_loss_is_measured_against_the_whole_document() -> None:
+    """A short bad paragraph is measured against the document, not its own length.
 
-    The share is taken on each paragraph, so the stray replacement mark is over
-    the accepted share in its own short passage and withheld, while the long clean
-    passage beside it is kept. A share of the whole unit would have hidden it.
+    The stray replacement mark invalidates its whole token, and the token is
+    dropped from the short paragraph with a gap. One substantive character is lost
+    from a long clean document, so the document rate stays under the accepted
+    share while the cleaned span is recorded.
     """
 
     long_clean = "The council recorded the wage the quay paid. " * 200
@@ -993,39 +1026,49 @@ def test_the_unclean_share_is_judged_per_passage_not_per_source() -> None:
         maximum_unclean_percent=1.0,
     )
 
-    assert [item["contents"] for item in retained] == [long_clean]
-    assert document["excluded_corrupt_passage_count"] == 1
-    passage = document["excluded_corrupt_passages"][0]
-    assert passage["passage_index"] == 1
-    assert passage["reasons"] == [SOURCE_REASON_UNCLEAN]
+    assert len(retained) == 1
+    contents = retained[0]["contents"]
+    assert long_clean in contents
+    assert "one stray [...] mark." in contents
+    assert "\ufffd" not in contents
+    assert document["excluded_corrupt_passage_count"] == 0
+    assert document["partially_cleaned_passage_count"] == 1
+    assert document["cleaned_corrupt_span_count"] == 1
+    assert document["discarded_corrupt_character_count"] == 1
     assert document["unclean_character_rate"] < 0.01
 
 
-def test_the_passage_record_carries_a_locator_and_no_quoted_text() -> None:
+def test_a_withheld_passage_record_carries_a_locator_and_no_quoted_text() -> None:
     """An exclusion names where a passage sat and why, and never repeats it.
 
-    A withheld passage can be unreadable and unsafe to repeat, so the record holds
-    only its unit, its index, its locator, and its reasons.
+    A passage with no readable token left is withheld whole. It can be unreadable
+    and unsafe to repeat, so the record holds only its unit, its index, its
+    locator, and its reasons.
     """
 
+    unreadable = "\ufffd" * 10
     document: dict = {"title": "Unsafe"}
     unit = _unit(
-        2, _paragraphs("A readable opening paragraph about labour.", CORRUPT_PAGE)
+        2, _paragraphs("A readable opening paragraph about labour.", unreadable)
     )
 
-    screen_source_units(
+    retained = screen_source_units(
         _named_source("unsafe.pdf"),
         document,
         [unit],
-        maximum_unclean_percent=1.0,
+        maximum_unclean_percent=50.0,
     )
 
+    assert [item["contents"] for item in retained] == [
+        "A readable opening paragraph about labour."
+    ]
     passage = document["excluded_corrupt_passages"][0]
     assert passage["unit_id"] == unit["id"]
     assert passage["passage_index"] == 1
     assert passage["locator"] == unit["locator"]
     assert "replacement_characters" in passage["reasons"]
-    assert CORRUPT_PAGE not in json.dumps(passage, ensure_ascii=False)
+    assert unreadable not in json.dumps(passage, ensure_ascii=False)
+    assert "\ufffd" not in json.dumps(passage, ensure_ascii=False)
 
 
 def test_the_source_gate_states_no_share_unless_asked() -> None:

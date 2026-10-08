@@ -86,22 +86,32 @@ What is on disk, how it is read, and what a file's text says about itself.
 - `screen_source_units` evaluates each PDF paragraph before chunking. Clean paragraphs
   bypass repair. `clean_unclean_passage` reverses recognizable UTF-8 mojibake without
   inventing missing glyphs. Paragraphs still unreadable are withheld individually.
-- `excluded_corrupt_passages` records unit IDs, paragraph offsets, locators, and
-  reasons without repeating damaged text. `cleaned_passage_count` records repairs.
-  `unclean_character_rate` records the share lost across the source for disclosure,
-  not acceptance. A unit is withheld whole only when it has no readable paragraph.
+- `excluded_corrupt_passages` records unit IDs, paragraph offsets, locators, reasons,
+  span offsets, and lost characters without repeating damaged text.
+  `cleaned_passage_count` records lossless repairs and local partial cleanups;
+  `cleaned_corrupt_span_count` and `partially_cleaned_passage_count` separate those
+  from whole omissions. `substantive_character_count` counts the text a document
+  keeps after known furniture and symbol-only non-evidence are removed;
+  `discarded_corrupt_character_count` counts what it lost, and
+  `unclean_character_rate` is that loss as a share of the substantive text. The rate
+  is disclosure, not acceptance. A unit is withheld whole only when it has no
+  readable paragraph.
 - A paragraph with no alphanumeric content and no corruption evidence is
   non-evidence, not corruption: `excluded_symbol_only_passages` records its unit,
   offset, and locator, and `excluded_symbol_only_units` does the same for a unit
   left with only such paragraphs. Neither enters `excluded_corrupt_*`. EPUB keeps
   its existing unit and source quality rules, so its symbol-only units stay on the
   corrupt counters.
-- For PDFs, `ingestion.maximum_unclean_percent` applies to one paragraph's identifiable
-  unreadable characters. Independent corruption checks remain in force at 100.
-  The generation and checkpoint record the threshold so changing it rebuilds text.
-- A PDF is refused only when no readable text survives. No aggregate loss or
-  cleaning ratio vetoes readable passages. Mixed image-only and readable pages
-  produce a warning rather than a scan-only refusal.
+- For PDFs, `ingestion.maximum_unclean_percent` caps the substantive text one
+  document may lose to unrecoverable corruption: `discarded_corrupt_character_count`
+  divided by `substantive_character_count`. A document over the cap is omitted from
+  the generation, and the collection still builds from the sources that remain.
+  A value of 100 accepts any PDF that keeps readable text, never one with none. The
+  generation and checkpoint record the threshold so changing it rebuilds text.
+- A PDF is omitted when it loses more than the cap, or when no readable text
+  survives. No passage-level loss or cleaning ratio vetoes a readable passage.
+  Mixed image-only and readable pages produce a warning rather than a scan-only
+  omission.
 - EPUB keeps its existing majority-readable unit and aggregate source checks.
 - Extraction performs no OCR. It reads a PDF or EPUB text layer only, so a scanned
   source needs OCR performed outside this app before it is added. A page is judged

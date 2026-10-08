@@ -660,11 +660,13 @@ SETTINGS: tuple[Setting, ...] = (
         kind=float,
         layer="identity",
         doc=(
-            "The maximum share of identifiable unreadable characters in one "
-            "PDF passage. Unhealthy PDF passages trigger automatic text recovery and "
-            "cleaning; passages still unreadable are withheld and reported, "
-            "not used to refuse readable neighbours. Independent corruption "
-            "checks still apply at 100. EPUB keeps its source-level loss limit. "
+            "The maximum share of substantive text one PDF may lose to "
+            "unrecoverable corruption. Lost characters are measured against the "
+            "substantive characters the document keeps after known furniture and "
+            "symbol-only non-evidence are removed. A PDF over this share is "
+            "omitted from the generation; readable errors below it are cleaned "
+            "and reported. 100 accepts any PDF that keeps readable text and "
+            "never a PDF with none. EPUB keeps its source-level loss limit. "
             "Changing this rebuilds extraction."
         ),
         minimum=0.0,

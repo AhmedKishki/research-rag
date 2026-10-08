@@ -7,7 +7,7 @@ import shutil
 import time
 import uuid
 from collections import Counter, defaultdict
-from collections.abc import Iterator
+from collections.abc import Iterable, Iterator
 from pathlib import Path
 from typing import Any
 
@@ -94,6 +94,26 @@ from .generation import (
 
 INGESTION_CHECKPOINT_VERSION = 1
 PENDING_ACTIVATION_VERSION = 1
+
+# The per-document loss a PDF build reports, summed for the whole corpus. The
+# substantive count is the denominator a document's own loss rate is measured
+# against; the rest are the material it lost. A source extracted before a field
+# was recorded contributes zero rather than a guessed figure.
+_DOCUMENT_LOSS_FIELDS = (
+    "substantive_character_count",
+    "discarded_corrupt_character_count",
+    "cleaned_corrupt_span_count",
+    "partially_cleaned_passage_count",
+)
+
+
+def _document_loss_totals(documents: Iterable[dict[str, Any]]) -> dict[str, int]:
+    """Sum the per-source loss fields a build reports for the whole corpus."""
+
+    return {
+        key: sum(int(document.get(key) or 0) for document in documents)
+        for key in _DOCUMENT_LOSS_FIELDS
+    }
 
 
 class _SourceChangedDuringIngest(RuntimeError):
@@ -2164,6 +2184,8 @@ class IngestionWorkflow:
                     key: round(float(value), 6)
                     for key, value in checkpoint["phase_timings_seconds"].items()
                 }
+                loss_totals = _document_loss_totals(documents)
+                substantive_characters = loss_totals["substantive_character_count"]
                 build_metrics = {
                     "skipped_sources": checkpoint.get("skipped_sources", []),
                     "skipped_source_count": len(checkpoint.get("skipped_sources", [])),
@@ -2201,6 +2223,16 @@ class IngestionWorkflow:
                             "recovered_pdf_blocks",
                         )
                     },
+                    **loss_totals,
+                    "unclean_character_rate": (
+                        round(
+                            loss_totals["discarded_corrupt_character_count"]
+                            / substantive_characters,
+                            6,
+                        )
+                        if substantive_characters
+                        else 0.0
+                    ),
                     "discarded_symbol_only_chunk_count": int(
                         checkpoint.get("discarded_symbol_only_chunk_count") or 0
                     ),

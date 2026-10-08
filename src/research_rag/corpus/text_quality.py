@@ -182,6 +182,48 @@ def _unclean_character_count(value: str) -> int:
     return sum(_counts_as_unreadable(character) for character in value)
 
 
+def clean_damaged_pdf_passage(value: str) -> tuple[str, int, list[dict[str, object]]]:
+    """Remove damaged lexical tokens, without inventing or completing a word.
+
+    The caller first attempts reversible encoding repair and native extraction.
+    Unknown glyphs inside a word invalidate that entire token, not just the
+    glyph. An explicit gap prevents the remaining words from looking contiguous.
+    Offsets refer to the supplied, post-repair paragraph. Lost characters exclude
+    whitespace and include all readable characters removed with the bad token.
+    """
+
+    spans: list[dict[str, object]] = []
+    pieces: list[str] = []
+    position = 0
+    lost = 0
+    for token in re.finditer(r"\S+", value):
+        text = token.group()
+        reasons = text_corruption_reasons(text)
+        if any(_counts_as_unreadable(character) for character in text):
+            reasons = list(dict.fromkeys([*reasons, "unreadable_characters"]))
+        if not reasons:
+            continue
+        pieces.append(value[position : token.start()])
+        pieces.append(" [...] ")
+        size = sum(not character.isspace() for character in text)
+        lost += size
+        spans.append(
+            {
+                "start": token.start(),
+                "end": token.end(),
+                "lost_characters": size,
+                "reasons": reasons,
+            }
+        )
+        position = token.end()
+    if not spans:
+        return value, 0, []
+    pieces.append(value[position:])
+    cleaned = normalize_inline_text("".join(pieces))
+    cleaned = re.sub(r"(?:\[\.\.\.\]\s*){2,}", "[...] ", cleaned).strip()
+    return cleaned, lost, spans
+
+
 def passage_health_reasons(
     value: str, *, maximum_unclean_percent: float | None = None
 ) -> list[str]:
@@ -465,7 +507,8 @@ def strip_non_argument_sections(
 # Refusing a source whose own text says it is unreadable
 # ---------------------------------------------------------------------------
 #
-# PDF quality is assessed per passage. EPUB keeps its existing aggregate policy.
+# PDF loss is measured over substantive document text after local cleaning.
+# EPUB keeps its existing aggregate policy.
 
 # No unit carried searchable text, so the file holds images or drawings only.
 SOURCE_REASON_NO_TEXT = "no_readable_text"
@@ -497,9 +540,10 @@ def source_health_reasons(
 ) -> list[str]:
     """Refuse an empty PDF or apply the unchanged EPUB source-level policy.
 
-    With `passage_level=True`, readable passages survive regardless of source
-    loss ratios. The extractor uses this for PDFs only. The default preserves
-    the aggregate checks used by EPUB ingestion and existing callers.
+    With `passage_level=True`, PDF passages were cleaned individually, and only
+    their cumulative substantive loss can refuse a remaining readable document.
+    The argument name remains compatible with existing callers. The default
+    preserves the aggregate checks used by EPUB ingestion.
     """
 
     if unit_count <= 0 or retained_count <= 0:
@@ -507,6 +551,12 @@ def source_health_reasons(
             return [SOURCE_REASON_NO_TEXT_LAYER]
         return [SOURCE_REASON_NO_TEXT]
     if passage_level:
+        if (
+            maximum_unclean_percent is not None
+            and withheld_characters > 0
+            and withheld_characters * 100 > kept_characters * maximum_unclean_percent
+        ):
+            return [SOURCE_REASON_UNCLEAN]
         return []
     reasons: list[str] = []
     if retained_count * 100 < unit_count * 10:

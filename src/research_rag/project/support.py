@@ -916,9 +916,15 @@ SCHEMA_VERSION = 5
 # or a punctuation-only fragment from withholding or corrupting a passage.
 # Version 12 bounds native recovery resources and rejects incomplete predictor
 # rows, so extraction generated before those safeguards is not reused.
-EXTRACTION_POLICY_VERSION = 12
+# Version 13 records a PDF's lost substantive text against the substantive
+# characters it retained, so a generation that carries no per-document loss
+# denominator is not reused.
+EXTRACTION_POLICY_VERSION = 13
 
-CLEANING_POLICY_VERSION = 8
+# Version 9 records partially cleaned passages, corrupt span counts, and lost
+# characters separately from whole omissions, so a generation built under the
+# earlier cleaning counters is not reused.
+CLEANING_POLICY_VERSION = 9
 
 ARTIFACT_POLICY_VERSION = 3
 

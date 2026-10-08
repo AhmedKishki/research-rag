@@ -2,9 +2,10 @@
 
 `clean_unclean_passage` reverses a UTF-8 stream read with a single-byte codec.
 `passage_health_reasons` judges one passage on its own evidence and its own
-unreadable share. `source_health_reasons` refuses a file only when no readable
-unit survives, so a readable minority keeps its source whatever the whole file
-lost. Every case here is a string, so no document or runtime is involved.
+unreadable share. With `passage_level=True`, `source_health_reasons` refuses a
+PDF whose cumulative discarded substantive text exceeds the accepted share;
+`None` leaves the loss uncapped, and a file with nothing readable is always
+refused. Every case here is a string, so no document or runtime is involved.
 """
 
 from __future__ import annotations
@@ -176,20 +177,29 @@ def test_a_fully_scanned_file_with_nothing_retained_names_the_missing_layer() ->
     ) == [SOURCE_REASON_NO_TEXT_LAYER]
 
 
-def test_a_tiny_readable_minority_keeps_the_source() -> None:
-    reasons = source_health_reasons(
-        unit_count=1000,
-        retained_count=1,
-        withheld_reasons=Counter({"replacement_characters": 999}),
-        kept_characters=200,
-        removed_characters=90000,
-        letter_characters=0,
-        withheld_characters=5000,
-        maximum_unclean_percent=0.1,
-        passage_level=True,
-    )
+def test_a_loss_over_the_document_budget_refuses_the_source() -> None:
+    """A PDF's cumulative loss is the one share that can refuse it.
 
-    assert reasons == []
+    A readable minority does not keep a source once the characters the cleaner had
+    to discard exceed the accepted share. The same figures under no cap are kept,
+    because `None` states no budget rather than a zero one.
+    """
+
+    figures = {
+        "unit_count": 1000,
+        "retained_count": 1,
+        "withheld_reasons": Counter({"replacement_characters": 999}),
+        "kept_characters": 200,
+        "removed_characters": 90000,
+        "letter_characters": 0,
+        "withheld_characters": 5000,
+        "passage_level": True,
+    }
+
+    assert source_health_reasons(**figures, maximum_unclean_percent=None) == []
+    assert source_health_reasons(**figures, maximum_unclean_percent=0.1) == [
+        SOURCE_REASON_UNCLEAN
+    ]
 
 
 def test_a_numeric_text_source_is_kept() -> None:
@@ -222,7 +232,7 @@ def test_the_removed_source_vetoes_are_no_longer_reachable() -> None:
         removed_characters=1_000_000,
         letter_characters=0,
         withheld_characters=1_000_000,
-        maximum_unclean_percent=0.0,
+        maximum_unclean_percent=None,
         passage_level=True,
     )
 
