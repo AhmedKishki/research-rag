@@ -105,6 +105,11 @@ to a shared user cache on first use.
 
 BROWSER WORKSPACE
 
+Local phone-access QR generation depends on:
+
+    python-qrcode (BSD License)
+    https://github.com/lincolnloop/python-qrcode
+
 The browser workspace, the settings layer, and the UltraRAG gateway are this
 project's own code:
 

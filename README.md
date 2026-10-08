@@ -59,8 +59,22 @@ research-rag --project-root "/path/to/project" search "How is evidence interpret
 research-rag --project-root "/path/to/project" --start-ui start
 ```
 
+- Omit `--project-root` and `--project` to choose a registered project in the terminal. Use Up/Down and Enter; Escape or Ctrl-C cancels. This also applies to a bare `research-rag` invocation.
 - Keep the terminal open. Ctrl-C or closing it stops the app.
-- The workspace has no authentication beyond its loopback boundary. Use a trusted machine.
+- The workspace defaults to local-only access.
+
+### Use a phone on home Wi-Fi
+
+```bash
+research-rag --start-ui start --lan
+```
+
+- Open **Remote Access** on the laptop website. Scan its QR code with your phone or open the displayed URL. QR codes are generated locally, not by an external service.
+- The existing website remains at `/`. The phone workspace is available alongside it at `/next/`; both use the same backend and project.
+- LAN mode uses HTTP without a login. Devices able to reach the port on the private network can read this project's sources and perform enabled workspace actions. Traffic is unencrypted. Use only a trusted home network; never forward this port to the internet.
+- LAN access supports the laptop's detected private IPv4 addresses. Allow the displayed port through the laptop firewall for your home network. Guest Wi-Fi or client isolation can prevent access.
+- Keep the laptop awake and its serving terminal open. If the laptop's network address changes, restart with `--lan` and scan the new code.
+- MCP, CLI control, installation management, and the local project/client registry remain local-only. Start without `--lan` to disable phone access.
 
 ## Connect an agent
 

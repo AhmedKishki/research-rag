@@ -1,8 +1,9 @@
 """The running app: one project, one port, one service, three front ends.
 
 One process owns the project lock, opens the UltraRAG gateway once, and serves the
-workspace and the agent surface on one loopback port, so a passage an agent
-retrieves and one the workspace renders are the same object.
+workspace and the agent surface on one port, so a passage an agent retrieves
+and one the workspace renders are the same object. Explicit home-LAN mode
+exposes the workspace; control and agent access remain loopback-only.
 
 **MCP clients attach and detach.** A streamable-HTTP session is recorded on its
 first request, and a forced detach refuses the rest of it. The bridge in
@@ -36,6 +37,7 @@ from ..project.config import ConfigurationError, ResearchConfig
 from ..project.state_files import PID_FILE, PORT_FILE, TTY_FILE
 from ..project.state_files import process_alive as alive
 from ..project.state_files import recorded_pid as _recorded_pid
+from .network import NetworkAccess, discover_lan_addresses
 
 if TYPE_CHECKING:
     # The engine is reached when the app serves, not when it is imported: a command
@@ -608,7 +610,7 @@ class Surfaces:
 
 
 def _claim_loopback_port(host: str, port: int) -> socket.socket:
-    """Return the socket holding the claimed loopback port.
+    """Return the socket holding the claimed serving port.
 
     A bound socket that is not listening can be bound again under `SO_REUSEADDR`,
     which Linux allows, so the claim is the listen and not a probe followed by a
@@ -651,12 +653,15 @@ class App:
     that needs it, so a health check starts no process.
     """
 
-    def __init__(self, config: ResearchConfig, *, port: int) -> None:
+    def __init__(self, config: ResearchConfig, *, port: int, lan: bool = False) -> None:
         if not 1 <= port <= 65535:
             raise ConfigurationError("port must be between 1 and 65535")
         self.config = config
-        self.host = UI_HOST
+        self.host = "0.0.0.0" if lan else UI_HOST
         self.port = port
+        self.network_access = NetworkAccess(
+            port=port, lan=lan, addresses=discover_lan_addresses() if lan else ()
+        )
         self.error: str | None = None
         self.started_at: float | None = None
         self.gateway, self.service = _service_pair(config)
@@ -667,7 +672,7 @@ class App:
 
     @property
     def url(self) -> str:
-        return f"http://{self.host}:{self.port}"
+        return f"http://{UI_HOST}:{self.port}"
 
     @property
     def mcp_url(self) -> str:
@@ -699,6 +704,7 @@ class App:
             "ui_error": self.error,
             "mcp_url": self.mcp_url,
             "mcp_clients": len(self.clients.attached),
+            "lan": self.network_access.report(),
         }
 
     def build(self) -> Starlette:
@@ -727,6 +733,7 @@ class App:
             service=self.service,
             clients=self.clients,
             app_state=self.state,
+            network_access=self.network_access,
         )
 
         @asynccontextmanager
@@ -753,10 +760,30 @@ class App:
                     ),
                 ),
             ],
-            middleware=[Middleware(BaseHTTPMiddleware, dispatch=_security_headers)],
+            middleware=[
+                Middleware(BaseHTTPMiddleware, dispatch=self._security_headers)
+            ],
             lifespan=lifespan,
             exception_handlers={Exception: _unexpected_error},
         )
+
+    async def _security_headers(self, request: Any, call_next: Any) -> Any:
+        refusal = self.network_access.request_refusal(request)
+        # MCP has its own protocol; the control API retains its strict
+        # loopback write guard. Browser writes use the serving policy.
+        if (
+            refusal is None
+            and request.method not in {"GET", "HEAD", "OPTIONS"}
+            and not request.url.path.startswith(("/control", "/mcp"))
+        ):
+            refusal = self.network_access.write_refusal(request)
+        if refusal is not None:
+            code, error = refusal
+            return JSONResponse({"error": error}, status_code=code)
+        response = await call_next(request)
+        response.headers["X-Content-Type-Options"] = "nosniff"
+        response.headers["Referrer-Policy"] = "no-referrer"
+        return response
 
     async def _service(self) -> ResearchService:
         return self.service
@@ -779,6 +806,7 @@ class App:
                 port=self.port,
                 log_level="warning",
                 access_log=False,
+                proxy_headers=False,
             )
         )
         self.started_at = _now()

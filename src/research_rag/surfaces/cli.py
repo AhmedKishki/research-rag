@@ -232,7 +232,10 @@ HELP_GROUPS: tuple[tuple[str, tuple[tuple[str, str], ...]], ...] = (
         (
             (
                 "start",
-                "Bring the app up and report where it is. --start-ui opens a browser.",
+                (
+                    "Bring the app up and report where it is. --start-ui opens a browser; "
+                    "start --lan enables home-network HTTP access without login."
+                ),
             ),
             (
                 "projects",
@@ -1237,6 +1240,16 @@ def _parser() -> argparse.ArgumentParser:
             f"{DEFAULT_UI_PORT}."
         ),
     )
+    browser.add_argument(
+        "--lan",
+        action="store_true",
+        help=(
+            "Expose this project's workspace over HTTP to private IPv4 devices on "
+            "your trusted home network, without login. Open the website's Remote "
+            "Access page for phone URLs and QR codes. Control and MCP stay local. "
+            "Do not forward this port to the internet."
+        ),
+    )
 
     add(
         "clients",
@@ -1444,7 +1457,12 @@ def _config_kwargs(args: argparse.Namespace) -> dict[str, Any]:
 def _resolve(args: argparse.Namespace) -> ResearchConfig:
     """Resolve an existing project, reusing the source directory it recorded."""
 
-    project = _project_path(args)
+    named = getattr(args, "project", None) or getattr(args, "project_root", None)
+    project = (
+        _only_project_or_ask()
+        if args.command == "start" and not named
+        else _project_path(args)
+    )
     return resolve_config(
         project,
         source_directory=configured_source_directory(project),
@@ -2366,6 +2384,7 @@ async def _serve_attached(
     *,
     port: int | None,
     open_browser: bool,
+    lan: bool = False,
 ) -> CommandResult:
     """Serve this project in this terminal until the terminal or the app ends.
 
@@ -2393,7 +2412,7 @@ async def _serve_attached(
     first = port if port is not None else _a_free_port()
     app: App | None = None
     for offset in (0,) if port is not None else range(_PORT_ATTEMPTS):
-        app = App(config, port=first + offset)
+        app = App(config, port=first + offset, **({"lan": True} if lan else {}))
         await app.start()
         if app.error is None:
             break
@@ -2475,6 +2494,11 @@ def _attached_banner(config: ResearchConfig, app: App) -> None:
         f"  pid {os.getpid()} · log {config.state_root / 'logs' / 'research-rag-ui.log'}",
         "  Ctrl-C stops the app and the gateway it started.",
     ]
+    if getattr(app, "network_access", None) is not None and app.network_access.lan:
+        lines.append(
+            f"  Home-network HTTP access has no login. Open {app.url}/remote "
+            "for phone URLs and QR codes; do not port-forward this port."
+        )
     sys.stdout.write("\n".join(lines) + "\n")
     sys.stdout.flush()
 
@@ -2523,17 +2547,7 @@ def _closing_with_the_terminal() -> Iterator[_Closing]:
 
 
 def _only_project_or_ask() -> Path:
-    """The project a bare call serves, chosen by the reader when there is a choice.
-
-    A bare call is the one command a reader types without thinking, so it needs no
-    project argument to be useful. Several projects are a decision only the reader
-    can make, so it is asked for in the terminal rather than guessed, and a
-    terminal that cannot answer — a script, a pipe — is given the list and the
-    command to run.
-
-    The list is the one `projects` prints, so the two cannot disagree about what
-    this installation holds.
-    """
+    """Choose a registered serving project without consulting the working directory."""
 
     registered = account_projects()["projects"]
     if not registered:
@@ -2542,29 +2556,76 @@ def _only_project_or_ask() -> Path:
             f"to open. Create one with '{CLI_NAME} init --project-root DIR --name "
             "NAME'."
         )
-    if len(registered) == 1:
-        return Path(str(registered[0]["project_root"]))
-    if not sys.stdin.isatty():
+    if not sys.stdin.isatty() or not sys.stdout.isatty():
+        import shlex
+
         raise ConfigurationError(
-            f"This installation holds {len(registered)} projects, so a bare call "
-            "cannot choose between them. Name one: "
-            + ", ".join(
-                f"--project {str(entry['project_name'])!r}" for entry in registered
+            "Choosing a registered project requires an interactive terminal. "
+            "Name one explicitly: "
+            + "; ".join(
+                f"{CLI_NAME} --project {shlex.quote(str(entry['project_name']))} start"
+                for entry in registered
             )
             + "."
         )
-    sys.stdout.write("Which project\n")
-    for index, entry in enumerate(registered, start=1):
-        running = " — already served" if entry["app"]["running"] else ""
-        if entry["app"].get("detached"):
-            running = " — served detached, which is a state this app does not serve"
-        sys.stdout.write(f"  [{index}] {entry['project_name']}{running}\n")
-    sys.stdout.write("  [0] none of these\n")
-    sys.stdout.flush()
-    answer = input("Number: ").strip()
-    if not answer.isdigit() or not 1 <= int(answer) <= len(registered):
-        raise ConfigurationError("No project chosen, so nothing was started.")
-    return Path(str(registered[int(answer) - 1]["project_root"]))
+    return Path(str(registered[_pick_registered_project(registered)]["project_root"]))
+
+
+def _pick_registered_project(registered: list[dict[str, Any]]) -> int:
+    """Read terminal arrow keys, restoring its attributes even after cancellation."""
+
+    import os
+    import select
+    import termios
+    import tty
+
+    fd = sys.stdin.fileno()
+    original = termios.tcgetattr(fd)
+    chosen = 0
+
+    def draw() -> None:
+        entry = registered[chosen]
+        name = "".join(c for c in str(entry["project_name"]) if c.isprintable())
+        app = entry.get("app", {})
+        state = " — already served" if app.get("running") else ""
+        if app.get("detached"):
+            state = " — served detached"
+        sys.stdout.write(
+            f"\r\033[2KProject {chosen + 1}/{len(registered)}: {name}{state}"
+        )
+        sys.stdout.flush()
+
+    try:
+        tty.setraw(fd)
+        sys.stdout.write("Choose project: Up/Down, Enter; Escape/Ctrl-C cancels\r\n")
+        draw()
+        while True:
+            key = os.read(fd, 1)
+            if key in {b"\r", b"\n"}:
+                return chosen
+            if key in {b"", b"\x03"}:
+                break
+            if key != b"\x1b":
+                continue
+            sequence = b""
+            for _ in range(2):
+                if not select.select([fd], [], [], 0.15)[0]:
+                    break
+                sequence += os.read(fd, 1)
+            if sequence in {b"[A", b"OA"}:
+                chosen = (chosen - 1) % len(registered)
+            elif sequence in {b"[B", b"OB"}:
+                chosen = (chosen + 1) % len(registered)
+            else:
+                break
+            draw()
+    except KeyboardInterrupt:
+        pass
+    finally:
+        termios.tcsetattr(fd, termios.TCSADRAIN, original)
+        sys.stdout.write("\n")
+        sys.stdout.flush()
+    raise ConfigurationError("No project chosen, so nothing was started.")
 
 
 def _is_detached(config: ResearchConfig) -> bool:
@@ -2658,7 +2719,12 @@ async def _start(args: argparse.Namespace, config: ResearchConfig) -> CommandRes
             f"'{CLI_NAME} stop' stops it, and this command then serves it here.\n"
         )
         return CommandResult()
-    return await _serve_attached(config, port=args.port, open_browser=args.start_ui)
+    return await _serve_attached(
+        config,
+        port=args.port,
+        open_browser=args.start_ui,
+        **({"lan": True} if getattr(args, "lan", False) else {}),
+    )
 
 
 def _open_browser(url: str) -> None:

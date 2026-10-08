@@ -220,6 +220,90 @@ def _attached_state(config: Any) -> str | None:
 # --- the bare call -------------------------------------------------------------
 
 
+@pytest.mark.parametrize("arguments", [("start",), ("start", "--lan")])
+def test_start_without_selector_resolves_registry_not_cwd(
+    project: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    arguments: tuple[str, ...],
+) -> None:
+    _initialised(project, "Chosen")
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(cli, "_only_project_or_ask", lambda: project)
+    assert cli._resolve(_no_arguments(*arguments)).project_root == project
+
+
+@pytest.mark.parametrize("selector", ["--project", "--project-root"])
+def test_start_explicit_selector_bypasses_picker(
+    project: Path, monkeypatch: pytest.MonkeyPatch, selector: str
+) -> None:
+    _initialised(project, "Chosen")
+
+    def refuse() -> Path:
+        raise AssertionError("explicit selectors must not prompt")
+
+    monkeypatch.setattr(cli, "_only_project_or_ask", refuse)
+    value = "Chosen" if selector == "--project" else str(project)
+    assert cli._resolve(_no_arguments(selector, value, "start")).project_root == project
+
+
+@pytest.mark.parametrize(
+    ("keys", "expected"),
+    [(b"\x1b[B\r", 1), (b"\x1b[A\r", 1), (b"\r", 0), (b"\x1b", None), (b"\x03", None)],
+)
+def test_project_picker_reads_pty_keys_and_restores_terminal(
+    monkeypatch: pytest.MonkeyPatch, keys: bytes, expected: int | None
+) -> None:
+    import io
+    import pty
+    import termios
+    import threading
+
+    master, slave = pty.openpty()
+    before = termios.tcgetattr(slave)
+    ready = threading.Event()
+    result: list[Any] = []
+
+    class Output(io.StringIO):
+        def flush(self) -> None:
+            ready.set()
+
+    source = os.fdopen(os.dup(slave), "r")
+    monkeypatch.setattr(cli.sys, "stdin", source)
+    monkeypatch.setattr(cli.sys, "stdout", Output())
+
+    def pick() -> None:
+        try:
+            result.append(
+                cli._pick_registered_project(
+                    [{"project_name": "First"}, {"project_name": "Second"}]
+                )
+            )
+        except ConfigurationError as exc:
+            result.append(exc)
+
+    worker = threading.Thread(target=pick, daemon=True)
+    try:
+        worker.start()
+        assert ready.wait(3)
+        os.write(master, keys)
+        worker.join(3)
+        assert not worker.is_alive()
+        assert termios.tcgetattr(slave) == before
+        if expected is None:
+            assert isinstance(result[0], ConfigurationError)
+            assert "No project chosen" in str(result[0])
+        else:
+            assert result == [expected]
+    finally:
+        if worker.is_alive():
+            os.write(master, b"\x03")
+            worker.join(3)
+        source.close()
+        os.close(master)
+        os.close(slave)
+
+
 def test_a_bare_call_with_one_project_opens_it_in_a_browser(
     project: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -233,11 +317,52 @@ def test_a_bare_call_with_one_project_opens_it_in_a_browser(
 
     monkeypatch.setattr(cli, "_serve_attached_sync", _serve)
 
+    monkeypatch.setattr(cli.sys.stdin, "isatty", lambda: True)
+    monkeypatch.setattr(cli.sys.stdout, "isatty", lambda: True)
+    monkeypatch.setattr(cli, "_pick_registered_project", lambda entries: 0)
+
     cli._bare_workspace(_no_arguments())
 
     # Serving never opens a browser on its own: the command line is where this app is
     # worked from, so a browser appears only when `--start-ui` asks for one.
     assert served == {"name": "Only One", "open_browser": False}
+
+
+def test_noninteractive_single_project_requires_explicit_selector(
+    project: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _initialised(project, "Only One")
+    monkeypatch.setattr(cli.sys.stdin, "isatty", lambda: False)
+    with pytest.raises(ConfigurationError, match="interactive terminal") as refusal:
+        cli._only_project_or_ask()
+    assert "research-rag --project 'Only One' start" in str(refusal.value)
+
+
+def test_picker_restores_terminal_after_read_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import io
+    import pty
+    import termios
+
+    master, slave = pty.openpty()
+    before = termios.tcgetattr(slave)
+    source = os.fdopen(os.dup(slave), "r")
+    monkeypatch.setattr(cli.sys, "stdin", source)
+    monkeypatch.setattr(cli.sys, "stdout", io.StringIO())
+
+    def fail(fd: int, size: int) -> bytes:
+        raise OSError("read failed")
+
+    monkeypatch.setattr(os, "read", fail)
+    try:
+        with pytest.raises(OSError, match="read failed"):
+            cli._pick_registered_project([{"project_name": "First"}])
+        assert termios.tcgetattr(slave) == before
+    finally:
+        source.close()
+        os.close(master)
+        os.close(slave)
 
 
 def test_a_bare_call_with_several_projects_asks_which(
@@ -255,7 +380,8 @@ def test_a_bare_call_with_several_projects_asks_which(
 
     monkeypatch.setattr(cli, "_serve_attached_sync", _serve)
     monkeypatch.setattr(cli.sys.stdin, "isatty", lambda: True, raising=False)
-    monkeypatch.setattr("builtins.input", lambda prompt="": "2")
+    monkeypatch.setattr(cli.sys.stdout, "isatty", lambda: True)
+    monkeypatch.setattr(cli, "_pick_registered_project", lambda entries: 1)
 
     cli._bare_workspace(_no_arguments())
 
@@ -273,13 +399,13 @@ def test_a_bare_call_that_cannot_ask_is_given_the_commands(
     _initialised(other, "Second")
     monkeypatch.setattr(cli.sys.stdin, "isatty", lambda: False, raising=False)
 
-    with pytest.raises(ConfigurationError, match="cannot choose") as refusal:
+    with pytest.raises(ConfigurationError, match="interactive terminal") as refusal:
         cli._bare_workspace(_no_arguments())
 
     assert "Second" in str(refusal.value)
 
 
-def test_a_bare_call_declines_a_number_outside_the_list(
+def test_a_bare_call_does_not_serve_after_picker_cancellation(
     project: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     _initialised(project, "First")
@@ -287,7 +413,12 @@ def test_a_bare_call_declines_a_number_outside_the_list(
     (other / "sources").mkdir(parents=True)
     _initialised(other, "Second")
     monkeypatch.setattr(cli.sys.stdin, "isatty", lambda: True, raising=False)
-    monkeypatch.setattr("builtins.input", lambda prompt="": "9")
+    monkeypatch.setattr(cli.sys.stdout, "isatty", lambda: True)
+
+    def cancel(entries: Any) -> int:
+        raise ConfigurationError("No project chosen")
+
+    monkeypatch.setattr(cli, "_pick_registered_project", cancel)
 
     with pytest.raises(ConfigurationError, match="No project chosen"):
         cli._bare_workspace(_no_arguments())
@@ -308,7 +439,7 @@ def test_a_bare_call_reports_an_app_already_up(
 
     monkeypatch.setattr(cli, "_serve_attached_sync", _refuse)
 
-    cli._bare_workspace(_no_arguments())
+    cli._bare_workspace(_no_arguments("--project", "Already"))
 
     out = capsys.readouterr().out
     # Reporting the app another terminal owns never opens a browser either.
@@ -434,7 +565,7 @@ def test_a_bare_call_names_a_detached_app_and_its_remedy(
     _served(resolve_config(project), monkeypatch, detached=True)
     monkeypatch.setattr(cli, "_serve_attached_sync", lambda *_a, **_k: None)
 
-    cli._bare_workspace(_no_arguments())
+    cli._bare_workspace(_no_arguments("--project-root", str(project)))
 
     out = capsys.readouterr().out
     assert "no terminal attached" in out
@@ -447,7 +578,7 @@ def test_a_bare_call_blames_another_terminal_only_when_one_owns_it(
     _initialised(project, "Held")
     _served(resolve_config(project), monkeypatch, detached=False)
 
-    cli._bare_workspace(_no_arguments())
+    cli._bare_workspace(_no_arguments("--project-root", str(project)))
 
     out = capsys.readouterr().out
     assert "this terminal does not own" in out

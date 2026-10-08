@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import html
 import logging
 from collections.abc import Mapping
 from contextlib import asynccontextmanager
@@ -140,6 +141,42 @@ async def _index(request: Request) -> Response:
     return HTMLResponse(page)
 
 
+async def _remote(request: Request) -> Response:
+    policy = request.app.state.network_access
+    report = policy.report() if policy is not None else {"enabled": False, "urls": []}
+    cards = []
+    if report.get("enabled"):
+        import qrcode
+        import qrcode.image.svg
+
+        for base in report.get("urls", []):
+            url = str(base).rstrip("/") + "/next/"
+            image = qrcode.make(url, image_factory=qrcode.image.svg.SvgPathImage)
+            svg = image.to_string(encoding="unicode")
+            cards.append(
+                '<section class="remote-card"><h2>Open on your phone</h2>'
+                f'<a class="remote-url" href="{html.escape(url, quote=True)}">'
+                f'{html.escape(url)}</a><div class="remote-qr" role="img" '
+                f'aria-label="QR code for {html.escape(url, quote=True)}">{svg}</div></section>'
+            )
+        if not cards:
+            cards.append(
+                '<section class="remote-card"><h2>No home-LAN address found</h2>'
+                "<p>Connect this computer to your home network, then restart the app with --lan.</p></section>"
+            )
+    else:
+        remedy = report.get(
+            "startup_remedy",
+            'Stop this app, then run: research-rag --project-root "<project>" start --lan',
+        )
+        cards.append(
+            '<section class="remote-card"><h2>LAN access is off</h2>'
+            f"<p>{html.escape(str(remedy))}</p></section>"
+        )
+    page = (request.app.state.static_root / "remote.html").read_text(encoding="utf-8")
+    return HTMLResponse(page.replace("<!-- REMOTE_CARDS -->", "".join(cards)))
+
+
 async def _asset(request: Request) -> Response:
     filename = request.path_params["filename"]
     media_type = _ASSETS.get(filename)
@@ -150,7 +187,23 @@ async def _asset(request: Request) -> Response:
 
 async def _ui_profile(request: Request) -> Response:
     profile: UIProfile = request.app.state.profile
-    return JSONResponse(profile.as_dict())
+    value = profile.as_dict()
+    policy = request.app.state.network_access
+    if policy is not None and not policy.is_local(request):
+        value["source_open_mode"] = "browser"
+        for name in (
+            "clients",
+            "projects",
+            "agent_entry",
+            "updates",
+            "sql_console",
+            "memory",
+            "memory_writes",
+            "bundle_export",
+            "bundle_import",
+        ):
+            value["capabilities"][name] = False
+    return JSONResponse(value)
 
 
 async def _health(request: Request) -> Response:
@@ -769,6 +822,11 @@ async def _updates(request: Request) -> Response:
 
 
 async def _security_headers(request: Request, call_next: Any) -> Response:
+    policy = getattr(request.app.state, "network_access", None)
+    if policy is not None:
+        refusal = policy.request_refusal(request)
+        if refusal is not None:
+            return JSONResponse({"error": refusal[1]}, status_code=refusal[0])
     if write_guard.served_authority(request) is None:
         return JSONResponse(
             {"error": "Requests require a loopback Host"}, status_code=403
@@ -813,6 +871,7 @@ def create_ui_app(
     adapter_factory: AdapterFactory | None = None,
     adapter: UIAdapter | None = None,
     static_root: Path | None = None,
+    network_access: Any = None,
 ) -> Starlette:
     """Create the local UI app around one server-specific adapter."""
     if (adapter_factory is None) == (adapter is None):
@@ -837,6 +896,10 @@ def create_ui_app(
 
     routes = [
         Route("/", _index),
+        Route("/next", _index),
+        Route("/next/", _index),
+        Route("/remote", _remote),
+        Route("/remote/", _remote),
         Route("/assets/{filename:str}", _asset),
         Route("/api/ui", _ui_profile),
         Route("/api/health", _health),
@@ -883,6 +946,10 @@ def create_ui_app(
         exception_handlers={HTTPException: _http_error, Exception: _unexpected_error},
     )
     app.state.profile = profile
+    app.state.network_access = network_access
+    # The compatibility guard exports also serve control routes. Only the
+    # workspace app opts into this policy; control remains strictly loopback.
+    app.state.workspace_network_access = network_access
     app.state.static_root = (static_root or STATIC_ROOT).resolve()
     return app
 

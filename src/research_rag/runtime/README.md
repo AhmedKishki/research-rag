@@ -6,6 +6,7 @@ The running process, and the commands that manage it.
 |---|---|
 | `app.py` | `App`: the one instance that serves a port, holds the client registry, and composes the surfaces |
 | `control.py` | The loopback control API, and the synchronous handle the command line speaks through it |
+| `network.py` | Home-LAN interface discovery and workspace host, peer, origin, and route authorization |
 | `process.py` | How a child process is asked to run and what a failure of it says |
 | `health.py` | The checks one health report is made of, and what each one blocks |
 | `doctor.py` | What is wrong with an installation, and the repair each fault has |

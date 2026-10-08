@@ -44,6 +44,31 @@ from research_rag.surfaces.cli import (
 from research_rag.surfaces.cli import _operate as operate
 
 ROOT = Path(__file__).resolve().parents[2]
+
+
+def test_home_lan_is_explicit_and_start_only() -> None:
+    parser = _parser()
+    assert parser.parse_args(["start"]).lan is False
+    args = parser.parse_args(["start", "--lan", "--port", "5051"])
+    assert args.lan is True
+    assert args.port == 5051
+
+
+def test_start_forwards_explicit_home_lan_mode(monkeypatch: pytest.MonkeyPatch) -> None:
+    from research_rag.surfaces import cli
+
+    calls: list[dict[str, Any]] = []
+
+    async def serve(config: Any, **kwargs: Any) -> cli.CommandResult:
+        calls.append(kwargs)
+        return cli.CommandResult()
+
+    monkeypatch.setattr(cli, "running_url", lambda _: None)
+    monkeypatch.setattr(cli, "_serve_attached", serve)
+    asyncio.run(cli._start(_parser().parse_args(["start", "--lan"]), object()))
+    assert calls == [{"port": None, "open_browser": False, "lan": True}]
+
+
 CONSOLE_SCRIPT = ROOT / ".venv" / "bin" / CLI_NAME
 EXAMPLE_LINE = re.compile(r"^ {2}(?P<command>.+)$", re.MULTILINE)
 # A dest an argparse metavar would otherwise print raw, uppercased. Each is an

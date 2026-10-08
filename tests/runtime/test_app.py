@@ -254,6 +254,37 @@ async def test_the_workspace_answers_on_the_same_port(project: Path) -> None:
         await app.stop()
 
 
+async def test_lan_opt_in_keeps_local_frontends_and_disables_proxy_headers(
+    project: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Wildcard serving never turns forwarded headers into trusted peer facts."""
+    monkeypatch.setattr(
+        "research_rag.runtime.app.discover_lan_addresses", lambda: ("192.168.1.2",)
+    )
+    config = resolve_config(project, vanilla_executable=sys.executable)
+    app = App(config, port=free_port(), lan=True)
+    app.service = FakeService()  # type: ignore[assignment]
+    await app.start()
+    try:
+        await wait_until_ready(app)
+        assert app.host == "0.0.0.0"
+        assert app.url == f"http://127.0.0.1:{app.port}"
+        assert app._server.config.proxy_headers is False
+        code, body = await asyncio.to_thread(
+            post_ordered,
+            app.url,
+            "/control/search",
+            {"query": "heron"},
+            {"Content-Type": "application/json", "X-Forwarded-For": "8.8.8.8"},
+        )
+        assert code == 200
+        assert body["operation"] == "search"
+        async with Client(app.mcp_url, timeout=30) as client:
+            assert tuple(tool.name for tool in await client.list_tools()) == OPERATIONS
+    finally:
+        await app.stop()
+
+
 async def test_the_control_api_and_the_agent_surface_share_one_service(
     project: Path,
 ) -> None:

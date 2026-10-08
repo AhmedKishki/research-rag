@@ -2839,6 +2839,10 @@ async function runSearch() {
 // and nothing is downloaded. A machine with no desktop to hand it to answers 501,
 // and the file is shown in the browser instead.
 async function openSource(path) {
+  if (state.profile?.source_open_mode === "browser") {
+    window.open(`/api/source-file?path=${encodeURIComponent(path)}`, "_blank", "noopener");
+    return;
+  }
   try {
     const result = await api("/api/open-source", {
       method: "POST",
@@ -2856,11 +2860,39 @@ async function openSource(path) {
 
 async function copyText(text, message) {
   try {
+    if (!navigator.clipboard?.writeText) {
+      copyTextWithoutClipboard(text, message);
+      return;
+    }
     await navigator.clipboard.writeText(text);
     toast(message);
   } catch (_error) {
-    toast("Clipboard access was blocked by the browser.", true);
+    copyTextWithoutClipboard(text, message);
   }
+}
+
+function copyTextWithoutClipboard(text, message) {
+  // HTTP LAN pages do not have the secure-context Clipboard API. Try the
+  // user-gesture copy path, then expose selectable text if the browser refuses.
+  const field = document.createElement("textarea");
+  field.value = text;
+  field.setAttribute("aria-label", "Text to copy");
+  field.style.position = "fixed";
+  field.style.opacity = "0";
+  document.body.append(field);
+  let copied = false;
+  try {
+    field.focus();
+    field.select();
+    field.setSelectionRange(0, text.length);
+    copied = Boolean(document.execCommand?.("copy"));
+  } catch (_error) {
+    copied = false;
+  } finally {
+    field.remove();
+  }
+  if (copied) toast(message);
+  else window.prompt("Select and copy this text:", text);
 }
 
 async function showContext(chunkId) {
