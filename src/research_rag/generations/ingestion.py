@@ -26,6 +26,7 @@ from ..corpus.extraction import (
     scan_pdf_pages,
     screen_source_units,
 )
+from ..corpus.pdf_text_recovery import PdfRecoveryCache, close_pdf_recovery_cache
 from ..corpus.sources import (
     ALLOWED_SOURCE_EXTENSIONS,
     SourceFile,
@@ -851,6 +852,40 @@ class IngestionWorkflow:
     def _source_artifact_root(staging_root: Path, relative_path: str) -> Path:
         return staging_root / "work" / "sources" / _source_work_key(relative_path)
 
+    def _pdf_recovery_cache(self, digest: str) -> PdfRecoveryCache:
+        """The native-reader cache for one source, kept across its scan batches.
+
+        Keyed by project and content digest, so a build never reuses a parse of
+        another project or of bytes that changed. The cache belongs to the build
+        that is scanning; it is released when the source finishes or the build
+        ends.
+        """
+
+        caches = getattr(self, "_pdf_recovery_caches", None)
+        if caches is None:
+            caches = {}
+            self._pdf_recovery_caches = caches
+        key = (self.config.project_id, digest)
+        cache = caches.get(key)
+        if cache is None:
+            cache = {}
+            caches[key] = cache
+        return cache
+
+    def _release_pdf_recovery_cache(self, digest: str) -> None:
+        caches = getattr(self, "_pdf_recovery_caches", None)
+        if not caches:
+            return
+        close_pdf_recovery_cache(caches.pop((self.config.project_id, digest), None))
+
+    def _release_pdf_recovery_caches(self) -> None:
+        caches = getattr(self, "_pdf_recovery_caches", None)
+        if not caches:
+            return
+        for cache in caches.values():
+            close_pdf_recovery_cache(cache)
+        caches.clear()
+
     @staticmethod
     def _save_vector_batch(
         path: Path,
@@ -1009,6 +1044,11 @@ class IngestionWorkflow:
                 self._add_phase_time(
                     checkpoint, "extraction", time.perf_counter() - started
                 )
+                failed_digest = checkpoint["source_digests"].get(
+                    record["source_relative_path"]
+                )
+                if failed_digest is not None:
+                    self._release_pdf_recovery_cache(str(failed_digest))
                 record_skip(record)
                 return None
 
@@ -1160,6 +1200,7 @@ class IngestionWorkflow:
                     self._write_checkpoint(staging_root, checkpoint)
                     continue
                 source = sources_by_path[relative]
+                source_digest = str(checkpoint["source_digests"][relative])
                 artifact_root = self._source_artifact_root(staging_root, relative)
                 artifact_root.mkdir(parents=True, exist_ok=True)
                 started = time.perf_counter()
@@ -1289,6 +1330,7 @@ class IngestionWorkflow:
 
                 extraction_stage = str(state["extraction_stage"])
                 if extraction_stage == "skipped":
+                    self._release_pdf_recovery_cache(source_digest)
                     record_skip(state["skipped_source"])
                     if budget_expired():
                         return self._in_progress_result(checkpoint)
@@ -1308,6 +1350,7 @@ class IngestionWorkflow:
                         raise ResearchError(
                             f"Completed extraction artifacts are invalid: {relative}"
                         )
+                    self._release_pdf_recovery_cache(source_digest)
                     checkpoint["extracted_source_paths"].append(relative)
                     count_field = (
                         "reused_document_count"
@@ -1329,6 +1372,7 @@ class IngestionWorkflow:
                             source,
                             index,
                             min(page_batch_size, total - index),
+                            self._pdf_recovery_cache(source_digest),
                         )
                         if page_scans is None:
                             if budget_expired():
@@ -1356,6 +1400,9 @@ class IngestionWorkflow:
                             int(checkpoint.get("extraction_work_completed") or 0) + 1
                         )
                     else:
+                        # Every page is scanned; the native-reader cache has no
+                        # further use once the scan batches are stored.
+                        self._release_pdf_recovery_cache(source_digest)
                         state["extraction_stage"] = "pdf_prepare"
                         state["next_index"] = 0
                     atomic_write_json(state_path, state)
@@ -2715,6 +2762,7 @@ class IngestionWorkflow:
                     deadline=deadline,
                 )
             except _SourceChangedDuringIngest as exc:
+                self._release_pdf_recovery_caches()
                 self._discard_checkpoint(
                     staging_root,
                     checkpoint,
@@ -2756,16 +2804,19 @@ class IngestionWorkflow:
                     ),
                 )
             except asyncio.CancelledError:
+                self._release_pdf_recovery_caches()
                 checkpoint["last_interruption"] = "cancelled"
                 self._remove_uncommitted_files(staging_root)
                 self._write_checkpoint(staging_root, checkpoint)
                 raise
             except TimeoutError:
+                self._release_pdf_recovery_caches()
                 checkpoint["last_interruption"] = "timeout"
                 self._remove_uncommitted_files(staging_root)
                 self._write_checkpoint(staging_root, checkpoint)
                 raise
             except Exception as exc:
+                self._release_pdf_recovery_caches()
                 pending = (
                     read_json(self._pending_activation_path)
                     if self._pending_activation_path.is_file()
@@ -2791,4 +2842,8 @@ class IngestionWorkflow:
                     "corpus changed since it was checkpointed, so this build starts "
                     "from the beginning. " + str(result.get("message") or "")
                 ).strip()
+            if result.get("status") != "in_progress":
+                # A source releases its own cache when it finishes, so this only
+                # clears one left by an interruption that returned no result.
+                self._release_pdf_recovery_caches()
             return result

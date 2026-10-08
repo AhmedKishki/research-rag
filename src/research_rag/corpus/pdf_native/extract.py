@@ -15,7 +15,15 @@ from __future__ import annotations
 
 from .content import extract_page
 from .geometry import page_size
-from .lines import Line, group_lines, merge_line_text
+from .lines import (
+    Line,
+    detect_column_gutter,
+    detect_column_x,
+    group_lines,
+    merge_line_text,
+    order_page_lines,
+    split_column_chunks,
+)
 from .objects import Document
 
 __all__ = [
@@ -47,14 +55,40 @@ def page_chunks(document, page, number):
     return chunks
 
 
-def lines_from_chunks(chunks):
-    """Group positioned runs into lines and merge each line's marked text."""
+def _merged_lines(chunks):
     lines = group_lines(chunks)
     for line in lines:
         line.text = merge_line_text(line.chunks)
-    return [line for line in lines if line.text.strip()]
+    lines = [line for line in lines if line.text.strip()]
+    return sorted(lines, key=lambda line: (-round(line.y, 2), line.x))
+
+
+def lines_from_chunks(chunks, page_w=None):
+    """Group positioned runs into lines and merge each line's marked text.
+
+    With ``page_w`` the page's width in points, two-column pages are read
+    column-major. The columns are separated before their runs are merged, so two
+    columns that share a baseline are never welded into one line: the boundary is
+    the line-start cluster `detect_column_x` finds, or, when the columns share
+    baselines and that test cannot fire, the vertical gutter
+    `detect_column_gutter` finds. Without a width, or on a page the geometry
+    cannot split, the lines keep top-down order.
+    """
+    lines = _merged_lines(chunks)
+    if page_w is None or not lines:
+        return lines
+    boundary = detect_column_x(lines, page_w)
+    if boundary is None:
+        boundary = detect_column_gutter(chunks, page_w)
+    if boundary is None:
+        return order_page_lines(lines, page_w)
+    left, right = split_column_chunks(chunks, boundary)
+    if not left or not right:
+        return order_page_lines(lines, page_w)
+    return [*_merged_lines(left), *_merged_lines(right)]
 
 
 def page_lines(document, page, number):
-    """One page's non-blank lines, in reading order."""
-    return lines_from_chunks(page_chunks(document, page, number))
+    """One page's non-blank lines, in reading order, columns split."""
+    width, _height = page_size(document, page)
+    return lines_from_chunks(page_chunks(document, page, number), width)

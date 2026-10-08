@@ -101,6 +101,28 @@ def test_a_scan_cache_parses_each_pdf_once(tmp_path, monkeypatch) -> None:
     assert calls == [path]
 
 
+def test_a_shared_cache_is_released_when_closed(tmp_path, monkeypatch) -> None:
+    """A caller-owned cache is reusable, and closing it releases the parse."""
+
+    path = _write(tmp_path, b"BT /F1 24 Tf 50 500 Td (Recovered alpha text) Tj ET")
+    opener = module.open_doc
+    calls = []
+
+    def counted_open(source):
+        calls.append(source)
+        return opener(source)
+
+    monkeypatch.setattr(module, "open_doc", counted_open)
+    cache = {}
+    assert module.recover_pdf_blocks(path, 1, WHOLE_PAGE, cache)[0]
+    assert cache
+    module.close_pdf_recovery_cache(cache)
+    assert cache == {}
+    # A released cache reopens on the next request rather than serving stale bytes.
+    assert module.recover_pdf_blocks(path, 1, WHOLE_PAGE, cache)[0]
+    assert calls == [path, path]
+
+
 def test_line_assembly_failure_is_nonfatal(tmp_path, monkeypatch) -> None:
     path = _write(tmp_path, b"BT /F1 24 Tf 50 500 Td (Recovered alpha text) Tj ET")
 
@@ -347,6 +369,107 @@ def test_pymupdf_block_boxes_are_matched(tmp_path) -> None:
     assert recovered[0] == "Alpha block first line"
     assert recovered[1] == "Alpha block second line"
     assert recovered[2] == "Beta block separate"
+
+
+def test_whole_page_recovery_reads_two_columns_in_column_order(tmp_path) -> None:
+    """A whole-page fallback must not interleave the two columns.
+
+    Each page here has no text layer PyMuPDF accepts, so the caller asks for the
+    whole page. The bundled reader must return the left column top-down, then
+    the right column top-down, not baseline by baseline across both.
+    """
+
+    pymupdf = pytest.importorskip("pymupdf")
+    path = tmp_path / "two-column.pdf"
+    document = pymupdf.open()
+    page = document.new_page(width=400, height=600)
+    left = [f"Left column evidence {number}" for number in range(1, 9)]
+    right = [f"Right column evidence {number}" for number in range(1, 9)]
+    for number, text in enumerate(left):
+        page.insert_text((40, 100 + number * 16), text, fontsize=11)
+    for number, text in enumerate(right):
+        # A few points lower, so the two columns do not share a baseline.
+        page.insert_text((225, 106 + number * 16), text, fontsize=11)
+    document.save(str(path))
+    document.close()
+
+    recovered, reason = module.recover_pdf_blocks(path, 1, WHOLE_PAGE)
+
+    assert reason is None
+    lines = recovered[0].splitlines()
+    assert lines == [*left, *right]
+
+
+def test_whole_page_recovery_separates_columns_on_shared_baselines(tmp_path) -> None:
+    """Two columns on identical baselines are not welded before separation.
+
+    `group_lines` would merge each row's left and right runs into one line. The
+    gutter between the columns must split the regions first, so the output is
+    column-major, not row-major.
+    """
+
+    pymupdf = pytest.importorskip("pymupdf")
+    path = tmp_path / "aligned-columns.pdf"
+    document = pymupdf.open()
+    page = document.new_page(width=400, height=600)
+    page.insert_text((40, 100), "Left first sentence.", fontsize=12)
+    page.insert_text((225, 100), "Right first sentence.", fontsize=12)
+    page.insert_text((40, 130), "Left second sentence.", fontsize=12)
+    page.insert_text((225, 130), "Right second sentence.", fontsize=12)
+    document.save(str(path))
+    document.close()
+
+    recovered, reason = module.recover_pdf_blocks(path, 1, WHOLE_PAGE)
+
+    assert reason is None
+    assert recovered[0].splitlines() == [
+        "Left first sentence.",
+        "Left second sentence.",
+        "Right first sentence.",
+        "Right second sentence.",
+    ]
+
+
+def test_whole_page_recovery_keeps_a_full_width_heading_whole(tmp_path) -> None:
+    """A heading spanning both columns stays one line above the split columns."""
+
+    pymupdf = pytest.importorskip("pymupdf")
+    path = tmp_path / "heading-and-columns.pdf"
+    document = pymupdf.open()
+    page = document.new_page(width=400, height=600)
+    heading = "A full width heading spanning the entire page here"
+    page.insert_text((40, 60), heading, fontsize=15)
+    left = [f"Left body line {number}" for number in range(1, 4)]
+    right = [f"Right body line {number}" for number in range(1, 4)]
+    for number, text in enumerate(left):
+        page.insert_text((40, 120 + number * 16), text, fontsize=11)
+        page.insert_text((225, 120 + number * 16), right[number], fontsize=11)
+    document.save(str(path))
+    document.close()
+
+    recovered, reason = module.recover_pdf_blocks(path, 1, WHOLE_PAGE)
+
+    assert reason is None
+    assert recovered[0].splitlines() == [heading, *left, *right]
+
+
+def test_whole_page_recovery_keeps_single_column_order(tmp_path) -> None:
+    """A single-column page keeps plain top-down baseline order, unsplit."""
+
+    pymupdf = pytest.importorskip("pymupdf")
+    path = tmp_path / "one-column.pdf"
+    document = pymupdf.open()
+    page = document.new_page(width=400, height=600)
+    lines = [f"Single column evidence {number}" for number in range(1, 11)]
+    for number, text in enumerate(lines):
+        page.insert_text((40, 80 + number * 16), text, fontsize=11)
+    document.save(str(path))
+    document.close()
+
+    recovered, reason = module.recover_pdf_blocks(path, 1, WHOLE_PAGE)
+
+    assert reason is None
+    assert recovered[0].splitlines() == lines
 
 
 # ------------------------------------------------------------ parser port

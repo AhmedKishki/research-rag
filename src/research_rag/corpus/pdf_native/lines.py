@@ -29,6 +29,7 @@ __all__ = [
     "body_size",
     "chunk_advance",
     "chunk_bounds",
+    "detect_column_gutter",
     "detect_column_x",
     "fragments",
     "group_lines",
@@ -37,6 +38,7 @@ __all__ = [
     "merge_line_text",
     "order_page_lines",
     "split_at_x",
+    "split_column_chunks",
 ]
 
 
@@ -323,6 +325,75 @@ def order_page_lines(lines, page_w=432.0):
     left.sort(key=lambda L: (-round(L.y, 2), L.x))
     right.sort(key=lambda L: (-round(L.y, 2), L.x))
     return left + right
+
+
+COLUMN_GUTTER = 12.0
+"""Smallest empty vertical band, in points, that separates two columns.
+
+An ordinary inter-word space is a few points; a column gutter is a band no run
+crosses. The floor keeps a word gap from reading as a column boundary.
+"""
+
+COLUMN_SPAN = 0.75
+"""A run at least this share of the page width spans both columns.
+
+A full-width heading or rule legitimately crosses the gutter. Ignoring runs that
+wide lets a spanning element sit above the columns without hiding the gutter
+between the body lines below it.
+"""
+
+
+def detect_column_gutter(chunks, page_w=432.0, min_share=0.25):
+    """Second-column boundary from an empty vertical band between runs, else None.
+
+    Two columns that share their baselines are welded into one line by
+    `group_lines` before any line-start cluster can see them, so `detect_column_x`
+    refuses them. The gutter between the columns is still a band no run crosses,
+    and this finds it: runs are sorted by left edge and the widest vertical gap
+    that leaves a share of the runs on each side is the boundary. Full-width runs
+    are left out of the search so a spanning heading does not close the gutter.
+    """
+
+    if not chunks or page_w <= 0:
+        return None
+    spanning = page_w * COLUMN_SPAN
+    body = sorted(
+        (
+            bounds
+            for chunk in chunks
+            if chunk.text.strip()
+            for bounds in (chunk_bounds(chunk),)
+            if 0.0 < bounds[2] - bounds[0] < spanning
+        ),
+        key=lambda bounds: bounds[0],
+    )
+    if len(body) < 4:
+        return None
+    best_boundary = None
+    best_gap = COLUMN_GUTTER
+    for index in range(2, len(body) - 1):
+        left_end = max(bounds[2] for bounds in body[:index])
+        right_start = min(bounds[0] for bounds in body[index:])
+        gap = right_start - left_end
+        if gap < best_gap:
+            continue
+        left_share = index / len(body)
+        if min(left_share, 1.0 - left_share) < min_share:
+            continue
+        boundary = (left_end + right_start) / 2.0
+        if not page_w * 0.25 <= boundary <= page_w * 0.75:
+            continue
+        best_gap = gap
+        best_boundary = boundary
+    return best_boundary
+
+
+def split_column_chunks(chunks, boundary):
+    """Partition runs into the columns left and right of a boundary."""
+
+    left = [chunk for chunk in chunks if chunk_bounds(chunk)[0] < boundary - 1]
+    right = [chunk for chunk in chunks if chunk_bounds(chunk)[0] >= boundary - 1]
+    return left, right
 
 
 def group_lines(chunks, ytol=2.6, page_w=None):

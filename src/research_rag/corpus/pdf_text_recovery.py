@@ -16,6 +16,7 @@ rejects the source.
 
 from __future__ import annotations
 
+import contextlib
 import math
 from pathlib import Path
 from typing import Any
@@ -34,6 +35,27 @@ _DEFAULT_PAGE_BOX = (0.0, 0.0, 612.0, 792.0)
 
 _Box = tuple[float, float, float, float]
 PdfRecoveryCache = dict[Path, tuple[Document, list[dict[str, Any]]] | None]
+
+
+def close_pdf_recovery_cache(cache: PdfRecoveryCache | None) -> None:
+    """Drop every parsed document a recovery cache holds.
+
+    A caller that keeps one cache across page batches owns it and calls this when
+    the source is done. The bundled reader holds the whole file in memory and has
+    no handle to close, so releasing the references is the cleanup.
+    """
+
+    if not cache:
+        return
+    for entry in cache.values():
+        if entry is None:
+            continue
+        document = entry[0]
+        close = getattr(document, "close", None)
+        if callable(close):
+            with contextlib.suppress(Exception):
+                close()
+    cache.clear()
 
 
 def _valid_page_number(page_number: object) -> bool:
@@ -131,8 +153,9 @@ def recover_pdf_blocks(
     Returns recovered text per requested block id, and ``None`` or a reason code.
     A block whose recovered text carries no alphanumeric character is omitted.
     The helper never raises for a bad caller argument or an unreadable file.
-    The optional cache belongs to one source scan, never a process or generation.
-    It avoids reopening and reparsing the PDF for each unhealthy page.
+    The optional cache belongs to one source, never a process or generation. One
+    caller keeps it across page batches of a single build and closes it when that
+    source is done; a caller with no cache gets a fresh parse each call.
     """
 
     checked = _valid_boxes(boxes)
@@ -168,11 +191,12 @@ def recover_pdf_blocks(
             return {}, REASON_UNSUPPORTED_ROTATION
         rectangle = _page_rectangle(document, page)
         chunks = page_chunks(document, page, page_number)
+        page_width = rectangle[2] - rectangle[0]
         recovered: dict[int, str] = {}
         for key, members in _select_chunks(chunks, checked, rectangle).items():
             text = "\n".join(
                 line.text.strip()
-                for line in lines_from_chunks(members)
+                for line in lines_from_chunks(members, page_width)
                 if line.text.strip()
             )
             if text and any(character.isalnum() for character in text):
