@@ -580,6 +580,49 @@ def test_unsearchable_upstream_chunks_are_counted_without_losing_a_unit() -> Non
         )
 
 
+def test_a_symbol_formatting_glyph_chunk_survives_the_chunk_gate() -> None:
+    """A documented symbol glyph is not corruption at the chunk gate.
+
+    A chunk carrying a Symbol face's bullet stays searchable, while a chunk that
+    is only the bullet is non-evidence and discarded as symbol-only, never as
+    corrupt.
+    """
+
+    document = {
+        "document_id": "doc_symbols",
+        "source_id": "src_symbols",
+        "source_path": "sources/symbols.pdf",
+        "title": "Symbols",
+        "authors": [],
+        "year": None,
+        "doi": "",
+        "categories": [],
+        "keywords": [],
+    }
+    unit = {
+        "id": "doc_symbols:pdf-page:000001",
+        "document_id": "doc_symbols",
+        "source_id": "src_symbols",
+        "locator": {"type": "pdf_page", "page": 1, "page_label": "1"},
+    }
+
+    chunks, discarded_empty, discarded_symbol_only, discarded_corrupt = _enrich_chunks(
+        [
+            {"doc_id": unit["id"], "contents": "\uf0b7 electricity consumption in TWh"},
+            {"doc_id": unit["id"], "contents": "\uf0b7"},
+        ],
+        [unit],
+        [document],
+    )
+
+    assert [chunk["contents"] for chunk in chunks] == [
+        "\uf0b7 electricity consumption in TWh"
+    ]
+    assert discarded_empty == 0
+    assert discarded_symbol_only == 1
+    assert discarded_corrupt == 0
+
+
 def test_legacy_automatic_metadata_uses_runtime_corruption_guard() -> None:
     legacy = {
         "source_path": "sources/safe-name.pdf",
@@ -2724,6 +2767,87 @@ def test_source_local_extraction_failure_skips_and_retries_unchanged_source(
         assert repaired["document_count"] == 2
         assert repaired["skipped_source_count"] == 0
         assert bad.read_bytes() == before
+
+    asyncio.run(exercise())
+
+
+def test_staged_pdf_scan_reuses_one_native_cache_across_batches(
+    project: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A source's scan batches share one native-reader cache and free it after.
+
+    The default batch is eight pages, so a nine-page source needs two scan
+    batches. Both must receive the same cache object, and a finished build must
+    leave no parsed document behind.
+    """
+
+    from research_rag.generations import ingestion
+
+    async def exercise():
+        topics = [
+            "Cobalt",
+            "Amber",
+            "Copper",
+            "Lithium",
+            "Silicon",
+            "Nickel",
+            "Graphite",
+            "Quartz",
+            "Manganese",
+        ]
+        write_pdf(
+            project / "sources" / "long.pdf",
+            [
+                f"{topic} research develops a distinct account of material evidence."
+                for topic in topics
+            ],
+        )
+        config = resolve_config(project, vanilla_executable=sys.executable)
+        service = ResearchService(config, FakeUltraRAG(), dense=FakeDenseBackend())
+        original = ingestion.scan_pdf_pages
+        seen_caches: list[object] = []
+
+        def record(source, *args, **kwargs):
+            seen_caches.append(kwargs.get("recovery_cache", args[-1] if args else None))
+            return original(source, *args, **kwargs)
+
+        monkeypatch.setattr(ingestion, "scan_pdf_pages", record)
+        result = await service.ingest(chunk_size=50, chunk_overlap=10)
+
+        assert result["status"] == "ready"
+        assert len(seen_caches) == 2
+        assert seen_caches[0] is not None
+        assert all(cache is seen_caches[0] for cache in seen_caches)
+        assert getattr(service, "_pdf_recovery_caches", {}) == {}
+
+    asyncio.run(exercise())
+
+
+def test_pdf_recovery_cache_is_scoped_to_project_and_source(tmp_path: Path) -> None:
+    """Caches are keyed by project and source digest and released explicitly."""
+
+    async def exercise():
+        roots = [tmp_path / "first", tmp_path / "second"]
+        for root in roots:
+            (root / "sources").mkdir(parents=True)
+            write_pdf(root / "sources" / "article.pdf", ["Stable evidence."])
+        configs = [
+            resolve_config(root, vanilla_executable=sys.executable) for root in roots
+        ]
+        first = ResearchService(configs[0], FakeUltraRAG(), dense=FakeDenseBackend())
+        second = ResearchService(configs[1], FakeUltraRAG(), dense=FakeDenseBackend())
+
+        cache = first._pdf_recovery_cache("digest")
+        assert cache is first._pdf_recovery_cache("digest")
+        assert cache is not first._pdf_recovery_cache("other-digest")
+        assert cache is not second._pdf_recovery_cache("digest")
+
+        first._release_pdf_recovery_cache("digest")
+        assert cache == {}
+        assert first._pdf_recovery_cache("digest") is not cache
+
+        first._release_pdf_recovery_caches()
+        second._release_pdf_recovery_caches()
 
     asyncio.run(exercise())
 

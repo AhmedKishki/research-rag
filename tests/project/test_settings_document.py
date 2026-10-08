@@ -661,6 +661,28 @@ def test_a_threshold_change_beside_an_embedding_change_keeps_the_model_cost(
     assert cost["requires_ingest"] is True
 
 
+def test_a_threshold_change_beside_a_reranker_change_still_requires_ingest(
+    project: Path,
+) -> None:
+    """A reranker change does not hide the rebuild the threshold still needs."""
+
+    service = _service(project)
+    before = service.config.settings
+
+    cost = change_cost(
+        before,
+        replace(
+            before,
+            maximum_unclean_percent=2.0,
+            reranker_model="BAAI/bge-reranker-base",
+        ),
+    )
+
+    assert cost["level"] == "model"
+    assert set(cost["moved"]) == {"passage_cleaning", "reranker_model"}
+    assert cost["requires_ingest"] is True
+
+
 async def test_a_passage_cleaning_change_warns_then_writes_with_ingest(
     project: Path,
 ) -> None:

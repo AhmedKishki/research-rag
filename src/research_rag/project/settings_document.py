@@ -337,13 +337,19 @@ def change_cost(before: EffectiveSettings, after: EffectiveSettings) -> dict[str
         if recorded_before[name] != recorded_after[name]
     ]
     if "embedding_model" in moved:
-        level, clause, requires_ingest = COST_MODEL, _EMBEDDING_CLAUSE, True
+        level, clause = COST_MODEL, _EMBEDDING_CLAUSE
     elif "reranker_model" in moved:
-        level, clause, requires_ingest = COST_MODEL, _RERANKER_CLAUSE, False
+        level, clause = COST_MODEL, _RERANKER_CLAUSE
     elif moved:
-        level, clause, requires_ingest = COST_REGENERATION, _REGENERATION_CLAUSE, True
+        level, clause = COST_REGENERATION, _REGENERATION_CLAUSE
     else:
-        level, clause, requires_ingest = COST_NONE, _NONE_CLAUSE, False
+        level, clause = COST_NONE, _NONE_CLAUSE
+    # A reranker change alone needs no rebuild, and a model change outranks the
+    # regeneration its other moved keys would cost. `requires_ingest` is still
+    # the union over moved keys: a rebuild-requiring key the reranker clause
+    # would otherwise hide (the PDF passage-cleaning threshold, chunking, the
+    # retrieval policy) keeps requiring ingest beside a reranker change.
+    requires_ingest = bool(set(moved) - {"reranker_model"})
     return {
         "level": level,
         "message": f"{clause[0].upper()}{clause[1:]}.",

@@ -11,8 +11,28 @@ Adapted from the user's own AhmedKishki/pdf-tools project; the code is reused
 here with the owner's permission.
 """
 
+import contextlib
+import os
 import re
 import zlib
+
+# Resource budgets for untrusted PDF input. A declared row count, encoded file
+# size, filter chain, compressed payload, or predictor dimension never sizes a
+# decode before the bytes exist. A PDF that exceeds a budget raises
+# PdfResourceLimitError, which the recovery helper turns into one bounded reason.
+MAX_NATIVE_DOCUMENT_BYTES = 256 * 1024 * 1024
+MAX_DECODED_STREAM_BYTES = 32 * 1024 * 1024
+MAX_DOCUMENT_DECODED_BYTES = 128 * 1024 * 1024
+MAX_FILTER_CHAIN = 16
+MAX_XREF_ENTRIES = 1_000_000
+MAX_PREDICTOR_COLUMNS = 1 << 20
+MAX_PREDICTOR_ROW_BYTES = 16 * 1024 * 1024
+MAX_PREDICTOR_COLORS = 64
+MAX_XREF_STREAM_FIELD_BYTES = 8
+
+
+class PdfResourceLimitError(ValueError):
+    """A declared or decoded PDF resource exceeds a parser budget."""
 
 
 class Name(str):
@@ -301,9 +321,12 @@ class Parser(Lexer):
         if raw is None:
             em = re.compile(rb"endstream").search(b, start)
             end = em.start() if em else n
-            raw = b[start:end]
-            while raw[-1:] in (b"\r", b"\n"):
-                raw = raw[:-1]
+            # Trim each trailing EOL in one backward pass; re-slicing per
+            # character is quadratic on a stream padded with newlines.
+            trim = end
+            while trim > start and b[trim - 1] in b"\r\n":
+                trim -= 1
+            raw = b[start:trim]
         m = re.compile(rb"endstream").search(b, start + len(raw))
         self.pos = m.end() if m else start + len(raw)
         return raw
@@ -325,6 +348,42 @@ def decode_name(raw):
     return bytes(out).decode("utf-8", "replace")
 
 
+def _decode_budget(doc):
+    """Bytes one stream may still decode to, within the document budget."""
+
+    if doc is None:
+        return MAX_DECODED_STREAM_BYTES
+    remaining = MAX_DOCUMENT_DECODED_BYTES - getattr(doc, "_decoded_bytes", 0)
+    return max(0, min(MAX_DECODED_STREAM_BYTES, remaining))
+
+
+def _bounded_inflate(data, limit):
+    """Inflate at most ``limit`` bytes, or return ``None`` when it exceeds it.
+
+    ``decompress`` is given the budget, so a small payload cannot expand into a
+    large allocation before the size check: the decoder stops at the budget and
+    any unconsumed tail marks the stream as over budget.
+    """
+
+    if limit <= 0:
+        return None
+    for wbits in (zlib.MAX_WBITS, -zlib.MAX_WBITS):
+        try:
+            engine = zlib.decompressobj(wbits)
+            out = engine.decompress(data, limit + 1)
+            if len(out) > limit or engine.unconsumed_tail:
+                continue
+            # Tolerate a truncated tail; the output stays bounded either way.
+            with contextlib.suppress(zlib.error):
+                out += engine.flush()
+        except zlib.error:
+            continue
+        if len(out) > limit:
+            continue
+        return out
+    return None
+
+
 def apply_filters(d, raw, doc=None):
     data = raw
     f = d.get("Filter")
@@ -332,67 +391,105 @@ def apply_filters(d, raw, doc=None):
         return data
     if isinstance(f, Name):
         f = [f]
+    if len(f) > MAX_FILTER_CHAIN:
+        raise PdfResourceLimitError("PDF filter chain exceeds the parser budget")
     parms = d.get("DecodeParms") or d.get("DP")
     if isinstance(parms, dict) or parms is None:
         parms = [parms]
     while isinstance(parms, list) and len(parms) < len(f):
         parms.append(None)
     for i, filt in enumerate(f):
+        budget = _decode_budget(doc)
         parm = parms[i] if i < len(parms) else None
         if isinstance(parm, Ref) and doc is not None:
             parm = doc.resolve(parm)
         filt = str(filt)
         if filt in ("FlateDecode", "Fl"):
-            try:
-                data = zlib.decompress(data)
-            except zlib.error:
-                try:
-                    data = zlib.decompressobj().decompress(data)
-                except zlib.error:
-                    try:
-                        data = zlib.decompressobj(-15).decompress(data)
-                    except zlib.error:
-                        data = b""
+            decoded = _bounded_inflate(data, budget)
+            data = decoded if decoded is not None else b""
         elif filt in ("LZWDecode", "LZW"):
-            data = lzw_decode(data)
+            data = lzw_decode(data, early=1, limit=budget)
         elif filt in ("ASCIIHexDecode", "AHx"):
             hx = re.sub(rb"[^0-9A-Fa-f]", b"", data.split(b">")[0])
             if len(hx) % 2:
                 hx += b"0"
             data = bytes.fromhex(hx.decode("ascii"))
         elif filt in ("ASCII85Decode", "A85"):
-            data = a85_decode(data)
+            data = a85_decode(data, limit=budget)
         elif filt in ("RunLengthDecode", "RL"):
-            data = rle_decode(data)
+            data = rle_decode(data, limit=budget)
         else:
             break  # image codecs (DCT/JPX/CCITT) are handled by pdfimage
+        if len(data) > budget:
+            return b""
+        # Charge each stage's output, so a chain of small expansions cannot
+        # stay under the per-stream cap while working past the document budget.
+        if doc is not None:
+            doc._decoded_bytes = getattr(doc, "_decoded_bytes", 0) + len(data)
         if parm and isinstance(parm, dict):
-            data = apply_predictor(data, parm)
+            data = apply_predictor(data, parm, limit=_decode_budget(doc))
+            if len(data) > _decode_budget(doc):
+                return b""
     return data
 
 
-def apply_predictor(data, parm):
+_VALID_BITS_PER_COMPONENT = (1, 2, 4, 8, 16)
+
+
+def _predictor_dimension(parm, key, default, cap, allowed=None):
+    """One predictor dimension, or ``None`` when the file's value is unusable."""
+
+    if key not in parm:
+        return default
+    value = parm.get(key)
+    if (
+        isinstance(value, bool)
+        or not isinstance(value, int)
+        or value <= 0
+        or value > cap
+        or (allowed is not None and value not in allowed)
+    ):
+        return None
+    return value
+
+
+def apply_predictor(data, parm, limit=None):
     pred = parm.get("Predictor", 1)
-    if not isinstance(pred, int) or pred < 2:
+    if isinstance(pred, bool) or not isinstance(pred, int) or pred < 2:
         return data
-    colors = parm.get("Colors", 1) or 1
-    bpc = parm.get("BitsPerComponent", 8) or 8
-    columns = parm.get("Columns", 1) or 1
+    budget = MAX_DECODED_STREAM_BYTES
+    if limit is not None:
+        budget = min(limit, MAX_DECODED_STREAM_BYTES)
+    colors = _predictor_dimension(parm, "Colors", 1, MAX_PREDICTOR_COLORS)
+    bpc = _predictor_dimension(
+        parm, "BitsPerComponent", 8, 32, _VALID_BITS_PER_COMPONENT
+    )
+    columns = _predictor_dimension(parm, "Columns", 1, MAX_PREDICTOR_COLUMNS)
+    if colors is None or bpc is None or columns is None:
+        return b""
     bpp = max(1, (colors * bpc + 7) // 8)
     rowlen = (columns * colors * bpc + 7) // 8
+    # Never size a row allocation from the file: rowlen must fit the remaining
+    # budget, and a zero-row stream is malformed rather than padded.
+    if rowlen <= 0 or rowlen > MAX_PREDICTOR_ROW_BYTES or rowlen > budget:
+        return b""
     if pred == 2:
         return data
+    n = len(data)
+    if not n or n % (rowlen + 1):
+        return b""
     out = bytearray()
     prev = bytearray(rowlen)
     i = 0
-    n = len(data)
     while i < n:
         ft = data[i]
         i += 1
+        # A predictor stream is whole rows: a truncated final row and an
+        # undefined PNG selector are both malformed, not padded.
+        if i + rowlen > n:
+            return b""
         row = bytearray(data[i : i + rowlen])
         i += rowlen
-        if len(row) < rowlen:
-            row.extend(b"\x00" * (rowlen - len(row)))
         if ft == 1:
             for j in range(bpp, rowlen):
                 row[j] = (row[j] + row[j - bpp]) & 0xFF
@@ -412,12 +509,21 @@ def apply_predictor(data, parm):
                 pa, pb, pc = abs(p - a), abs(p - b), abs(p - c)
                 pr = a if (pa <= pb and pa <= pc) else (b if pb <= pc else c)
                 row[j] = (row[j] + pr) & 0xFF
+        elif ft != 0:
+            return b""
         out.extend(row)
+        if len(out) > budget:
+            return b""
         prev = row
     return bytes(out)
 
 
-def lzw_decode(data, early=1):
+def lzw_decode(data, early=1, limit=None):
+    budget = MAX_DECODED_STREAM_BYTES
+    if limit is not None:
+        budget = min(limit, MAX_DECODED_STREAM_BYTES)
+    if budget <= 0:
+        return b""
     out = bytearray()
     prev = None
     bitpos = 0
@@ -453,13 +559,20 @@ def lzw_decode(data, early=1):
                 entry = prev + prev[:1]
                 table.append(entry)
         out.extend(entry)
+        if len(out) > budget:
+            return b""
         prev = entry
         if len(table) + early >= (1 << codelen) and codelen < 12:
             codelen += 1
     return bytes(out)
 
 
-def a85_decode(data):
+def a85_decode(data, limit=None):
+    budget = MAX_DECODED_STREAM_BYTES
+    if limit is not None:
+        budget = min(limit, MAX_DECODED_STREAM_BYTES)
+    if budget <= 0:
+        return b""
     data = re.sub(rb"\s", b"", data)
     if data.startswith(b"<~"):
         data = data[2:]
@@ -472,6 +585,8 @@ def a85_decode(data):
         if data[i : i + 1] == b"z":
             out.extend(b"\x00\x00\x00\x00")
             i += 1
+            if len(out) > budget:
+                return b""
             continue
         chunk = data[i : i + 5]
         i += 5
@@ -484,10 +599,17 @@ def a85_decode(data):
             v.to_bytes(4, "big", signed=False) if v < (1 << 32) else b"\x00\x00\x00\x00"
         )
         out.extend(b4[: 4 - pad] if pad else b4)
+        if len(out) > budget:
+            return b""
     return bytes(out)
 
 
-def rle_decode(data):
+def rle_decode(data, limit=None):
+    budget = MAX_DECODED_STREAM_BYTES
+    if limit is not None:
+        budget = min(limit, MAX_DECODED_STREAM_BYTES)
+    if budget <= 0:
+        return b""
     out = bytearray()
     i = 0
     while i < len(data):
@@ -502,6 +624,8 @@ def rle_decode(data):
             if i < len(data):
                 out.extend(bytes([data[i]]) * (257 - l))
                 i += 1
+        if len(out) > budget:
+            return b""
     return bytes(out)
 
 
@@ -523,6 +647,9 @@ class Stream:
 
 class Document:
     def __init__(self, path):
+        size = os.path.getsize(path)
+        if size > MAX_NATIVE_DOCUMENT_BYTES:
+            raise PdfResourceLimitError("PDF exceeds the encoded size budget")
         with open(path, "rb") as f:
             self.buf = f.read()
         self.xref = {}
@@ -533,6 +660,7 @@ class Document:
         self._extra = {}  # objects recovered from /ObjStm by scanning
         self._objstm_indexed = False
         self._loading = set()
+        self._decoded_bytes = 0
         self._scan_all_xref()
         if not self.xref and not self.compressed:
             self._rebuild_xref()
@@ -559,6 +687,45 @@ class Document:
                     break
                 off2 = nxt
 
+    def _xref_stream_fields(self, obj):
+        """Validated ``(widths, index)`` for a cross-reference stream, or None.
+
+        Field widths and the index run come from the file, so each is bounded
+        before it can size a decode or a loop.
+        """
+
+        w = obj.dict.get("W")
+        if isinstance(w, Ref):
+            w = self.resolve(w)
+        if not isinstance(w, list) or not w:
+            return None
+        widths = []
+        for width in w:
+            if (
+                isinstance(width, bool)
+                or not isinstance(width, int)
+                or width < 0
+                or width > MAX_XREF_STREAM_FIELD_BYTES
+            ):
+                return None
+            widths.append(width)
+        if sum(widths) <= 0:
+            return None
+        index = obj.dict.get("Index") or [0, obj.dict.get("Size", 0)]
+        if isinstance(index, Ref):
+            index = self.resolve(index)
+        if not isinstance(index, list) or not index or len(index) % 2:
+            return None
+        entries = []
+        for value in index:
+            if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+                return None
+            entries.append(value)
+        total = sum(entries[k + 1] for k in range(0, len(entries) - 1, 2))
+        if total > MAX_XREF_ENTRIES:
+            return None
+        return widths, entries
+
     def _load_xref_at(self, off):
         if off < 0 or off >= len(self.buf):
             return False
@@ -580,7 +747,15 @@ class Document:
                 first, count = int(m.group(1)), int(m.group(2))
                 p.pos = m.end()
                 p.skip_ws()
+                end = len(self.buf)
+                if count > MAX_XREF_ENTRIES:
+                    return False
+                # A declared row count cannot exceed the rows the file can
+                # hold; never loop past EOF on an attacker-chosen count.
+                count = min(count, max(0, (end - p.pos) // 20 + 1))
                 for i in range(count):
+                    if p.pos >= end:
+                        break
                     ent = self.buf[p.pos : p.pos + 20]
                     em = re.match(rb"\s*(\d{1,10})\s+(\d{1,5})\s+([nf])", ent)
                     if not em:
@@ -599,14 +774,10 @@ class Document:
         if not isinstance(obj, Stream):
             return False
         self._merge_trailer(obj.dict)
-        w = obj.dict.get("W")
-        if not w:
+        fields = self._xref_stream_fields(obj)
+        if fields is None:
             return False
-        w = [int(x) for x in w]
-        index = obj.dict.get("Index") or [0, obj.dict.get("Size", 0)]
-        if isinstance(index, Ref):
-            index = self.resolve(index)
-        index = [int(x) for x in index]
+        w, index = fields
         data = obj.data
         sz = sum(w)
         pos = 0
@@ -722,12 +893,16 @@ class Document:
         for num in sorted(self.xref):
             try:
                 obj = self._parse_indirect_at(self.xref[num])
+            except PdfResourceLimitError:
+                raise
             except Exception:  # noqa: BLE001, S112 - a broken object is skipped.
                 continue
             if isinstance(obj, Stream) and obj.dict.get("Type") == "ObjStm":
                 try:
                     for onum, oobj in self._read_objstm(num).items():
                         self._extra.setdefault(onum, oobj)
+                except PdfResourceLimitError:
+                    raise
                 except Exception:  # noqa: BLE001, S112 - a broken stream is skipped.
                     continue
 

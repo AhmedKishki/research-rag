@@ -27,7 +27,11 @@ from bs4 import BeautifulSoup, Comment, NavigableString, Tag
 from ebooklib import epub
 
 from ..project.settings import BM25_STOPWORD_LANGUAGES, bm25_stopwords
-from .pdf_text_recovery import PdfRecoveryCache, recover_pdf_blocks
+from .pdf_text_recovery import (
+    PdfRecoveryCache,
+    close_pdf_recovery_cache,
+    recover_pdf_blocks,
+)
 from .sources import SourceFile, sha256_file
 from .text_normalization import (
     HORIZONTAL_SPACE,
@@ -1487,13 +1491,13 @@ def _extract_pdf(
     except Exception as exc:
         raise ExtractionError(f"Cannot open PDF source: {source.path}") from exc
 
+    recovery_cache: PdfRecoveryCache = {}
     try:
         if document.needs_pass:
             raise ExtractionError(
                 f"Password-protected PDF is unsupported: {source.path}"
             )
         metadata = document.metadata or {}
-        recovery_cache: PdfRecoveryCache = {}
         pages: list[tuple[list[_TextBlock], float, float]] = [
             (
                 _page_blocks(
@@ -1562,6 +1566,7 @@ def _extract_pdf(
                 )
             )
     finally:
+        close_pdf_recovery_cache(recovery_cache)
         document.close()
 
     if not units:
@@ -1684,8 +1689,15 @@ def scan_pdf_pages(
     source: SourceFile,
     start_index: int,
     page_count: int,
+    recovery_cache: PdfRecoveryCache | None = None,
 ) -> list[dict[str, Any]]:
-    """A consecutive page batch, from one PDF document handle."""
+    """A consecutive page batch, from one PDF document handle.
+
+    A caller staging a build passes one source-scoped ``recovery_cache`` for
+    every batch and closes it when the source is done, so the bundled native
+    reader parses the file once per source, not once per batch. Without a cache
+    this call owns a fresh one and closes it before returning.
+    """
 
     if start_index < 0:
         raise ValueError("start_index must be non-negative")
@@ -1696,19 +1708,18 @@ def scan_pdf_pages(
         document = pymupdf.open(source.path)
     except Exception as exc:
         raise ExtractionError(f"Cannot open PDF source: {source.path}") from exc
+    owns_cache = recovery_cache is None
+    cache: PdfRecoveryCache = recovery_cache if recovery_cache is not None else {}
     try:
         if document.needs_pass:
             raise ExtractionError(
                 f"Password-protected PDF is unsupported: {source.path}"
             )
         end_index = min(start_index + page_count, document.page_count)
-        recovery_cache: PdfRecoveryCache = {}
         scans: list[dict[str, Any]] = []
         for page_index in range(start_index, end_index):
             page = document.load_page(page_index)
-            blocks = _page_blocks(
-                page, source_path=source.path, recovery_cache=recovery_cache
-            )
+            blocks = _page_blocks(page, source_path=source.path, recovery_cache=cache)
             scans.append(
                 {
                     "page_index": page_index,
@@ -1730,6 +1741,8 @@ def scan_pdf_pages(
             )
         return scans
     finally:
+        if owns_cache:
+            close_pdf_recovery_cache(cache)
         document.close()
 
 

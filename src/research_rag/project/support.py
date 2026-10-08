@@ -914,9 +914,11 @@ SCHEMA_VERSION = 5
 # as needing only `layout_extraction` when its unit text also changed, so both move.
 # Version 11 recovers documented symbol-font glyphs and stops a formatting glyph
 # or a punctuation-only fragment from withholding or corrupting a passage.
-EXTRACTION_POLICY_VERSION = 11
+# Version 12 bounds native recovery resources and rejects incomplete predictor
+# rows, so extraction generated before those safeguards is not reused.
+EXTRACTION_POLICY_VERSION = 12
 
-CLEANING_POLICY_VERSION = 7
+CLEANING_POLICY_VERSION = 8
 
 ARTIFACT_POLICY_VERSION = 3
 
