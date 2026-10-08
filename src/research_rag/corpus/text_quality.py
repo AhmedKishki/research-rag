@@ -15,7 +15,7 @@ from __future__ import annotations
 import re
 import unicodedata
 from collections import Counter
-from collections.abc import Sequence
+from collections.abc import Iterator, Sequence
 
 from .text_normalization import (
     is_control_character,
@@ -182,12 +182,34 @@ def _unclean_character_count(value: str) -> int:
     return sum(_counts_as_unreadable(character) for character in value)
 
 
+def _pdf_lexical_spans(value: str) -> Iterator[tuple[int, int]]:
+    """Keep whitespace-free scripts local without splitting Latin words."""
+
+    unspaced = {"cjk", "japanese", "thai", "lao", "khmer", "myanmar"}
+    for match in re.finditer(r"\S+", value):
+        position = match.start()
+        while position < match.end():
+            end = position + 1
+            if _script_family(value[position]) in unspaced:
+                while end < match.end() and unicodedata.category(value[end]).startswith(
+                    "M"
+                ):
+                    end += 1
+            else:
+                while end < match.end() and _script_family(value[end]) not in unspaced:
+                    end += 1
+            yield position, end
+            position = end
+
+
 def clean_damaged_pdf_passage(value: str) -> tuple[str, int, list[dict[str, object]]]:
     """Remove damaged lexical tokens, without inventing or completing a word.
 
     The caller first attempts reversible encoding repair and native extraction.
     Unknown glyphs inside a word invalidate that entire token, not just the
     glyph. An explicit gap prevents the remaining words from looking contiguous.
+    Whitespace-free scripts are divided at script and combining-cluster boundaries,
+    so one bad glyph cannot invalidate an otherwise readable CJK paragraph.
     Offsets refer to the supplied, post-repair paragraph. Lost characters exclude
     whitespace and include all readable characters removed with the bad token.
     """
@@ -196,26 +218,26 @@ def clean_damaged_pdf_passage(value: str) -> tuple[str, int, list[dict[str, obje
     pieces: list[str] = []
     position = 0
     lost = 0
-    for token in re.finditer(r"\S+", value):
-        text = token.group()
+    for start, end in _pdf_lexical_spans(value):
+        text = value[start:end]
         reasons = text_corruption_reasons(text)
         if any(_counts_as_unreadable(character) for character in text):
             reasons = list(dict.fromkeys([*reasons, "unreadable_characters"]))
         if not reasons:
             continue
-        pieces.append(value[position : token.start()])
+        pieces.append(value[position:start])
         pieces.append(" [...] ")
         size = sum(not character.isspace() for character in text)
         lost += size
         spans.append(
             {
-                "start": token.start(),
-                "end": token.end(),
+                "start": start,
+                "end": end,
                 "lost_characters": size,
                 "reasons": reasons,
             }
         )
-        position = token.end()
+        position = end
     if not spans:
         return value, 0, []
     pieces.append(value[position:])

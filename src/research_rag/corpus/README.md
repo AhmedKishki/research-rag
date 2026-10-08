@@ -90,11 +90,12 @@ What is on disk, how it is read, and what a file's text says about itself.
   span offsets, and lost characters without repeating damaged text.
   `cleaned_passage_count` records lossless repairs and local partial cleanups;
   `cleaned_corrupt_span_count` and `partially_cleaned_passage_count` separate those
-  from whole omissions. `substantive_character_count` counts the text a document
-  keeps after known furniture and symbol-only non-evidence are removed;
+  from whole omissions. `substantive_character_count` counts retained and discarded
+  substantive characters after known furniture and symbol-only non-evidence are removed;
   `discarded_corrupt_character_count` counts what it lost, and
   `unclean_character_rate` is that loss as a share of the substantive text. The rate
-  is disclosure, not acceptance. A unit is withheld whole only when it has no
+  is rounded for disclosure; acceptance compares the exact character counts.
+  A unit is withheld whole only when it has no
   readable paragraph.
 - A paragraph with no alphanumeric content and no corruption evidence is
   non-evidence, not corruption: `excluded_symbol_only_passages` records its unit,

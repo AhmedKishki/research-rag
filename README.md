@@ -85,7 +85,7 @@ research-rag --project-root "/path/to/project" doctor --mcp-entry
 - `research-rag help TOPIC`: workflow guidance for `agents`, `filters`, or `settings`.
 - Extraction is text only. A PDF with a text layer is indexed as that text; a PDF with no text layer or a password is refused.
   - Scanned PDFs need OCR performed outside this app. Add the recognised copy to the sources directory and run `ingest`.
-  - Cleaning runs per passage: a passage whose extracted text is unreadable is withheld and reported, and the readable passages index normally. No source is refused for the share it lost.
+  - PDF cleaning repairs passages locally and leaves visible gaps where damaged text cannot be recovered. `ingestion.maximum_unclean_percent` caps substantive text loss per document, excluding confirmed furniture and non-evidence. Over-budget or unreadable PDFs are omitted from a retained partial generation, not used to fail otherwise readable sources.
 - [Features and limits](FEATURES.md), [storage and portability](STORAGE.md), [measurement protocols](MEASUREMENTS.md).
 
 ## UltraRAG credit and licensing

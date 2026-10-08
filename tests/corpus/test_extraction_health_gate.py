@@ -732,7 +732,7 @@ def test_the_gate_records_a_cleaned_span_and_an_omitted_symbol_passage() -> None
 
     assert [unit["contents"] for unit in retained] == [
         "A page that reads as ordinary argument about labour and time.",
-        "[...] corrupted ൠ؞༽൷㜭ᡀ࣏",
+        "[...] 䘉Ӌਁ corrupted ൠ؞༽൷㜭ᡀ࣏",
     ]
     # The irrecoverable token and its replacement marks are gone; the valid
     # words that shared the passage are not.
@@ -747,9 +747,9 @@ def test_the_gate_records_a_cleaned_span_and_an_omitted_symbol_passage() -> None
     assert cleaned["unit_id"] == units[1]["id"]
     assert cleaned["passage_index"] == 0
     assert cleaned["locator"] == units[1]["locator"]
-    assert cleaned["lost_characters"] == 10
+    assert cleaned["lost_characters"] == 7
     assert cleaned["removed_spans"][0]["start"] == 0
-    assert cleaned["removed_spans"][0]["end"] == 10
+    assert cleaned["removed_spans"][0]["end"] == 7
     assert "contents" not in cleaned and "text" not in cleaned
     assert document["excluded_symbol_only_unit_count"] == 1
     assert document["excluded_symbol_only_units"][0]["locator"]["page"] == 3
@@ -809,7 +809,7 @@ def test_a_damaged_passage_in_a_long_source_is_cleaned_locally_not_refused() -> 
     assert [unit["contents"] for unit in retained] == [
         ordinary,
         ordinary,
-        "[...] corrupted ൠ؞༽൷㜭ᡀ࣏",
+        "[...] 䘉Ӌਁ corrupted ൠ؞༽൷㜭ᡀ࣏",
     ]
     assert "\ufffd" not in _combined(retained)
     assert document["excluded_corrupt_unit_count"] == 0
@@ -901,7 +901,7 @@ def test_a_huge_cumulative_loss_refuses_a_source_with_a_readable_minority() -> N
 
     Twenty damaged pages beside one readable page leave a readable minority, and
     the old unit rule kept the file for it. The budget now states what the file
-    cost: 200 of 563 substantive characters were discarded, far over one percent,
+    cost: 140 of 563 substantive characters were discarded, far over one percent,
     so the source is omitted rather than published with the hole in it.
     """
 
@@ -919,7 +919,7 @@ def test_a_huge_cumulative_loss_refuses_a_source_with_a_readable_minority() -> N
 
     assert "document budget" in str(failure.value)
     assert document["substantive_character_count"] == 563
-    assert document["discarded_corrupt_character_count"] == 200
+    assert document["discarded_corrupt_character_count"] == 140
 
 
 def test_a_clean_unit_does_not_excuse_a_loss_over_the_budget() -> None:
@@ -947,7 +947,7 @@ def test_a_clean_unit_does_not_excuse_a_loss_over_the_budget() -> None:
         )
 
     assert "document budget" in str(failure.value)
-    assert document["discarded_corrupt_character_count"] == 10
+    assert document["discarded_corrupt_character_count"] == 7
     assert document["excluded_symbol_only_unit_count"] == 1
     assert document["excluded_corrupt_passage_count"] == 0
 
