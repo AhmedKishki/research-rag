@@ -10,11 +10,18 @@ What is on disk, how it is read, and what a file's text says about itself.
 | `text_quality.py` | Whether a string is usable: corruption, scripts, the flags a chunk carries, which paragraphs belong to a non-argument section, and whether a whole source is readable |
 | `pdf_text_recovery.py` | Automatic native-text retries for unhealthy PDF blocks, matched by page geometry |
 | `pdf_native/` | The bundled text-only PDF content-stream interpreter adapted from pdf-tools; no OCR, rendering, or image export |
+| `pdf_backend.py` | The PDF backend registry: the default bundled reader or the optional Docling worker, its resource boundary, availability and its reuse fingerprint |
+| `docling_env.py` | The managed, versioned Docling environment: lazy first-use install under a bounded lock and cgroup, spec/ABI completion manifest, atomic publish, and the isolated worker bootstrap |
+| `docling_worker.py` | The bounded subprocess entry point; verifies its cgroup before importing Docling and never runs in the parent |
+| `docling_adapter.py` | Pure conversion of a Docling export into units: physical page locators, every provenance character span, caption-only figures, and furniture exclusion |
 
 ## Rules
 
 - `text_normalization.py` and `text_quality.py` import only the standard library and each other. A module asking whether text is readable imports `text_quality` and no PDF or EPUB reader.
 - `extraction.py` may not decide what a source is. That is `sources.py`'s.
+- `docling_adapter.py` imports neither Docling nor a PDF library; it reads a plain mapping. `docling_worker.py` imports Docling only inside its `run`, after the resource-boundary check, and the parent process imports neither.
+- An offline Docling extraction never fetches and fails closed on a missing model; an online extraction may fetch one lazily on its first call, inside the verified worker. An online first use also builds the managed environment through `docling_env.py`; an offline run with no ready environment fails closed. `doctor --prefetch-models` provisions both ahead of an offline run.
+- The managed environment is separate from the app's own: its interpreter is run isolated (`-I`) with only the shipped worker pointed at from the app source, so the app's site-packages never reach it and Docling never enters the app's environment.
 - `pymupdf.no_recommend_layout()` runs at import of `extraction.py`, so importing that module has a cost.
 - The stored flags a chunk carries (`text_quality.CHUNK_FLAG_*`) and the token
   `extraction.py` writes into `quality_flags` are one contract:

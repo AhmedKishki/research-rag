@@ -91,6 +91,37 @@ obligations therefore apply to anyone who distributes or operates a covered
 combination of them with this app, independently of this repository's own
 license. The repository's own license terms do not change those obligations.
 
+OPTIONAL DOCLING PDF BACKEND
+
+`ingestion.pdf_backend=docling` is opt-in and installs the `docling` extra. The
+default installation does not carry it.
+
+    Docling 2.135.0 (MIT License)
+    https://pypi.org/project/docling/
+    https://github.com/docling-project/docling
+
+    rapidocr 3.9.1 (Apache License 2.0)
+    https://pypi.org/project/rapidocr/
+    https://github.com/RapidAI/RapidOCR
+
+The pins are explicit because docling 2.135.0 imports a symbol rapidocr 3.10.0
+removed, so docling and rapidocr 3.9.1 install together even though this app runs
+with OCR disabled.
+
+Docling is not installed with this app. When `ingestion.pdf_backend=docling` is
+selected, the app builds a separate, pinned virtual environment for it under the
+user cache on first use, and runs it there; the app's own environment never
+carries Docling. Docling resolves its own Python dependency chain, which carries
+packages under their own licenses; this repository makes no claim about them and
+does not relicense them. An online run may fetch Docling's own layout and table
+model artifacts to a local cache lazily on first use, inside the bounded worker;
+an offline run never fetches them. Those model files are separate works under
+their own licenses, are not redistributed here, and must be reviewed against the
+intended use before redistribution. Docling is imported only inside that
+separate, resource-bounded worker process; it is never imported into this app's
+own process, and OCR, VLM, and enrichment models are disabled in the
+configuration this app supplies.
+
 LICENSE OF THIS REPOSITORY
 
 The code in this repository is licensed under the Apache License, Version 2.0.

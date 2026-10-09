@@ -33,6 +33,12 @@ if TYPE_CHECKING:
 DEFAULT_RETRIEVAL_METHOD = "hybrid"
 RETRIEVAL_METHODS = frozenset({"bm25", "dense", "hybrid"})
 
+#: The PDF-extraction backend a generation with no recorded backend carries. It is
+#: the legacy default, so recording a backend does not by itself invalidate an
+#: existing corpus. It lives here, in a module that pulls no retrieval stack, so
+#: lightweight commands can compare it without importing one.
+DEFAULT_PDF_BACKEND_FINGERPRINT = "pdf-backend:custom:v1"
+
 
 class ResearchError(RuntimeError):
     """User-facing research workflow failure."""

@@ -555,3 +555,54 @@ def test_the_report_serializes_to_the_status_fields(healthy: ResearchConfig) -> 
         "reason": "fine",
         "remedy": None,
     }
+
+
+def test_docling_backend_readiness_is_reported(
+    project: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config = _isolated(
+        project, tmp_path, settings_overrides=["ingestion.pdf_backend=docling"]
+    )
+
+    env = SimpleNamespace(root=tmp_path / "env", versions={"docling": "2.135.0"})
+
+    # Environment ready, models absent, online: a lazy fetch is described.
+    monkeypatch.setattr(health_module, "resolve_docling_env", lambda _config: env)
+    monkeypatch.setattr(health_module, "docling_cache_has_models", lambda _root: False)
+    check = _report(config).named("docling_backend")
+    assert check is not None and check.state == "warn"
+    assert "--prefetch-models" in (check.remedy_command or "")
+    assert "lazily" in check.reason
+
+    # Environment ready, models absent, offline: it cannot fetch.
+    offline = _isolated(
+        project,
+        tmp_path,
+        settings_overrides=["ingestion.pdf_backend=docling", "runtime.offline=true"],
+    )
+    check = _report(offline).named("docling_backend")
+    assert check is not None and check.state == "warn"
+    assert "cannot fetch" in check.reason
+
+    # No environment, online: it is built lazily on first use.
+    monkeypatch.setattr(health_module, "resolve_docling_env", lambda _config: None)
+    check = _report(config).named("docling_backend")
+    assert check is not None and check.state == "warn"
+    assert "lazily" in check.reason
+    assert _report(config).blocked_by == []
+
+    # No environment, offline: it must be provisioned.
+    check = _report(offline).named("docling_backend")
+    assert check is not None and check.state == "warn"
+    assert "runtime.offline forbids" in check.reason
+
+    # Environment ready and models cached.
+    monkeypatch.setattr(health_module, "resolve_docling_env", lambda _config: env)
+    monkeypatch.setattr(health_module, "docling_cache_has_models", lambda _root: True)
+    check = _report(config).named("docling_backend")
+    assert check is not None and check.state == "ok"
+
+
+def test_custom_backend_adds_no_docling_check(healthy: ResearchConfig) -> None:
+    with pytest.raises(KeyError):
+        _report(healthy).named("docling_backend")

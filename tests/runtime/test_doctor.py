@@ -295,6 +295,62 @@ def test_prefetch_reports_what_it_cached(
     assert any("MiniLM" in line for line in lines)
 
 
+def test_prefetch_provisions_the_selected_docling_backend(
+    config: ResearchConfig, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from dataclasses import replace
+
+    import research_rag.corpus.pdf_backend as pdf_backend_module
+    import research_rag.retrieval.dense as dense_module
+
+    monkeypatch.setattr(dense_module, "_load_embedder", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(
+        dense_module, "_load_cross_encoder", lambda *_args, **_kwargs: None
+    )
+    calls: list[object] = []
+    monkeypatch.setattr(
+        pdf_backend_module,
+        "prefetch_docling_models",
+        lambda cfg, **_kwargs: calls.append(cfg) or {"version": "2.135.0"},
+    )
+    docling_config = replace(
+        config, settings=replace(config.settings, pdf_backend="docling")
+    )
+
+    lines = doctor_module.prefetch_models(docling_config)
+
+    assert calls == [docling_config]
+    assert any("Provisioned the managed Docling environment" in line for line in lines)
+
+
+def test_prefetch_reports_a_failed_docling_environment_actionably(
+    config: ResearchConfig, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from dataclasses import replace
+
+    import research_rag.corpus.docling_env as docling_env_module
+    import research_rag.corpus.pdf_backend as pdf_backend_module
+    import research_rag.retrieval.dense as dense_module
+
+    monkeypatch.setattr(dense_module, "_load_embedder", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(
+        dense_module, "_load_cross_encoder", lambda *_args, **_kwargs: None
+    )
+
+    def fail(_config):
+        raise docling_env_module.DoclingEnvironmentError("uv is not on PATH")
+
+    monkeypatch.setattr(pdf_backend_module, "prefetch_docling_models", fail)
+    docling_config = replace(
+        config, settings=replace(config.settings, pdf_backend="docling")
+    )
+
+    lines = doctor_module.prefetch_models(docling_config)
+
+    assert any("Docling environment could not be built" in line for line in lines)
+    assert any("uv is not on PATH" in line for line in lines)
+
+
 def test_prefetch_clears_the_model_cache_warnings(
     config: ResearchConfig, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -697,3 +753,30 @@ def test_the_entry_check_reports_without_reading_the_project(
 
     assert result.exit_code == 0
     assert "ok" in result.text()
+
+
+def test_run_doctor_prefetch_includes_docling_provisioning(
+    config: ResearchConfig, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from dataclasses import replace
+
+    import research_rag.corpus.pdf_backend as pdf_backend_module
+    import research_rag.retrieval.dense as dense_module
+
+    monkeypatch.setattr(dense_module, "_load_embedder", lambda *_a, **_k: None)
+    monkeypatch.setattr(dense_module, "_load_cross_encoder", lambda *_a, **_k: None)
+    monkeypatch.setattr(
+        pdf_backend_module,
+        "prefetch_docling_models",
+        lambda _cfg, **_k: {"version": "2.135.0"},
+    )
+    docling_config = replace(
+        config, settings=replace(config.settings, pdf_backend="docling")
+    )
+
+    result = run_doctor(docling_config, dict(READY_STATUS), running=[], prefetch=True)
+
+    assert any(
+        "Provisioned the managed Docling environment" in line for line in result.lines
+    )
+    assert any("docling_backend" in line for line in result.lines)

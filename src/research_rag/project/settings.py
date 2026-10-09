@@ -59,6 +59,10 @@ FULL_TOOL_DETAIL = "full"
 TOOL_DETAIL_MODES = (LEAN_TOOL_DETAIL, FULL_TOOL_DETAIL)
 LOG_LEVELS = ("debug", "info", "warn", "error")
 DENSE_BACKENDS = ("auto", "exact", "qdrant")
+# Which reader turns a PDF into extraction units. `custom` is the bundled
+# text-only reader; `docling` is the optional, resource-bounded backend. The
+# names live here so the registry and the backend module agree on one source.
+PDF_BACKEND_CHOICES = ("custom", "docling")
 DEFAULT_LANGUAGE = "en"
 LANGUAGE_PATTERN = r"^[a-z]{2,3}$"
 # The longest one ingest call may be told to run. A caller driving a build in one
@@ -710,6 +714,27 @@ SETTINGS: tuple[Setting, ...] = (
         env="RESEARCH_RAG_INGESTION_PDF_PAGE_BATCH_SIZE",
     ),
     Setting(
+        key="ingestion.pdf_backend",
+        field="pdf_backend",
+        kind=str,
+        layer="identity",
+        normalize_case=True,
+        doc=(
+            "Which reader turns a PDF into extraction units. 'custom' is this "
+            "app's bundled text-only reader and the default. 'docling' converts "
+            "through a separate resource-bounded Docling worker with OCR, VLM, "
+            "and every enrichment disabled. Docling is not part of the app "
+            "install: an online first use builds a pinned managed environment "
+            "and fetches models lazily, inside the verified worker, and an "
+            "offline run needs it or fails closed. Both backends reach the same "
+            "text-quality gate with the project's own loss budget. Changing this "
+            "rebuilds PDF extraction; a generation built before it existed is "
+            "'custom'."
+        ),
+        choices=PDF_BACKEND_CHOICES,
+        env="RESEARCH_RAG_INGESTION_PDF_BACKEND",
+    ),
+    Setting(
         key="dense.backend",
         field="dense_backend",
         kind=str,
@@ -862,6 +887,7 @@ class EffectiveSettings:
     maximum_unclean_percent: float
     embedding_batch_size: int
     pdf_page_batch_size: int
+    pdf_backend: str
     dense_backend: str
     embedding_model: str
     reranker_model: str

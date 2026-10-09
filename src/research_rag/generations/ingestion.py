@@ -13,9 +13,15 @@ from typing import Any
 
 import numpy as np
 
+from ..corpus.docling_env import (
+    DoclingEnvironmentError,
+    ensure_docling_env,
+    resolve_docling_env,
+)
 from ..corpus.extraction import (
     REMOVAL_FIELDS,
     ExtractionError,
+    docling_pdf_batch,
     empty_removal_counts,
     extract_epub_spine_item,
     extract_scanned_pdf_pages,
@@ -25,6 +31,14 @@ from ..corpus.extraction import (
     prepare_scanned_pdf,
     scan_pdf_pages,
     screen_source_units,
+)
+from ..corpus.pdf_backend import (
+    PDF_BACKEND_DOCLING,
+    effective_maximum_unclean_percent,
+    normalize_pdf_backend,
+    pdf_backend_fingerprint,
+    pdf_backend_record,
+    recorded_pdf_backend_fingerprint,
 )
 from ..corpus.pdf_text_recovery import PdfRecoveryCache, close_pdf_recovery_cache
 from ..corpus.sources import (
@@ -121,6 +135,46 @@ class _SourceChangedDuringIngest(RuntimeError):
 
 
 class IngestionWorkflow:
+    @property
+    def _pdf_backend(self) -> str:
+        return normalize_pdf_backend(self.config.settings.pdf_backend)
+
+    @property
+    def _pdf_backend_fingerprint(self) -> str:
+        return pdf_backend_fingerprint(self._pdf_backend, self.config)
+
+    def _pdf_backend_matches_snapshot(
+        self,
+        manifest: dict[str, Any],
+        selected_paths: list[str],
+        sources_by_path: dict[str, SourceFile],
+    ) -> bool:
+        """Whether the snapshot's recorded backend may serve the selected PDFs.
+
+        A PDF's units are backend-specific and are never reused across a backend
+        change. An EPUB or a corpus with no selected PDF is unaffected, so the
+        generation as a whole stays eligible for source-independent reuse.
+        """
+
+        has_pdf = any(
+            (source := sources_by_path.get(path)) is not None
+            and source.extension == ".pdf"
+            for path in selected_paths
+        )
+        if not has_pdf:
+            return True
+        return (
+            recorded_pdf_backend_fingerprint(manifest) == self._pdf_backend_fingerprint
+        )
+
+    def _effective_pdf_loss_limit(self) -> float:
+        """The loss budget the shared gate applies for the selected backend."""
+
+        return effective_maximum_unclean_percent(
+            self._pdf_backend,
+            self.config.settings.maximum_unclean_percent,
+        )
+
     def _select_build_dense_backend(self, chunk_count: int) -> str:
         """Choose the dense backend for a new generation.
 
@@ -235,21 +289,36 @@ class IngestionWorkflow:
                             next_index,
                             page_batch_size,
                         )
-                        source_total = (batch_total * 2) + 2
-                        if extraction_stage == "pdf_scan":
-                            source_completed = completed_batches
-                        elif extraction_stage == "pdf_prepare":
-                            source_completed = batch_total
-                        elif extraction_stage == "pdf_pages":
-                            source_completed = batch_total + 1 + completed_batches
-                        elif extraction_stage == "finalize":
-                            source_completed = (batch_total * 2) + 1
-                        elif extraction_stage == "complete":
-                            source_completed = source_total - int(
-                                relative not in extracted_paths
-                            )
+                        if state.get("docling"):
+                            # The Docling path has one pass over the page batches,
+                            # then finalize.
+                            source_total = batch_total + 2
+                            if extraction_stage == "docling_pages":
+                                source_completed = completed_batches
+                            elif extraction_stage == "finalize":
+                                source_completed = batch_total + 1
+                            elif extraction_stage == "complete":
+                                source_completed = source_total - int(
+                                    relative not in extracted_paths
+                                )
+                            else:
+                                return
                         else:
-                            return
+                            source_total = (batch_total * 2) + 2
+                            if extraction_stage == "pdf_scan":
+                                source_completed = completed_batches
+                            elif extraction_stage == "pdf_prepare":
+                                source_completed = batch_total
+                            elif extraction_stage == "pdf_pages":
+                                source_completed = batch_total + 1 + completed_batches
+                            elif extraction_stage == "finalize":
+                                source_completed = (batch_total * 2) + 1
+                            elif extraction_stage == "complete":
+                                source_completed = source_total - int(
+                                    relative not in extracted_paths
+                                )
+                            else:
+                                return
                     elif source_format == "epub" and extraction_stage == "epub_items":
                         source_total = unit_total + 2
                         source_completed = next_index + 1
@@ -826,6 +895,7 @@ class IngestionWorkflow:
             force_recompute=force_recompute,
             embedding=self.config.settings.embedding_facts,
             maximum_unclean_percent=self.config.settings.maximum_unclean_percent,
+            pdf_backend_fingerprint=self._pdf_backend_fingerprint,
         )
         now = _utc_now()
         checkpoint: dict[str, Any] = {
@@ -1139,6 +1209,11 @@ class IngestionWorkflow:
                     and not snapshot.manifest.get("build_metrics", {}).get(
                         "skipped_sources"
                     )
+                    # A corpus that selects a PDF under a different backend is not
+                    # unchanged; an EPUB-only corpus still is.
+                    and self._pdf_backend_matches_snapshot(
+                        snapshot.manifest, selected_paths, sources_by_path
+                    )
                     and source_set_matches(
                         snapshot,
                         records,
@@ -1250,6 +1325,14 @@ class IngestionWorkflow:
                         == METADATA_STORAGE_POLICY
                         and document_id in snapshot.units_by_document
                         and document_id in snapshot.chunks_by_document
+                        # A PDF's units are backend-specific: never reuse them
+                        # across a backend change, whatever else matches. EPUB
+                        # units are unaffected and stay reusable.
+                        and (
+                            source.extension != ".pdf"
+                            or recorded_pdf_backend_fingerprint(snapshot.manifest)
+                            == self._pdf_backend_fingerprint
+                        )
                     )
                     if (
                         reusable
@@ -1283,9 +1366,13 @@ class IngestionWorkflow:
                             if budget_expired():
                                 return self._in_progress_result(checkpoint)
                             continue
+                        docling = self._pdf_backend == PDF_BACKEND_DOCLING
                         state = {
                             "reused": False,
-                            "extraction_stage": "pdf_scan",
+                            "docling": docling,
+                            "extraction_stage": (
+                                "docling_pages" if docling else "pdf_scan"
+                            ),
                             "next_index": 0,
                             "total": total,
                             "page_batch_size": self.config.settings.pdf_page_batch_size,
@@ -1301,7 +1388,7 @@ class IngestionWorkflow:
                                 _pdf_batch_count(
                                     total, self.config.settings.pdf_page_batch_size
                                 )
-                                * 2
+                                * (1 if docling else 2)
                             )
                             + 2
                         )
@@ -1450,6 +1537,79 @@ class IngestionWorkflow:
                         int(checkpoint.get("extraction_work_completed") or 0) + 1
                     )
                     atomic_write_json(state_path, state)
+                elif extraction_stage == "docling_pages":
+                    index = int(state["next_index"])
+                    total = int(state["total"])
+                    page_batch_size = int(state.get("page_batch_size") or 1)
+                    end_index = min(index + page_batch_size, total)
+                    document_path = artifact_root / "document.json"
+                    existing_document = (
+                        read_json(document_path) if document_path.exists() else None
+                    )
+                    docling_env = getattr(
+                        self, "_docling_env", None
+                    ) or resolve_docling_env(self.config)
+                    if docling_env is None:
+                        raise DoclingEnvironmentError(
+                            "the managed Docling environment was not resolved "
+                            "before the PDF batches began."
+                        )
+                    prepared_batch = await extract_source(
+                        docling_pdf_batch,
+                        source,
+                        existing_document,
+                        index,
+                        end_index,
+                        digest=source_digest,
+                        offline=self.config.offline,
+                        model_cache_root=self.config.model_cache_root,
+                        docling_env=docling_env,
+                        total_pages=total,
+                    )
+                    if prepared_batch is None:
+                        if budget_expired():
+                            return self._in_progress_result(checkpoint)
+                        continue
+                    pages, document, batch_empty, batch_removals, batch_diagnostics = (
+                        prepared_batch
+                    )
+                    if not document_path.exists():
+                        atomic_write_json(document_path, document)
+                    accumulated_diagnostics = {
+                        str(key): int(value)
+                        for key, value in (
+                            state.get("docling_diagnostics") or {}
+                        ).items()
+                    }
+                    for key, value in batch_diagnostics.items():
+                        accumulated_diagnostics[key] = int(
+                            accumulated_diagnostics.get(key) or 0
+                        ) + int(value)
+                    state["docling_diagnostics"] = accumulated_diagnostics
+                    # Write one batch file per page in the range, empty included,
+                    # so finalize reads a complete sequence whatever the worker
+                    # emitted for a blank page.
+                    for page_index in range(index, end_index):
+                        atomic_write_jsonl(
+                            artifact_root / "unit-batches" / f"{page_index:08d}.jsonl",
+                            pages.get(page_index, []),
+                            fsync_parent=False,
+                        )
+                    fsync_directories([artifact_root / "unit-batches"])
+                    state["removals"] = merge_removal_counts(
+                        state.get("removals"), batch_removals
+                    )
+                    state["empty_units"] = int(state.get("empty_units") or 0) + int(
+                        batch_empty
+                    )
+                    state["next_index"] = end_index
+                    checkpoint["extraction_work_completed"] = (
+                        int(checkpoint.get("extraction_work_completed") or 0) + 1
+                    )
+                    if end_index >= total:
+                        state["extraction_stage"] = "finalize"
+                        state["next_index"] = 0
+                    atomic_write_json(state_path, state)
                 elif extraction_stage in {"pdf_pages", "epub_items"}:
                     index = int(state["next_index"])
                     total = int(state["total"])
@@ -1528,6 +1688,11 @@ class IngestionWorkflow:
                         )
                     document = read_json(artifact_root / "document.json")
                     document["empty_units"] = int(state.get("empty_units") or 0)
+                    if state.get("docling_diagnostics"):
+                        document["docling_diagnostics"] = {
+                            str(key): int(value)
+                            for key, value in state["docling_diagnostics"].items()
+                        }
                     removals = {
                         key: int(value)
                         for key, value in (state.get("removals") or {}).items()
@@ -1539,9 +1704,7 @@ class IngestionWorkflow:
                         document,
                         units,
                         removals=removals,
-                        maximum_unclean_percent=(
-                            self.config.settings.maximum_unclean_percent
-                        ),
+                        maximum_unclean_percent=self._effective_pdf_loss_limit(),
                     )
                     if retained is None:
                         if budget_expired():
@@ -2298,8 +2461,20 @@ class IngestionWorkflow:
                         checkpoint.get("excluded_corrupt_unit_count") or 0
                     ),
                     "passage_cleaning": {
+                        # The configured budget is the identity a rebuild reads;
+                        # the effective budget is what the shared gate actually
+                        # applied for the selected backend. Both readers use the
+                        # project budget. Reuse compares the configured value, so a
+                        # legacy manifest with only that key stays compatible.
                         "maximum_unclean_percent": self.config.settings.maximum_unclean_percent,
+                        "effective_maximum_unclean_percent": (
+                            self._effective_pdf_loss_limit()
+                        ),
+                        "pdf_backend": self._pdf_backend,
                     },
+                    "extraction_backend": pdf_backend_record(
+                        self.config.settings.pdf_backend, self.config
+                    ),
                     "chunking": {
                         "backend": "UltraRAG token chunker",
                         "tokenizer": "gpt2",
@@ -2727,6 +2902,16 @@ class IngestionWorkflow:
             )
             exclusion_revision = value_fingerprint(exclusions)
             inventory = _source_inventory(scan)
+            # Resolve the managed Docling environment before any fingerprint or
+            # checkpoint identity is computed, so a first-use install cannot move
+            # the build's identity mid-build. An offline run with no environment
+            # fails closed here rather than during a source batch.
+            if self._pdf_backend == PDF_BACKEND_DOCLING and any(
+                source.extension == ".pdf" for source in selected
+            ):
+                self._docling_env = await _atomic_to_thread(
+                    ensure_docling_env, self.config
+                )
             identity = _checkpoint_identity(
                 project_id=self.config.project_id,
                 inventory=inventory,
@@ -2738,6 +2923,7 @@ class IngestionWorkflow:
                 force_recompute=force_recompute,
                 embedding=self.config.settings.embedding_facts,
                 maximum_unclean_percent=self.config.settings.maximum_unclean_percent,
+                pdf_backend_fingerprint=self._pdf_backend_fingerprint,
             )
             recovered = await self._recover_pending_activation(
                 expected_identity=identity,
