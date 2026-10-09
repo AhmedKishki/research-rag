@@ -21,6 +21,11 @@ import asyncio
 from pathlib import Path
 from typing import Any
 
+from ..corpus.pdf_backend import (
+    pdf_backend_available,
+    pdf_backend_fingerprint,
+    recorded_pdf_backend_fingerprint,
+)
 from ..corpus.sources import (
     ALLOWED_SOURCE_EXTENSIONS,
     SourcePolicyError,
@@ -81,6 +86,25 @@ def generation_upgrade_reasons(
         config.settings.maximum_unclean_percent
     ):
         reasons.append("passage_cleaning")
+    # A backend change makes a future build differ, but a selected optional
+    # backend that is not installed cannot run that build: it is a readiness
+    # warning for the next ingest, not a reason an existing servable generation
+    # is reported as needing one.
+    source_files = manifest.get("source_files")
+    has_pdf = not isinstance(source_files, list) or any(
+        str(item.get("source_relative_path") or "").casefold().endswith(".pdf")
+        for item in source_files
+        if isinstance(item, dict)
+    )
+    if (
+        has_pdf
+        and pdf_backend_available(config.settings.pdf_backend, config)
+        and (
+            recorded_pdf_backend_fingerprint(manifest)
+            != pdf_backend_fingerprint(config.settings.pdf_backend, config)
+        )
+    ):
+        reasons.append("extraction_backend")
     if int(manifest.get("artifact_policy_version") or 0) != ARTIFACT_POLICY_VERSION:
         reasons.append("generation_artifacts")
     if manifest.get("metadata_storage_policy") != METADATA_STORAGE_POLICY:

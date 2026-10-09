@@ -57,6 +57,7 @@
 - Preserve `USER_CONFIG_DIRECTORY = research-rag`, `SETTINGS_ENVIRONMENT_PREFIX = RESEARCH_RAG_`, and the `research-rag` model cache.
   - Do not use these names for another product. `tests/project/test_data_roots.py` covers them.
 - Pins live in `pyproject.toml` and `gateway/manifest.py`.
+  - `corpus/docling_env.py` owns the separately installed Docling runtime pins.
   - Keep the `bm25s` non-ASCII stopword fork until upstream fixes round-tripping. Reject invalid lists promptly.
   - `_pdf_locator` falls back to the physical page on `Page.get_label()`'s `IndexError`. Narrow the guard when upstream issue 5140 closes.
 
@@ -95,7 +96,7 @@
   - Without an app, answer local-state operations in process.
 - Keep project artifacts under `<project>/.research-rag`, including namespaced pid, port, and lock files.
   - `STORAGE.md` owns runtime relocation and its marker.
-  - Share only immutable model binaries through the user cache, never corpus, index, log, or query state.
+  - Share only immutable model binaries and versioned dependency runtimes through the user cache, never corpus, index, log, or query state.
 - Preserve deterministic IDs, normalized source-relative paths, and locators.
   - `source_id` survives byte changes. `document_id` identifies path plus content version.
   - Chunk IDs can change with text or chunking. Document and chunk IDs need not survive incompatible generations.
@@ -180,6 +181,7 @@
   - Over-budget or completely unreadable PDFs are omitted through the source-local partial-generation path. They never alter the selected generation automatically.
   - Preserve EPUB's existing unit and source quality rules.
   - Keep physical PDF page locators. Do not infer printed numbers from recovered text.
+  - `ingestion.pdf_backend=docling` is opt-in and runs Docling in a resource-bounded child with OCR, VLM, and every enrichment off. Docling is never installed into this app's environment: an online first use builds a pinned, versioned managed environment under the user cache, in isolation, and fetches models lazily on that same first call; an offline run never fetches and needs a ready environment or fails closed. `doctor --prefetch-models` provisions environment and models ahead of an offline run, and a ready environment or cached model is reused without a fetch.
 - Opening a source asks the desktop's own viewer through an authorised path, and falls back to the browser only where there is no desktop.
 
 ## Architecture

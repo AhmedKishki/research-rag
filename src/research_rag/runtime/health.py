@@ -15,6 +15,11 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+from ..corpus.docling_env import resolve_docling_env
+from ..corpus.pdf_backend import (
+    docling_cache_has_models,
+    docling_cache_root,
+)
 from ..project.config import ResearchConfig, project_command, runtime_root_claim_problem
 from ..project.state_files import LOCK_FILE, process_alive
 from ..retrieval.embeddings import resolve_embedding_model
@@ -185,6 +190,60 @@ def _model_check(
         f"The pinned {name} ({repository}@{revision}) is not fully cached at {snapshot}, and "
         f"offline mode forbids downloading it, so {consequence}.",
         prefetch,
+    )
+
+
+def _docling_backend_check(config: ResearchConfig) -> Check | None:
+    """Readiness of the selected optional PDF backend, without importing Docling.
+
+    This reports readiness for the *next* PDF build, not whether the selected
+    generation can be served: searching an existing generation never needs
+    Docling. A missing backend or cache warns and is remedied before the next
+    ingest, and never blocks or marks the corpus unserviceable.
+    """
+
+    if config.settings.pdf_backend != "docling":
+        return None
+    cache = docling_cache_root(config.model_cache_root)
+    env = resolve_docling_env(config)
+    prefetch = doctor_command(config, "--prefetch-models")
+    if env is None:
+        # The environment is built lazily on the first real conversion. An
+        # online run builds it; an offline run cannot, so it needs provisioning.
+        if config.offline:
+            reason = (
+                "ingestion.pdf_backend=docling is selected but its managed "
+                "environment is not built, and runtime.offline forbids building "
+                "it. Existing generations still serve; provision it before the "
+                "next PDF ingest."
+            )
+        else:
+            reason = (
+                "ingestion.pdf_backend=docling is selected; its managed "
+                "environment is not built yet. The first PDF ingest builds it "
+                "lazily; run the remedy to provision it ahead of that build."
+            )
+        return Check("docling_backend", WARN, reason, prefetch)
+    if not docling_cache_has_models(config.model_cache_root):
+        if config.offline:
+            reason = (
+                "ingestion.pdf_backend=docling is selected and its environment "
+                f"is built, but no models are cached at {cache}. Offline "
+                "extraction cannot fetch them, so provision them before the next "
+                "PDF ingest."
+            )
+        else:
+            reason = (
+                "ingestion.pdf_backend=docling is selected and its environment "
+                f"is built, but no models are cached at {cache}. The first PDF "
+                "ingest fetches them lazily; provision them first to keep that "
+                "build offline or to avoid paying the fetch during it."
+            )
+        return Check("docling_backend", WARN, reason, prefetch)
+    return Check(
+        "docling_backend",
+        OK,
+        f"Docling is installed and its models are cached at {cache}.",
     )
 
 
@@ -472,6 +531,7 @@ def health_report(
             OK,
             f"The state root {root} is writable.",
         )
+    docling_backend = _docling_backend_check(config)
     return HealthReport(
         checks=(
             *(
@@ -482,6 +542,7 @@ def health_report(
             identity,
             runtime_root,
             _vanilla_runtime_check(config),
+            *((docling_backend,) if docling_backend is not None else ()),
             _model_check(
                 config,
                 embedding.name,

@@ -41,7 +41,11 @@ from ..retrieval.artifact_lookup import LOOKUP_HEALTH_FLAGS_KEY
 from ..retrieval.dense import DenseTokenAuditUnavailable
 from ..retrieval.embeddings import EmbeddingModel
 from ..retrieval.rerankers import resolve_reranker_model
-from .policy import ResearchError, value_fingerprint
+from .policy import (
+    DEFAULT_PDF_BACKEND_FINGERPRINT,
+    ResearchError,
+    value_fingerprint,
+)
 
 
 def _selection_relevance(
@@ -199,6 +203,7 @@ def _checkpoint_identity(
     force_recompute: bool,
     embedding: EmbeddingModel,
     maximum_unclean_percent: float = 1.0,
+    pdf_backend_fingerprint: str = DEFAULT_PDF_BACKEND_FINGERPRINT,
 ) -> str:
     """Fingerprint the inputs a staged build may resume from.
 
@@ -219,6 +224,7 @@ def _checkpoint_identity(
             "chunk_overlap": chunk_overlap,
             "chunk_headers": chunk_headers,
             "maximum_unclean_percent": maximum_unclean_percent,
+            "pdf_backend_fingerprint": pdf_backend_fingerprint,
             "force_recompute": force_recompute,
             "generation_schema_version": SCHEMA_VERSION,
             "extraction_policy_version": EXTRACTION_POLICY_VERSION,

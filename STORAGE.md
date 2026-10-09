@@ -36,12 +36,14 @@ my-research-project/
                 └── qdrant/
 
 ~/.cache/research-rag/models/  shared model binaries only
+~/.cache/research-rag/backend-envs/<spec>/  the managed Docling environment
 ```
 
 - `~/.config/research-rag/config.toml` is the user settings file.
 - `~/.config/research-rag/projects.json` is the account's project register.
 - `projects.lock` beside the register serializes read-modify-write operations across processes. Readers use atomic snapshots without the lock.
 - `~/.cache/research-rag/models/` holds the embedding and reranker binaries, about 150 MB in total. It is the only cross-project shared state, because the binaries are immutable once downloaded.
+- `~/.cache/research-rag/backend-envs/<spec>/` is the optional Docling backend's own virtual environment, named by a spec fingerprint of its pinned packages and the interpreter ABI. It is built on the first real `ingestion.pdf_backend=docling` conversion, or by `doctor --prefetch-models`, under a bounded installer, and published only after its pinned versions are read back. An incomplete install leaves no `ready.json` and is never used; an environment that was already ready is never touched. The app's own environment never carries Docling.
 - Model snapshots use `models--<repository>/snapshots/<commit>`, with `/` in the repository replaced by `--`. Health checks require the pinned repository, commit, ONNX files, and tokenizer files. They do not hash the cached binaries.
 - `tests/project/test_data_roots.py` asserts both roots and why each is named for this app.
 

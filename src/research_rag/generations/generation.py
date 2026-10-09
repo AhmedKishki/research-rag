@@ -51,6 +51,10 @@ def generation_is_reusable(
         and chunking.get("headers", False) == chunk_headers
         and manifest.get("passage_cleaning", {}).get("maximum_unclean_percent", 1.0)
         == maximum_unclean_percent
+        # The PDF backend is deliberately not a generation-wide reuse condition:
+        # it decides how PDFs are re-extracted, not whether an EPUB or unrelated
+        # source-independent artifact may be reused. The staged extraction path
+        # refuses to reuse a PDF when its recorded backend differs.
         # The model's repository is checked too when the generation recorded one,
         # because a revision names a commit inside a repository and a mirror can
         # serve different weights under the same name. A generation built before

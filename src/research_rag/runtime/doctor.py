@@ -108,6 +108,12 @@ def repair_runtime(config: ResearchConfig) -> tuple[str, ...]:
 
 
 def prefetch_models(config: ResearchConfig) -> tuple[str, ...]:
+    from ..corpus.docling_env import DoclingEnvironmentError
+    from ..corpus.pdf_backend import (
+        PdfBackendError,
+        docling_cache_root,
+        prefetch_docling_models,
+    )
     from ..retrieval.dense import _load_cross_encoder, _load_embedder
     from ..storage.records import directory_statistics
 
@@ -117,11 +123,29 @@ def prefetch_models(config: ResearchConfig) -> tuple[str, ...]:
     _load_embedder(config.model_cache_root, offline=False, model=embedding.name)
     _load_cross_encoder(config.model_cache_root, offline=False, model=reranker)
     _count, after = directory_statistics(config.model_cache_root)
-    return (
+    lines = [
         f"Cached {embedding.name} from {embedding.repository}@{embedding.revision}.",
         f"Cached {reranker}@{revision}.",
         f"{config.model_cache_root} now holds {after - before} more bytes.",
-    )
+    ]
+    if config.settings.pdf_backend == "docling":
+        # This is the one explicit path that may both build the managed Docling
+        # environment and fetch its models. Both run under the same verified
+        # resource boundary, in the managed interpreter, so the parent never
+        # imports Docling and the app environment is never changed.
+        try:
+            result = prefetch_docling_models(config)
+        except DoclingEnvironmentError as exc:
+            lines.append(f"Docling environment could not be built: {exc}")
+        except PdfBackendError as exc:
+            lines.append(f"Docling model provisioning failed: {exc}")
+        else:
+            lines.append(
+                "Provisioned the managed Docling environment and models "
+                f"(docling {result.get('version')}) with cache at "
+                f"{docling_cache_root(config.model_cache_root)}."
+            )
+    return tuple(lines)
 
 
 def _argument_value(arguments: list[str], name: str) -> str | None:

@@ -116,6 +116,30 @@ def test_source_state_is_bounded_and_safe(workflow, checkpoint, unsafe):
     assert workflow._ingestion_progress(checkpoint)["source_progress"] is None
 
 
+def test_docling_page_batches_report_progress(workflow, checkpoint):
+    checkpoint["extracted_source_paths"] = ["a.pdf"]
+    path = state_path(workflow, checkpoint)
+    path.parent.mkdir(parents=True)
+    atomic_write_json(
+        path,
+        {
+            "docling": True,
+            "extraction_stage": "docling_pages",
+            "total": 4,
+            "next_index": 2,
+            "page_batch_size": 2,
+        },
+    )
+
+    workflow._reconcile_checkpoint_progress(
+        workflow.config.staging_root / checkpoint["build_id"], checkpoint
+    )
+
+    # Two source batches plus prepare and finalize; two batches done.
+    assert checkpoint["extraction_work_total"] == 4
+    assert checkpoint["extraction_work_completed"] == 1
+
+
 def test_global_phase_has_no_invented_source_or_eta(workflow, checkpoint):
     checkpoint.update(
         phase="embedding",

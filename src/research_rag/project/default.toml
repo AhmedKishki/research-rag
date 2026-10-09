@@ -175,6 +175,16 @@ maximum_unclean_percent = 1.0
 # Chunks embedded per gateway call, and PDF pages extracted per call. Throughput only.
 embedding_batch_size = 64
 pdf_page_batch_size = 8
+# Which reader turns a PDF into extraction units. "custom" is this app's bundled
+# text-only reader and the default. "docling" converts through a separate,
+# resource-bounded Docling worker with OCR, VLM, and every enrichment disabled.
+# Docling is not part of the app install: an online first use builds a pinned
+# managed environment and fetches models lazily, inside the verified worker, and
+# an offline run needs that environment or fails closed. Both backends reach the
+# same text-quality gate with this project's own loss budget. Changing this
+# rebuilds PDF extraction; a generation built before this key existed is
+# "custom". (identity: recorded in the generation.)
+pdf_backend = "custom"
 
 [dense]
 # Embedding model for the dense half of retrieval. Every supported name is pinned to

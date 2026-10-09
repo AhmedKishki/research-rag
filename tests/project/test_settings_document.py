@@ -622,6 +622,30 @@ def test_setting_cost_names_a_proposed_passage_cleaning_threshold(
         assert cost["requires_ingest"] is True
 
 
+def test_a_change_to_the_pdf_backend_costs_a_regeneration(project: Path) -> None:
+    """The reader is recorded in the generation, so switching it rebuilds PDFs."""
+
+    service = _service(project)
+    before = service.config.settings
+
+    cost = change_cost(before, replace(before, pdf_backend="docling"))
+
+    assert cost["level"] == "regeneration"
+    assert cost["moved"] == ["extraction_backend"]
+    assert cost["requires_ingest"] is True
+
+
+def test_the_pdf_backend_setting_costs_a_regeneration(project: Path) -> None:
+    service = _service(project)
+    key = SETTINGS_BY_KEY["ingestion.pdf_backend"]
+
+    cost = setting_cost(service.config.settings, key, value="docling")
+
+    assert cost["level"] == "regeneration"
+    assert cost["moved"] == ["extraction_backend"]
+    assert cost["requires_ingest"] is True
+
+
 def test_a_passage_cleaning_threshold_that_does_not_move_costs_nothing(
     project: Path,
 ) -> None:

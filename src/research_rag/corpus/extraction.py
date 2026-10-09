@@ -27,6 +27,15 @@ from bs4 import BeautifulSoup, Comment, NavigableString, Tag
 from ebooklib import epub
 
 from ..project.settings import BM25_STOPWORD_LANGUAGES, bm25_stopwords
+from .docling_env import DoclingEnv, DoclingEnvironmentError
+from .pdf_backend import (
+    DEFAULT_PDF_BACKEND,
+    PDF_BACKEND_DOCLING,
+    DoclingConversionError,
+    docling_backend_record_from_env,
+    effective_maximum_unclean_percent,
+    run_docling_batch,
+)
 from .pdf_text_recovery import (
     PdfRecoveryCache,
     close_pdf_recovery_cache,
@@ -2811,17 +2820,308 @@ def _refusal_message(
     )
 
 
+def _effective_pdf_loss_limit(
+    backend: str,
+    configured: float | None,
+) -> float | None:
+    """The loss budget the shared gate applies, or None when none was given."""
+
+    if configured is None:
+        return None
+    return effective_maximum_unclean_percent(backend, float(configured))
+
+
+def _docling_document_record(
+    source: SourceFile,
+    digest: str,
+    pdf_metadata: dict[str, Any],
+    total_pages: int,
+    docling_env: DoclingEnv,
+) -> dict[str, Any]:
+    declared_language = str(pdf_metadata.get("language") or "")
+    automatic, provenance, warnings = _front_matter_identity(
+        [],
+        pdf_metadata,
+        source.path.stem,
+        declared_language=declared_language,
+    )
+    record = _base_metadata(
+        source=source,
+        document_id=_document_id(source, digest),
+        digest=digest,
+        automatic=automatic,
+        provenance=provenance,
+        warnings=warnings,
+    )
+    record.update(
+        {
+            "physical_pages": int(total_pages),
+            "extracted_units": 0,
+            "empty_units": 0,
+            **empty_removal_counts(),
+        }
+    )
+    record["extraction_backend"] = docling_backend_record_from_env(docling_env)
+    return record
+
+
+def _docling_page_units(
+    raw_units: list[dict[str, Any]],
+    document: dict[str, Any],
+    page_number: int,
+    page_label: str,
+) -> list[dict[str, Any]]:
+    locator = {
+        "type": "pdf_page",
+        "page": page_number,
+        "page_label": page_label,
+    }
+    units: list[dict[str, Any]] = []
+    for index, raw in enumerate(raw_units, 1):
+        text = normalize_reading_text(str(raw.get("contents") or ""))
+        if not text.strip():
+            continue
+        kind = str(raw.get("content_kind") or "prose")
+        units.append(
+            {
+                "id": (
+                    f"{document['document_id']}:pdf-page:{page_number:06d}:"
+                    f"docling:{index:04d}"
+                ),
+                "document_id": str(document["document_id"]),
+                "source_id": str(document["source_id"]),
+                "title": str(document["title"]),
+                "contents": text,
+                "content_kind": kind,
+                "annotations": [],
+                "quality_flags": _quality_flags(text, kind),
+                "locator": locator,
+                "provenance": list(raw.get("provenance") or []),
+            }
+        )
+    return units
+
+
+def _docling_incompleteness(diagnostics: dict[str, Any]) -> str | None:
+    """Why a conversion could have lost evidence, or None when it is complete.
+
+    An unsupported item was acknowledged but not emitted, and an unresolved
+    child or caption reference means a picture's descendants could not be
+    classified. Either can lose evidence, so the source is refused before it can
+    reach the success path; a clean conversion keeps its diagnostics.
+    """
+
+    unsupported = int(diagnostics.get("unsupported_item_count") or 0)
+    missing = int(diagnostics.get("missing_child_ref_count") or 0) + int(
+        diagnostics.get("missing_caption_ref_count") or 0
+    )
+    if not unsupported and not missing:
+        return None
+    return f"unsupported_item_count={unsupported}, unresolved_reference_count={missing}"
+
+
+def _annotate_docling_batch(
+    result: dict[str, Any],
+    document: dict[str, Any],
+    *,
+    page_first: int,
+    page_last: int,
+) -> tuple[
+    dict[int, list[dict[str, Any]]],
+    int,
+    dict[str, int],
+    dict[str, int],
+]:
+    labels = {
+        int(key): str(value) for key, value in (result.get("page_labels") or {}).items()
+    }
+    pages: dict[int, list[dict[str, Any]]] = {}
+    populated: set[int] = set()
+    for page_key, raw_units in (result.get("pages") or {}).items():
+        page_number = int(page_key)
+        units = _docling_page_units(
+            list(raw_units or []),
+            document,
+            page_number,
+            labels.get(page_number) or str(page_number),
+        )
+        if units:
+            pages[page_number - 1] = units
+            populated.add(page_number)
+    # A blank page is one the worker returned nothing for, so it carries no page
+    # key at all. Count every requested page that produced no unit, once; an
+    # image-only picture page is such a page and is not counted again anywhere.
+    empty = sum(
+        1
+        for page_number in range(page_first, page_last + 1)
+        if page_number not in populated
+    )
+    diagnostics = {
+        str(key): int(value)
+        for key, value in (result.get("diagnostics") or {}).items()
+        if isinstance(value, (int, float))
+    }
+    removals = empty_removal_counts()
+    removals["removed_repeated_margin_blocks"] = int(
+        diagnostics.get("excluded_furniture_item_count") or 0
+    )
+    # Image-only pages are a source-wide diagnostic from the native probe, not a
+    # second count of the empty pages above.
+    removals["image_only_pages"] = int(result.get("image_only_pages") or 0)
+    return pages, empty, removals, diagnostics
+
+
+def docling_pdf_batch(
+    source: SourceFile,
+    existing_document: dict[str, Any] | None,
+    start_index: int,
+    end_index: int,
+    *,
+    digest: str,
+    offline: bool,
+    model_cache_root: Path | None,
+    docling_env: DoclingEnv,
+    total_pages: int | None = None,
+) -> tuple[
+    dict[int, list[dict[str, Any]]],
+    dict[str, Any],
+    int,
+    dict[str, int],
+    dict[str, int],
+]:
+    """One bounded Docling page batch for the staged build path.
+
+    ``start_index`` and ``end_index`` are 0-based and half-open. The document
+    record is built on the first batch and passed back unchanged afterwards, so
+    every batch shares one identity. ``docling_env`` is the managed environment
+    resolved once at the start of the build. Raises :class:`ExtractionError` for
+    a source-local conversion failure, which the staged caller omits like any
+    other unreadable source.
+    """
+
+    try:
+        result = run_docling_batch(
+            source_path=source.path,
+            start=start_index + 1,
+            end=end_index,
+            offline=offline,
+            model_cache_root=model_cache_root,
+            docling_env=docling_env,
+        )
+    except DoclingConversionError as exc:
+        raise ExtractionError(str(exc)) from exc
+    incompleteness = _docling_incompleteness(result.get("diagnostics") or {})
+    if incompleteness is not None:
+        raise ExtractionError(
+            "Docling could not convert "
+            f"{source.source_relative_path} pages {start_index + 1}-{end_index} "
+            f"without risking evidence loss ({incompleteness}); the source is "
+            "omitted from this generation rather than partially trusted."
+        )
+    if existing_document is None:
+        document = _docling_document_record(
+            source,
+            digest,
+            result.get("pdf_metadata") or {},
+            int(total_pages) if total_pages else end_index,
+            docling_env,
+        )
+    else:
+        document = existing_document
+    pages, empty, removals, diagnostics = _annotate_docling_batch(
+        result,
+        document,
+        page_first=start_index + 1,
+        page_last=end_index,
+    )
+    return pages, document, empty, removals, diagnostics
+
+
+def extract_pdf_docling(
+    source: SourceFile,
+    digest: str | None = None,
+    *,
+    page_batch_size: int = 8,
+    offline: bool = False,
+    model_cache_root: Path | None = None,
+    docling_env: DoclingEnv,
+    total_pages: int | None = None,
+) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+    """Direct Docling extraction of one PDF, page batch by page batch."""
+
+    digest = digest or sha256_file(source.path)
+    total = int(total_pages) if total_pages else pdf_page_count(source)
+    document: dict[str, Any] | None = None
+    units: list[dict[str, Any]] = []
+    empty = 0
+    removals = empty_removal_counts()
+    diagnostics: Counter[str] = Counter()
+    batch = max(1, int(page_batch_size))
+    for start in range(0, total, batch):
+        end = min(start + batch, total)
+        pages, document, batch_empty, batch_removals, batch_diag = docling_pdf_batch(
+            source,
+            document,
+            start,
+            end,
+            digest=digest,
+            offline=offline,
+            model_cache_root=model_cache_root,
+            docling_env=docling_env,
+            total_pages=total,
+        )
+        empty += batch_empty
+        removals = merge_removal_counts(removals, batch_removals)
+        for page_index in sorted(pages):
+            units.extend(pages[page_index])
+        for key, value in batch_diag.items():
+            diagnostics[key] += int(value)
+    if document is None:
+        raise ExtractionError(_no_text_layer_message(source, "PDF"))
+    document.update(
+        {
+            "extracted_units": len(units),
+            "empty_units": empty,
+            **removals,
+        }
+    )
+    document["docling_diagnostics"] = dict(diagnostics)
+    if not units:
+        raise ExtractionError(_no_text_layer_message(source, "PDF"))
+    return document, units
+
+
 def extract_sources(
     sources: tuple[SourceFile, ...],
     source_digests: dict[str, str] | None = None,
     *,
     maximum_unclean_percent: float | None = None,
+    pdf_backend: str = DEFAULT_PDF_BACKEND,
+    page_batch_size: int = 8,
+    offline: bool = False,
+    model_cache_root: Path | None = None,
+    docling_env: DoclingEnv | None = None,
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     documents: list[dict[str, Any]] = []
     units: list[dict[str, Any]] = []
+    limit = _effective_pdf_loss_limit(pdf_backend, maximum_unclean_percent)
     for source in sources:
         digest = (source_digests or {}).get(source.source_relative_path)
-        if source.extension == ".pdf":
+        if source.extension == ".pdf" and pdf_backend == PDF_BACKEND_DOCLING:
+            if docling_env is None:
+                raise DoclingEnvironmentError(
+                    "Docling extraction requires the managed environment, which "
+                    "was not resolved before extraction began."
+                )
+            document, extracted = extract_pdf_docling(
+                source,
+                digest,
+                page_batch_size=page_batch_size,
+                offline=offline,
+                model_cache_root=model_cache_root,
+                docling_env=docling_env,
+            )
+        elif source.extension == ".pdf":
             document, extracted = _extract_pdf(source, digest)
         elif source.extension == ".epub":
             document, extracted = _extract_epub(source, digest)
@@ -2831,7 +3131,7 @@ def extract_sources(
             source,
             document,
             extracted,
-            maximum_unclean_percent=maximum_unclean_percent,
+            maximum_unclean_percent=limit,
         )
         documents.append(document)
         units.extend(retained)
