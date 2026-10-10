@@ -6,7 +6,7 @@ Read this before editing a project by hand.
 
 ```text
 my-research-project/
-├── sources/                              untouched PDF/EPUB originals
+├── sources/                              untouched PDF/EPUB/MOBI originals
 └── .research-rag/                        all project state
     ├── project.json                      stable id, name, source directory
     ├── source-catalog.json               durable source-id-to-path registry
@@ -160,12 +160,13 @@ generations/<generation-id>/
 
 ## Sources
 
-- Only regular `.pdf` and `.epub` files beneath the configured source directory are indexed. Markdown, symlinks, and everything outside it are ignored.
+- Only regular `.pdf`, `.epub`, and `.mobi` files beneath the configured source directory are indexed. Markdown and everything outside it are ignored; source symlinks are rejected.
 - The app never edits an original.
 - A `source_id` combines the project id with the normalized source-relative path. Replacing a file's bytes preserves it. Renaming or moving the file changes it.
 - A `document_id` identifies one path-and-content version. It changes between generations and is never reported in an answer.
 - A `chunk_id` belongs to the generation that returned it and can change after a rebuild.
-- A locator is a position only: a page, or a section for an EPUB. It carries `page_label` only where the printed label differs from the physical page.
+- A locator is a position only: a PDF page, an EPUB section, or a logical MOBI part. It carries `page_label` only where the printed label differs from the physical page.
+- A MOBI locator has type `mobi_section`: a logical rendition part index, the current heading, and element-path, block-index, or existing `id`/`name` anchors. Its synthetic `part-NNNNNN.html` reference identifies reconstructed text, not a printed page or an EPUB archive path.
 - Search returns, and the index holds, cleaned semantic text. It is not a transcript, so `text` is not quotable.
 - Document records keep `cleaned_passage_count`, `partially_cleaned_passage_count`, `excluded_corrupt_passage_count`, `substantive_character_count`, `discarded_corrupt_character_count`, `cleaned_corrupt_span_count`, `unclean_character_rate`, and the corresponding `cleaned_passages` and `excluded_corrupt_passages` decisions. Each decision carries a unit ID, a zero-based paragraph index, a locator, its reasons, the span offsets it covers, and the characters it lost, never damaged passage text.
 - `pdf_text_recovery_pages` counts PDF pages retried through the bundled text interpreter. `recovered_pdf_blocks` counts accepted replacements. Build metrics aggregate these counts.
@@ -280,7 +281,7 @@ generations/<generation-id>/
 
 - `title` is a scalar string where the other fields are lists, so it is normalized on its own.
 - Authors and titles match as substrings because a name is a phrase, not a controlled tag.
-- Language is the only field extraction detects. `metadata_provenance.language` records the decision as `pdf_catalog`, `epub_opf`, `text_sample`, or `missing`.
+- Language is the only field extraction detects. `metadata_provenance.language` records the decision as `pdf_catalog`, `epub_opf`, `mobi_header`, `text_sample`, or `missing`.
 - Filtering resolves the current overlay to document IDs at query time. Metadata is never baked into an index.
 
 ## Extraction behaviour

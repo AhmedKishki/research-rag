@@ -5,7 +5,8 @@ What is on disk, how it is read, and what a file's text says about itself.
 | Module | Holds |
 |---|---|
 | `sources.py` | The scan of `sources/`, the policy that decides what is a source, and the stable source ID |
-| `extraction.py` | PDF page extraction, EPUB traversal, the units they yield, the stripping of non-argument sections across a source, and the gate both build paths apply |
+| `extraction.py` | PDF page extraction, EPUB traversal, MOBI text-part adaptation, the units they yield, the stripping of non-argument sections across a source, and the gate both build paths apply |
+| `mobi_reader.py` | Offline, resource-bounded MOBI parsing, in-memory KF8 reconstruction, and bounded serialized-unit handoff; calls shared extraction helpers inside the worker without conversion output |
 | `text_normalization.py` | Reading text as it is read: compatibility characters, whitespace, sentence ends, and the formatting glyphs a symbol face exposed as private use |
 | `text_quality.py` | Whether a string is usable: corruption, scripts, the flags a chunk carries, which paragraphs belong to a non-argument section, and whether a whole source is readable |
 | `pdf_text_recovery.py` | Automatic native-text retries for unhealthy PDF blocks, matched by page geometry |
@@ -17,7 +18,8 @@ What is on disk, how it is read, and what a file's text says about itself.
 
 ## Rules
 
-- `text_normalization.py` and `text_quality.py` import only the standard library and each other. A module asking whether text is readable imports `text_quality` and no PDF or EPUB reader.
+- `text_normalization.py` and `text_quality.py` import only the standard library and each other. A module asking whether text is readable imports `text_quality` and no document reader.
+- `extraction.extract_mobi` requests worker-built units; the worker calls `extraction._mobi_units_from_text` for HTML parsing, metadata inference, and unit construction under the parser's resource boundary. MOBI text parts share EPUB HTML normalization, structural and furniture cleanup, and quality rules. `FEATURES.md` owns parser variants and safety limits; `STORAGE.md` owns logical-part locators.
 - `extraction.py` may not decide what a source is. That is `sources.py`'s.
 - `docling_adapter.py` imports neither Docling nor a PDF library; it reads a plain mapping. `docling_worker.py` imports Docling only inside its `run`, after the resource-boundary check, and the parent process imports neither.
 - An offline Docling extraction never fetches and fails closed on a missing model; an online extraction may fetch one lazily on its first call, inside the verified worker. An online first use also builds the managed environment through `docling_env.py`; an offline run with no ready environment fails closed. `doctor --prefetch-models` provisions both ahead of an offline run.
@@ -121,7 +123,7 @@ What is on disk, how it is read, and what a file's text says about itself.
   Mixed image-only and readable pages produce a warning rather than a scan-only
   omission.
 - EPUB keeps its existing majority-readable unit and aggregate source checks.
-- Extraction performs no OCR. It reads a PDF or EPUB text layer only, so a scanned
+- Extraction performs no OCR. It reads existing PDF, EPUB, or MOBI text only, so a scanned
   source needs OCR performed outside this app before it is added. A page is judged
   a scan by `extraction._image_only_page`, which asks whether the page has no text
   and an image covering most of it; a share of digits or symbols is not a scan.

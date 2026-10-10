@@ -250,3 +250,96 @@ None of the constructed or judged passage inputs exceeded the model's token limi
 These observations disprove semantic-equivalence guarantees for this cosine
 threshold. They do not establish corpus-wide false-collapse incidence, safe
 admission thresholds, or superiority of a replacement model or scoring method.
+
+## Current reranker screening (2026-10-10)
+
+- Protocol: `evaluation/README.md`; schema-3 offline reports `/tmp/kilo/reranker-20261010-offline-pass-{1,2,3}.json`, harness revision `fef9fadd0e8e1586c8cb1efa56de88aacc45450d`, Python 3.12.3. The initial `pass-.json` provisioning artifact is excluded. Private reports remain outside Git.
+- The reports' live `project` block identifies generation `20261009T201931Z-66ebc96e`, 39,298 chunks and 132 indexed sources, with no generation upgrade required. Their `corpus` block describes the older judged-set reference, not the searched generation. The reports supply no corpus content hash.
+- Thirty unique known-item queries cover 18 targets. Explicit `--skip-targets t12` excludes the absent Hall source under the evaluation protocol. Three passes of five conditions produce 450 repeated searches, not independent samples. Reply depth is ten; no deep pass runs; staleness checks are disabled.
+- Every condition observes branch depth 40. All 360 requested reranked searches apply reranking without fallback and score exactly 20 candidates. Ordered stage identifiers and returned identifiers match across passes for each query and condition.
+- Models use the CPU FastEmbed ONNX cross-encoder. Revision pins are owned by `src/research_rag/retrieval/rerankers.py::RERANKER_MODELS` at the recorded revision: L6 `a09144355adeed5f58c8ed011d209bf8ee5a1fec`, L12 `42a4a787e30451cf9dbd09080c2a5b8dde332c1e`, Jina tiny `aca45de6945b5dc6399abcd2a9c55ded5dc9111f`, Jina turbo `b8c14f4e723d9e0aab4732a7b7b93741eeeb77c2`. L6/L12 denote `Xenova/ms-marco-MiniLM-L-{6,12}-v2`; Jina tiny/turbo denote `jinaai/jina-reranker-v1-{tiny,turbo}-en`. The dense report records `qdrant/bge-small-en-v1.5-onnx-q` revision `aa8f8b060edb00e03bfdd08813a2949946c8ba55`.
+
+Quality is identical in all three passes. Counts retain the denominator of 30; MRR and binary-gain nDCG use the designated chunk only.
+
+| Condition | Success@1 | Success@3 | Success@10 | Document@10 | MRR | nDCG@10 |
+|---|---:|---:|---:|---:|---:|---:|
+| Hybrid, no reranker | 19/30 | 21/30 | 25/30 | 27/30 | 0.686429 | 0.721267 |
+| Hybrid + L6 | 24/30 | 25/30 | 26/30 | 27/30 | 0.821429 | 0.832142 |
+| Hybrid + L12 | 24/30 | 26/30 | 26/30 | 27/30 | 0.833333 | 0.842062 |
+| Hybrid + Jina tiny | 23/30 | 23/30 | 26/30 | 27/30 | 0.787222 | 0.805791 |
+| Hybrid + Jina turbo | 22/30 | 24/30 | 25/30 | 27/30 | 0.769444 | 0.785387 |
+
+Latency entries are seconds, median/p95 per pass, using nearest-rank percentiles over 29 searches after excluding `q01` separately in each condition. The last column gives the excluded first-use `q01` range across passes.
+
+| Condition | Pass 1 | Pass 2 | Pass 3 | First-use range |
+|---|---:|---:|---:|---:|
+| Hybrid, no reranker | 0.360/0.625 | 0.192/0.498 | 0.212/0.525 | 0.500–0.640 |
+| Hybrid + L6 | 1.497/1.852 | 1.410/1.652 | 1.419/1.620 | 1.647–2.059 |
+| Hybrid + L12 | 2.644/3.530 | 2.618/2.938 | 2.620/2.905 | 3.014–3.741 |
+| Hybrid + Jina tiny | 1.263/1.595 | 1.255/1.466 | 1.278/1.362 | 1.640–2.043 |
+| Hybrid + Jina turbo | 1.789/2.304 | 1.750/1.935 | 1.772/1.917 | 2.279–2.851 |
+
+- The discarded warm-up runs BM25 only (9.643–11.546 seconds); it does not warm dense inference or each cross-encoder. First-use entries are measured searches, not isolated model-load times. Fixed condition order and three small repeated passes do not establish a stable population p95 or a performance winner.
+- Against L6, L12 regresses `q06` from rank 1 to 2 and improves `q27` from 7 to 1. Jina tiny regresses `q15` from 1 to 5 and `q29` from 1 to 4; it improves `q25` from 2 to 1 and `q27` from 7 to 6. Jina turbo loses `q06` from the top ten and regresses `q16` from 1 to 4; it improves `q27` from 7 to 3.
+- All five conditions miss `q14`, `q22`, `q17`, and `q18`. The first two targets are outside the fused candidate pool; the latter two reach that pool but lie outside the 20-candidate scored window. A reranker comparison at this window cannot repair those upstream misses.
+- This is screening on one inspected, single-annotator known-item set, not pooled relevance, exhaustive recall, abstention, or held-out confirmation. Correlated target families and repeated searches do not establish model superiority. Defaults, judgments, sources, and generation state remain unchanged.
+
+## Descriptive paraphrase experiment (2026-10-10)
+
+- Private records: `/tmp/kilo/paraphrase-20261010/{report,summary,stage-analysis,fidelity-review,variants}.json`. Query and passage text remain outside Git.
+- Report identity: 80 cells, eight conditions and ten shared targets; fixed generation `20261009T201931Z-66ebc96e`, hybrid + `Xenova/ms-marco-MiniLM-L-6-v2` (L6), retrieval-policy fingerprint `b7285824c79d662c9abdba84238077abc1271d11a861c931ee0e590c3d4f380f`. The offline run requests ten results, records no searches, and uses order seed `20261010`. All cells apply reranking without fallback; generation identity stays fixed.
+- Exact is a canonical cleaned-text excerpt control, not a verified source quotation. Format uppercases exact; syntax and lexical manipulate excerpts; structural and conceptual are questions. Context additions, question form and answer slots confound these comparisons. They do not estimate a causal effect of paraphrase depth.
+- Historical baseline questions remain unchanged despite documented scope, modality, attribution and target-note drift. They are historical comparators, not strictly equivalent controls.
+- Anchored appends source keyword anchors to the conceptual question as query text, not metadata filters. These privileged, target-informed additions can disclose answer names or source entities; they do not test ordinary unassisted question augmentation.
+
+Counts and MRR credit only the designated target chunk in the final top ten, with reciprocal rank zero for a miss. Each condition has ten correlated target observations.
+
+| Condition | Target@1 | Target@10 | MRR |
+|---|---:|---:|---:|
+| Historical baseline | 6/10 | 6/10 | 0.60 |
+| Format | 10/10 | 10/10 | 1.00 |
+| Syntax | 10/10 | 10/10 | 1.00 |
+| Lexical | 8/10 | 9/10 | 0.85 |
+| Structural | 9/10 | 10/10 | 0.95 |
+| Conceptual | 5/10 | 6/10 | 0.55 |
+| Anchored | 7/10 | 9/10 | 0.80 |
+| Exact canonical text | 10/10 | 10/10 | 1.00 |
+
+- Paired conceptual-to-anchored target recovery rises from 6/10 to 9/10: `t03`, `t11` and `t15` enter the top ten. MRR rises from 0.55 to 0.80. Designated-target recovery does not establish full relevance, usable evidence, or exhaustive recall. Answer-bearing neighbours can score as target misses.
+- A separate model reviewer saved blinded passage assessments before reading condition labels. The rubric distinguishes full support, partial support, topical evidence and irrelevant evidence, preserving the requested relationship and modality. These are model assessments of cleaned text, not human ground truth or verified quotations; `judgments.json` retains passage IDs, ranks, reasons and ambiguity flags.
+- Model-assessed full support rises from 6/10 to 8/10 at rank one and from 8/10 to 10/10 somewhere in the returned ten for conceptual versus anchored questions. Best-of-ten means one supporting passage, not synthesis across passages. Anchors repair the recycling and writer-compensation evidence gaps; the financial-elites and model-collapse questions already return fully supporting alternatives without their designated targets. Four of the ten designated-target misses across all conditions have full alternative evidence.
+- Observed branch candidate depth is 40 and the scored window is 20; fused pools contain 40–80 candidates. Baseline `t08` and `t11` reach fusion at ranks 63 and 64, and conceptual `t03` at rank 34, outside the scored window. Other misses never reach fusion. These traces describe losses, not a causal depth sweep or proof that widening a window repairs them.
+- Lexical `t03` reaches dense eligible rank 3 but fails the dense floor (`dense_below_threshold`), has no admitted lexical target, and never reaches fusion. Anchors recover `t08` to the fused pool at rank 10, but reranking places it at rank 15, outside the final ten. The scored stage excludes the unscored tail; a final omission is not automatically a gate rejection.
+
+## Critical-realism preprocessing experiment (2026-10-10)
+
+- Private records live under `/tmp/kilo/critical-realism-preprocessing-20261010/`: `paired-diagnostics-costs.json`, `paired-anchor-retention.json`, `paired-negative-controls.json`, `paired-source-integrity.json`, `{custom,docling}-setup.json`, and `paired-retrieval-evaluation/{summary,protocol,artifact-integrity}.json`. `paired-analysis-provenance.json` records exact input and analysis-script SHA-256 identities; setup and integrity records retain per-source hashes. Private text and reports remain outside Git.
+- Both isolated private arms index the same 17 sources: 13 PDF, three EPUB and one MOBI. The byte-identical Naturalism EPUB duplicate is retained in both arms. Original before/after hashes, snapshot hashes and manifest hashes agree. No original source changes.
+- Effective settings differ only in `pdf_backend`; both use recorded defaults with two embedding threads, chunk size/overlap 384/64 and headers off. Dense inference uses `qdrant/bge-small-en-v1.5-onnx-q@aa8f8b060edb00e03bfdd08813a2949946c8ba55`; reranking uses `Xenova/ms-marco-MiniLM-L-6-v2@a09144355adeed5f58c8ed011d209bf8ee5a1fec`. Setup records retain installed packages and Docling runtime pins (`docling==2.135.0`, `rapidocr==3.9.1`, `pymupdf>=1.26,<2`).
+- Checkout base is `fef9fadd0e8e1586c8cb1efa56de88aacc45450d`, with uncommitted MOBI, extraction and other changes. Git HEAD alone does not reproduce the executed code; the retained records do not establish a complete immutable dirty-checkout snapshot.
+
+| Arm | Generation | Extraction units | Chunks |
+|---|---|---:|---:|
+| Custom | `20261010T110139Z-f988ef97` | 9,675 | 12,210 |
+| Docling | `20261010T112412Z-67b31671` | 21,554 | 21,976 |
+
+- Both generations are ready and non-partial. Unit, chunk and loss counts describe pipeline output, not source fidelity.
+- The model-prepared, original-verified sample contains 17 anchors. Each arm retains all 17 anchors' normalized tokens in order; 16 occur contiguously. Protected negations survive. These lexical diagnostics establish neither full-page retention nor visual reading order. No anchor contains numeric tokens, so number retention is untested.
+- All 7,029 EPUB/MOBI negative-control units are exactly equal in ordered extraction-bearing payloads, without text normalization and excluding only `id`, `document_id` and `source_id`.
+- Custom recorded ingestion time is 1,352.6 seconds. Docling's start-to-continuation-end wall span is 7,967.5 seconds, including an unquantified interruption gap and a 2,798.3-second continuation; it is not uninterrupted processing time. Provisioning takes 87.2 seconds separately. The handoff span already includes continuation and must not be added to it. Recorded cumulative RSS maxima do not support a valid per-arm memory comparison.
+- Retrieval runs offline with ten results and no search-history writes: 40 conditions per arm, ten shared needs and four variants (baseline, lexical, structural, conceptual). All 80 searches pass strict pipeline validation; arm artifacts and original sources remain unchanged. All conditions, including misses, remain in the denominator. Anchor matching uses the protocol's normalization without paraphrase matching; these are known-item diagnostics, not pooled relevance or exhaustive recall.
+
+| Arm | Anchor@1 | Anchor@10 | Anchor MRR@10 | Source@10 | Physical page@10 |
+|---|---:|---:|---:|---:|---:|
+| Custom | 19/40 | 28/40 | 0.5306 | 37/40 | 28/40 |
+| Docling | 25/40 | 29/40 | 0.6558 | 36/40 | 29/40 |
+
+- Independent model evidence judgments were saved before joining the arm mapping: `paired-retrieval-evaluation/{evidence-judgments,evidence-summary-private}.json`. The rubric scores full support 3, partial support 2, topical evidence 1 and irrelevant evidence 0, including required qualifications. These are model assessments, not human annotations. Best-of-ten scores one passage, never combined passages.
+
+| Arm | Rank-one full | Rank-one partial-only | Best single top-ten full | Best single top-ten partial-only |
+|---|---:|---:|---:|---:|
+| Custom | 20/40 | 7/40 | 28/40 | 6/40 |
+| Docling | 22/40 | 9/40 | 26/40 | 10/40 |
+
+- The review identifies mixed tradeoffs: custom retains the complete Donati claim in one passage where Docling splits it; Docling returns the required Porpora qualifier at rank one. Supporting and ambiguous candidates received full reads; other candidates were screened through beginnings and need-bearing clauses. The reviewer used supplied model-verified original-source context as the reference and opened no additional source images. This is not a new original-source verification.
+- Forty variants are correlated within ten information-need families, not independent trials or evidence of statistical significance. The page-fidelity review remains pending; these retrieval assessments establish neither overall source quality nor global superiority. This experiment changes no defaults.

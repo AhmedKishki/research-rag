@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "research-rag"
 version = "2.0.0"
-description = "A browser workspace for reviewing research evidence over a project's own PDF and EPUB corpus, built on vanilla UltraRAG"
+description = "A browser workspace for reviewing research evidence over a project's own PDF, EPUB and MOBI corpus, built on vanilla UltraRAG"
 readme = "README.md"
 license = "Apache-2.0"
 license-files = ["LICENSE", "NOTICE"]
@@ -14,6 +14,8 @@ dependencies = [
     "bm25s @ git+https://github.com/AhmedKishki/bm25s.git@20f6c02612b8114dca4662131ba09d5102c53308",
     "beautifulsoup4>=4.13,<5",
     "ebooklib>=0.20,<1",
+    # KindleUnpack's read-only MOBI header, decompression and KF8 reconstruction.
+    "mobi==0.4.1",
     "fastembed==0.8.0",
     "fastmcp==3.4.0",
     # The control channel between the command line and the running app.

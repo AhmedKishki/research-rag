@@ -91,6 +91,35 @@ obligations therefore apply to anyone who distributes or operates a covered
 combination of them with this app, independently of this repository's own
 license. The repository's own license terms do not change those obligations.
 
+MOBI extraction depends on a separately licensed parser:
+
+    mobi 0.4.1
+    GNU General Public License, version 3 only (GPL-3.0-only).
+    https://pypi.org/project/mobi/0.4.1/
+    https://github.com/iscc/mobi
+    https://www.gnu.org/licenses/gpl-3.0.html
+
+The installed distribution declares GPL-3.0-only in its package metadata and
+ships the GPL version 3 text in its licenses/LICENSE file. It is a fork of
+KindleUnpack and retains these upstream credits in its package documentation:
+
+    KindleUnpack
+    https://github.com/kevinhendricks/KindleUnpack
+    Initial mobipocket version Copyright 2009 Charles M. Hannum.
+    Extensions and improvements Copyright 2009-2014 by P. Durrant,
+    K. Hendricks, S. Siebert, fandrieu, DiapDealer, nickredding, and tkeo.
+
+This app uses the parser's in-memory components in an offline, resource-bounded
+subprocess that also parses HTML, infers metadata, and constructs extraction
+units. The parent receives bounded serialized units rather than parsing MOBI
+HTML itself. It does not copy parser source into this repository or call its
+file-producing conversion entry points. Subprocess separation is an execution
+boundary, not a claim that GPL obligations disappear. Recipients and
+redistributors must review and satisfy the GPL terms for the dependency and any
+covered combination, including applicable license, notice, and corresponding
+source requirements. The Apache grant for this repository's own code does not
+relicense mobi or make the installed dependency combination Apache-only.
+
 OPTIONAL DOCLING PDF BACKEND
 
 `ingestion.pdf_backend=docling` is opt-in and installs the `docling` extra. The

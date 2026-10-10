@@ -1105,6 +1105,7 @@ def test_a_source_opens_in_the_desktop_viewer_and_only_a_source_does(
 
     (project / "sources" / "evidence.pdf").write_bytes(b"%PDF-1.4\n% test\n")
     (project / "sources" / "book.epub").write_bytes(b"PK")
+    (project / "sources" / "book.mobi").write_bytes(b"MOBI")
     opened: list[Path] = []
 
     def hand_over(path: Path) -> str:
@@ -1116,6 +1117,8 @@ def test_a_source_opens_in_the_desktop_viewer_and_only_a_source_does(
     with client:
         answered = client.post("/api/open-source", json={"source_path": "evidence.pdf"})
         epub = client.post("/api/open-source", json={"source_path": "book.epub"})
+        mobi = client.post("/api/open-source", json={"source_path": "book.mobi"})
+        mobi_file = client.get("/api/source-file", params={"path": "book.mobi"})
         traversal = client.post(
             "/api/open-source", json={"source_path": "../secret.pdf"}
         )
@@ -1138,13 +1141,16 @@ def test_a_source_opens_in_the_desktop_viewer_and_only_a_source_does(
         "filename": "evidence.pdf",
     }
     assert epub.status_code == 200
-    assert [path.name for path in opened] == ["evidence.pdf", "book.epub"]
+    assert mobi.status_code == 200
+    assert mobi_file.headers["content-type"] == "application/x-mobipocket-ebook"
+    assert mobi_file.headers["content-disposition"].startswith("attachment;")
+    assert [path.name for path in opened] == ["evidence.pdf", "book.epub", "book.mobi"]
     assert traversal.status_code == 400
     assert missing.status_code == 404
     assert cross.status_code == 403
     assert headless.status_code == 501
     assert "no desktop" in headless.json()["error"]
-    assert len(opened) == 2
+    assert len(opened) == 3
 
 
 def test_the_desktop_viewer_is_started_without_a_shell_and_reaped(

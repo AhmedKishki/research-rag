@@ -28,6 +28,7 @@ from ebooklib import epub
 
 from ..project.settings import BM25_STOPWORD_LANGUAGES, bm25_stopwords
 from .docling_env import DoclingEnv, DoclingEnvironmentError
+from .mobi_reader import MobiReadError, MobiText, extract_mobi_payload
 from .pdf_backend import (
     DEFAULT_PDF_BACKEND,
     PDF_BACKEND_DOCLING,
@@ -310,7 +311,9 @@ def _valid_title(
         return False
     if any(pattern.search(normalized) for pattern in _TITLE_REJECTIONS):
         return False
-    comparable_title = re.sub(r"\.(?:pdf|epub)$", "", normalized, flags=re.IGNORECASE)
+    comparable_title = re.sub(
+        r"\.(?:pdf|epub|mobi)$", "", normalized, flags=re.IGNORECASE
+    )
     comparable = re.sub(r"[^a-z0-9]+", "", comparable_title.casefold())
     filename = re.sub(r"[^a-z0-9]+", "", filename_stem.casefold())
     if reject_filename_match and comparable and comparable == filename:
@@ -1890,13 +1893,16 @@ def extract_scanned_pdf_pages(
 def prepare_epub_extraction(
     source: SourceFile,
     digest: str,
+    *,
+    book: epub.EpubBook | None = None,
 ) -> tuple[dict[str, Any], int]:
     """EPUB metadata and its deterministic spine work count."""
 
-    try:
-        book = epub.read_epub(str(source.path), options={"ignore_ncx": True})
-    except Exception as exc:
-        raise ExtractionError(f"Cannot open EPUB source: {source.path}") from exc
+    if book is None:
+        try:
+            book = epub.read_epub(str(source.path), options={"ignore_ncx": True})
+        except Exception as exc:
+            raise ExtractionError(f"Cannot open EPUB source: {source.path}") from exc
     titles = _epub_metadata_values(book, "title")
     authors = _epub_metadata_values(book, "creator")
     identifiers = _epub_metadata_values(book, "identifier")
@@ -1972,6 +1978,79 @@ def prepare_epub_extraction(
         }
     )
     return record, len(book.spine)
+
+
+def extract_mobi(
+    source: SourceFile,
+    digest: str | None = None,
+) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+    """Read MOBI once without writing conversions; apply the EPUB HTML rules.
+
+    MOBI7 uses the original HTML stream. KF8 uses reconstructed text parts. These
+    logical sections and element paths are not printed pages or EPUB source paths.
+    """
+    try:
+        return extract_mobi_payload(
+            source.path,
+            {
+                "source": {
+                    "source_id": source.source_id,
+                    "source_relative_path": source.source_relative_path,
+                    "project_relative_path": source.project_relative_path,
+                    "extension": source.extension,
+                    "size": source.size,
+                    "mtime_ns": source.mtime_ns,
+                },
+                "digest": digest or sha256_file(source.path),
+            },
+        )
+    except MobiReadError as exc:
+        raise ExtractionError(f"Cannot open MOBI source {source.path}: {exc}") from exc
+
+
+def _mobi_units_from_text(
+    source: SourceFile, digest: str, parsed: MobiText
+) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+    """Worker-only HTML conversion; the serving parent never parses MOBI HTML."""
+    book = epub.EpubBook()
+    for mobi_key, dc_key in (
+        ("Title", "title"),
+        ("Creator", "creator"),
+        ("Published", "date"),
+        ("Language", "language"),
+    ):
+        for value in parsed.metadata.get(mobi_key, []):
+            book.add_metadata("DC", dc_key, value)
+    items = []
+    for index, html in enumerate(parsed.parts):
+        item = epub.EpubHtml(
+            uid=f"part-{index + 1}", file_name=f"part-{index + 1:06d}.html"
+        )
+        item.set_content(html.encode("utf-8"))
+        book.add_item(item)
+        items.append(item)
+    book.spine = [(item.id, "yes") for item in items]
+    record, _total = prepare_epub_extraction(source, digest, book=book)
+    record["metadata_provenance"] = {
+        key: value.replace("epub_opf", "mobi_header").replace(
+            "epub_visible", "mobi_visible"
+        )
+        for key, value in record["metadata_provenance"].items()
+    }
+    record.update(mobi_version=parsed.version, mobi_compression=parsed.compression)
+    units: list[dict[str, Any]] = []
+    removals = empty_removal_counts()
+    empty = 0
+    for index, item in enumerate(items):
+        batch, absent, counts = _extract_html_item(source, record, index, item)
+        units.extend(batch)
+        empty += int(absent)
+        removals = merge_removal_counts(removals, counts)
+    record.update(removals)
+    record.update(extracted_units=len(units), empty_units=empty)
+    if not units:
+        raise ExtractionError(_no_text_layer_message(source, "MOBI"))
+    return record, units
 
 
 def _epub_fragment(tag: Tag) -> tuple[str, str] | None:
@@ -2199,6 +2278,17 @@ def extract_epub_spine_item(
     item = book.get_item_with_id(item_id)
     if item is None or item.get_type() != ebooklib.ITEM_DOCUMENT:
         return [], False, removals
+    return _extract_html_item(source, document_record, spine_index, item)
+
+
+def _extract_html_item(
+    source: SourceFile,
+    document_record: dict[str, Any],
+    spine_index: int,
+    item: epub.EpubHtml,
+) -> tuple[list[dict[str, Any]], bool, dict[str, int]]:
+    """Shared reflowable HTML cleanup; locators keep the source format distinct."""
+    removals = empty_removal_counts()
     soup = BeautifulSoup(item.get_content(), "html.parser")
     # The navigation, scripts, and stylesheet are removed on every EPUB and say nothing
     # about the source's own furniture, so they are not counted. The count is what a
@@ -2261,10 +2351,13 @@ def extract_epub_spine_item(
             block_index=block_index,
             anchor=anchor,
         )
+        source_format = source.extension.removeprefix(".")
+        if source_format == "mobi":
+            locator["type"] = "mobi_section"
         units.append(
             {
                 "id": (
-                    f"{document_id}:epub-section:{spine_index + 1:06d}:"
+                    f"{document_id}:{source_format}-section:{spine_index + 1:06d}:"
                     f"block:{block_index:06d}"
                 ),
                 "document_id": document_id,
@@ -2292,6 +2385,8 @@ def extract_epub_spine_item(
         )
         if element_name in _EPUB_HEADING_ELEMENTS:
             heading_segments = _epub_text_segments(element, initial_anchor)
+            if source.extension == ".mobi":
+                section_title = normalize_inline_text(element.get_text(" ", strip=True))
             pending_heading_parts.extend(text for text, _anchor in heading_segments)
             if pending_heading_anchor is None:
                 pending_heading_anchor = next(
@@ -2792,8 +2887,8 @@ def _refusal_message(
             )
         return (
             f"Source is not clean ({', '.join(reasons)}): {source.path}. "
-            "No readable text was recovered within this project's EPUB loss limit. "
-            "The file is never edited. Supply a readable EPUB, or exclude it with "
+            f"No readable text was recovered within this project's {source.extension[1:].upper()} loss limit. "
+            "The file is never edited. Supply a readable ebook, or exclude it with "
             f"`research-rag exclude {source.source_relative_path} --reason "
             '"not clean"`, or raise ingestion.maximum_unclean_percent.'
         )
@@ -2805,7 +2900,7 @@ def _refusal_message(
         first = rejected[0]["locator"]
         if first.get("type") == "pdf_page":
             location = f" First excluded unit at page {first.get('page')}."
-        elif first.get("type") == "epub_section":
+        elif first.get("type") in {"epub_section", "mobi_section"}:
             location = (
                 f" First excluded unit at section {first.get('section_index')}"
                 f" ({first.get('href')})."
@@ -3125,6 +3220,8 @@ def extract_sources(
             document, extracted = _extract_pdf(source, digest)
         elif source.extension == ".epub":
             document, extracted = _extract_epub(source, digest)
+        elif source.extension == ".mobi":
+            document, extracted = extract_mobi(source, digest)
         else:  # pragma: no cover
             raise ExtractionError(f"Unsupported source format: {source.path}")
         retained = screen_source_units(

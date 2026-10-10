@@ -134,7 +134,7 @@ HELP_GROUPS: tuple[tuple[str, tuple[tuple[str, str], ...]], ...] = (
             (
                 "ingest",
                 (
-                    "Extract, chunk, embed, and index the PDFs and EPUBs in the "
+                    "Extract, chunk, embed, and index the PDFs, EPUBs and MOBIs in the "
                     "sources directory. Call it again to resume a build that ran "
                     "out of time."
                 ),
@@ -432,7 +432,7 @@ A first project, in four commands:
   research-rag --project-root "/path/to/My Project" search "what does it say?"
   research-rag --project-root "/path/to/My Project" --start-ui start
 
-Copy the PDFs and EPUBs into "/path/to/My Project/sources" before `ingest`, and
+Copy the PDFs, EPUBs and MOBIs into "/path/to/My Project/sources" before `ingest`, and
 keep the terminal open while `start` is serving it.
 
 A project this installation already registered, named instead of its path:
@@ -473,7 +473,7 @@ def _parser() -> argparse.ArgumentParser:
         # epilog are read raw.
         formatter_class=argparse.RawDescriptionHelpFormatter,
         description=(
-            "Review evidence from a project's PDF and EPUB corpus, in a terminal, "
+            "Review evidence from a project's PDF, EPUB and MOBI corpus, in a terminal, "
             "in a browser, or through an agent.\n"
             "\n"
             "One project is one app, one index, and one set of review decisions. "
@@ -482,7 +482,7 @@ def _parser() -> argparse.ArgumentParser:
             "disagree about it.\n"
             "\n"
             "`init` gives a directory its project record, `ingest` builds the "
-            "searchable generation from the PDFs and EPUBs in its sources "
+            "searchable generation from the PDFs, EPUBs and MOBIs in its sources "
             "directory, and `search` or `start` reads what was built. An answer "
             "carries the passage, where it sits, and the original to open beside "
             "it; the conclusion is yours."
@@ -724,7 +724,7 @@ def _parser() -> argparse.ArgumentParser:
     refresh = add(
         "ingest",
         description=(
-            "Build the searchable generation from the PDFs and EPUBs in the "
+            "Build the searchable generation from the PDFs, EPUBs and MOBIs in the "
             "source directory: extract, chunk, embed, and index them. A build that "
             "fails or is cancelled leaves the generation search reads in place, "
             "and calling this again resumes the checkpoint."
@@ -1519,7 +1519,7 @@ def _init(args: argparse.Namespace) -> dict[str, Any]:
         "registry_path": str(registry_path()),
         "keep_out_of_version_control": list(VERSION_CONTROL_NOTES),
         "next_steps": [
-            f"Add PDF or EPUB sources to {config.source_root}.",
+            f"Add PDF, EPUB or MOBI sources to {config.source_root}.",
             project_command(config.project_root, "ingest"),
             project_command(config.project_root, "search", "your question"),
             project_command(config.project_root, "start"),
@@ -3110,7 +3110,7 @@ def _help_menu() -> str:
     label = 2 + width + 2
     text_width = max(40, min(78, 96) - label)
     lines = [
-        f"{CLI_NAME} — a research knowledge base over a project's own PDFs and EPUBs.",
+        f"{CLI_NAME} — a research knowledge base over a project's own PDFs, EPUBs and MOBIs.",
         "",
         "A project has one app. This command line, the browser workspace, and an",
         "agent's tools are three ways into that one process, so they read one index",
