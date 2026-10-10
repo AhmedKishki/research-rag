@@ -42,7 +42,8 @@ def generation_is_reusable(
         and manifest.get("cleaning_policy_version") == cleaning_policy_version
         and manifest.get("artifact_policy_version") == artifact_policy_version
         and manifest.get("project_id") == project_id
-        and chunking.get("backend") == "UltraRAG token chunker"
+        and chunking.get("backend")
+        in {"UltraRAG token chunker", "Chonkie token chunker (UltraRAG-compatible)"}
         and chunking.get("tokenizer") == "gpt2"
         and chunking.get("chunk_size") == chunk_size
         and chunking.get("chunk_overlap") == chunk_overlap

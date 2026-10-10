@@ -156,6 +156,13 @@ async def _clients(app: App, request: Request) -> JSONResponse:
     return _json({"clients": app.clients.report()})
 
 
+async def _lan(app: App, request: Request) -> JSONResponse:
+    body = await _body(request)
+    if set(body) != {"enabled"} or not isinstance(body.get("enabled"), bool):
+        raise ResearchError("LAN control requires only a boolean enabled")
+    return _json(await app.set_lan(body["enabled"]))
+
+
 async def _disconnect(app: App, request: Request) -> JSONResponse:
     session_id = request.path_params["session_id"]
     reason = (await _body(request)).get("reason") or "Disconnected by request."
@@ -455,6 +462,7 @@ def control_routes(app: App) -> list[Route]:
     return [
         route("/status", _status, ["GET"]),
         route("/health", _health, ["GET"]),
+        route("/lan", _lan, ["POST"]),
         route("/clients", _clients, ["GET"]),
         route("/clients/{session_id}/disconnect", _disconnect, ["POST"]),
         route("/ingest", _ingest, ["POST"]),
@@ -520,6 +528,9 @@ class Control:
 
     def health(self) -> dict[str, Any]:
         return self._call("GET", "/health")
+
+    def set_lan(self, enabled: bool) -> dict[str, Any]:
+        return self._call("POST", "/lan", json={"enabled": enabled})
 
     def clients(self) -> list[dict[str, Any]]:
         return list(self._call("GET", "/clients")["clients"])

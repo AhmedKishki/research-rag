@@ -1,19 +1,19 @@
 # Features
 
-- **UltraRAG** marks a capability from the pinned upstream framework, used as it is.
-- **Added here** marks the research layer around UltraRAG.
+- Normal retrieval uses an in-process backend compatible with the pinned UltraRAG chunker and BM25 implementation.
+- The legacy gateway is optional. The research layer, workspace, and agent tools do not launch it.
 
 ## What UltraRAG provides
 
 - The UltraRAG gateway exposes about 78 tools and 26 prompts across corpus, retrieval, reranking, prompt, generation, routing, memory, benchmark, and evaluation components. It also ships several vector-database backends and a web interface.
-- This app uses three upstream capabilities and owns everything else.
-  - The chunker and BM25 are upstream. The chunk size, overlap, which units are chunked, result filtering, and the disclosure of rejected text are this app's.
+- This app preserves the upstream chunking and BM25 semantics while calling their dependencies directly.
+  - Chonkie splits GPT-2 token windows. bm25s supplies the lexical index. Chunk size, overlap, which units are chunked, result filtering, and the disclosure of rejected text are this app's.
   - The app needs no upstream service, credential, GPU, or vector database.
 
 | UltraRAG capability | Used | What this app does |
 |---|---|---|
-| GPT-2 token chunking (`corpus_chunk_documents`) | Yes | Splits extraction units into token chunks of a configured size and overlap. Several units share one call; each keeps its own durable output. |
-| BM25 index and search (`retriever_retriever_init`, `retriever_bm25_index`, `retriever_bm25_search`) | Yes | Supplies the lexical half of retrieval, in English, on CPU. |
+| GPT-2 token chunking (`corpus_chunk_documents`) | Compatible direct implementation | Splits extraction units through Chonkie with the same token windows and overlap. Each unit keeps its own durable output. |
+| BM25 index and search (`retriever_retriever_init`, `retriever_bm25_index`, `retriever_bm25_search`) | Compatible direct implementation | Supplies the lexical half on CPU through the pinned bm25s fork, with the same saved index layout and stopword semantics. |
 | FAISS, Qdrant, Milvus backends (`retriever_init(index_backend=...)`) | No | Replaced by FastEmbed CPU embeddings with an exact scan of portable vectors, or an embedded Qdrant collection. |
 | Reranking (`reranker_init`, `reranker_rerank`) | No | Replaced by a FastEmbed CPU cross-encoder. |
 | Prompt assembly and answer generation | No | Left out. The reader writes the answer. |
@@ -45,7 +45,9 @@
 
 - The exact scan is the default. Above 200,000 chunks the embedded Qdrant backend is selected per generation and recorded in its manifest. It returns scored hits under a payload filter, which upstream FAISS cannot.
 - The reranker orders at most 50 candidates by score, then appends the unreranked tail, so a source whose best passage fell outside the window can still be reached. A string-only reranker cannot express that.
-- The vanilla gateway can start a `reranker` namespace, but this app requests `corpus` and `retriever` only. Adding it would add a second model-serving surface.
+- The optional vanilla gateway retains its upstream namespaces. Normal retrieval starts none of them.
+- Existing generations retain their original manifest provenance. Compatible old chunks, vectors, and BM25 indexes remain readable and reusable without migration. New manifests name the direct implementation; changing the backend alone does not change defaults or require ingestion.
+- `research-rag-gateway` requires the optional `legacy` dependency. `research-rag-runtime` and `doctor --repair-runtime` still install or validate the historical snapshot explicitly; neither is required for normal retrieval.
 - Six FastEmbed cross-encoders are supported, each pinned to a revision in `rerankers.py`. The default is `Xenova/ms-marco-MiniLM-L-6-v2`. A name outside the table is refused.
 - Embeddings and rerankers load an exact Hugging Face repository commit through FastEmbed's explicit snapshot path. A missing pin never falls back to a repository head or a tarball.
 - Reranking is fixed behaviour. `rerank=false` is reachable only from the engine. When the model cannot load, search falls back to the unranked order and discloses it.
@@ -86,7 +88,7 @@
 
 | Feature | What it does |
 |---|---|
-| BM25 lexical search (UltraRAG) | Matches the typed words. Serves exact names, terms, and phrases. |
+| BM25 lexical search (compatible bm25s) | Matches the typed words. Serves exact names, terms, and phrases. |
 | Dense semantic search | FastEmbed `bge-small-en-v1.5`, 384 dimensions, CPU, revision-pinned. Finds passages phrased differently from the question. |
 | Hybrid search | Weighted reciprocal-rank fusion of the two rankings, with an opt-out to inspect either alone. |
 | Incompatible embedding identity | A model, repository, revision, or dimension mismatch disables dense search and vector reuse. Default search uses BM25 with an upgrade warning; an explicit dense or hybrid engine request refuses until ingestion rebuilds the vectors. |
@@ -103,7 +105,7 @@
 | Relevance gates with abstention | Weak candidates are dropped, so a search can return fewer than `top_k` results, including none. A dense candidate below the cosine floor is still admitted when the query's best candidate cleared the floor and this one is within `retrieval.dense_relative_similarity_margin` of it. The full-detail payload reports each gate's rejected count, the best similarity, and the sources the floor dropped. |
 | Minimum passage length | `retrieval.minimum_passage_words` and `retrieval.minimum_passage_token_fraction` drop short candidates before fusion in each half. Both are off by default. The full-detail payload reports the rules, counts, and dropped sources. |
 | Precomputed usability verdict | Whether a candidate is structurally unusable is computed once when the lookup is built and stored per chunk. |
-| Evaluation harnesses | A judged query set and a harness that measures each retrieval mode through the engine the tools call. A second harness drives index builds, durability writes, embedding, and the query gate against the real gateway, models, and service. |
+| Evaluation harnesses | A judged query set and a harness that measures each retrieval mode through the engine the tools call. Build and latency harnesses use the same direct backend, models, and service. Historical gateway measurements do not establish direct-backend performance or retrieval quality. |
 
 ### Project model, review, and durability
 
@@ -138,14 +140,14 @@
 
 | Feature | What it does |
 |---|---|
-| One running app | `research-rag start` brings up one process per project. It owns the project lock and the UltraRAG gateway and serves the workspace, the agent surface at `/mcp`, and the control API on one port. Loopback is the default; `start --lan` exposes only the workspace to the home network. The gateway opens on the first call that needs it. |
+| One running app | `research-rag start` brings up one process per project. It owns the project lock and direct retrieval backend and serves the workspace, the agent surface at `/mcp`, and the control API on one port. Loopback is the default; `start --lan` exposes only the workspace to the home network. Retrieval dependencies load on demand. |
 | Workspace attached to the terminal | A bare `research-rag` serves from its terminal and asks which project when several are registered. `--start-ui` opens a browser. Ctrl-C or closing the terminal stops the app and gateway, and an app whose terminal disappears without a signal stops too. A process with no terminal is refused rather than served. A running app is reported, not duplicated. The pid, port, and terminal records let `projects` identify the owner. |
 | Reads during a build | `status`, `sources`, search, passages, and the stats answer while a build runs. Only a build's BM25 phase holds a search, and one held past the lock wait is refused with the build named. |
 | Client registry and disconnect | The app records every MCP client by declared name and by the program, directory, and process the stdio bridge inherited. One agent is one row however many sessions it opened. An unnamed client shows as its connection kind. A client silent for 15 minutes is forgotten. `research-rag disconnect <session>` refuses that client before its requests reach the tools. |
 | Stdio bridge | `research-rag mcp --project-name NAME` proxies a running app and never starts one. It takes no project path. It decides nothing at launch: every call asks whether the app answers, so an agent that connected before the app started, or while it restarted, has all eight tools and finds them working once the app is up. While it is down each call returns the start command, and `status` returns it as a structured answer. A read dropped mid-call is repeated once; a write is never repeated and its error says to check `status`. An unregistered project exposes only `status` with an `init` remedy, and finds the project once `init` has run. |
 | Fair queue for several agents | Writes take turns one at a time and searches `runtime.search_concurrency` at a time, default 2. Waiting callers are served in rounds, one agent after another, so an agent asking twenty times waits behind the others' first questions. A wait is bounded, 45 s for a search and 20 s for a write, and a refusal says how many were ahead and to ask again. A second `ingest` during a build is refused with the build's phase, not queued. |
 | Core command line | One command per job. A command that touches the corpus reaches the running app over the control API. With no app up, it is answered in process. |
-| Dependency report and doctor | `status` reports `blocked_by` and `degraded`, each a list of `{check, reason, remedy}`. `research-rag doctor` prints the same checks one per line and reads without writing. On request it repairs a mismatched UltraRAG runtime or fetches the pinned models. |
+| Dependency report and doctor | `status` reports `blocked_by` and `degraded`, each a list of `{check, reason, remedy}`. `research-rag doctor` prints the same checks and reads without writing. Normal checks cover direct dependencies and model/tokenizer caches, not the optional UltraRAG snapshot. Explicit flags prefetch models or repair the legacy runtime. |
 | Browser workspace | A local-first workspace over the command line's operations, with a tab per job. A search asks for any number of passages from 1 to 50, ten by default. It covers per-query source include and exclude, category filters, a partition list with counts, project settings, health checks with remedies, and a rebuild that reuses nothing, offered apart from ingestion. Each view, search, and page of sources is addressed in the URL fragment, so Back, Forward, and reload return to it. Sources show five to a page, each card's actions sit behind one menu, and a list of more than five starts folded. |
 | Project selector and client entry | The workspace names the project on screen and lists the account's others with whether an app is up. The MCP tab shows the agent endpoint and a copyable client entry, and folds attached clients behind one click with the count on the summary. |
 | CPU niceness | `runtime.nice` raises the process's niceness once at start, and every child inherits it. Default `10`, which keeps a desktop responsive during a build. Docling installation and conversion require a verified niceness of at least `10`, even when the app's priority is unchanged. |

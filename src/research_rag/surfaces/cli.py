@@ -9,10 +9,8 @@ console script reaches all of it, and the agent surface lives in `surfaces/mcp.p
 rather than here, so the terminal and the browser answer from the same call on the
 same payload.
 
-Only a command that queries opens the vanilla gateway, and it opens on the first
-call rather than as a command-line choice: a generation initializes BM25 through
-that gateway as it loads for querying. A command that reads only local state never
-starts one, so it works with no UltraRAG runtime installed.
+Retrieval loads its direct dependencies only when an operation needs them. A
+command that reads local state starts no gateway and needs no UltraRAG runtime.
 """
 
 from __future__ import annotations
@@ -246,6 +244,10 @@ HELP_GROUPS: tuple[tuple[str, tuple[tuple[str, str], ...]], ...] = (
                 "The agents attached to this project's app.",
             ),
             (
+                "lan",
+                "Enable or disable LAN browser access immediately for this app run.",
+            ),
+            (
                 "disconnect",
                 "End one attached agent's session.",
             ),
@@ -452,16 +454,16 @@ Every global option goes before the command name, and `--project` and
 
 @asynccontextmanager
 async def _service(config: ResearchConfig) -> AsyncIterator[ResearchService]:
-    """Yield the service over a gateway that opens only if it is spoken to."""
+    """Yield the service over the lazy, in-process compatible retrieval backend."""
 
     from ..core.service import ResearchService
-    from ..retrieval.ultrarag import LazyGateway, VanillaUltraRAG
+    from ..retrieval.direct import DirectRetrieval
 
-    gateway = LazyGateway(config)
+    backend = DirectRetrieval(config)
     try:
-        yield ResearchService(config, VanillaUltraRAG(gateway, config))
+        yield ResearchService(config, backend)
     finally:
-        await gateway.aclose()
+        await backend.aclose()
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -559,7 +561,7 @@ def _parser() -> argparse.ArgumentParser:
         action="store_true",
         default=None,
         help=(
-            "Refuse the network and require the pinned runtime and every model to "
+            "Refuse the network and require every needed model and tokenizer to "
             "be cached already. `doctor --prefetch-models` caches them."
         ),
     )
@@ -1270,6 +1272,15 @@ def _parser() -> argparse.ArgumentParser:
             "tools. This is the same decision the workspace's MCP tab makes, so "
             "an agent ended in the browser is gone from the terminal too."
         ),
+    )
+    lan = add(
+        "lan",
+        description="Change LAN browser access immediately for this app run. HTTP has no authentication or encryption; use only a trusted home network. Control and MCP remain local.",
+    )
+    lan.add_argument(
+        "action",
+        choices=("enable", "disable"),
+        help="Enable trusted home-LAN HTTP access or return to loopback-only serving without restarting.",
     )
     drop.add_argument(
         "session_id",
@@ -2492,7 +2503,7 @@ def _attached_banner(config: ResearchConfig, app: App) -> None:
         f"{config.project_name} — workspace attached to {_own_tty() or 'no terminal'}",
         f"  {app.url}",
         f"  pid {os.getpid()} · log {config.state_root / 'logs' / 'research-rag-ui.log'}",
-        "  Ctrl-C stops the app and the gateway it started.",
+        "  Ctrl-C stops the app and releases its retrieval backend.",
     ]
     if getattr(app, "network_access", None) is not None and app.network_access.lan:
         lines.append(
@@ -3209,6 +3220,11 @@ async def _run(args: argparse.Namespace) -> CommandResult:
         return await _start(args, config)
     if args.command == "clients":
         return CommandResult(payload=_clients(config))
+    if args.command == "lan":
+        with _control(config) as control:
+            if control is None:
+                raise ResearchError("No app is running; run research-rag start.")
+            return CommandResult(payload=control.set_lan(args.action == "enable"))
     if args.command == "disconnect":
         return CommandResult(payload=_disconnect(args, config))
     if args.command == "stop":

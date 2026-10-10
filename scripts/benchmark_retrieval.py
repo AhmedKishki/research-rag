@@ -4,9 +4,8 @@ The app owns the numbers; a design owns the experiment. This harness is one
 worker: it opens the project it is pointed at, runs the frozen query set it is
 given through ``hybrid`` with reranking, and writes one JSON report. It starts no
 app, registers no client, and stops nothing, and it never inspects a process
-tree. The stdio gateway it opens is a child of the worker that opened it, and the
-worker closes it before it reports, so the reaped children's CPU is that child's
-and nothing else.
+tree. Retrieval runs directly in the worker's threads. The report separates
+the worker's CPU from any reaped children and names its backend implementation.
 
 No relevance is measured here. A row says how long one search took and what it
 returned; judging whether that return was right belongs to
@@ -63,12 +62,10 @@ import statistics
 import subprocess
 import sys
 from collections.abc import Callable, Mapping, Sequence
-from contextlib import AbstractAsyncContextManager
+from contextlib import AbstractAsyncContextManager, asynccontextmanager
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
-
-from fastmcp import Client
 
 from research_rag.core.service import ResearchService
 from research_rag.project.config import (
@@ -77,10 +74,7 @@ from research_rag.project.config import (
     resolve_config,
 )
 from research_rag.project.support import ResearchError
-from research_rag.retrieval.ultrarag import (
-    VanillaUltraRAG,
-    create_vanilla_transport,
-)
+from research_rag.retrieval.direct import DirectRetrieval
 
 #: The protocol this harness speaks. A worker report and the summary over worker
 #: reports each carry their own version, because a figure measured by report
@@ -125,12 +119,11 @@ DATA_STATE_FILES: tuple[str, ...] = (
 #: quantity. A gateway child burns most of the CPU a search costs, and a worker
 #: that reported one blended number would be describing a machine it does not own.
 CPU_ACCOUNTING_NOTE = (
-    "self_cpu_seconds is this worker's own user plus system time. "
-    "children_cpu_seconds_total_reaped is the same sum for the stdio gateway this "
-    "worker started, counted only once the operating system has reaped it, so a "
-    "gateway still running is absent from it. The two totals are the whole cost of "
-    "one worker; a per-query row carries the self figure alone and never the "
-    "gateway's."
+    "self_cpu_seconds is this worker's user plus system time, including direct "
+    "retrieval threads. children_cpu_seconds_total_reaped records any reaped "
+    "child processes; normal retrieval starts no gateway. A per-query row carries "
+    "self CPU only. Historical gateway runs charged lexical retrieval to child "
+    "CPU instead, so compare totals only with the backend identity disclosed."
 )
 
 #: Reported beside every worker so a reader does not mistake a cold process for a
@@ -638,27 +631,20 @@ def _row(
 # --------------------------------------------------------------------------
 
 
-def _client_scope(config: Any) -> AbstractAsyncContextManager[Any]:
-    """The stdio gateway this worker starts, as a context manager.
-
-    The gateway is opened here and nowhere else, is a child of this worker, and
-    is closed by the ``async with`` that ends the measurement. Nothing is
-    registered, no daemon is contacted, and no existing app is signalled.
-    """
-
-    return Client(
-        create_vanilla_transport(config),
-        timeout=CLIENT_TIMEOUT_SECONDS,
-        init_timeout=CLIENT_INIT_TIMEOUT_SECONDS,
-    )
+@asynccontextmanager
+async def _client_scope(config: Any):
+    """Own the same direct backend as the app, without contacting a daemon."""
+    backend = DirectRetrieval(config)
+    try:
+        yield backend
+    finally:
+        await backend.aclose()
 
 
 def _service_for(config: Any, client: Any) -> ResearchService:
-    """The app's own service, over that gateway."""
+    """The app's own service, over the compatible direct backend."""
 
-    return ResearchService(
-        config, VanillaUltraRAG(client, config), record_searches=False
-    )
+    return ResearchService(config, client, record_searches=False)
 
 
 def _require_servable(
@@ -873,6 +859,7 @@ async def run_probe(
     report: dict[str, Any] = {
         "schema_version": REPORT_SCHEMA_VERSION,
         "kind": "research-rag retrieval latency probe",
+        "retrieval_backend": "direct-compatible",
         "notice": PROBE_NOTICE,
         "cache_disclosure": CACHE_DISCLOSURE,
         "dates": {"started_at": started_at, "finished_at": _utc_now()},
@@ -1011,7 +998,7 @@ async def run_probe(
             ),
             "self_cpu_seconds": (
                 "this worker's own user plus system time across that one search; "
-                "the gateway's CPU is in the resource totals and in no row"
+                "direct retrieval runs in its threads, with no gateway child"
             ),
             "returned_chunk_ids": (
                 "rank-ordered identifiers, recorded so a repeated worker can be "
@@ -1027,8 +1014,8 @@ async def run_probe(
                 "Digests of the project's portable state, its selected generation, "
                 "and the current pointer, taken after the read-only status call and "
                 "again after the last search. The runtime directory is not hashed: "
-                "the gateway writes logs and handoff files there, so hashing it "
-                "would report this harness's own traffic as a change."
+                "operational logs can change without a change to evidence. "
+                "Normal direct retrieval writes no gateway handoff files."
             ),
         },
     }
@@ -1467,7 +1454,7 @@ def _condition_summary(
             "note": (
                 "One cold row per worker, because every worker is a fresh "
                 "interpreter. These figures include the process's own imports, the "
-                "gateway handshake, and reading cached files that the operating "
+                "direct retrieval initialization, and reading cached files that the operating "
                 "system may already have in memory."
             ),
         },

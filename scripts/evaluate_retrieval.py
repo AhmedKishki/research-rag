@@ -59,21 +59,16 @@ import time
 from pathlib import Path
 from typing import Any
 
-from fastmcp import Client
-
 from research_rag.core.service import ResearchService
 from research_rag.project.config import (
     configured_source_directory,
     resolve_config,
 )
 from research_rag.project.policy import retrieval_policy_fingerprint
+from research_rag.retrieval.direct import DirectRetrieval
 from research_rag.retrieval.rerankers import (
     DEFAULT_RERANKER_MODEL,
     RERANKER_MODEL_CHOICES,
-)
-from research_rag.retrieval.ultrarag import (
-    VanillaUltraRAG,
-    create_vanilla_transport,
 )
 
 DEFAULT_JUDGMENTS = Path("evaluation/ai-and-fetishism-queries.json")
@@ -1971,17 +1966,11 @@ async def evaluate(args: argparse.Namespace) -> dict[str, Any]:
             "search asks for the pipeline's evaluation trace, which changes no "
             "ranking decision."
         ),
+        "retrieval_backend": "direct-compatible",
     }
 
-    vanilla_transport = create_vanilla_transport(config)
-    async with Client(
-        vanilla_transport,
-        timeout=1800,
-        init_timeout=1800,
-    ) as vanilla_client:
-        service = ResearchService(
-            config, VanillaUltraRAG(vanilla_client, config), record_searches=False
-        )
+    async with DirectRetrieval(config) as backend:
+        service = ResearchService(config, backend, record_searches=False)
         status = await service.status()
         generation_root = status.get("generation_root")
         if not generation_root:

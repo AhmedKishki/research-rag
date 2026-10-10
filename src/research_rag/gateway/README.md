@@ -1,6 +1,6 @@
 # `gateway`
 
-The stdio MCP gateway this app spawns, and the UltraRAG runtime it proxies.
+The optional legacy stdio MCP gateway and the UltraRAG runtime it proxies. Normal retrieval uses `retrieval/direct.py` and does not spawn this gateway.
 
 | Module | Holds |
 |---|---|
@@ -14,8 +14,8 @@ The stdio MCP gateway this app spawns, and the UltraRAG runtime it proxies.
 
 ## Rules
 
-- The gateway is an implementation dependency below the app, not a surface. It is
-  reached over MCP and nothing else.
+- The gateway is a legacy helper, not part of normal retrieval or the app's agent surface. Its own clients reach it over MCP.
+- Install the optional `legacy` extra before starting `research-rag-gateway`. Missing library support fails before a runtime download and names the install command. `research-rag-runtime` manages the source snapshot without requiring the library.
 - The runtime cache directory, its marker file, and the environment variable that
   relocates it are found by name, so a rename re-downloads a runtime for every
   machine that already has one.

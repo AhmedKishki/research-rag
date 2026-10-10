@@ -644,6 +644,20 @@ def test_a_reading_command_never_opens_the_gateway(
     assert result.payload["source_count"] == 0
 
 
+def test_normal_service_scope_uses_direct_backend(project: Path) -> None:
+    from research_rag.retrieval.direct import DirectRetrieval
+    from research_rag.surfaces.cli import _service
+
+    config = _resolve(_args("--project-root", str(project), "status"))
+
+    async def scenario() -> None:
+        async with _service(config) as service:
+            assert isinstance(service.ultrarag, DirectRetrieval)
+            assert (await service.status())["ready"] is False
+
+    asyncio.run(scenario())
+
+
 def test_the_doctor_reports_without_opening_the_gateway(
     project: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -660,7 +674,7 @@ def test_the_doctor_reports_without_opening_the_gateway(
 
     assert result.text is not None
     assert "project_identity" in result.text
-    assert "vanilla_runtime" in result.text
+    assert "direct_retrieval" in result.text
     assert result.exit_code == 1
 
 

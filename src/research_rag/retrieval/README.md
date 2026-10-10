@@ -11,6 +11,7 @@ Answering a query against a built generation.
 | `embeddings.py` | The model catalogue and the dimensions each entry declares |
 | `rerankers.py` | The reranker catalogue |
 | `artifact_lookup.py` | Reading a chunk or a document out of a generation without loading its vectors |
+| `direct.py` | Compatible direct Chonkie token chunking and bm25s indexing/search, with lazy dependency loading |
 | `ultrarag.py` | The typed MCP client to the gateway in `../gateway/`, and the lazy container that defers its spawn |
 
 ## Rules
@@ -23,4 +24,5 @@ Answering a query against a built generation.
 - An exact index build's rows travel in an `ExactIndexBuild` or are held against
   the index path being written. One backend instance serves one process, so a
   second build in the same instance must not inherit the first one's rows.
-- `ultrarag.py` speaks MCP to a child process. It does not know what a chunk is.
+- `direct.py` owns normal chunking and lexical retrieval. Blocking dependency calls run off the event loop, and one live BM25 index serves each backend.
+- `ultrarag.py` retains the optional legacy MCP client. Normal app and CLI operations do not instantiate it.

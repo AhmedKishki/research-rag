@@ -2510,7 +2510,7 @@ class IngestionWorkflow:
                         self.config.settings.pdf_backend, self.config
                     ),
                     "chunking": {
-                        "backend": "UltraRAG token chunker",
+                        "backend": "Chonkie token chunker (UltraRAG-compatible)",
                         "tokenizer": "gpt2",
                         "unit": "tokens",
                         "chunk_size": chunk_size,
@@ -2521,7 +2521,7 @@ class IngestionWorkflow:
                         "default_method": DEFAULT_RETRIEVAL_METHOD,
                         "available_methods": sorted(RETRIEVAL_METHODS),
                         "bm25": {
-                            "backend": "UltraRAG BM25",
+                            "backend": "bm25s (UltraRAG-compatible)",
                             # The setting the index was built with, not a constant.
                             "language": self.config.settings.bm25_stopwords_language,
                             "tokenizer": "default",

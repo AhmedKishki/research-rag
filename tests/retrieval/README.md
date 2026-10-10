@@ -17,5 +17,6 @@ The two retrieval paths, the fusion, the models, chunk identifiers, filters, and
   - An unavailable reranker traced as not applied.
   - A traced search answering identically to an untraced one.
 - `test_ultrarag.py`: a failed start names the reason and both logs, a mid-call exit becomes a tool error naming its log, and the handshake has its own timeout.
+- `test_direct.py`: pinned upstream chunk/BM25 differential checks, exact artifact bytes, bidirectional historical index loading, offline tokenizer caches, and cancellation/concurrency boundaries. Upstream reference checks use a cached source snapshot and skip when it is unavailable; normal backend tests need no legacy library.
 
 - `test_search_filters.py`, `test_chunk_exclusions.py`, and `test_search_evaluation_trace.py` import `FakeDenseBackend`, `FakeUltraRAG`, `ProgressivelyFilteredUltraRAG`, and `UnavailableRerankerDenseBackend` from `tests/core/test_service.py`. The last two take the PDF writer from `tests/conftest.py`. Do not move them without updating those imports.

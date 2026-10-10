@@ -18,6 +18,7 @@ import pytest
 
 from research_rag.core.service import ResearchService
 from research_rag.project.config import GATEWAY_EXECUTABLE, resolve_config
+from research_rag.retrieval.direct import DirectRetrieval
 from research_rag.retrieval.ultrarag import LazyGateway, VanillaUltraRAG
 from tests.conftest import write_pdf
 
@@ -59,14 +60,16 @@ class Research:
     fine against a gateway that could never start.
     """
 
-    def __init__(self, config: Any) -> None:
+    def __init__(self, config: Any, *, legacy: bool = False) -> None:
         self.config = config
-        self.gateway = LazyGateway(config)
+        self.legacy = legacy
+        self.gateway = LazyGateway(config) if legacy else DirectRetrieval(config)
         self.service: ResearchService | None = None
 
     async def __aenter__(self) -> ResearchService:
         self.service = ResearchService(
-            self.config, VanillaUltraRAG(self.gateway, self.config)
+            self.config,
+            VanillaUltraRAG(self.gateway, self.config) if self.legacy else self.gateway,
         )
         return self.service
 
@@ -385,7 +388,7 @@ def test_a_gateway_that_cannot_start_is_reported_by_the_operation_that_needed_it
     config = _config(project, vanilla_executable=str(broken))
 
     async def scenario() -> None:
-        async with Research(config) as service:
+        async with Research(config, legacy=True) as service:
             assert (await service.status())["ready"] is False
             # A search refuses a project with no generation before it reaches for
             # anything, so the build is the first operation that needs the gateway.

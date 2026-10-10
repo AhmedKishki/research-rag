@@ -85,7 +85,7 @@ def _split(value: str) -> SplitResult | None:
         return None
 
 
-@dataclass(frozen=True)
+@dataclass
 class NetworkAccess:
     """Validated interface snapshot and request gates, injectable into the workspace."""
 
@@ -174,5 +174,5 @@ class NetworkAccess:
             "urls": urls,
             "remote_page_urls": [url + "/remote" for url in urls],
             "workspace_urls": [url + "/next/" for url in urls],
-            "startup_remedy": "Restart from the serving terminal with --lan to enable home-LAN access.",
+            "startup_remedy": "Enable LAN access on this machine's Remote Access page, or run research-rag lan enable.",
         }

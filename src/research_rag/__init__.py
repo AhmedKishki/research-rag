@@ -13,7 +13,7 @@ The package is divided into folders, one per concern, and each folder carries a
 | `retrieval/` | answering a query against a built generation |
 | `surfaces/` | the command line, the agent surface, and the browser workspace |
 | `runtime/` | the running process and the commands that manage it |
-| `gateway/` | the stdio MCP gateway to UltraRAG, and the runtime it proxies |
+| `gateway/` | the optional legacy stdio MCP gateway to UltraRAG, and the runtime it proxies |
 
 `AGENTS.md` holds the architecture the three surfaces share, and the gates that
 keep the folders from reaching into each other.

@@ -35,7 +35,8 @@ from research_rag.runtime.health import Check, HealthReport, health_report
 EXPECTED_CHECKS = (
     "project_identity",
     "runtime_root",
-    "vanilla_runtime",
+    "direct_retrieval",
+    "chunk_tokenizer",
     "embedding_model",
     "reranker_model",
     "lock",
@@ -122,6 +123,9 @@ def healthy(config: ResearchConfig, monkeypatch: pytest.MonkeyPatch) -> Research
     """A project whose dependencies are all in place."""
 
     _install_models(config)
+    import research_rag.retrieval.direct as direct_module
+
+    monkeypatch.setattr(direct_module, "tokenizer_cache_status", lambda _root: True)
     root = config.model_cache_root.parent / "runtime-cache" / "UltraRAG-test"
     _fake_runtime(root)
     (root / vanilla_runtime.MARKER_FILENAME).write_text("{}\n", encoding="utf-8")
@@ -138,6 +142,47 @@ def test_a_healthy_project_reports_nothing_to_act_on(healthy: ResearchConfig) ->
     assert report.degraded == []
     assert report.not_checked == []
     assert report.has_blocker is False
+
+
+def test_normal_health_never_validates_optional_legacy_runtime(
+    healthy: ResearchConfig, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def refuse(_config: ResearchConfig) -> None:
+        raise AssertionError("normal health reached the optional legacy runtime")
+
+    monkeypatch.setattr(health_module, "_vanilla_runtime_check", refuse)
+    assert _report(healthy).named("direct_retrieval").state == "ok"
+
+
+def test_direct_dependency_pin_mismatch_is_actionable(
+    healthy: ResearchConfig, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    original = health_module.version
+    monkeypatch.setattr(
+        health_module,
+        "version",
+        lambda name: "1.6.0" if name == "chonkie" else original(name),
+    )
+    check = _report(healthy).named("direct_retrieval")
+    assert check.state == "blocked"
+    assert "expected 1.7.0" in check.reason
+    assert check.remedy_command == "uv sync --locked"
+
+
+def test_missing_tokenizer_does_not_block_existing_indexes_offline(
+    healthy: ResearchConfig, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from dataclasses import replace
+
+    import research_rag.retrieval.direct as direct_module
+
+    monkeypatch.setattr(direct_module, "tokenizer_cache_status", lambda _root: False)
+    report = _report(replace(healthy, settings=replace(healthy.settings, offline=True)))
+    check = report.named("chunk_tokenizer")
+    assert check.state == "warn"
+    assert "Offline mode forbids fetching" in check.reason
+    assert "--prefetch-models" in check.remedy_command
+    assert report.blocked_by == []
 
 
 def test_a_mismatched_runtime_is_blocked_and_names_the_file(
@@ -163,7 +208,9 @@ def test_a_mismatched_runtime_is_blocked_and_names_the_file(
 
     monkeypatch.setattr(vanilla_runtime, "validate_managed_runtime", refuse)
     health_module._VANILLA_CACHE.clear()
-    report = _report(healthy)
+    report = health_module.HealthReport(
+        (health_module._vanilla_runtime_check(healthy),)
+    )
 
     blocked = report.named("vanilla_runtime")
     assert blocked.state == "blocked"
@@ -190,7 +237,9 @@ def test_an_older_vanilla_still_blocks_and_says_it_cannot_name_the_file(
 
     monkeypatch.setattr(vanilla_runtime, "validate_managed_runtime", refuse)
     health_module._VANILLA_CACHE.clear()
-    report = _report(healthy)
+    report = health_module.HealthReport(
+        (health_module._vanilla_runtime_check(healthy),)
+    )
 
     blocked = report.named("vanilla_runtime")
     assert blocked.state == "blocked"
@@ -218,7 +267,7 @@ def test_a_vanilla_release_that_cannot_be_used_is_unknown(
     )
     health_module._VANILLA_CACHE.clear()
 
-    report = _report(config)
+    report = health_module.HealthReport((health_module._vanilla_runtime_check(config),))
 
     checked = report.named("vanilla_runtime")
     assert checked.state == "unknown"
@@ -241,8 +290,8 @@ def test_a_missing_runtime_blocks_offline_and_warns_online(
 
     offline = resolve_config(config.project_root, offline=True)
     online = resolve_config(config.project_root)
-    offline_check = health_report(offline, dict(READY_STATUS)).named("vanilla_runtime")
-    online_check = health_report(online, dict(READY_STATUS)).named("vanilla_runtime")
+    offline_check = health_module._vanilla_runtime_check(offline)
+    online_check = health_module._vanilla_runtime_check(online)
 
     assert offline_check.state == "blocked"
     assert "offline mode forbids downloading it" in offline_check.reason
@@ -507,20 +556,20 @@ def test_the_tree_is_read_once_per_marker(
     monkeypatch.setattr(vanilla_runtime, "validate_managed_runtime", counted)
     health_module._VANILLA_CACHE.clear()
 
-    first = _report(healthy)
-    second = _report(healthy)
+    first = health_module._vanilla_runtime_check(healthy)
+    second = health_module._vanilla_runtime_check(healthy)
 
     assert reads == [root]
-    assert first.named("vanilla_runtime") is second.named("vanilla_runtime")
+    assert first is second
 
     # A reinstalled runtime is written with a new marker, and that re-reads the tree.
     (root / vanilla_runtime.MARKER_FILENAME).write_text(
         '{"repaired": true}\n', encoding="utf-8"
     )
-    third = _report(healthy)
+    third = health_module._vanilla_runtime_check(healthy)
 
     assert reads == [root, root]
-    assert third.named("vanilla_runtime") is not first.named("vanilla_runtime")
+    assert third is not first
 
 
 def test_every_check_carries_a_reason_and_a_remedy_when_it_blocks(

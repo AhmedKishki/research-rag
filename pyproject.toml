@@ -5,13 +5,18 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "research-rag"
 version = "2.0.0"
-description = "A browser workspace for reviewing research evidence over a project's own PDF, EPUB and MOBI corpus, built on vanilla UltraRAG"
+description = "A browser workspace for reviewing research evidence over a project's own PDF, EPUB and MOBI corpus"
 readme = "README.md"
 license = "Apache-2.0"
 license-files = ["LICENSE", "NOTICE"]
 requires-python = ">=3.11,<3.13"
 dependencies = [
     "bm25s @ git+https://github.com/AhmedKishki/bm25s.git@20f6c02612b8114dca4662131ba09d5102c53308",
+    "chonkie==1.7.0",
+    "tiktoken==0.14.0",
+    "scipy>=1.10,<2",
+    "PyStemmer>=2.2,<3",
+    "orjson==3.12.0",
     "beautifulsoup4>=4.13,<5",
     "ebooklib>=0.20,<1",
     # KindleUnpack's read-only MOBI header, decompression and KF8 reconstruction.
@@ -24,8 +29,7 @@ dependencies = [
     "huggingface-hub>=0.20,<2",
     "filelock>=3.16,<5",
     "numpy>=1.26,<3",
-    # UltraRAG's BM25 backend runs on numba, and its own metadata does not declare
-    # it, so the gateway's index and every search through it fail without it here.
+    # Preserve the historical BM25 indexing and search implementation.
     "numba==0.65.0",
     "platformdirs>=4.3,<5",
     "starlette>=1.6,<2",
@@ -37,10 +41,11 @@ dependencies = [
     # Generate phone-access QR codes locally, without sending URLs to a service.
     "qrcode>=8.2,<9",
     "uvicorn>=0.53,<1",
-    # The pinned UltraRAG the gateway proxies. The managed snapshot under the runtime
-    # cache supplies each server's entry point, and those entry points import the
-    # `ultrarag` library from this environment, so the library is a direct dependency
-    # rather than something the snapshot carries.
+]
+
+[project.optional-dependencies]
+# The historical gateway remains available, but normal retrieval does not spawn it.
+legacy = [
     "ultrarag @ https://github.com/OpenBMB/UltraRAG/archive/3a709a2aea3fbe46acca59c422621c94b6e86857.tar.gz",
 ]
 

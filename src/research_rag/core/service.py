@@ -84,8 +84,8 @@ from ..retrieval.dense import (
     LocalQdrantDenseBackend,
     LocalVectorDenseBackend,
 )
+from ..retrieval.direct import DirectRetrieval
 from ..retrieval.search import SearchWorkflow
-from ..retrieval.ultrarag import VanillaUltraRAG
 from ..storage.records import (  # noqa: F401
     StorageError,
     atomic_write_json,
@@ -131,7 +131,7 @@ class ResearchService(
     def __init__(
         self,
         config: ResearchConfig,
-        ultrarag: VanillaUltraRAG,
+        ultrarag: DirectRetrieval | None,
         dense: DenseBackend | None = None,
         *,
         record_searches: bool = True,

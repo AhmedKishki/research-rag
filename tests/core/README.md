@@ -1,9 +1,9 @@
 # Service tests
 
-The operations every surface calls. The gateway and dense backend are faked, so no model download or managed runtime is needed.
+The operations every surface calls. Retrieval and dense backends are faked, so no model download or managed runtime is needed.
 
 - `test_service.py`: ingestion, selective reuse, checkpointing, crash windows, activation, retrieval, filtering, reranking, pseudo-relevance feedback, source diversity, and generation selection. It also defines `FakeUltraRAG` and `FakeDenseBackend`.
-  - Corpus-derived and explicit BM25 languages reach the gateway and match the manifest and status.
+  - Corpus-derived and explicit BM25 languages reach the backend and match the manifest and status.
 - `test_review_state_edits.py`: hand-edited review files. A hand edit applies at the next read without re-ingestion, a service write keeps an entry edited by hand, and a wrong field, type, or path is refused by name.
 - `test_mobi_service.py`: staged MOBI ingestion, hybrid retrieval, source lookup, no-op and extraction reuse, reviewed metadata and exclusions, and a DRM omission retaining a partial generation without changing the selected one.
 - `test_admission.py`: callers served in rounds, slots running together up to their number, a bounded wait that names the queue it stood in, a cancelled wait that frees its place, and a search refused behind a full queue.

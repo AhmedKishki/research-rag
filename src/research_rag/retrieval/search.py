@@ -343,7 +343,15 @@ class SearchWorkflow:
         tokenizer = token_policy.get("tokenizer")
         if floor <= 0 or not isinstance(tokenizer, str):
             return False
-        return passage_token_count(text, tokenizer) < floor
+        return (
+            passage_token_count(
+                text,
+                tokenizer,
+                offline=self.config.offline,
+                cache_root=self.config.model_cache_root,
+            )
+            < floor
+        )
 
     def _record_rejected_candidate(
         self,

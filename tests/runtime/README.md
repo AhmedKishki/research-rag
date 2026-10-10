@@ -1,11 +1,11 @@
 # Runtime tests
 
-The serving process, its health report, and the commands that need no project. The gateway is faked or left closed.
+The serving process, its health report, and the commands that need no project. Normal retrieval uses the direct backend; legacy gateway tests use fakes.
 
 - `test_app.py`: a real app on a loopback port. The agent endpoint answers once mounted, the workspace and agent surface share one service, a control settings write is refused from another site or without a JSON body, a client is listed once and can be disconnected, and a dropped session never reaches the tools.
 - `test_attached_workspace.py`: the pid, port, and tty records, a bare call that never starts a second app, a detached app named with its remedy, a process with no terminal refused, an app stopped when its terminal is lost, and a stop sweep that signals only a provably owned process.
 - `test_health.py`: one check per condition in `ok`, `warn`, `blocked`, or `unknown`.
-  - A mismatched runtime, a missing model, a held project lock, and a stale lock from a dead process.
+  - Direct dependency pins, missing model and GPT-2 caches, a held project lock, and a stale lock from a dead process. Legacy runtime validation is tested separately from normal health.
   - Free space against the build it must fit, and an app older than the installed code.
   - A check that did not run never reads as healthy.
 - `test_doctor.py`: a default run reports every check and changes nothing. The two network operations run against stand-ins. Each desktop entry is checked for its project, bridge, and timeout.

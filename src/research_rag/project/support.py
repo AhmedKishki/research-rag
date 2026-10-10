@@ -680,35 +680,26 @@ def _chunk_text(chunk: dict[str, Any]) -> str:
 # that applies no token floor never pays for the dependency.
 TOKENIZER_REPOSITORIES = {"gpt2": "openai-community/gpt2"}
 
-_TOKENIZERS: dict[str, Any] = {}
 
-
-def passage_token_count(text: str, tokenizer: str) -> int:
+def passage_token_count(
+    text: str, tokenizer: str, *, offline: bool = False, cache_root: Path | None = None
+) -> int:
     """Count a passage in the tokens the generation was chunked by."""
 
-    counter = _TOKENIZERS.get(tokenizer)
-    if counter is None:
-        repository = TOKENIZER_REPOSITORIES.get(tokenizer)
-        if repository is None:
-            raise ResearchError(
-                "The current generation records an unknown chunker tokenizer: "
-                f"{tokenizer!r}. Known names: "
-                f"{', '.join(sorted(TOKENIZER_REPOSITORIES))}."
-            )
-        try:
-            from tokie import Tokenizer
-        except ImportError as exc:  # pragma: no cover - a packaging failure
-            raise ResearchError(
-                f"The {tokenizer} tokenizer is unavailable: {exc}"
-            ) from exc
-        try:
-            counter = Tokenizer.from_pretrained(repository)
-        except Exception as exc:
-            raise ResearchError(
-                f"The {tokenizer} tokenizer could not be loaded: {exc}"
-            ) from exc
-        _TOKENIZERS[tokenizer] = counter
-    return int(counter.count_tokens(text))
+    if tokenizer not in TOKENIZER_REPOSITORIES:
+        raise ResearchError(
+            "The current generation records an unknown chunker tokenizer: "
+            f"{tokenizer!r}. Known names: "
+            f"{', '.join(sorted(TOKENIZER_REPOSITORIES))}."
+        )
+    from ..retrieval.direct import count_gpt2_tokens
+
+    try:
+        return count_gpt2_tokens(text, offline=offline, cache_root=cache_root)
+    except Exception as exc:
+        raise ResearchError(
+            f"The {tokenizer} tokenizer could not be loaded: {exc}"
+        ) from exc
 
 
 def _embedding_text(chunk: dict[str, Any]) -> str:
