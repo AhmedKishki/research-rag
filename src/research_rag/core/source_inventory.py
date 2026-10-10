@@ -327,7 +327,7 @@ def resolve_source_selector(
     record = known.get(relative)
     if record is None:
         raise SourcePolicyError(
-            f"Unknown PDF or EPUB source_relative_path: {source_path}"
+            f"Unknown PDF, EPUB or MOBI source_relative_path: {source_path}"
         )
     return record
 

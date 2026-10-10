@@ -164,7 +164,7 @@ SourcePath: TypeAlias = Annotated[
     str,
     Field(
         description=(
-            "PDF or EPUB path relative to the configured sources directory. Use "
+            "PDF, EPUB or MOBI path relative to the configured sources directory. Use "
             "the `source_relative_path` find_source reports for it; absolute and "
             "escaping paths are rejected."
         ),

@@ -106,7 +106,7 @@ def set_source_inclusion(
                 and previous is None
             ):
                 raise SourcePolicyError(
-                    "Only an existing or currently indexed PDF or EPUB can "
+                    "Only an existing or currently indexed PDF, EPUB or MOBI can "
                     "be excluded: "
                     f"{relative}"
                 )

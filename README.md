@@ -1,6 +1,6 @@
 # research-rag
 
-- Search a project's PDFs and EPUBs locally on CPU, without an account or hosted model service.
+- Search a project's PDFs, EPUBs, and MOBIs locally on CPU, without an account or hosted model service.
 - Read passages with source locators, review bibliography, and exclude unwanted evidence in the browser.
 - Use the same knowledge base from the browser, command line, or an MCP agent.
 - Results are evidence, not generated answers or verified quotations.
@@ -35,14 +35,14 @@ uv run research-rag install
 research-rag --project-root "/path/to/project" init --name "My project"
 ```
 
-- Copy PDFs and EPUBs into the project's `sources/` directory, then build the index:
+- Copy PDFs, EPUBs, and MOBIs into the project's `sources/` directory, then build the index:
 
 ```bash
 research-rag --project-root "/path/to/project" ingest
 ```
 
 - The first build can take time. Repeat `ingest` if it reports an unfinished build.
-- If a PDF or EPUB cannot be extracted, a validated generation containing the remaining sources is retained as **partial**, not selected. Review the omitted sources in the result or generation list. Repair them and run `ingest` again, or select the partial generation with `research-rag --project-root "/path/to/project" generations --use GENERATION_ID`.
+- If a source cannot be extracted, a validated generation containing the remaining sources is retained as **partial**, not selected. Review the omitted sources in the result or generation list. Repair them and run `ingest` again, or select the partial generation with `research-rag --project-root "/path/to/project" generations --use GENERATION_ID`.
 
 ## Read the evidence
 
@@ -100,11 +100,12 @@ research-rag --project-root "/path/to/project" doctor --mcp-entry
 - Extraction is text only. A PDF with a text layer is indexed as that text; a PDF with no text layer or a password is refused.
   - Scanned PDFs need OCR performed outside this app. Add the recognised copy to the sources directory and run `ingest`.
   - PDF cleaning repairs passages locally and leaves visible gaps where damaged text cannot be recovered. `ingestion.maximum_unclean_percent` caps substantive text loss per document, excluding confirmed furniture and non-evidence. Over-budget or unreadable PDFs are omitted from a retained partial generation, not used to fail otherwise readable sources.
-- [Features and limits](FEATURES.md), [storage and portability](STORAGE.md), [measurement protocols](MEASUREMENTS.md).
+- MOBI support covers unencrypted reflowable books, not dictionaries or Print Replica. [Features and limits](FEATURES.md) specifies supported variants and parser safety limits.
+- [Storage and portability](STORAGE.md), [measurement protocols](MEASUREMENTS.md).
 
 ## UltraRAG credit and licensing
 
 - Built on [UltraRAG](https://github.com/OpenBMB/UltraRAG)'s MCP architecture, corpus chunker, and BM25 retriever.
   - UltraRAG credits THUNLP at Tsinghua University, NEUIR at Northeastern University, OpenBMB, AI9stars, and its contributors.
 - This is an independent project, not an official UltraRAG release, and is not affiliated with or endorsed by those organizations or contributors.
-- This code uses the [Apache License 2.0](LICENSE). Extraction components have AGPL obligations. [NOTICE](NOTICE) records their terms, model licences, and upstream revisions.
+- This repository's code uses the [Apache License 2.0](LICENSE). Extraction dependencies carry separate AGPL and GPL obligations. [NOTICE](NOTICE) records their terms, model licences, and upstream revisions.

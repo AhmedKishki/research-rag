@@ -24,6 +24,7 @@ from ..corpus.extraction import (
     docling_pdf_batch,
     empty_removal_counts,
     extract_epub_spine_item,
+    extract_mobi,
     extract_scanned_pdf_pages,
     merge_removal_counts,
     pdf_page_count,
@@ -1393,6 +1394,39 @@ class IngestionWorkflow:
                             + 2
                         )
                         atomic_write_json(state_path, state)
+                    elif source.extension == ".mobi":
+                        prepared = await extract_source(
+                            extract_mobi, source, checkpoint["source_digests"][relative]
+                        )
+                        if prepared is None:
+                            if budget_expired():
+                                return self._in_progress_result(checkpoint)
+                            continue
+                        document, units = prepared
+                        atomic_write_json(artifact_root / "document.json", document)
+                        atomic_write_jsonl(
+                            artifact_root / "unit-batches" / "00000000.jsonl", units
+                        )
+                        state = {
+                            "reused": False,
+                            "extraction_stage": "finalize",
+                            "total": 1,
+                            "removals": {
+                                key: int(document.get(key) or 0)
+                                for key in REMOVAL_FIELDS
+                            },
+                            "empty_units": document["empty_units"],
+                            "discarded_empty_chunks": 0,
+                            "discarded_symbol_only_chunks": 0,
+                            "discarded_corrupt_chunks": 0,
+                        }
+                        checkpoint["extraction_work_total"] = (
+                            int(checkpoint.get("extraction_work_total") or 0) + 2
+                        )
+                        checkpoint["extraction_work_completed"] = (
+                            int(checkpoint.get("extraction_work_completed") or 0) + 1
+                        )
+                        atomic_write_json(state_path, state)
                     else:
                         prepared = await extract_source(
                             prepare_epub_extraction,
@@ -2632,6 +2666,7 @@ class IngestionWorkflow:
                     "document_count": len(documents),
                     "pdf_count": sum(item["format"] == "pdf" for item in documents),
                     "epub_count": sum(item["format"] == "epub" for item in documents),
+                    "mobi_count": sum(item["format"] == "mobi" for item in documents),
                     "extraction_unit_count": extraction_unit_count,
                     "chunk_count": chunk_count,
                     "content_kind_counts": content_kind_counts,
@@ -2878,7 +2913,7 @@ class IngestionWorkflow:
                 raise ResearchError(str(exc)) from exc
             if not scan.selected:
                 raise ResearchError(
-                    f"No PDF or EPUB sources found beneath {self.config.source_root}"
+                    f"No PDF, EPUB or MOBI sources found beneath {self.config.source_root}"
                 )
             exclusions = self._source_exclusions()
             selected = tuple(
@@ -2888,7 +2923,7 @@ class IngestionWorkflow:
             )
             if not selected:
                 raise ResearchError(
-                    "All discovered PDF and EPUB sources are excluded; include at "
+                    "All discovered PDF, EPUB and MOBI sources are excluded; include at "
                     "least one source before ingesting"
                 )
             current = self._load_current_optional()
@@ -2990,7 +3025,7 @@ class IngestionWorkflow:
                 fresh_exclusions = self._source_exclusions()
                 if not fresh_scan.selected:
                     raise ResearchError(
-                        "All PDF and EPUB sources disappeared during ingestion"
+                        "All PDF, EPUB and MOBI sources disappeared during ingestion"
                     ) from exc
                 if not any(
                     source.source_relative_path not in fresh_exclusions

@@ -11,7 +11,7 @@ from ..project.config import ResearchConfig
 from ..project.normalized_paths import normalized_relative_path
 from ..project.settings import LANGUAGE_PATTERN
 
-ALLOWED_SOURCE_EXTENSIONS = frozenset({".epub", ".pdf"})
+ALLOWED_SOURCE_EXTENSIONS = frozenset({".epub", ".mobi", ".pdf"})
 METADATA_FIELDS = frozenset(
     {
         "title",

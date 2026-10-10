@@ -1,7 +1,7 @@
 """Agent workflow and evidence safeguards; parameter details belong to tool schemas."""
 
 AGENT_INSTRUCTIONS = """\
-Use this project's PDF and EPUB evidence before composing an answer in the user's language.
+Use this project's PDF, EPUB and MOBI evidence before composing an answer in the user's language.
 
 Workflow:
 1. Call status first. Check ready, stale, requires, blocked_by, and degraded.

@@ -3,6 +3,7 @@
 What enters an index: source selection, locators, text cleanup, and the health gate. They also cover source-directory and runtime-root resolution in `src/research_rag/project/config.py`.
 
 - `test_sources_and_extraction.py`: source selection and stable ids, symlink and escaping-directory rejection, PDF page and EPUB section locators, batched page extraction, EPUB anchor stability, text normalization, corruption and script signals with their reasons, front-matter metadata, layout restoration, language detection, and the relocated runtime root's claim marker.
+- `test_mobi.py`: real-parser uncompressed, PalmDOC, HUFF/CDIC, KF8, and dual-rendition containers; metadata and logical-part anchors; DRM, malformed-container, resource-limit, and symlink refusals. Synthetic containers come from `tests/mobi_fixtures.py`, not private books.
 - `test_ocr.py`: OCR is gone: the parser, help menu, module, and package extra offer none, and no shipped document names the removed command.
 - `test_extraction_health_gate.py`: pre-chunk cleanup and the source health gate, including the share of unreadable text a source may lose before it is refused.
   - Each removal rule against the text it must keep.

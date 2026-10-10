@@ -2,7 +2,7 @@
 
 ## Scope
 
-- Project-scoped PDF/EPUB evidence retrieval, not answer generation.
+- Project-scoped PDF/EPUB/MOBI evidence retrieval, not answer generation.
 - One process and port per project, shared by the workspace, MCP, and CLI. Loopback is the default; explicit home-LAN mode exposes only the workspace.
 - Ship the gateway, workspace, and settings layer here. Do not depend on a sibling project.
 
@@ -128,7 +128,7 @@
   - Vector reuse also requires exact canonical text, model revision, and dimension.
   - `force_recompute=True` disables all reuse.
 - Dispatch dense backends from the manifest. Never substitute one during reuse.
-- A source-local PDF/EPUB extraction failure omits that source from a validated partial generation when at least one source remains. Retain the partial generation without selecting it; disclose the omission, mark a selected partial generation stale, and retry omitted sources on ordinary ingestion. Other failures preserve the selected generation.
+- A source-local PDF/EPUB/MOBI extraction failure omits that source from a validated partial generation when at least one source remains. Retain the partial generation without selecting it; disclose the omission, mark a selected partial generation stale, and retry omitted sources on ordinary ingestion. Other failures preserve the selected generation.
 
 ### Boundaries a contributor must not cross
 
@@ -140,7 +140,7 @@
 - Browser and control writes must be same-origin and JSON-only, with no caller-selected output paths. Control and MCP remain loopback-only.
   - Explicit home-LAN mode accepts private IPv4 peers and detected local-interface hosts. Remote browser writes require an exact validated HTTP origin; cross-site writes are refused.
   - Home-LAN HTTP has no authentication or encryption. Other remote exposure requires an explicit security design.
-- Ingest only regular PDF/EPUB files beneath the configured source root. Reject symlinks and traversal.
+- Ingest only regular PDF/EPUB/MOBI files beneath the configured source root. Reject symlinks and traversal.
 - Do not patch UltraRAG, expose vanilla operations, or move dense backends into the gateway.
 - Preserve CLI access to every workspace capability.
   - Settings writes belong to the workspace, not agents. `research-rag config` is read-only.
@@ -155,7 +155,7 @@
   - Read terminal ownership from `/proc/<pid>/stat`, not only `research-rag-ui.tty`.
   - `start`, bare invocation, `projects`, and `stop` report the condition with a `stop` remedy. They never launch a second app.
   - `tests/runtime/test_attached_workspace.py` covers this. Detached serving is deferred in `TODO.md`.
-- Keep private projects, notes, drafts, and original PDFs/EPUBs out of Git. Add new personal paths to `.gitignore`.
+- Keep private projects, notes, drafts, and original PDFs/EPUBs/MOBIs out of Git. Add new personal paths to `.gitignore`.
 - State unimplemented limits explicitly, never as shipped capabilities.
 
 ### Reporting a condition
@@ -174,7 +174,8 @@
   - Reads take neither lock. A read holds a lease on the generation it resolved, and removing that generation waits for it.
   - The gateway holds one BM25 retriever. A build and a search take it in turn.
 - Search counts store ranks, ids, times, result counts, and who asked. They store the question and its filters only while `runtime.search_history` is on, and `history --clear` removes them and leaves the counts. A measurement does not count.
-- Extraction reads a PDF or EPUB text layer only. Scanned PDFs need OCR performed outside this app; no OCR command, agent tool, control route, or workspace action exists.
+- Extraction reads existing PDF, EPUB, or MOBI text only. Scanned PDFs need OCR performed outside this app; no OCR command, agent tool, control route, or workspace action exists.
+- MOBI parsing runs offline in a resource-bounded child without conversion or resource output. Reject DRM and unsupported or corrupt containers; retain logical-part locators rather than inventing printed pages. `FEATURES.md` owns supported variants and safety limits.
 - PDF cleaning runs locally. Unhealthy PDF blocks trigger the bundled native text extractor automatically; irrecoverable lexical tokens are omitted with visible gaps and loss diagnostics.
   - Recognised formatting and math glyphs are not corruption. Harmless symbol-only fragments may be omitted as non-evidence and must be counted separately.
   - `ingestion.maximum_unclean_percent` caps cumulative substantive-character loss per PDF document after confirmed furniture and non-evidence are removed.

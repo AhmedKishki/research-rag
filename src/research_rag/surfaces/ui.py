@@ -41,13 +41,13 @@ RESEARCH_UI_PROFILE = UIProfile(
     project_label="Project",
     project_fallback_name="Research project",
     navigation_label="Research views",
-    source_types_label="PDF + EPUB sources",
+    source_types_label="PDF + EPUB + MOBI sources",
     # A client entry carries a command and a project, so the app cannot tell one
     # agent from another and the reader is told how to name it instead. The
     # variable is the bridge's, so this sentence is written where it is declared.
     client_naming_hint=f"Set {CLIENT_NAME_ENV} in the client entry to name an agent.",
     ingest_intro=(
-        "Build indexes from included PDFs and EPUBs. The selected generation "
+        "Build indexes from included PDFs, EPUBs and MOBIs. The selected generation "
         "is replaced only after a complete build succeeds."
     ),
     ingest_busy_message=("Building indexes. Large collections may take a while…"),
@@ -624,11 +624,11 @@ class ResearchUIAdapter:
         selected = next((item for item in scan.selected if item.path == target), None)
         if selected is None:
             raise UIRequestError("Source was not found", status_code=404)
-        media_type = (
-            "application/pdf"
-            if selected.extension == ".pdf"
-            else "application/epub+zip"
-        )
+        media_type = {
+            ".pdf": "application/pdf",
+            ".epub": "application/epub+zip",
+            ".mobi": "application/x-mobipocket-ebook",
+        }[selected.extension]
         disposition = "inline" if selected.extension == ".pdf" else "attachment"
         return SourceFile(
             path=selected.path,
