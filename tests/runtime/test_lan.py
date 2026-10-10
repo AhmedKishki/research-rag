@@ -247,9 +247,89 @@ async def test_outer_runtime_gate_blocks_control_and_mcp_before_dispatch(
             assert response.status_code == 403, prefix
         response = await client.post("/api/search", json={"query": "heron"})
         assert response.status_code == 403
+        response = await client.post("/control/lan", json={"enabled": False})
+        assert response.status_code == 403
+        page = await client.get("/remote")
+        assert 'id="lan-toggle"' not in page.text
+        app.network_access.lan = False
+        assert (await client.get("/remote")).status_code == 403
     assert app.clients.report() == []
 
 
 @pytest.fixture
 def anyio_backend() -> str:
     return "asyncio"
+
+
+@pytest.mark.integration
+@pytest.mark.anyio
+async def test_live_lan_listener_and_rollback(
+    project: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import asyncio
+
+    from research_rag.project.policy import ResearchError
+    from research_rag.runtime import app as runtime
+
+    monkeypatch.setattr(runtime, "discover_lan_addresses", lambda: ("192.168.1.2",))
+    with socket.socket() as probe:
+        probe.bind(("127.0.0.1", 0))
+        port = probe.getsockname()[1]
+    app = App(resolve_config(project), port=port)
+    policy = app.network_access
+    await app.start()
+    try:
+        for _ in range(200):
+            if app.ready:
+                break
+            await asyncio.sleep(0.01)
+        assert app.ready
+        task, server, gateway = app._task, app._server, app.gateway
+        async with httpx.AsyncClient(base_url=app.url) as client:
+            page = await client.get("/remote")
+            assert "Enable LAN browser access" in page.text
+            assert '<script src="/assets/remote.js"></script>' in page.text
+            assert "script-src 'self'" in page.headers["content-security-policy"]
+            asset = await client.get("/assets/remote.js")
+            assert asset.status_code == 200
+            assert "fetch('/control/lan'" in asset.text
+            response = await client.post("/control/lan", json={"enabled": True})
+            assert response.status_code == 200, response.text
+            assert response.json()["enabled"] is True
+            assert app.network_access is policy
+            assert app._socket.getsockname() == ("0.0.0.0", port)
+            async with httpx.AsyncClient(base_url=app.url) as fresh:
+                assert (await fresh.get("/control/health")).status_code == 200
+            assert "Disable LAN browser access" in (await client.get("/remote")).text
+            assert (
+                await client.post("/control/lan", json={"enabled": "false"})
+            ).status_code == 400
+            assert (
+                await client.post(
+                    "/control/lan",
+                    json={"enabled": False},
+                    headers={"Origin": "http://evil.example"},
+                )
+            ).status_code == 403
+            assert (
+                await client.post("/control/lan", json={"enabled": False})
+            ).status_code == 200
+            assert app._socket.getsockname() == ("127.0.0.1", port)
+            async with httpx.AsyncClient(base_url=app.url) as fresh:
+                assert (await fresh.get("/control/health")).status_code == 200
+            assert policy.lan is False
+            claim = runtime._claim_loopback_port
+
+            def fail_lan(host: str, port: int) -> socket.socket:
+                if host == "0.0.0.0":
+                    raise OSError("occupied")
+                return claim(host, port)
+
+            monkeypatch.setattr(runtime, "_claim_loopback_port", fail_lan)
+            with pytest.raises(ResearchError, match="previous listener restored"):
+                await app.set_lan(True)
+            assert (await client.get("/control/health")).status_code == 200
+            assert not policy.lan
+        assert (app._task, app._server, app.gateway) == (task, server, gateway)
+    finally:
+        await app.stop()

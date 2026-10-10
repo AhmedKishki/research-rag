@@ -115,6 +115,7 @@ def prefetch_models(config: ResearchConfig) -> tuple[str, ...]:
         prefetch_docling_models,
     )
     from ..retrieval.dense import _load_cross_encoder, _load_embedder
+    from ..retrieval.direct import prefetch_gpt2_tokenizer
     from ..storage.records import directory_statistics
 
     _count, before = directory_statistics(config.model_cache_root)
@@ -122,10 +123,12 @@ def prefetch_models(config: ResearchConfig) -> tuple[str, ...]:
     reranker, revision = resolve_reranker_model(config.reranker_model)
     _load_embedder(config.model_cache_root, offline=False, model=embedding.name)
     _load_cross_encoder(config.model_cache_root, offline=False, model=reranker)
+    prefetch_gpt2_tokenizer(cache_root=config.model_cache_root)
     _count, after = directory_statistics(config.model_cache_root)
     lines = [
         f"Cached {embedding.name} from {embedding.repository}@{embedding.revision}.",
         f"Cached {reranker}@{revision}.",
+        "Cached the compatible GPT-2 chunk and passage-count tokenizer.",
         f"{config.model_cache_root} now holds {after - before} more bytes.",
     ]
     if config.settings.pdf_backend == "docling":

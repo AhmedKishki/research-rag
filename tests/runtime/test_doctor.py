@@ -13,6 +13,7 @@ from typing import Any
 
 import pytest
 
+import research_rag.retrieval.direct as direct_module
 import research_rag.runtime.doctor as doctor_module
 from research_rag.gateway import runtime as vanilla_runtime
 from research_rag.project.config import ResearchConfig, resolve_config
@@ -78,6 +79,7 @@ def healthy(config: ResearchConfig, monkeypatch: pytest.MonkeyPatch) -> Research
     root = Path(config.runtime_cache_root) / "runtime" / "UltraRAG-test"
     root.mkdir(parents=True, exist_ok=True)
     (root / vanilla_runtime.MARKER_FILENAME).write_text("{}\n", encoding="utf-8")
+    monkeypatch.setattr(direct_module, "tokenizer_cache_status", lambda _root: True)
     monkeypatch.setattr(vanilla_runtime, "managed_runtime_path", lambda _c: root)
     monkeypatch.setattr(vanilla_runtime, "validate_managed_runtime", lambda p: p)
     return config
@@ -100,7 +102,7 @@ def test_the_default_run_reports_every_check_and_changes_nothing(
     result = _run(config)
 
     assert sorted(path.name for path in config.state_root.rglob("*")) == before
-    for name in ("project_identity", "runtime_root", "vanilla_runtime", "lock"):
+    for name in ("project_identity", "runtime_root", "direct_retrieval", "lock"):
         assert any(name in line for line in result.lines)
     # Nothing is installed and nothing blocks: an online project downloads what it needs
     # on first use, which is a warning, not a broken installation.
@@ -123,7 +125,7 @@ def test_every_check_is_one_line_naming_its_state_and_its_remedy(
     checks = [
         line for line in result.lines if line[:8].strip() in {"ok", "warn", "blocked"}
     ]
-    assert len(checks) == 9
+    assert len(checks) == 10
     for line in checks:
         state, name, _rest = line.split(maxsplit=2)
         assert state in {"ok", "warn", "blocked", "unknown"}
@@ -141,7 +143,7 @@ def test_a_healthy_installation_exits_zero(healthy: ResearchConfig) -> None:
     assert not [line for line in result.lines if line.startswith(("warn", "blocked"))]
 
 
-def test_offline_without_an_installed_runtime_is_blocked(
+def test_offline_without_cached_embedding_model_is_blocked(
     config: ResearchConfig, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """Offline is the mode where a missing dependency stops the server."""
@@ -157,7 +159,7 @@ def test_offline_without_an_installed_runtime_is_blocked(
 
     assert result.exit_code == 1
     assert any(
-        line.startswith("blocked") and "vanilla_runtime" in line
+        line.startswith("blocked") and "embedding_model" in line
         for line in result.lines
     )
 
@@ -274,6 +276,9 @@ def test_prefetch_reports_what_it_cached(
     config: ResearchConfig, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     loaded: list[str] = []
+    monkeypatch.setattr(
+        direct_module, "prefetch_gpt2_tokenizer", lambda **_kwargs: None
+    )
 
     import research_rag.retrieval.dense as dense_module
 
@@ -299,6 +304,10 @@ def test_prefetch_provisions_the_selected_docling_backend(
     config: ResearchConfig, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     from dataclasses import replace
+
+    monkeypatch.setattr(
+        direct_module, "prefetch_gpt2_tokenizer", lambda **_kwargs: None
+    )
 
     import research_rag.corpus.pdf_backend as pdf_backend_module
     import research_rag.retrieval.dense as dense_module
@@ -328,6 +337,10 @@ def test_prefetch_reports_a_failed_docling_environment_actionably(
 ) -> None:
     from dataclasses import replace
 
+    monkeypatch.setattr(
+        direct_module, "prefetch_gpt2_tokenizer", lambda **_kwargs: None
+    )
+
     import research_rag.corpus.docling_env as docling_env_module
     import research_rag.corpus.pdf_backend as pdf_backend_module
     import research_rag.retrieval.dense as dense_module
@@ -355,6 +368,10 @@ def test_prefetch_clears_the_model_cache_warnings(
     config: ResearchConfig, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     import research_rag.retrieval.model_runtime as runtime
+
+    monkeypatch.setattr(
+        direct_module, "prefetch_gpt2_tokenizer", lambda **_kwargs: None
+    )
     from research_rag.retrieval.model_cache import snapshot_path
     from research_rag.runtime.health import health_report
 

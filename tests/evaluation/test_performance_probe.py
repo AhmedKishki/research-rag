@@ -1115,10 +1115,7 @@ def test_the_report_separates_the_workers_own_cpu_from_the_gateways(
     assert resource_section["children_cpu_seconds_total_reaped"] == pytest.approx(4.5)
     assert "No process tree was inspected" in resource_section["scope"]
     assert "reaped" in resource_section["cpu_accounting"]
-    assert (
-        "per-query row carries the self figure alone"
-        in (resource_section["cpu_accounting"])
-    )
+    assert "per-query row carries self CPU only" in (resource_section["cpu_accounting"])
 
 
 def test_the_environment_is_recorded_before_and_after_the_run(

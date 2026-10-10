@@ -91,7 +91,7 @@
 
 ### The state a reader must be able to trust
 
-- One app process serves each configured project root. Every surface shares that process, its project lock, and its single UltraRAG gateway.
+- One app process serves each configured project root. Every surface shares that process, its project lock, and its single direct retrieval backend.
   - Implement capabilities once in `ResearchService`. Running CLI commands use the control API.
   - Without an app, answer local-state operations in process.
 - Keep project artifacts under `<project>/.research-rag`, including namespaced pid, port, and lock files.
@@ -167,12 +167,12 @@
 - Default `doctor` reads the same report without writing.
   - Only explicit `--prefetch-models` and `--repair-runtime` may fetch or write. Quarantine discarded evidence.
 - Diagnose gateway failures through the requesting operation and component logs, not process-tree inspection.
-- Resolve settings and serve before opening the gateway. Local reads must work without a managed runtime.
+- Resolve settings and serve before loading retrieval dependencies. Local reads must work without a managed legacy runtime.
   - Lightweight commands must not require the retrieval stack.
 - Move blocking extraction and filesystem scans off the event loop.
 - Serialize project writes with both the in-process lock and the cross-process `project.lock`. Bound both waits and refuse after them.
   - Reads take neither lock. A read holds a lease on the generation it resolved, and removing that generation waits for it.
-  - The gateway holds one BM25 retriever. A build and a search take it in turn.
+  - The direct backend holds one BM25 retriever. A build and a search take it in turn.
 - Search counts store ranks, ids, times, result counts, and who asked. They store the question and its filters only while `runtime.search_history` is on, and `history --clear` removes them and leaves the counts. A measurement does not count.
 - Extraction reads existing PDF, EPUB, or MOBI text only. Scanned PDFs need OCR performed outside this app; no OCR command, agent tool, control route, or workspace action exists.
 - MOBI parsing runs offline in a resource-bounded child without conversion or resource output. Reject DRM and unsupported or corrupt containers; retain logical-part locators rather than inventing printed pages. `FEATURES.md` owns supported variants and safety limits.
@@ -200,8 +200,8 @@ Terminal ── control ───┘      ├── the workspace and its adapte
                                ├── control API (runtime/control.py)
                                ├── client registry (runtime/app.py)
                                │
-                               └── the engine, ending in the stdio MCP gateway
-                                   the vanilla gateway proxies (gateway/)
+                               └── the engine, using direct compatible chunk/BM25
+                                   retrieval (retrieval/direct.py)
 ```
 
 ### Layer ownership
@@ -240,7 +240,7 @@ uv run python -m compileall -q src tests
 - Produce a retrieval-quality claim with `uv run python scripts/evaluate_retrieval.py --project <project> --offline`, with `--validate-only` added first.
   - Record valid measurements in `MEASUREMENTS.md`. Never change documented defaults on an unrecorded run.
 - Workspace changes test safe source resolution, argument forwarding, and the real host, without source mutations. Run the `surfaces/workspace/` tests.
-- Source and retrieval integration tests use the real gateway, both indexes, hybrid and dense search, a known passage, and an excluded neighbour.
+- Source and retrieval integration tests use the real direct backend, both indexes, hybrid and dense search, a known passage, and an excluded neighbour.
   - Restart offline and repeat a hybrid reranked search from caches.
 - Offline unit tests cover:
   - RRF, failure atomicity, and no-op ingestion.

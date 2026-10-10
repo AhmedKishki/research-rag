@@ -1,7 +1,7 @@
 """Measure the per-unit write pattern on a real project build.
 
 Harness behind the write-grouping decision in ``MEASUREMENTS.md``. One corpus is
-built twice on the device ``--root`` names, through the real gateway, tokenizer
+built twice on the device ``--root`` names, through the real direct backend, tokenizer
 chunking, and embeddings, changing nothing but the write pattern:
 
 * ``paired`` (before) fsyncs every atomic write's directory and the handoff file.
@@ -30,12 +30,11 @@ from pathlib import Path
 from typing import Any
 
 import pymupdf
-from fastmcp import Client
 
 import research_rag.generations.ingestion as ingestion_module
 from research_rag.core.service import ResearchService
 from research_rag.project.config import resolve_config
-from research_rag.retrieval.ultrarag import VanillaUltraRAG, create_vanilla_transport
+from research_rag.retrieval.direct import DirectRetrieval
 
 WORDS = (
     "cobalt",
@@ -196,13 +195,8 @@ async def run_once(
 
     started = time.perf_counter()
     with patch_for(variant, side):
-        async with Client(
-            create_vanilla_transport(config),
-            name="write-pattern-benchmark",
-            timeout=1800,
-            init_timeout=1800,
-        ) as client:
-            service = ResearchService(config, VanillaUltraRAG(client, config))
+        async with DirectRetrieval(config) as backend:
+            service = ResearchService(config, backend)
             result = await service.ingest(
                 chunk_size=chunk_size,
                 chunk_overlap=chunk_overlap,

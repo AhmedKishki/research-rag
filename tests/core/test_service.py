@@ -800,7 +800,7 @@ async def _assert_research_generation_and_structured_search(project: Path) -> No
 
     legacy_manifest["schema_version"] = 1
     legacy_manifest["retrieval"] = {
-        "backend": "UltraRAG BM25",
+        "backend": "bm25s (UltraRAG-compatible)",
         "language": "en",
         "tokenizer": "default",
     }

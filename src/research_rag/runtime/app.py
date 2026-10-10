@@ -1,6 +1,6 @@
 """The running app: one project, one port, one service, three front ends.
 
-One process owns the project lock, opens the UltraRAG gateway once, and serves the
+One process owns the project lock and direct retrieval backend, and serves the
 workspace and the agent surface on one port, so a passage an agent retrieves
 and one the workspace renders are the same object. Explicit home-LAN mode
 exposes the workspace; control and agent access remain loopback-only.
@@ -640,17 +640,17 @@ def _service_pair(config: ResearchConfig) -> tuple[Any, ResearchService]:
     """
 
     from ..core.service import ResearchService
-    from ..retrieval.ultrarag import LazyGateway, VanillaUltraRAG
+    from ..retrieval.direct import DirectRetrieval
 
-    gateway = LazyGateway(config)
-    return gateway, ResearchService(config, VanillaUltraRAG(gateway, config))
+    backend = DirectRetrieval(config)
+    return backend, ResearchService(config, backend)
 
 
 class App:
     """The one running instance: a service, a port, and two HTTP surfaces.
 
-    The service is built on construction; the gateway opens on the first operation
-    that needs it, so a health check starts no process.
+    The service is built on construction; retrieval dependencies load on the first
+    operation that needs them, so a health check starts no process.
     """
 
     def __init__(self, config: ResearchConfig, *, port: int, lan: bool = False) -> None:
@@ -669,6 +669,79 @@ class App:
         self._server: uvicorn.Server | None = None
         self._task: asyncio.Task[None] | None = None
         self._socket: socket.socket | None = None
+        self._network_lock = asyncio.Lock()
+
+    async def set_lan(self, enabled: bool) -> dict[str, Any]:
+        """Replace accepting sockets, not the app, gateway, lifespan, or port.
+
+        Existing connections stay alive but every request checks the live policy.
+        A failed bind restores the old listener before returning a refusal.
+        """
+        from ..project.policy import ResearchError
+
+        async with self._network_lock:
+            if not self.ready or self._server is None:
+                raise ResearchError("The app is not serving; run research-rag start.")
+            if enabled == self.network_access.lan:
+                return self.network_access.report()
+            try:
+                addresses = discover_lan_addresses() if enabled else ()
+            except OSError as exc:
+                raise ResearchError(
+                    f"Cannot read LAN interfaces ({exc}); previous listener unchanged. "
+                    "Retry research-rag lan enable."
+                ) from exc
+            old_host = self.host
+            host = "0.0.0.0" if enabled else UI_HOST
+            server = self._server
+            for listener in server.servers:
+                listener.close()
+            # Python 3.12 wait_closed also waits for active transports, including
+            # this control request. close releases the accepting socket now;
+            # connections remain owned by uvicorn's shared server_state.
+            self._release_claim()
+
+            async def listen(bind_host: str) -> None:
+                claim = _claim_loopback_port(bind_host, self.port)
+                try:
+                    listener = await asyncio.get_running_loop().create_server(
+                        lambda: server.config.http_protocol_class(
+                            config=server.config,
+                            server_state=server.server_state,
+                            app_state=server.lifespan.state,
+                        ),
+                        sock=claim,
+                        backlog=_CLAIM_BACKLOG,
+                    )
+                except BaseException:
+                    claim.close()
+                    raise
+                self._socket = claim
+                server.servers = [listener]
+
+            try:
+                await listen(host)
+            except (Exception, asyncio.CancelledError) as exc:
+                try:
+                    await listen(old_host)
+                except Exception as rollback:
+                    self.network_access.lan = False
+                    self.network_access.addresses = ()
+                    self.error = f"Listener rollback failed: {rollback}; stop and restart research-rag."
+                    server.should_exit = True
+                    raise ResearchError(self.error) from rollback
+                if isinstance(exc, asyncio.CancelledError):
+                    raise
+                raise ResearchError(
+                    f"LAN change failed ({exc}); previous listener restored. "
+                    "Retry research-rag lan "
+                    + ("enable" if enabled else "disable")
+                    + "."
+                ) from exc
+            self.host = host
+            self.network_access.addresses = addresses
+            self.network_access.lan = enabled
+            return self.network_access.report()
 
     @property
     def url(self) -> str:
@@ -853,10 +926,11 @@ class App:
         A failure must not take this process down: `_task_finished` records whatever
         ended the task and does not re-raise it.
         """
-        if self._server is not None:
-            self._server.should_exit = True
-        if self._task is not None:
+        async with self._network_lock:
+            if self._server is not None:
+                self._server.should_exit = True
             task, self._task = self._task, None
+        if task is not None:
             with contextlib.suppress(asyncio.CancelledError, Exception):
                 await task
         self._release_claim()

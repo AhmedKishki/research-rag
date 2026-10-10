@@ -67,6 +67,22 @@ def _is_reusable(manifest: dict[str, Any], model: EmbeddingModel) -> bool:
     )
 
 
+@pytest.mark.parametrize(
+    "backend", ["UltraRAG token chunker", "Chonkie token chunker (UltraRAG-compatible)"]
+)
+def test_compatible_direct_and_historical_chunk_provenance_reuse(backend: str) -> None:
+    manifest = _dense_manifest(_EMBEDDING)
+    manifest["chunking"]["backend"] = backend
+    assert _is_reusable(manifest, _EMBEDDING)
+    assert manifest["chunking"]["backend"] == backend
+
+
+def test_unrecognized_chunk_backend_does_not_reuse() -> None:
+    manifest = _dense_manifest(_EMBEDDING)
+    manifest["chunking"]["backend"] = "different semantics"
+    assert not _is_reusable(manifest, _EMBEDDING)
+
+
 def _snapshot(
     root: Path,
     *,

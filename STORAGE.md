@@ -24,7 +24,7 @@ my-research-project/
         ├── logs/
         ├── failures/                     small failed-build records
         ├── staging/<build-id>/           resumable incomplete build plus checkpoint
-        ├── ultrarag-runtime/
+        ├── ultrarag-runtime/              retained optional legacy gateway state
         └── generations/<generation-id>/
             ├── manifest.json
             ├── corpus/extracted-units.jsonl
@@ -115,7 +115,7 @@ my-research-project/
   - It refuses a generation a pending activation names.
   - Space returns only through a rebuild, which costs one ingestion.
   - It never touches original files.
-- A running app can hold a generation. The gateway keeps a live index against the generation it last loaded, and the exact dense backend memory-maps the vector file for the process's lifetime. An unlinked mapping keeps reading the old bytes, and a later open fails with a missing-file error. That is why both commands refuse the current generation.
+- A running app can hold a generation. The direct backend keeps a live BM25 index against the generation it last loaded, and the exact dense backend memory-maps the vector file for the process's lifetime. An unlinked mapping keeps reading the old bytes, and a later open fails with a missing-file error. That is why both commands refuse the current generation.
 
 ### Generation layout
 
@@ -126,7 +126,7 @@ generations/<generation-id>/
   chunks/chunks.jsonl           the final chunks, one JSON object per line
   portable/embeddings.npy       float32 vectors, row i belongs to chunk i
   indexes/artifact-lookup.sqlite3
-  indexes/bm25/                 the pinned UltraRAG BM25 index
+  indexes/bm25/                 compatible bm25s index, historical layout unchanged
   indexes/qdrant/               the dense index, when the manifest names it
 ```
 
@@ -156,7 +156,8 @@ generations/<generation-id>/
 - A cancelled or timed-out build keeps its checkpoint.
 - A build whose inputs no longer match supersedes the checkpoint with a small diagnostic.
 - A build that cannot resume leaves a small record under `failures/` and removes its heavy staging data.
-- UltraRAG raw chunks are staging data and do not survive activation. Raw coordinate extraction is not generated.
+- Raw chunker output is staging data and does not survive activation. Raw coordinate extraction is not generated.
+- Historical manifests keep their UltraRAG provenance. The direct backend reads the same saved BM25 layout without rewriting it. New manifests name Chonkie and bm25s as compatible direct implementations; their labels do not invalidate historical chunk and vector reuse.
 
 ## Sources
 

@@ -8,7 +8,7 @@
 ## Requirements
 
 - Linux, Python 3.11 or 3.12, [uv](https://docs.astral.sh/uv/), and Git.
-- Internet access for the initial runtime and model downloads. Cached installations can use `--offline`.
+- Internet access for initial model and GPT-2 tokenizer downloads. Cached installations can use `--offline`; normal retrieval needs no UltraRAG runtime download.
 
 ## Install
 
@@ -73,8 +73,8 @@ research-rag --start-ui start --lan
 - The existing website remains at `/`. The phone workspace is available alongside it at `/next/`; both use the same backend and project.
 - LAN mode uses HTTP without a login. Devices able to reach the port on the private network can read this project's sources and perform enabled workspace actions. Traffic is unencrypted. Use only a trusted home network; never forward this port to the internet.
 - LAN access supports the laptop's detected private IPv4 addresses. Allow the displayed port through the laptop firewall for your home network. Guest Wi-Fi or client isolation can prevent access.
-- Keep the laptop awake and its serving terminal open. If the laptop's network address changes, restart with `--lan` and scan the new code.
-- MCP, CLI control, installation management, and the local project/client registry remain local-only. Start without `--lan` to disable phone access.
+- Keep the laptop awake and its serving terminal open. If the laptop's network address changes, disable and enable LAN access on the laptop's Remote Access page and scan the new code.
+- MCP, CLI control, installation management, and the local project/client registry remain local-only. The laptop's Remote Access page enables or disables phone access immediately without restarting. `research-rag lan enable` and `research-rag lan disable` provide the same control in a terminal. The choice lasts only for this app run; starting without `--lan` returns to loopback-only serving.
 
 ## Connect an agent
 
@@ -105,7 +105,8 @@ research-rag --project-root "/path/to/project" doctor --mcp-entry
 
 ## UltraRAG credit and licensing
 
-- Built on [UltraRAG](https://github.com/OpenBMB/UltraRAG)'s MCP architecture, corpus chunker, and BM25 retriever.
+- Derived from [UltraRAG](https://github.com/OpenBMB/UltraRAG)'s MCP architecture, corpus chunker, and BM25 retriever. Normal retrieval calls Chonkie and bm25s directly with the historical chunk and index semantics.
   - UltraRAG credits THUNLP at Tsinghua University, NEUIR at Northeastern University, OpenBMB, AI9stars, and its contributors.
 - This is an independent project, not an official UltraRAG release, and is not affiliated with or endorsed by those organizations or contributors.
 - This repository's code uses the [Apache License 2.0](LICENSE). Extraction dependencies carry separate AGPL and GPL obligations. [NOTICE](NOTICE) records their terms, model licences, and upstream revisions.
+- The legacy `research-rag-gateway` and `research-rag-runtime` helper commands remain available. The gateway needs the optional `legacy` dependency: use `uv sync --locked --extra legacy` in a checkout or install `research-rag[legacy]` as a package. It is not needed by the workspace, CLI retrieval, or agent tools.

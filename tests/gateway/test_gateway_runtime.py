@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 import stat
+import subprocess
 import sys
 from collections.abc import Iterator
 from pathlib import Path
@@ -27,6 +28,36 @@ from research_rag.gateway.runtime import (
     make_tree_read_only,
     validate_managed_runtime,
 )
+
+
+def test_gateway_without_optional_library_refuses_before_runtime_download() -> None:
+    from research_rag.project.config import child_process_environment
+
+    # Keep the gateway's process-global logging/CLI setup out of the app tests.
+    script = """
+import importlib.util
+import sys
+from research_rag.gateway import server
+find_spec = importlib.util.find_spec
+importlib.util.find_spec = lambda name, *args, **kwargs: None if name == "ultrarag" else find_spec(name, *args, **kwargs)
+sys.argv = ["research-rag-gateway", "--workspace-root", "/tmp/kilo"]
+def refuse(**kwargs):
+    raise AssertionError("missing optional library caused a runtime download")
+server.install_managed_runtime = refuse
+server.main()
+"""
+    result = subprocess.run(
+        [sys.executable, "-c", script],
+        capture_output=True,
+        text=True,
+        env=child_process_environment(),
+        timeout=30,
+        check=False,
+    )
+    assert result.returncode == 2
+    message = result.stderr
+    assert "uv sync --locked --extra legacy" in message
+    assert "Normal research-rag retrieval does not need this gateway" in message
 
 
 def _make_writable(root: Path) -> None:

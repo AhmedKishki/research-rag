@@ -158,6 +158,16 @@ def _parser() -> argparse.ArgumentParser:
 def main() -> None:
     parser = _parser()
     args = parser.parse_args()
+    # Refuse before downloading a runtime when its optional Python library is absent.
+    from importlib.util import find_spec
+
+    if find_spec("ultrarag") is None:
+        parser.error(
+            "The legacy UltraRAG gateway requires the optional legacy dependency. "
+            "Install it with 'uv sync --locked --extra legacy' (checkout) or "
+            "'pip install research-rag[legacy]' (package), then retry. "
+            "Normal research-rag retrieval does not need this gateway."
+        )
     try:
         ultrarag_root = args.ultrarag_root or install_managed_runtime(
             cache_root=args.runtime_cache_root,

@@ -95,7 +95,7 @@ uv run python scripts/evaluate_retrieval.py --project /path/to/project --deep-to
 - `--deep-top-k 0` skips the deep pass.
 - `--reranker-model NAME` can repeat. The reranked row is then measured once per model over the same queries.
   - Without it, the row uses the configured model: `--reranker-model` or `RESEARCH_RAG_RERANKER_MODEL`, default `Xenova/ms-marco-MiniLM-L-6-v2`.
-- `--offline` works when the runtime and both model caches are present.
+- `--offline` works when the pinned model caches and GPT-2 tokenizer cache are present. The harness uses the direct backend and needs no legacy gateway runtime.
 - Every mode passes `rerank` explicitly, so numbers do not depend on the app's default. The `hybrid+rerank` row is what an ordinary search returns.
 - Target resolution attempts every target not skipped and records every failure before reporting any. Each failure names its own cause, so a reviewer sees every decision a stale set needs. The causes are:
   - A source the generation does not hold.

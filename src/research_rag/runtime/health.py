@@ -12,6 +12,7 @@ import threading
 from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
 from typing import Any
 
@@ -330,6 +331,57 @@ def _vanilla_runtime_check(config: ResearchConfig) -> Check:
     return check
 
 
+def _direct_retrieval_check(config: ResearchConfig) -> Check:
+    """Read package metadata; normal retrieval needs no managed gateway tree."""
+    required = {"chonkie": "1.7.0", "tiktoken": "0.14.0"}
+    problems = []
+    for package in ("chonkie", "tiktoken", "bm25s", "numba", "scipy", "PyStemmer"):
+        try:
+            installed = version(package)
+        except PackageNotFoundError:
+            problems.append(f"{package} is not installed")
+        else:
+            expected = required.get(package)
+            if expected is not None and installed != expected:
+                problems.append(
+                    f"{package} {installed} is installed; expected {expected}"
+                )
+    if problems:
+        return Check(
+            "direct_retrieval",
+            BLOCKED,
+            "; ".join(problems),
+            "uv sync --locked",
+        )
+    return Check(
+        "direct_retrieval",
+        OK,
+        "Compatible Chonkie and BM25 dependencies are installed; normal retrieval "
+        "does not require the optional UltraRAG gateway runtime.",
+    )
+
+
+def _chunk_tokenizer_check(config: ResearchConfig) -> Check:
+    """Read verified cache inputs without importing the tokenizer or fetching."""
+    from ..retrieval.direct import tokenizer_cache_status
+
+    if tokenizer_cache_status(config.model_cache_root):
+        return Check("chunk_tokenizer", OK, "The compatible GPT-2 tokenizer is cached.")
+    reason = (
+        "The GPT-2 tokenizer cache is missing or invalid. Existing BM25/dense "
+        "indexes remain searchable without a token-length floor; chunking and "
+        "token-length filtering need the cache. "
+    )
+    reason += (
+        "Offline mode forbids fetching it."
+        if config.offline
+        else "The first operation that needs it downloads it."
+    )
+    return Check(
+        "chunk_tokenizer", WARN, reason, doctor_command(config, "--prefetch-models")
+    )
+
+
 def _lock_check(config: ResearchConfig) -> Check:
     path = config.state_root / LOCK_FILE
     if not path.is_file():
@@ -541,7 +593,8 @@ def health_report(
             ),
             identity,
             runtime_root,
-            _vanilla_runtime_check(config),
+            _direct_retrieval_check(config),
+            _chunk_tokenizer_check(config),
             *((docling_backend,) if docling_backend is not None else ()),
             _model_check(
                 config,

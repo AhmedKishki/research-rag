@@ -20,8 +20,9 @@ together with the wider UltraRAG contributor community:
     https://github.com/AI9Stars
     https://github.com/OpenBMB/UltraRAG/graphs/contributors
 
-This app depends on UltraRAG's MCP architecture, corpus chunker, and BM25
-retriever. Its pinned dependency chain resolves to:
+This app derives its MCP architecture and compatible direct chunker and BM25
+retriever from UltraRAG. The optional legacy gateway retains this pinned
+dependency chain:
 
     vanilla-ultra-rag-mcp-server commit
     fc339c259a672ca4dacb525840eba851d01c4b75
@@ -42,6 +43,19 @@ the upstream LICENSE.txt and all upstream notices.
 ADDITIONAL RETRIEVAL COMPONENTS
 
 The hybrid retrieval implementation also depends on:
+
+    Chonkie 1.7.0 (MIT License)
+    https://github.com/chonkie-inc/chonkie
+
+    tiktoken 0.14.0 (MIT License)
+    https://github.com/openai/tiktoken
+
+    bm25s (MIT License), non-ASCII stopword round-trip fork
+    https://github.com/AhmedKishki/bm25s/tree/20f6c02612b8114dca4662131ba09d5102c53308
+
+The direct backend preserves the historical GPT-2 chunk windows, BM25 semantics,
+and saved index layout. The legacy UltraRAG library is optional, not a required
+dependency of normal retrieval.
 
     Qdrant Python client 1.19.1 (Apache License 2.0)
     https://github.com/qdrant/qdrant-client

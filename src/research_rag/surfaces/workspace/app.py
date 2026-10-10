@@ -25,9 +25,13 @@ from .contracts import AdapterFactory, SourceFile, UIAdapter, UIProfile, UIReque
 
 LOGGER = logging.getLogger(__name__)
 STATIC_ROOT = Path(__file__).with_name("static")
-# The page's two assets and their media types; nothing else under the static
+# The page assets and their media types; nothing else under the static
 # root is served.
-_ASSETS = {"app.css": "text/css", "app.js": "text/javascript"}
+_ASSETS = {
+    "app.css": "text/css",
+    "app.js": "text/javascript",
+    "remote.js": "text/javascript",
+}
 MAX_ERROR_LENGTH = 1200
 # A statement is forwarded whole and unchanged, so the request layer is where an
 # accidental paste stops: past this length it is a file, not a statement.
@@ -145,6 +149,17 @@ async def _remote(request: Request) -> Response:
     policy = request.app.state.network_access
     report = policy.report() if policy is not None else {"enabled": False, "urls": []}
     cards = []
+    if policy is not None and policy.is_local(request):
+        enabled = bool(report.get("enabled"))
+        cards.append(
+            '<button type="button" id="lan-toggle" data-enabled="'
+            + str(not enabled).lower()
+            + '">'
+            + ("Disable" if enabled else "Enable")
+            + ' LAN browser access</button><p id="lan-result" role="status"></p>'
+            "<p>This change is immediate and lasts only for this app run. "
+            "Control and MCP remain local-only.</p>"
+        )
     if report.get("enabled"):
         import qrcode
         import qrcode.image.svg
@@ -159,10 +174,10 @@ async def _remote(request: Request) -> Response:
                 f'{html.escape(url)}</a><div class="remote-qr" role="img" '
                 f'aria-label="QR code for {html.escape(url, quote=True)}">{svg}</div></section>'
             )
-        if not cards:
+        if not report.get("urls"):
             cards.append(
                 '<section class="remote-card"><h2>No home-LAN address found</h2>'
-                "<p>Connect this computer to your home network, then restart the app with --lan.</p></section>"
+                "<p>Connect this computer to your home network, then disable and enable LAN access on this machine to refresh its addresses.</p></section>"
             )
     else:
         remedy = report.get(
