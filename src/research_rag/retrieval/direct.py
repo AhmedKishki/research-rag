@@ -104,11 +104,53 @@ def load_gpt2_tokenizer(
 
     New assets enter the research-rag model cache. The historical temporary
     tiktoken cache is read-only fallback. Explicit environment overrides win.
+    Verified encodings are reused until the selected cache files change.
     """
     primary, roots = _cache_directories(cache_root)
+    primary = primary.resolve() if primary is not None else None
+    resolved_roots = tuple(root.resolve() for root in roots)
+    if not resolved_roots:
+        # An empty cache override disables persistence. In particular, a prior
+        # online load must not make an offline call with no cache succeed.
+        return _load_verified_gpt2_tokenizer(primary, resolved_roots, offline)
+    state: list[tuple[int, ...] | None] = []
+    for name, _digest in GPT2_CACHE_INPUTS:
+        filename = hashlib.sha1((GPT2_CACHE_URL + name).encode()).hexdigest()
+        for root in resolved_roots:
+            try:
+                observed = (root / filename).stat()
+            except OSError:
+                state.append(None)
+            else:
+                state.append(
+                    (
+                        observed.st_dev,
+                        observed.st_ino,
+                        observed.st_size,
+                        observed.st_mtime_ns,
+                        observed.st_ctime_ns,
+                    )
+                )
+    return _cached_gpt2_tokenizer(primary, resolved_roots, offline, tuple(state))
+
+
+@lru_cache(maxsize=8)
+def _cached_gpt2_tokenizer(
+    primary: Path | None,
+    roots: tuple[Path, ...],
+    offline: bool,
+    _state: tuple[tuple[int, ...] | None, ...],
+) -> Any:
+    """Cache verified loads by resolved selection, mode, and file identity."""
+    return _load_verified_gpt2_tokenizer(primary, roots, offline)
+
+
+def _load_verified_gpt2_tokenizer(
+    primary: Path | None, roots: tuple[Path, ...], offline: bool
+) -> Any:
     inputs = {}
     for name, digest in GPT2_CACHE_INPUTS:
-        data = _cached_input(name, digest, roots)
+        data = _cached_input(name, digest, list(roots))
         if data is None:
             if offline:
                 raise ResearchError(

@@ -24,6 +24,7 @@ An item is done when the harness has produced its measurement and the validation
 - [ ] **Let a command start the app when the corpus is not ready.** Decision. A command that touches the corpus goes to the running app. With no app up, it is answered in process, which opens a second service nobody serves. Starting an app instead makes `status` leave a process behind. App should be started explicitly for any process.
 - [ ] **Decide whether `search --method` and `--no-rerank` stay.** Decision. They reproduce a `MEASUREMENTS.md` row on demand, and no reader-facing surface offers either. Removing them is a deliberate simplification.
   - The running app's control route ignores both flags and returns hybrid, reranked results. Forward the diagnostic choices if retained, or reject unsupported flags explicitly. Test local and running-app behavior.
+- [ ] **Share workflow decisions without coupling the surfaces.** Refactor. Audit duplicated argument validation and workflow decisions in the CLI, control API, and workspace adapter. Move shared rules below the surfaces; keep terminal formatting and browser interaction separate. Preserve the no-cross-surface-import gate and test equivalent calls against the same service.
 
 ## agents
 
@@ -53,9 +54,12 @@ An item is done when the harness has produced its measurement and the validation
 - [ ] **Authenticated, encrypted remote serving.** Feature. Home-LAN mode has no login and uses unencrypted HTTP; it is not a public or multi-user deployment.
 
   - Design authentication, session expiry, TLS trust, and permissions before supporting untrusted networks or public exposure.
+  - Choose authenticated remote access or withholding LAN exposure before changing the supported security boundary. Protect search, passages, originals, and enabled writes; a write-only token leaves the corpus readable.
+  - Treat Host, private-peer, and Origin checks as boundary and browser-write protections, not authentication. A bearer secret over HTTP does not protect against interception.
   - Preserve local-only CLI control, MCP, and installation management.
   - Keep loopback the default. Extend the explicit host, peer, and browser-origin policies rather than disabling them.
 - [ ] **A connection an unnamed client opened cannot be dropped.** Limit. A client that declared nothing is one client per MCP session, so a hand-written HTTP client has only its sessions refused. `RESEARCH_RAG_CLIENT_NAME` fixes it, and the stdio bridge always sets it.
+- [ ] **Diagnose intermittent MCP initialization HTTP 500.** Test. Reproduce `/mcp` termination before `http.response.start` with synthetic projects and a minimized execution-order or load trigger. Capture session, lifespan, and cancellation events; compare the trigger against `c95e435` with identical dependencies. Correct the demonstrated cause with a deterministic regression test, not retries, skips, longer timeouts, or weaker security. Validate app/LAN tests and a serialized non-integration suite.
 
 ## reporting
 
@@ -103,8 +107,13 @@ An item is done when the harness has produced its measurement and the validation
 ## retrieval
 
 - [ ] **Report weak relevance separately from candidate availability.** Feature. An unrelated query can return a full result set with uniformly poor reranker scores while `relevance_limited` remains false. Measure a low-relevance warning or abstention policy against judged relevant and unrelated queries. Do not assume raw reranker scores share a universal cutoff. Preserve the evidence-only contract and expose the condition consistently across surfaces.
-- [ ] **Make duplicate handling a stated, measured policy.** Feature. `retrieval.duplicate_cosine` already suppresses a passage a search has shown, at search time. Name every case it must cover — one essay alone and inside a book, a byte-identical source under two names, a passage repeated across a generation — and measure what still appears twice on a large corpus.
+- [ ] **Choose a duplicate policy that preserves distinct claims.** Decision. `MEASUREMENTS.md` records cosine-collapse counterexamples and a sign contrast lost by `same_words`. Compare the current policy, no semantic suppression, explicit project opt-in, and strict canonical-text grouping with each member's source and locator preserved. Approve and evaluate a policy before changing retrieval defaults.
+  - Test negation, reversed actors, changed quantities, and meaningful punctuation. Same-source membership or a higher similarity threshold does not prove claim equality.
+  - Define an explicit disabled state. Zero is a cosine threshold in the current implementation, not an off switch.
+  - Cover one essay alone and inside a book, a byte-identical source under two names, and repeated passages without merging provenance or inferring independent evidence.
   - Keep suppression at search time, never at chunk- or record-time, so a duplicate keeps the rank the next query could use.
+- [ ] **Return scored lexical identities and filter before top-k.** Refactor. `DirectRetrieval.search_bm25` still returns strings and discards scores. Choose a typed row/chunk-ID boundary before implementation. Preserve occurrence identity for identical text at different locators. Apply reviewed metadata, document selection, and source/passage exclusions to eligible rows before top-k while retaining corpus-wide BM25 statistics. Remove content remapping and filter-window widening only after compatibility tests cover ties, selective filters, old indexes, concurrent reads/builds, and offline restart.
+- [ ] **Split the search pipeline into explicit stages.** Refactor. `retrieval/search.py::SearchWorkflow.search` owns admission, filtering, fusion, relevance gates, reranking, repetition handling, selection, and disclosure. Give stages explicit input/output state and preserve ordered hit IDs and diagnostic counts in differential tests before removing its complexity exemption.
 - [ ] **Improve paraphrase matching, and price each lever.** Feature. Measure the levers the app already reaches — the pseudo-relevance expansion, the CPU reranker, and a larger embedding model from the pinned registry — against the pooled judgments once they exist. Keep only a lever whose pooled result improves and whose cost is stated.
 - [ ] **Merge the stopword lists of a mixed corpus.** Feature. `language.corpus` can name several languages while BM25 filters the one list in `language.bm25_stopwords`. bm25s accepts a list. Check that the pinned runtime passes a list through `bm25.lang`, then measure the union against one list.
 - [ ] **Add an Arabic stopword source.** Feature. bm25s ships no Arabic list, so `language.corpus = "ar"` is refused although a source can declare Arabic. Add an explicit list option or an empty list, plus an Arabic-capable model in the pinned table.
@@ -112,6 +121,7 @@ An item is done when the harness has produced its measurement and the validation
 ## storage
 
 - [ ] **Narrow the two broad `except Exception` handlers.** Feature. Both sit at durability boundaries, so a storage fault is swallowed, not raised.
+- [ ] **Measure retained-generation growth before changing storage.** Decision. Compare the current self-contained generations, explicit retention controls, filesystem-assisted sharing, and content-addressed blobs. A passage occurrence ID is not a text-only blob key. Any shared store needs durable references, crash-safe garbage collection, safe interrupted-build cleanup, portability, and preservation of current, leased, and pending-activation generations. Get a choice before changing layouts or deleting retained evidence.
 
 ## evaluation
 
@@ -123,3 +133,5 @@ An item is done when the harness has produced its measurement and the validation
 ## project
 
 - [ ] **Split the remaining concerns in `project/support.py`.** Metadata overlays, chunk records, IR statistics, citations, source identity, and tokenizer caching need separate owners. `project/policy.py` owns lightweight errors and policy primitives. Acceptance: shared definitions have one owner, and `tests/gates/test_lightweight_imports.py` keeps diagnostic commands from loading retrieval dependencies.
+- [ ] **Remove private-helper compatibility re-exports.** Refactor. Update tests and harnesses to import private helpers from their owning modules rather than `core/service.py`. Remove unused re-exports without changing supported service operations, and keep architecture and lightweight-import gates green.
+- [ ] **Assess settings layers before removing supported overrides.** Decision. Compare retaining the current stack with a smaller stack and an explicit deprecation path. Measure actual use and ambiguity; retain validation, effective-value provenance, rebuild-cost calculation, and protection against ineffective writes. A single user can still need several projects and machine-specific overrides.

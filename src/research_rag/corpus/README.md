@@ -51,12 +51,14 @@ What is on disk, how it is read, and what a file's text says about itself.
   reachable as a figure's label. A page that cannot establish a body block or a
   body size yields no sidebar and no footnote, which is the direction that keeps a
   two-column page and a page of tables whole.
-- `_footnote_blocks` requires a leading note marker, smaller type, and a bottom-page
-  position outside detected table regions. Unmarked small-font prose stays.
+- `_footnote_blocks` requires a leading note marker, smaller type, a bottom-page
+  position outside detected tables, and a confirmed bibliographic record.
+  Explanatory and ambiguous notes stay.
   `_body_font_size` uses the character-weighted modal size rather than the median.
 - An EPUB has no page geometry, so `extraction._is_epub_furniture` names it
-  instead of measuring it, from the element's own `role`, `class`, and `id`. Only
-  the markup is read, so a paragraph that mentions footnotes is untouched.
+  instead of measuring it, from the element's own `role`, `class`, `id`, and
+  `epub:type`. Explicit notes are removed only when their text is bibliographic.
+  A paragraph that mentions footnotes is untouched.
 - A reference list or note apparatus can span pages or EPUB elements.
   `extraction.strip_non_argument_units` reads the whole source in reading order.
   `text_quality.non_argument_removal_flags` decides each paragraph inside that
@@ -68,6 +70,11 @@ What is on disk, how it is read, and what a file's text says about itself.
   is removed only once a paragraph of the section's own shape has confirmed it, so
   a "References" line above ordinary prose removes nothing. `text_quality` owns
   every one of those tests.
+- `text_quality.structural_non_evidence_reason` recognizes closed production,
+  navigation, and reference shapes. Explicit headings can inform sibling PDF units
+  on the same source's physical page. Confirmed units are omitted before chunking;
+  IDs, locators, reasons, and counts remain in source diagnostics. The lookup uses
+  the same rules for retained generations without rewriting their canonical text.
 - Unicode text is normalized, not stripped. `text_normalization` composes to NFC,
   removes control characters, and folds only the two compatibility blocks English
   scholarship produces; combining marks, accents, superscripts, and subscripts are

@@ -15,7 +15,7 @@ from __future__ import annotations
 import re
 import unicodedata
 from collections import Counter
-from collections.abc import Iterator, Sequence
+from collections.abc import Iterable, Iterator, Mapping, Sequence
 
 from .text_normalization import (
     is_control_character,
@@ -274,12 +274,13 @@ def passage_health_reasons(
     return list(dict.fromkeys(reasons))
 
 
-# Retrieval rejects a candidate for exactly two reasons, and both are properties
+# Retrieval rejects a candidate for three reasons, and all are properties
 # of the chunk text plus its stored quality flags rather than of the query. They
 # are computed once when the artifact lookup is built and stored as a bitmask,
 # which removes the per-query text scans from the candidate gate.
 CHUNK_FLAG_CORRUPT_TEXT = 1
 CHUNK_FLAG_EXTRACTION_ARTIFACT = 2
+CHUNK_FLAG_NON_EVIDENCE = 4
 
 # The token `extraction` stores against a chunk it could not read as prose. It is
 # written by one module and read by this one, so it is named here and nowhere else.
@@ -451,9 +452,9 @@ def _continuation_entry(paragraph: str, kind: str) -> bool:
     """
 
     return (
-        is_reference_entry(paragraph)
+        is_reference_entry(paragraph) and _CLAIM_CUE.search(paragraph) is None
         if kind == "bibliography"
-        else opens_with_note_marker(paragraph)
+        else is_pure_bibliographic_note(paragraph)
     )
 
 
@@ -523,6 +524,217 @@ def strip_non_argument_sections(
     kept = [text for text, removed in zip(paragraphs, flags) if removed is None]
     removed_kinds = [kind for kind in flags if kind is not None]
     return kept, tuple(dict.fromkeys(removed_kinds))
+
+
+_STRUCTURAL_HEADING = re.compile(
+    r"^(?:\d{1,4}\s+)?(contents|table of contents|index|references|bibliography|"
+    r"works cited)(?:\s+\d{1,4})?$",
+    re.IGNORECASE,
+)
+_PRODUCTION_FILE = re.compile(r"\b[\w.-]+\.indd\b", re.IGNORECASE)
+_PRODUCTION_TIME = re.compile(
+    r"\b\d{1,2}/\d{1,2}/\d{2,4}\s+\d{1,2}:\d{2}(?::\d{2})?(?:\s*(?:AM|PM))?\b",
+    re.IGNORECASE,
+)
+_NAVIGATION_ROW = re.compile(
+    r"^(?:\d{1,3}[.)]\s+)?(.{3,140}?)\s+(?:\d{1,4}|[ivxlcdm]{1,8})$",
+    re.IGNORECASE,
+)
+_INDEX_LOCATOR = re.compile(r"\b\d{1,4}(?:[–—-]\d{1,4})?(?:n\d{1,3})?\b")
+_INLINE_REFERENCE_START = re.compile(
+    r"\b[^\W\d_][\w'’\-]*,\s*(?:[A-Z]\.\s*){1,4}"
+    r"(?=\s*\((?:18|19|20|21)\d{2}[a-z]?\)\.(?:\s|$))",
+    re.UNICODE,
+)
+_REFERENCE_END = re.compile(
+    r"(?:[,;]\s*pp\.\s*\d+(?:[–—-]\d+)?\.?|\b\d+[–—-]\d+\.?|"
+    r"https?://\S+|\bdoi:\s*\S+)\s*$",
+    re.IGNORECASE,
+)
+_CLAIM_CUE = re.compile(
+    r"\b(?:is|are|was|were|has|have|had|not|argues?|shows?|finds?|rejects?|"
+    r"ignores?|explains?|excludes?|omits?|omitted|concludes?|supports?|"
+    r"rose|fell|spread|increased|decreased|rather than|see|compare)\b",
+    re.IGNORECASE,
+)
+_INDEX_RECORD = re.compile(
+    r"(?P<label>[^\d;\n]{2,140}?)\s*,?\s+"
+    r"(?P<pages>\d{1,4}(?:[–—-]\d{1,4})?(?:n\d{1,3})?"
+    r"(?:\s*,\s*\d{1,4}(?:[–—-]\d{1,4})?(?:n\d{1,3})?)*)"
+)
+
+
+def _structural_lines(text: str) -> list[str]:
+    # PDF URLs can contain zero-width breaks. They are layout, not new evidence.
+    return [
+        normalized
+        for line in text.replace("\u200b", "").splitlines()
+        if (normalized := normalize_inline_text(line))
+    ]
+
+
+def _structural_section_heading(text: str) -> str | None:
+    first = next(
+        (line for line in text.replace("\u200b", "").splitlines() if line.strip()), ""
+    )
+    found = _STRUCTURAL_HEADING.fullmatch(normalize_inline_text(first))
+    if found is None:
+        return None
+    heading = found[1].casefold()
+    if heading in {"contents", "table of contents"}:
+        return "contents"
+    if heading == "index":
+        return "index"
+    return "bibliography"
+
+
+def structural_context_key(unit: Mapping[str, object]) -> tuple[str, int] | None:
+    """A section hint belongs to one source's physical PDF page, not a topic."""
+    locator = unit.get("locator")
+    if not isinstance(locator, Mapping) or locator.get("type") != "pdf_page":
+        return None
+    page = locator.get("page")
+    if isinstance(page, bool) or not isinstance(page, int) or page < 1:
+        return None
+    document = str(unit.get("document_id") or unit.get("source_id") or "")
+    return document, page
+
+
+def structural_section_contexts(
+    units: Iterable[Mapping[str, object]],
+) -> dict[tuple[str, int], str]:
+    """Collect explicit page headings; conflicting hints remain unclassified."""
+    contexts: dict[tuple[str, int], str] = {}
+    ambiguous: set[tuple[str, int]] = set()
+    for unit in units:
+        key = structural_context_key(unit)
+        kind = _structural_section_heading(str(unit.get("contents") or ""))
+        if key is None or kind is None or key in ambiguous:
+            continue
+        if key in contexts and contexts[key] != kind:
+            contexts.pop(key)
+            ambiguous.add(key)
+        else:
+            contexts[key] = kind
+    return contexts
+
+
+def _has_sentence_prose(text: str, *, minimum_words: int = 12) -> bool:
+    """Long sentence-shaped spans make a structural verdict ambiguous.
+
+    This is a preservation guard, not a language or coherence test. A long title
+    can keep a reference list; that false negative is preferable to lost prose.
+    """
+    without_locators = _DOI_OR_URL.sub("", text)
+    for sentence in re.findall(r"[^.!?\n]+[.!?](?=\s|$)", without_locators):
+        words = re.findall(r"\b[^\W\d_]{2,}\b", sentence, re.UNICODE)
+        if len(words) >= minimum_words and len(
+            {word.casefold() for word in words}
+        ) * 3 >= len(words):
+            return True
+    return False
+
+
+def is_pure_bibliographic_note(text: str) -> bool:
+    """A marker alone never proves that an explanatory note is non-evidence."""
+    if not opens_with_note_marker(text):
+        return False
+    body = _NOTE_MARKER.sub("", text, count=1).strip()
+    return _is_closed_reference_record(body) and not _has_sentence_prose(body)
+
+
+def _is_closed_reference_record(text: str) -> bool:
+    return bool(
+        _INLINE_REFERENCE_START.match(text.strip())
+        and _REFERENCE_END.search(text)
+        and _CLAIM_CUE.search(text) is None
+    )
+
+
+def _is_closed_index_list(text: str) -> bool:
+    remaining = normalize_inline_text(text)
+    if any(marker in remaining for marker in ("|", "=", "→")):
+        return False
+    records = 0
+    references = 0
+    while remaining:
+        matched = _INDEX_RECORD.match(remaining)
+        if matched is None:
+            return False
+        label = matched["label"].strip(" ,:")
+        if _CLAIM_CUE.search(label):
+            return False
+        if sum(character.isalpha() for character in label) < 3:
+            return False
+        if label.casefold() in {"in", "during", "and", "or", "from", "to"}:
+            return False
+        records += 1
+        references += len(_INDEX_LOCATOR.findall(matched["pages"]))
+        remaining = remaining[matched.end() :].lstrip(" ;")
+    return records >= 3 and references >= 3
+
+
+def structural_non_evidence_reason(
+    text: str, *, section: str | None = None
+) -> str | None:
+    """Recognize closed structural shapes, never infer that unfamiliar prose is junk.
+
+    Navigation needs an explicit section heading on the same physical page.
+    Production debris needs repeated layout filenames and print timestamps.
+    References need several independent publication records. Sentence-shaped
+    explanation, ambiguous fragments, and substantive notes stay eligible.
+    """
+    heading = _structural_section_heading(text)
+    kind = heading or section
+    candidate_text = text.replace("\u200b", "")
+    if (
+        kind not in {"contents", "index"}
+        and _PRODUCTION_FILE.search(candidate_text) is None
+        and _INLINE_REFERENCE_START.search(candidate_text) is None
+    ):
+        return None
+    lines = _structural_lines(candidate_text)
+    if not lines:
+        return None
+    normalized = "\n".join(lines)
+    if _has_sentence_prose(normalized):
+        return None
+    if (
+        len(normalized) <= 1500
+        and len(_PRODUCTION_FILE.findall(normalized)) >= 2
+        and len(_PRODUCTION_TIME.findall(normalized)) >= 2
+    ):
+        residual = _PRODUCTION_FILE.sub("", _PRODUCTION_TIME.sub("", normalized))
+        if _has_sentence_prose(residual, minimum_words=2):
+            return None
+        return "production_debris"
+    body = lines[1:] if heading else lines
+    if kind == "contents" and len(body) >= 3:
+        rows = [_NAVIGATION_ROW.fullmatch(line) for line in body]
+        if all(
+            row is not None and sum(character.isalpha() for character in row[1]) >= 3
+            for row in rows
+        ):
+            return "contents_list"
+    if kind == "index":
+        body_text = "\n".join(body)
+        if _is_closed_index_list(body_text):
+            return "index_entries"
+    # A marked note may contain the claim itself. Do not treat note headings or
+    # a run of numbered citations as a declaration that every note is non-evidence.
+    if lines[0].casefold().startswith(("notes", "footnotes", "endnotes")):
+        return None
+    reference_text = "\n".join(body)
+    starts = list(_INLINE_REFERENCE_START.finditer(reference_text))
+    if len(starts) < 3 or reference_text[: starts[0].start()].strip():
+        return None
+    records = [
+        reference_text[start.start() : following.start() if following else None]
+        for start, following in zip(starts, [*starts[1:], None])
+    ]
+    if all(_is_closed_reference_record(record) for record in records):
+        return "reference_list"
+    return None
 
 
 # ---------------------------------------------------------------------------
@@ -601,9 +813,17 @@ def source_health_reasons(
     return reasons
 
 
-def chunk_health_flags(text: str, *, quality_flags: object = None) -> int:
-    """A precomputed verdict: an extraction artifact, or has no searchable
-    alphanumeric content. Mirrors the query-time check, so counters cannot change.
+def chunk_health_flags(
+    text: str,
+    *,
+    quality_flags: object = None,
+    section: str | None = None,
+    content_kind: object = None,
+) -> int:
+    """Compute mechanical and structural flags from text and supplied context.
+
+    The lookup also propagates confirmed parent-unit verdicts. Context-free
+    callers conservatively recognize only shapes in the text itself.
     """
     flags = 0
     if text_corruption_reasons(text):
@@ -613,4 +833,8 @@ def chunk_health_flags(text: str, *, quality_flags: object = None) -> int:
         text
     ):
         flags |= CHUNK_FLAG_EXTRACTION_ARTIFACT
+    if content_kind != "table" and structural_non_evidence_reason(
+        text, section=section
+    ):
+        flags |= CHUNK_FLAG_NON_EVIDENCE
     return flags

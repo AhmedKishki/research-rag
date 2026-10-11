@@ -7,6 +7,7 @@ from pathlib import Path
 import pytest
 
 from research_rag.core.service import ResearchError, ResearchService
+from research_rag.corpus.text_quality import CHUNK_FLAG_NON_EVIDENCE
 from research_rag.project.config import resolve_config
 from tests.conftest import write_pdf, write_reviewed_metadata
 from tests.core.test_service import (
@@ -79,6 +80,46 @@ def test_search_selects_and_excludes_sources_by_stable_id(project: Path) -> None
         }
         assert excluded["filters"]["exclude_source_ids"] == [waste]
         assert excluded["filters"]["active_document_count"] == 1
+
+    asyncio.run(exercise())
+
+
+def test_structural_non_evidence_has_distinct_rejections_and_passage_guard(
+    project: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from research_rag.project.support import _candidate_flags
+
+    async def exercise() -> None:
+        service, source_ids = await _build_project(project)
+        baseline = await service.search("labour evidence", top_k=10, rerank=False)
+        target = next(
+            hit["chunk_id"]
+            for hit in baseline["hits"]
+            if hit["source_id"] == source_ids["cobalt.pdf"]
+        )
+
+        def flags(chunk: dict) -> int:
+            return (
+                CHUNK_FLAG_NON_EVIDENCE
+                if chunk["chunk_id"] == target
+                else _candidate_flags(chunk)
+            )
+
+        monkeypatch.setattr("research_rag.retrieval.search._candidate_flags", flags)
+        for method in ("bm25", "dense", "hybrid"):
+            result = await service.search(
+                "labour evidence", top_k=10, rerank=False, retrieval_method=method
+            )
+            assert target not in {hit["chunk_id"] for hit in result["hits"]}
+            assert result["rejected_candidates"]["bm25_corrupt_text"] == 0
+            assert result["rejected_candidates"]["dense_corrupt_text"] == 0
+            assert result["withheld_candidates"]["total"] == 0
+            if method != "dense":
+                assert result["rejected_candidates"]["bm25_non_evidence"] == 1
+            if method != "bm25":
+                assert result["rejected_candidates"]["dense_non_evidence"] == 1
+        with pytest.raises(ResearchError, match="structural non-evidence"):
+            await service.get_passage(target)
 
     asyncio.run(exercise())
 

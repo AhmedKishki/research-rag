@@ -216,6 +216,9 @@ def test_pdf_page_batches_share_handles_and_preserve_extraction_output(
         if key not in {
             "empty_units",
             "excluded_corrupt_unit_count",
+            "excluded_structural_non_evidence_unit_count",
+            "excluded_structural_non_evidence_units",
+            "excluded_structural_non_evidence_counts",
             "excluded_corrupt_units",
             "excluded_corrupt_passage_count",
             "excluded_corrupt_passages",
