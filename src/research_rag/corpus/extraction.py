@@ -60,14 +60,10 @@ from .text_quality import (
     SOURCE_REASON_UNCLEAN,
     clean_damaged_pdf_passage,
     has_searchable_alphanumeric_content,
-    is_pure_bibliographic_note,
     non_argument_removal_flags,
     opens_with_note_marker,
     passage_health_reasons,
     source_health_reasons,
-    structural_context_key,
-    structural_non_evidence_reason,
-    structural_section_contexts,
     text_corruption_reasons,
     text_health_reasons,
 )
@@ -1083,8 +1079,11 @@ def _footnote_blocks(
     its own, so a page that is uniformly small — a table page, a page of
     equations — keeps every block.
 
-    Geometry identifies a note, not its evidential value. Only a confirmed
-    bibliographic note is omitted. Explanatory notes and ambiguous apparatus stay.
+    The marker is what makes this safe rather than merely cautious. A data table, a
+    block quote, a credit line, and the last paragraph of a chapter are all set
+    small and sit low, and each of them is evidence; a note apparatus is the one of
+    those shapes that is numbered. A note printed without its marker stays in the
+    index, which is the direction that keeps text.
     """
 
     if body_size < _FOOTNOTE_MINIMUM_BODY_SIZE or page_height <= 0:
@@ -1107,8 +1106,6 @@ def _footnote_blocks(
         if not opens_with_note_marker(block.lines[0] if block.lines else ""):
             continue
         text = normalize_inline_text(block.text)
-        if not is_pure_bibliographic_note(text):
-            continue
         if _FIGURE_CAPTION.match(text) or _TABLE_CAPTION.match(text):
             continue
         if any(
@@ -2202,37 +2199,6 @@ _EPUB_FURNITURE_MARKERS = re.compile(
 _EPUB_FURNITURE_ROLES = frozenset(
     {"complementary", "doc-endnotes", "doc-footnote", "doc-noteref", "note"}
 )
-_EPUB_NOTE_MARKERS = re.compile(
-    r"(?:^|[\s_-])(?:footnotes?|endnotes?)(?:[\s_-]|$)", re.IGNORECASE
-)
-
-
-def _is_epub_note(tag: Tag) -> bool:
-    if {str(value).casefold() for value in str(tag.get("epub:type") or "").split()} & {
-        "footnote",
-        "endnote",
-        "rearnote",
-        "footnotes",
-        "endnotes",
-        "rearnotes",
-    }:
-        return True
-    if str(tag.get("role") or "").casefold() in {
-        "doc-endnotes",
-        "doc-footnote",
-        "note",
-    }:
-        return True
-    for attribute in ("class", "id"):
-        value = tag.get(attribute) or ""
-        joined = (
-            " ".join(str(item) for item in value)
-            if isinstance(value, list)
-            else str(value)
-        )
-        if _EPUB_NOTE_MARKERS.search(joined):
-            return True
-    return False
 
 
 def _is_epub_furniture(tag: Tag) -> bool:
@@ -2243,8 +2209,6 @@ def _is_epub_furniture(tag: Tag) -> bool:
     the rule reads markup, not prose.
     """
 
-    if _is_epub_note(tag):
-        return is_pure_bibliographic_note(tag.get_text(" ", strip=True))
     if str(tag.get("role") or "").casefold() in _EPUB_FURNITURE_ROLES:
         return True
     for attribute in ("class", "id"):
@@ -2259,14 +2223,6 @@ def _is_epub_furniture(tag: Tag) -> bool:
         if _EPUB_FURNITURE_MARKERS.search(joined):
             return True
     return False
-
-
-def _remove_epub_element(tag: Tag) -> bool:
-    if str(tag.name).casefold() in _EPUB_SKIPPED_ELEMENTS:
-        if str(tag.name).casefold() == "aside" and _is_epub_note(tag):
-            return _is_epub_furniture(tag)
-        return True
-    return _is_epub_furniture(tag)
 
 
 def _epub_locator(
@@ -2342,13 +2298,20 @@ def _extract_html_item(
         tag
         for tag in soup.find_all(True)
         if str(tag.name).casefold() not in _EPUB_STRUCTURAL_ELEMENTS
-        and _remove_epub_element(tag)
+        and (
+            str(tag.name).casefold() in _EPUB_SKIPPED_ELEMENTS
+            or _is_epub_furniture(tag)
+        )
         and not any(
-            parent is not soup and _remove_epub_element(parent)
+            parent is not soup
+            and (
+                str(parent.name).casefold() in _EPUB_SKIPPED_ELEMENTS
+                or _is_epub_furniture(parent)
+            )
             for parent in tag.parents
         )
     ]
-    for unwanted in soup(list(_EPUB_STRUCTURAL_ELEMENTS)):
+    for unwanted in soup(list(_EPUB_SKIPPED_ELEMENTS)):
         unwanted.decompose()
     for furniture in outermost:
         furniture.decompose()
@@ -2553,32 +2516,7 @@ def screen_source_units(
     abort rather than publish a generation holding one unreadable file.
     """
 
-    contexts = structural_section_contexts(units)
-    structural_units: list[dict[str, Any]] = []
-    structural_counts: Counter[str] = Counter()
-    eligible_units: list[dict[str, Any]] = []
-    for unit in units:
-        reason = structural_non_evidence_reason(
-            str(unit.get("contents") or ""),
-            section=contexts.get(structural_context_key(unit)),
-        )
-        if unit.get("content_kind") == "table":
-            reason = None
-        if reason is None:
-            eligible_units.append(unit)
-        else:
-            structural_counts[reason] += 1
-            structural_units.append(
-                {
-                    "unit_id": str(unit.get("id") or ""),
-                    "locator": dict(unit.get("locator") or {}),
-                    "reasons": [reason],
-                }
-            )
-    document["excluded_structural_non_evidence_unit_count"] = len(structural_units)
-    document["excluded_structural_non_evidence_units"] = structural_units
-    document["excluded_structural_non_evidence_counts"] = dict(structural_counts)
-    cleaned, section_counts = strip_non_argument_units(eligible_units)
+    cleaned, section_counts = strip_non_argument_units(units)
     passage_level = source.extension == ".pdf"
 
     retained: list[dict[str, Any]] = []
@@ -2734,7 +2672,7 @@ def screen_source_units(
         round(withheld_characters / kept_characters, 6) if kept_characters else 0.0
     )
     document["extracted_units"] = len(retained)
-    if rejected_passages or rejected or cleaned_corrupt_spans or structural_units:
+    if rejected_passages or rejected or cleaned_corrupt_spans:
         document["metadata_warnings"] = list(
             dict.fromkeys(
                 [
@@ -2750,11 +2688,6 @@ def screen_source_units(
                         else []
                     ),
                     *(["corrupt_extraction_units_excluded"] if rejected else []),
-                    *(
-                        ["structural_non_evidence_units_excluded"]
-                        if structural_units
-                        else []
-                    ),
                 ]
             )
         )
@@ -2785,7 +2718,7 @@ def screen_source_units(
         # The refusal names where the unreadable material sat. A punctuation-only
         # unit is not corrupt, but it is why nothing survived, so it is reported
         # here for its locator and its reason without entering the corrupt counts.
-        reported_units = [*rejected, *omitted_symbol_only_units, *structural_units]
+        reported_units = [*rejected, *omitted_symbol_only_units]
         if passage_level:
             reported_units.extend(
                 decision
@@ -2793,7 +2726,6 @@ def screen_source_units(
                 if decision.get("lost_characters")
             )
         reported_counts = Counter(reason_counts)
-        reported_counts.update(structural_counts)
         reported_counts["symbol_only"] += len(omitted_symbol_only_units)
         raise error_type(
             _refusal_message(

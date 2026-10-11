@@ -17,18 +17,12 @@ from collections.abc import Iterator, Mapping, Sequence
 from pathlib import Path
 from typing import Any
 
-from ..corpus.text_quality import (
-    CHUNK_FLAG_NON_EVIDENCE,
-    chunk_health_flags,
-    structural_context_key,
-    structural_non_evidence_reason,
-    structural_section_contexts,
-)
+from ..corpus.text_quality import chunk_health_flags
 from ..storage.records import fsync_directory
 
 # Key under which a loaded chunk record carries its stored rejection verdict.
 LOOKUP_HEALTH_FLAGS_KEY = "_lookup_health_flags"
-LOOKUP_SCHEMA_VERSION = 4
+LOOKUP_SCHEMA_VERSION = 3
 LOOKUP_RELATIVE_PATH = Path("indexes") / "artifact-lookup.sqlite3"
 _SQL_BATCH_SIZE = 500
 
@@ -117,7 +111,6 @@ def _create_schema(connection: sqlite3.Connection) -> None:
 def _index_chunks(
     connection: sqlite3.Connection,
     path: Path,
-    unit_contexts: Mapping[tuple[str, str], tuple[bool, str | None]],
 ) -> tuple[int, str, dict[str, int]]:
     before = _file_identity(path)
     digest = hashlib.sha256()
@@ -133,10 +126,6 @@ def _index_chunks(
             document_id = record.get("document_id")
             document_chunk_index = record.get("document_chunk_index")
             contents = _chunk_text(record)
-            parent_non_evidence, section = unit_contexts.get(
-                (str(document_id), str(record.get("unit_id") or "")),
-                (False, None),
-            )
             if (
                 not isinstance(chunk_id, str)
                 or not chunk_id
@@ -170,10 +159,7 @@ def _index_chunks(
                         chunk_health_flags(
                             contents,
                             quality_flags=record.get("quality_flags"),
-                            section=section,
-                            content_kind=record.get("content_kind"),
-                        )
-                        | (CHUNK_FLAG_NON_EVIDENCE if parent_non_evidence else 0),
+                        ),
                     ),
                 )
             except sqlite3.IntegrityError as exc:
@@ -283,36 +269,14 @@ def build_artifact_lookup(
     try:
         connection = sqlite3.connect(temporary)
         _create_schema(connection)
-        # Two streaming scans retain only section hints and unit verdicts, never
-        # the generation's full text. Sibling headings inform a physical page.
-        context_identity = _file_identity(units_path)
-        sections = structural_section_contexts(_unit_records(units_path))
-        unit_contexts = {}
-        for unit in _unit_records(units_path):
-            section = sections.get(structural_context_key(unit))
-            unit_contexts[(str(unit.get("document_id")), str(unit.get("id")))] = (
-                structural_non_evidence_reason(_chunk_text(unit), section=section)
-                is not None
-                and unit.get("content_kind") != "table",
-                section,
-            )
-        if context_identity != _file_identity(units_path):
-            raise ArtifactLookupError(
-                f"Artifact changed while it was indexed: {units_path}"
-            )
         chunk_count, chunk_digest, chunk_identity = _index_chunks(
             connection,
             chunks_path,
-            unit_contexts,
         )
         unit_count, unit_digest, unit_identity = _index_units(
             connection,
             units_path,
         )
-        if context_identity != unit_identity:
-            raise ArtifactLookupError(
-                f"Artifact changed while it was indexed: {units_path}"
-            )
         _write_metadata(
             connection,
             "chunks",
@@ -340,13 +304,6 @@ def build_artifact_lookup(
         if connection is not None:
             connection.close()
         temporary.unlink(missing_ok=True)
-
-
-def _unit_records(path: Path) -> Iterator[dict[str, Any]]:
-    with path.open("rb") as handle:
-        for line_number, line in enumerate(handle, 1):
-            if line.strip():
-                yield _read_json_line(path, line, line_number)
 
 
 def _read_metadata(connection: sqlite3.Connection) -> dict[str, str]:

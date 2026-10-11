@@ -64,6 +64,28 @@ uv run python scripts/evaluate_retrieval.py --project /path/to/project --offline
 - A reranked row needs evidence that the reranker ran. A fallback to the unranked order is a degraded result, not a reranking experiment.
 - These diagnostics do not establish an optimum. Shipped settings stay unchanged.
 
+### Incremental corpus addition check
+
+- `scripts/evaluate_retrieval.py` was run offline after `--validate-only` on 2026-10-11.
+- Target `t12` was explicitly skipped because its Hall scan is a reviewed source exclusion. The declared subset contains 30 queries over 18 targets. The judgments and query-set files were not changed.
+- The selected generation is `20261011T214042Z-7a817e55`: 135 documents, 27,628 extraction units, and 42,002 chunks. Both indexes validated, and no source was omitted from the build.
+- The build reused 133 documents and 39,378 chunks and vectors. The two added volumes produced 970 units and 2,624 new chunks and vectors. Existing chunk IDs, text, locators, and document/source identities were unchanged; all eight passage exclusions still resolve.
+- The reranked run used BGE-small-en-v1.5, the pinned MiniLM-L-6-v2 reranker, word floor 12, token fraction 0.1, and source-diversity penalty 0.25. The project profile is not the unmodified default profile.
+
+| Mode, top-k 10 | Queries | Success@1 | Success@10 | MRR | nDCG@10 | p50 seconds | p95 seconds |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| BM25 | 30 | 56.7% | 83.3% | 0.651 | 0.695 | 0.12 | 0.35 |
+| Dense | 30 | 33.3% | 56.7% | 0.410 | 0.447 | 0.21 | 0.55 |
+| Hybrid | 30 | 63.3% | 83.3% | 0.686 | 0.721 | 0.24 | 0.27 |
+| Hybrid + rerank | 30 | 80.0% | 86.7% | 0.821 | 0.832 | 2.08 | 2.43 |
+
+- The hybrid top-k 50 diagnostic reached 93.3% designated-passage success. It is not the default-depth result.
+- Hybrid + rerank recovered every quote target, 60% of paraphrase targets, and every entity target within ten hits. The four missing designated targets are `q14`, `q17`, `q18`, and `q22`; relevant alternatives are not pooled judgments.
+- The run executed 150 measured searches in 114.6 seconds. Its designated-passage scores match the earlier 30-query run on `20261010T103302Z-f48df5e4`. The earlier run used the subsequently removed structural heuristic. This comparison mixes a corpus addition and a code rollback; it isolates neither effect and establishes no speedup or statistical equivalence.
+- Six additional original-grounded exploratory checks used physical pages in the added volumes. The expected page appeared within ten hits in all six source-filtered searches and four of six unfiltered searches. These checks are not additions to the judged set and establish no general recall or text-fidelity rate.
+- Eleven chunks in the added volumes exceeded the embedding input limit: four in Volume II and seven in Volume III. Their semantic vectors cover truncated inputs; complete cleaned passage text remains stored. The build's token audit reports 26 truncated chunks across the full generation.
+- Retained run reports are `ai-fetishism-before-capital-20261011.json`, `ai-fetishism-after-capital-20261011.json`, and `capital-retrieval-smoke-20261011.json`. They retain exact queries, ranks, settings, generation identity, and timings. No retrieval default was changed from this run.
+
 ### What the judged set cannot establish
 
 - Judgments are known-item and single-annotator. A mode that returns a different passage making the same point scores as a miss. No true recall figure is claimed.

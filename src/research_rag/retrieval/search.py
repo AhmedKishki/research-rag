@@ -12,7 +12,6 @@ import numpy as np
 from ..corpus.text_quality import (
     CHUNK_FLAG_CORRUPT_TEXT,
     CHUNK_FLAG_EXTRACTION_ARTIFACT,
-    CHUNK_FLAG_NON_EVIDENCE,
     text_corruption_reasons,
 )
 from ..project.policy import DEFAULT_RETRIEVAL_METHOD, RETRIEVAL_METHODS, ResearchError
@@ -442,7 +441,6 @@ class SearchWorkflow:
                     "no_query_token_overlap": 0,
                     "extraction_artifact": 0,
                     "corrupt_text": 0,
-                    "non_evidence": 0,
                     "too_short": 0,
                 },
                 {},
@@ -510,7 +508,6 @@ class SearchWorkflow:
                 "no_query_token_overlap": 0,
                 "extraction_artifact": 0,
                 "corrupt_text": 0,
-                "non_evidence": 0,
                 "too_short": 0,
             }
             rejected_examples: dict[str, list[dict[str, Any]]] = {}
@@ -552,9 +549,6 @@ class SearchWorkflow:
                     flags_cache[chunk_id] = flags
                 if flags & CHUNK_FLAG_EXTRACTION_ARTIFACT:
                     rejected["extraction_artifact"] += 1
-                    continue
-                if flags & CHUNK_FLAG_NON_EVIDENCE:
-                    rejected["non_evidence"] += 1
                     continue
                 if flags & CHUNK_FLAG_CORRUPT_TEXT:
                     rejected["corrupt_text"] += 1
@@ -927,7 +921,6 @@ class SearchWorkflow:
                 "no_query_token_overlap": 0,
                 "extraction_artifact": 0,
                 "corrupt_text": 0,
-                "non_evidence": 0,
                 "too_short": 0,
             }
 
@@ -1084,7 +1077,6 @@ class SearchWorkflow:
             dense_admitted_above_floor = 0
             dense_quality_rejected = 0
             dense_corrupt_text_rejected = 0
-            dense_non_evidence_rejected = 0
             dense_too_short = 0
             dense_filtered_out = 0
             dense_rejected_examples: dict[str, list[dict[str, Any]]] = {}
@@ -1103,9 +1095,6 @@ class SearchWorkflow:
                 dense_flags = _candidate_flags(chunk)
                 if dense_flags & CHUNK_FLAG_EXTRACTION_ARTIFACT:
                     dense_quality_rejected += 1
-                    continue
-                if dense_flags & CHUNK_FLAG_NON_EVIDENCE:
-                    dense_non_evidence_rejected += 1
                     continue
                 if dense_flags & CHUNK_FLAG_CORRUPT_TEXT:
                     dense_corrupt_text_rejected += 1
@@ -1496,7 +1485,6 @@ class SearchWorkflow:
                             "returned_by_index": dense_returned_by_index,
                             "extraction_artifact": dense_quality_rejected,
                             "corrupt_text": dense_corrupt_text_rejected,
-                            "non_evidence": dense_non_evidence_rejected,
                             "too_short": dense_too_short,
                             "filtered_out": dense_filtered_out,
                         }
@@ -1544,12 +1532,10 @@ class SearchWorkflow:
                     ],
                     "bm25_extraction_artifact": bm25_rejected["extraction_artifact"],
                     "bm25_corrupt_text": bm25_rejected["corrupt_text"],
-                    "bm25_non_evidence": bm25_rejected["non_evidence"],
                     "bm25_too_short": bm25_rejected["too_short"],
                     "dense_below_threshold": dense_below_threshold,
                     "dense_extraction_artifact": dense_quality_rejected,
                     "dense_corrupt_text": dense_corrupt_text_rejected,
-                    "dense_non_evidence": dense_non_evidence_rejected,
                     "dense_too_short": dense_too_short,
                 },
                 "withheld_candidates": {
@@ -1658,7 +1644,6 @@ class SearchWorkflow:
                                 "returned_by_index": dense_returned_by_index,
                                 "extraction_artifact": dense_quality_rejected,
                                 "corrupt_text": dense_corrupt_text_rejected,
-                                "non_evidence": dense_non_evidence_rejected,
                                 "too_short": dense_too_short,
                                 "filtered_out": dense_filtered_out,
                             },
@@ -1772,11 +1757,6 @@ class SearchWorkflow:
                     "The requested chunk is an extraction artifact and is not "
                     "available; re-ingest to remove it from the generation"
                 )
-            if _candidate_flags(target) & CHUNK_FLAG_NON_EVIDENCE:
-                raise ResearchError(
-                    "The requested chunk is structural non-evidence and is not "
-                    "available for retrieval"
-                )
             if text_corruption_reasons(_chunk_text(target)):
                 raise ResearchError(
                     "The requested chunk contains corrupt extracted text and is "
@@ -1804,8 +1784,6 @@ class SearchWorkflow:
             for item in same_document[start:end]:
                 passage = _public_passage(item, document)
                 if item["chunk_id"] in excluded_chunk_ids:
-                    passage["excluded_from_search"] = True
-                if _candidate_flags(item) & CHUNK_FLAG_NON_EVIDENCE:
                     passage["excluded_from_search"] = True
                 context.append(passage)
             return {
