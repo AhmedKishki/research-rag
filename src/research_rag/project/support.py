@@ -846,8 +846,8 @@ def _is_extraction_artifact(chunk: dict[str, Any]) -> bool:
 def _candidate_flags(chunk: dict[str, Any]) -> int:
     """Return the stored retrieval-rejection verdict for one candidate.
 
-    The artifact lookup computes this when it is built, so a query does not rescan
-    chunk text. A lookup predating it falls back to computing the same flags here.
+    The current lookup includes parent context and avoids a query-time scan.
+    Context-free records can recognize only shapes in their own text.
     """
 
     stored = chunk.get(LOOKUP_HEALTH_FLAGS_KEY)
@@ -856,6 +856,7 @@ def _candidate_flags(chunk: dict[str, Any]) -> int:
     return chunk_health_flags(
         _chunk_text(chunk),
         quality_flags=chunk.get("quality_flags"),
+        content_kind=chunk.get("content_kind"),
     )
 
 
@@ -916,7 +917,7 @@ SCHEMA_VERSION = 5
 # Version 13 records a PDF's lost substantive text against the substantive
 # characters it retained, so a generation that carries no per-document loss
 # denominator is not reused.
-EXTRACTION_POLICY_VERSION = 14
+EXTRACTION_POLICY_VERSION = 15
 
 # Version 9 records partially cleaned passages, corrupt span counts, and lost
 # characters separately from whole omissions, so a generation built under the

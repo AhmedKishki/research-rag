@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import ast
 import asyncio
+import hashlib
 import io
 import json
 import logging
@@ -24,6 +25,227 @@ from research_rag.retrieval import direct
 
 def write_rows(path: Path, rows: list[dict[str, Any]]) -> None:
     path.write_text("".join(json.dumps(row, ensure_ascii=False) + "\n" for row in rows))
+
+
+@pytest.fixture(autouse=True)
+def clear_tokenizer_load_cache():
+    direct._cached_gpt2_tokenizer.cache_clear()
+    yield
+    direct._cached_gpt2_tokenizer.cache_clear()
+
+
+@pytest.fixture
+def tokenizer_assets(tmp_path, monkeypatch):
+    """Small hash-verified assets exercise cache policy without model downloads."""
+    assets = {"vocab.bpe": b"test merges", "encoder.json": b'{"test":0}'}
+    monkeypatch.setattr(
+        direct,
+        "GPT2_CACHE_INPUTS",
+        tuple(
+            (name, hashlib.sha256(data).hexdigest()) for name, data in assets.items()
+        ),
+    )
+    monkeypatch.setattr(
+        direct,
+        "_encoding",
+        lambda encoder: SimpleNamespace(encode=lambda text, **kwargs: list(text)),
+    )
+    monkeypatch.setattr(
+        direct,
+        "urlopen",
+        lambda *args, **kwargs: pytest.fail("tokenizer test attempted a download"),
+    )
+    root = tmp_path / "tokenizer-cache"
+    root.mkdir()
+    for name, data in assets.items():
+        filename = hashlib.sha1((direct.GPT2_CACHE_URL + name).encode()).hexdigest()
+        (root / filename).write_bytes(data)
+    monkeypatch.setenv("TIKTOKEN_CACHE_DIR", str(root))
+    return root
+
+
+def test_repeated_token_counts_reuse_verified_assets(tokenizer_assets, monkeypatch):
+    reads = []
+    read_bytes = Path.read_bytes
+
+    def observe(path):
+        reads.append(path)
+        return read_bytes(path)
+
+    monkeypatch.setattr(Path, "read_bytes", observe)
+    for _ in range(3):
+        assert direct.count_gpt2_tokens("example", offline=True) == 7
+    assert len(reads) == len(direct.GPT2_CACHE_INPUTS)
+    # Health verifies the current bytes independently of a resident encoding.
+    assert direct.tokenizer_cache_status()
+    assert len(reads) == 2 * len(direct.GPT2_CACHE_INPUTS)
+
+
+@pytest.mark.parametrize("change", ["remove", "replace", "edit"])
+def test_tokenizer_cache_rechecks_changed_assets(tokenizer_assets, change):
+    assert direct.count_gpt2_tokens("example", offline=True) == 7
+    name, _digest = direct.GPT2_CACHE_INPUTS[-1]
+    path = (
+        tokenizer_assets
+        / hashlib.sha1((direct.GPT2_CACHE_URL + name).encode()).hexdigest()
+    )
+    observed = path.stat()
+    corrupt = b"x" * observed.st_size
+    if change == "remove":
+        path.unlink()
+    elif change == "replace":
+        replacement = tokenizer_assets / "replacement"
+        replacement.write_bytes(corrupt)
+        os.utime(replacement, ns=(observed.st_atime_ns, observed.st_mtime_ns))
+        os.replace(replacement, path)
+    else:
+        path.write_bytes(corrupt)
+        os.utime(path, ns=(observed.st_atime_ns, observed.st_mtime_ns))
+    assert not direct.tokenizer_cache_status()
+    with pytest.raises(ResearchError, match="Offline GPT2"):
+        direct.count_gpt2_tokens("example", offline=True)
+
+
+def test_tokenizer_cache_follows_environment_selection(
+    tokenizer_assets, tmp_path, monkeypatch
+):
+    assert direct.count_gpt2_tokens("example", offline=True) == 7
+    monkeypatch.delenv("TIKTOKEN_CACHE_DIR")
+    monkeypatch.setenv("DATA_GYM_CACHE_DIR", str(tmp_path / "missing"))
+    with pytest.raises(ResearchError, match="Offline GPT2"):
+        direct.count_gpt2_tokens("example", offline=True)
+    monkeypatch.setenv("TIKTOKEN_CACHE_DIR", "")
+    monkeypatch.setenv("DATA_GYM_CACHE_DIR", str(tokenizer_assets))
+    with pytest.raises(ResearchError, match="Offline GPT2"):
+        direct.count_gpt2_tokens("example", offline=True)
+    monkeypatch.setenv("TIKTOKEN_CACHE_DIR", str(tokenizer_assets))
+    assert direct.count_gpt2_tokens("example", offline=True) == 7
+
+
+def test_tokenizer_cache_follows_model_cache_root(
+    tokenizer_assets, tmp_path, monkeypatch
+):
+    monkeypatch.setattr(direct, "_cache_directories", lambda root: (root, [root]))
+    assert (
+        direct.count_gpt2_tokens("example", offline=True, cache_root=tokenizer_assets)
+        == 7
+    )
+    with pytest.raises(ResearchError, match="Offline GPT2"):
+        direct.count_gpt2_tokens(
+            "example", offline=True, cache_root=tmp_path / "missing"
+        )
+
+
+def test_tokenizer_cache_follows_relative_override_directory(
+    tokenizer_assets, tmp_path, monkeypatch
+):
+    monkeypatch.chdir(tokenizer_assets.parent)
+    monkeypatch.setenv("TIKTOKEN_CACHE_DIR", tokenizer_assets.name)
+    assert direct.count_gpt2_tokens("example", offline=True) == 7
+    other = tmp_path / "other"
+    other.mkdir()
+    monkeypatch.chdir(other)
+    with pytest.raises(ResearchError, match="Offline GPT2"):
+        direct.count_gpt2_tokens("example", offline=True)
+
+
+def test_tokenizer_health_and_loading_keep_literal_tilde_overrides(
+    tokenizer_assets, tmp_path, monkeypatch
+):
+    home = tmp_path / "home"
+    home_cache = home / "cache"
+    home_cache.mkdir(parents=True)
+    for source in tokenizer_assets.iterdir():
+        (home_cache / source.name).write_bytes(source.read_bytes())
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("TIKTOKEN_CACHE_DIR", "~/cache")
+    assert not direct.tokenizer_cache_status()
+    with pytest.raises(ResearchError, match="Offline GPT2"):
+        direct.count_gpt2_tokens("example", offline=True)
+    literal_cache = tmp_path / "~" / "cache"
+    literal_cache.mkdir(parents=True)
+    for source in tokenizer_assets.iterdir():
+        (literal_cache / source.name).write_bytes(source.read_bytes())
+    assert direct.tokenizer_cache_status()
+    assert direct.count_gpt2_tokens("example", offline=True) == 7
+
+
+def test_online_load_without_persistent_cache_cannot_satisfy_offline(
+    tokenizer_assets, monkeypatch
+):
+    assets = {
+        name: (
+            tokenizer_assets
+            / hashlib.sha1((direct.GPT2_CACHE_URL + name).encode()).hexdigest()
+        ).read_bytes()
+        for name, _digest in direct.GPT2_CACHE_INPUTS
+    }
+    downloads = []
+
+    def fetch(url, **kwargs):
+        downloads.append(url)
+        return io.BytesIO(assets[url.rsplit("/", 1)[-1]])
+
+    monkeypatch.setenv("TIKTOKEN_CACHE_DIR", "")
+    monkeypatch.setattr(direct, "urlopen", fetch)
+    assert direct.count_gpt2_tokens("example", offline=False) == 7
+    assert len(downloads) == len(direct.GPT2_CACHE_INPUTS)
+    with pytest.raises(ResearchError, match="Offline GPT2"):
+        direct.count_gpt2_tokens("example", offline=True)
+    assert len(downloads) == len(direct.GPT2_CACHE_INPUTS)
+
+
+@pytest.mark.anyio
+async def test_token_floor_counting_runs_off_event_loop(tmp_path, monkeypatch):
+    from research_rag.retrieval import search as search_module
+
+    workflow = search_module.SearchWorkflow()
+    workflow.config = SimpleNamespace(
+        settings=SimpleNamespace(minimum_passage_words=0),
+        offline=True,
+        model_cache_root=tmp_path,
+    )
+    event_loop_thread = threading.get_ident()
+    calls = []
+
+    def count(text, tokenizer, **kwargs):
+        calls.append((threading.get_ident(), text, tokenizer, kwargs))
+        return 7
+
+    monkeypatch.setattr(search_module, "passage_token_count", count)
+    chunk = {"contents": "example"}
+    assert not await workflow._passage_too_short_async(chunk)
+    assert calls == []
+    assert await workflow._passage_too_short_async(
+        chunk, token_policy={"minimum_tokens": 10, "tokenizer": "gpt2"}
+    )
+    assert len(calls) == 1
+    thread, text, tokenizer, options = calls[0]
+    assert thread != event_loop_thread
+    assert (text, tokenizer) == ("example", "gpt2")
+    assert options == {"offline": True, "cache_root": tmp_path}
+
+
+def test_synchronous_length_check_remains_available_to_audit_callers(
+    tmp_path, monkeypatch
+):
+    from research_rag.retrieval import search as search_module
+
+    workflow = search_module.SearchWorkflow()
+    workflow.config = SimpleNamespace(
+        settings=SimpleNamespace(minimum_passage_words=0),
+        offline=True,
+        model_cache_root=tmp_path,
+    )
+    monkeypatch.setattr(search_module, "passage_token_count", lambda *args, **kwargs: 7)
+    assert (
+        workflow._passage_too_short(
+            {"contents": "example"},
+            token_policy={"minimum_tokens": 10, "tokenizer": "gpt2"},
+        )
+        is True
+    )
 
 
 @pytest.fixture
