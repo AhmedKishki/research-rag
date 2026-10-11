@@ -143,9 +143,8 @@ generations/<generation-id>/
 
 - `artifact-lookup.sqlite3` holds identifiers, ordinals, content hashes, byte offsets into the canonical JSONL files, and one integer retrieval verdict per chunk.
   - It never stores passage text.
-  - It is rebuilt from the canonical files when missing or when its supported revision changes.
-- The verdict includes corrupt text, extraction artifact, and structural non-evidence. Structural screening also reads confirmed parent-unit and same-page section context; context-free text checks cannot reconstruct that context.
-- Rebuilding the lookup changes no canonical text, chunk identities, vector rows, or reviewed exclusions. Pre-chunk prevention takes effect only in a new generation; changed chunk identities can leave previous passage decisions unmatched.
+  - It is rebuilt from the canonical files when missing.
+- The verdict is a bitmask over properties of the chunk alone, such as corrupt text and extraction artifact. It mirrors the query-time check exactly.
 
 ## Ingestion
 

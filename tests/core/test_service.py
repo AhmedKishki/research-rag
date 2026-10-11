@@ -2373,12 +2373,10 @@ async def _assert_relevance_gates_allow_abstention(project: Path) -> None:
         "bm25_no_query_token_overlap": 1,
         "bm25_extraction_artifact": 0,
         "bm25_corrupt_text": 0,
-        "bm25_non_evidence": 0,
         "bm25_too_short": 0,
         "dense_below_threshold": 1,
         "dense_extraction_artifact": 0,
         "dense_corrupt_text": 0,
-        "dense_non_evidence": 0,
         "dense_too_short": 0,
     }
 
@@ -3727,13 +3725,9 @@ def test_query_gate_falls_back_without_a_stored_verdict(
         calls: list[str] = []
         real_flags = support_module.chunk_health_flags
 
-        def counting_flags(
-            _text: str, *, quality_flags: object = None, content_kind: object = None
-        ) -> int:
+        def counting_flags(_text: str, *, quality_flags: object = None) -> int:
             calls.append(_text)
-            return real_flags(
-                _text, quality_flags=quality_flags, content_kind=content_kind
-            )
+            return real_flags(_text, quality_flags=quality_flags)
 
         monkeypatch.setattr(support_module, "chunk_health_flags", counting_flags)
         # Model a lookup that predates the stored verdict: the query path has to

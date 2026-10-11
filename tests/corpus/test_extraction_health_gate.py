@@ -43,9 +43,6 @@ from research_rag.corpus.text_quality import (
     non_argument_removal_flags,
     source_health_reasons,
     strip_non_argument_sections,
-    structural_context_key,
-    structural_non_evidence_reason,
-    structural_section_contexts,
 )
 from research_rag.project.config import resolve_config
 from research_rag.project.policy import ResearchError
@@ -204,224 +201,6 @@ def _unit(index: int, text: str, *, content_kind: str = "prose") -> dict:
     }
 
 
-# Invented layout fragments exercise structure without reproducing source text.
-PRODUCTION_DEBRIS = (
-    "Archive Layout\narchive_front.indd 1\n11/02/2024 09:14:22\n"
-    "archive_front.indd 1\n11/02/2024 09:14:22"
-)
-CONTENTS_ROWS = (
-    "Opening question .... 3\nThe river archive .... 17\nClosing account .... 42"
-)
-INDEX_ROWS = "archive, 12, 18, 35\nboats, 23, 47\ncustoms, 51, 62, 79"
-REFERENCE_RECORDS = (
-    f"{ENTRY_ONE}\n{ENTRY_TWO}\n"
-    "River, B. (2021). Counting boats. Ledger Review, 8, pp. 31-45."
-)
-
-
-@pytest.mark.parametrize(
-    ("text", "section", "reason"),
-    [
-        (PRODUCTION_DEBRIS, None, "production_debris"),
-        (CONTENTS_ROWS, "contents", "contents_list"),
-        (INDEX_ROWS, "index", "index_entries"),
-        (REFERENCE_RECORDS, None, "reference_list"),
-        (REFERENCE_RECORDS, "bibliography", "reference_list"),
-    ],
-)
-def test_structural_non_evidence_requires_its_confirmed_shape(
-    text: str, section: str | None, reason: str
-) -> None:
-    assert structural_non_evidence_reason(text, section=section) == reason
-
-
-@pytest.mark.parametrize(
-    ("text", "section"),
-    [
-        (CONTENTS_ROWS, None),
-        (INDEX_ROWS, None),
-        ("Opening question .... 3\nClosing account .... 42", "contents"),
-        (PRODUCTION_DEBRIS.replace("archive_front.indd", "archive_front.pdf"), None),
-        ("archive_front.indd 1\n11/02/2024 09:14:22", None),
-        (PRODUCTION_DEBRIS + "\n" + BODY_PROSE, None),
-        (PRODUCTION_DEBRIS + "\n" + "Layout title " * 150, None),
-        (ENTRY_ONE + "\n" + ENTRY_TWO, None),
-        (REFERENCE_RECORDS + "\n" + BODY_PROSE, "bibliography"),
-        ("References\n" + BODY_PROSE, "bibliography"),
-        ("Contents\n" + BODY_PROSE, "contents"),
-        ("Index\n" + BODY_PROSE, "index"),
-        ("Notes\n1 The archive copy explains why the counts differ.", None),
-        ("Figure 2. The curve records the wage changes after the strike.", None),
-        ("Table 1\nYear | Harvest | Wage\n1919 | 4200 | 3.10", None),
-        ("E[X] = μ + σ²/μ", None),
-        (ARABIC, None),
-        (DEVANAGARI, None),
-        (HEBREW, None),
-        (
-            "Jones, A. (2020) argues that the road came first, and the record agrees.",
-            None,
-        ),
-    ],
-)
-def test_structural_screen_preserves_substance_and_ambiguous_layout(
-    text: str, section: str | None
-) -> None:
-    assert structural_non_evidence_reason(text, section=section) is None
-
-
-def test_long_reference_records_need_positive_bibliographic_evidence() -> None:
-    records = "\n".join(
-        f"Ledger, {initial}. ({year}). " + "River account " * 45 + "Review, pp. 10-20."
-        for initial, year in [("A", 2018), ("B", 2019), ("C", 2020)]
-    )
-    assert structural_non_evidence_reason(records) == "reference_list"
-    assert structural_non_evidence_reason(records + "\n" + BODY_PROSE) is None
-
-
-@pytest.mark.parametrize(
-    "text",
-    [
-        (
-            "Smith, A. (2020) finds wages fell.\nJones, B. (2021) finds rents rose.\n"
-            "Brown, C. (2022) rejects both estimates."
-        ),
-        REFERENCE_RECORDS + "\nThe estimates exclude unpaid labour.",
-        REFERENCE_RECORDS + "\nUnpaid labour is omitted; see p. 12.",
-        PRODUCTION_DEBRIS + "\nWages fell.",
-    ],
-)
-def test_structural_marker_counts_do_not_remove_short_claims(text: str) -> None:
-    assert structural_non_evidence_reason(text) is None
-
-
-def test_a_citation_led_explanatory_note_is_not_a_pure_reference() -> None:
-    from research_rag.corpus.text_quality import is_pure_bibliographic_note
-
-    for note in (
-        "1 Smith, A. (2020), p. 12, ignores unpaid labour.",
-        "1 Smith, A. (2020). This estimate excludes unpaid labour; see p. 12.",
-    ):
-        assert not is_pure_bibliographic_note(note)
-        assert _removed(_paragraphs("Notes", note)) == (_paragraphs("Notes", note), ())
-
-
-def test_an_index_heading_does_not_remove_quantitative_prose() -> None:
-    prose = (
-        "In 1910, 1920, 1930, and 1940 wages rose; "
-        "in 1950, 1960, 1970, and 1980 rents fell."
-    )
-    assert structural_non_evidence_reason(prose, section="index") is None
-    assert (
-        structural_non_evidence_reason(
-            "Wages rose in 1910; rents fell in 1920; strikes spread in 1930",
-            section="index",
-        )
-        is None
-    )
-    heading = {**_unit(1, "Index"), "id": "index-heading"}
-    body = {**_unit(1, prose), "id": "body"}
-    retained = screen_source_units(
-        _named_source("index-argument.pdf"), {}, [heading, body]
-    )
-    assert prose in _combined(retained)
-    ambiguous = "\n".join(
-        f"Ledger, Alice. River account. Harbour Press, {year}."
-        for year in [2018, 2019, 2020, 2021]
-    )
-    assert structural_non_evidence_reason(ambiguous) is None
-
-
-def _structural_unit(document: str, page: int, region: int, text: str) -> dict:
-    return {
-        **_unit(page, text),
-        "id": f"{document}:pdf-page:{page:06d}:region:{region:03d}",
-        "document_id": document,
-    }
-
-
-def test_structural_context_is_same_document_and_physical_page_only() -> None:
-    heading = _structural_unit("first", 3, 1, "Contents")
-    rows = _structural_unit("first", 3, 2, CONTENTS_ROWS)
-    other_page = _structural_unit("first", 4, 1, CONTENTS_ROWS)
-    other_document = _structural_unit("second", 3, 1, CONTENTS_ROWS)
-    notes = _structural_unit("first", 5, 1, "Notes")
-    contexts = structural_section_contexts(
-        iter([heading, rows, other_page, other_document, notes])
-    )
-    assert structural_context_key(heading) == structural_context_key(rows)
-    assert structural_context_key(rows) != structural_context_key(other_page)
-    assert structural_context_key(rows) != structural_context_key(other_document)
-    assert contexts.get(structural_context_key(rows)) == "contents"
-    assert contexts.get(structural_context_key(other_page)) is None
-    assert contexts.get(structural_context_key(other_document)) is None
-    assert contexts.get(structural_context_key(notes)) is None
-    relabelled = {**rows, "locator": {**rows["locator"], "page_label": "iii"}}
-    assert structural_context_key(relabelled) == structural_context_key(rows)
-
-
-@pytest.mark.parametrize(
-    ("heading", "rows", "reason"),
-    [
-        ("Contents", CONTENTS_ROWS, "contents_list"),
-        ("Index", INDEX_ROWS, "index_entries"),
-        ("References", REFERENCE_RECORDS, "reference_list"),
-    ],
-)
-def test_whole_unit_structural_screen_uses_separate_same_page_heading(
-    heading: str, rows: str, reason: str
-) -> None:
-    units = [
-        _structural_unit("doc", 1, 1, heading),
-        _structural_unit("doc", 1, 2, rows),
-        _structural_unit("doc", 2, 1, BODY_PROSE),
-    ]
-    document: dict = {"title": "Structure"}
-    retained = screen_source_units(_named_source("structure.pdf"), document, units)
-    assert BODY_PROSE in _combined(retained)
-    assert rows not in _combined(retained)
-    assert document["excluded_structural_non_evidence_counts"][reason] == 1
-    assert document["excluded_structural_non_evidence_units"] == [
-        {"unit_id": units[1]["id"], "locator": units[1]["locator"], "reasons": [reason]}
-    ]
-
-
-def test_production_title_debris_is_recorded_without_losing_real_body() -> None:
-    units = [_unit(1, PRODUCTION_DEBRIS, content_kind="figure"), _unit(2, BODY_PROSE)]
-    document: dict = {"title": "Archive Layout"}
-    retained = screen_source_units(_named_source("layout.pdf"), document, units)
-    assert [unit["contents"] for unit in retained] == [BODY_PROSE]
-    assert document["excluded_structural_non_evidence_counts"] == {
-        "production_debris": 1
-    }
-    assert document["excluded_structural_non_evidence_units"] == [
-        {
-            "unit_id": units[0]["id"],
-            "locator": units[0]["locator"],
-            "reasons": ["production_debris"],
-        }
-    ]
-    assert document["excluded_corrupt_unit_count"] == 0
-
-
-def test_structural_screen_keeps_boundary_argument_and_substantive_notes() -> None:
-    texts = [
-        BODY_PROSE,
-        "Notes\n\n1 The archive copy explains why the river count differs from the quay count.",
-        "Figure 1. The curve explains the relation between time and wages.",
-        "The estimator satisfies E[X] = μ + σ²/μ for the lognormal case.",
-        ARABIC,
-        DEVANAGARI,
-        "See Smith (2019) for the survey, and Jones (2020) for the second count.",
-        "References\n\n" + BODY_PROSE,
-    ]
-    units = [_unit(index, text) for index, text in enumerate(texts, 1)]
-    document: dict = {"title": "Substance"}
-    retained = screen_source_units(_named_source("substance.pdf"), document, units)
-    assert [unit["contents"] for unit in retained] == texts
-    assert document["excluded_structural_non_evidence_units"] == []
-    assert document["excluded_structural_non_evidence_counts"] == {}
-
-
 # ---------------------------------------------------------------------------
 # Semantic cleaning: what comes out, and what must not
 # ---------------------------------------------------------------------------
@@ -451,29 +230,22 @@ def test_reference_section_is_removed_and_main_text_citations_are_not() -> None:
     assert "Jones, A. (2020)" not in cleaned
 
 
-def test_marker_led_bibliographic_notes_are_removed_and_the_body_survives() -> None:
+def test_marker_led_note_apparatus_is_removed_and_the_body_before_it_survives() -> None:
     text = _paragraphs(
         "The account below rests on three sources and says which.",
         "Notes",
-        f"* {ENTRY_ONE}",
-        f"* {ENTRY_TWO}",
+        (
+            "* The first note quotes a witness: the road was already cut, and "
+            "the cutting decided what the road was for."
+        ),
+        "* The second note gives the archive reference and the access date.",
     )
 
     cleaned, removed = _removed(text)
 
     assert removed == ("footnotes",)
     assert cleaned == "The account below rests on three sources and says which."
-    assert ENTRY_ONE not in cleaned
-
-
-def test_marker_led_explanatory_notes_are_retained() -> None:
-    text = _paragraphs(
-        BODY_PROSE,
-        "Notes",
-        "* The witness explains that the road was already cut before the dispute.",
-        "* The second note states how the archive evidence changes the argument.",
-    )
-    assert _removed(text) == (text, ())
+    assert "archive reference" not in cleaned
 
 
 def test_a_word_that_names_a_section_is_not_a_section_heading() -> None:
@@ -599,7 +371,7 @@ def test_an_unmarked_paragraph_ends_a_note_apparatus() -> None:
     text = _paragraphs(
         "The chapter states its evidence and where it came from.",
         "Notes",
-        f"* {ENTRY_ONE}",
+        "* The first note names the archive box the copy came from.",
         "This paragraph carries no marker, so the apparatus ended at the note.",
     )
 
@@ -1435,7 +1207,7 @@ def test_a_sidebar_to_the_right_of_the_body_column_is_not_indexed(
 def test_a_footnote_set_in_the_foot_of_the_page_below_the_body_is_not_indexed(
     project: Path,
 ) -> None:
-    """Geometry and a marker withhold only a confirmed bibliographic note."""
+    """A note takes all four conditions: smaller, low, separated, and marked."""
 
     _pdf(
         project / "sources" / "footnote.pdf",
@@ -1444,7 +1216,7 @@ def test_a_footnote_set_in_the_foot_of_the_page_below_the_body_is_not_indexed(
                 ((72, 100, 540, 320), BODY_PROSE, 10.0),
                 (
                     (72, 700, 540, 760),
-                    f"1 {ENTRY_ONE}",
+                    "1 The note explains the definition used in the table above.",
                     7.0,
                 ),
             ]
@@ -1453,20 +1225,9 @@ def test_a_footnote_set_in_the_foot_of_the_page_below_the_body_is_not_indexed(
 
     documents, units = _extracted(project)
 
-    assert ENTRY_ONE not in _combined(units)
+    assert "The note explains the definition" not in _combined(units)
     assert documents[0]["removed_footnote_blocks"] == 1
     assert documents[0]["removed_non_argument_characters"] > 0
-
-
-def test_a_marked_explanatory_footnote_is_kept(project: Path) -> None:
-    note = "1 The note explains the definition used in the table above."
-    _pdf(
-        project / "sources" / "explanatory-note.pdf",
-        [[((72, 100, 540, 320), BODY_PROSE, 10.0), ((72, 700, 540, 760), note, 7.0)]],
-    )
-    documents, units = _extracted(project)
-    assert note in _combined(units)
-    assert documents[0]["removed_footnote_blocks"] == 0
 
 
 def test_an_unmarked_note_in_the_foot_of_the_page_is_kept(project: Path) -> None:
@@ -1840,12 +1601,12 @@ def test_a_pdf_note_apparatus_running_onto_the_next_page_is_removed(
             [
                 (
                     (72, 100, 540, 200),
-                    f"* {ENTRY_ONE}",
+                    "* The first note names the archive box the copy came from.",
                     10.0,
                 ),
                 (
                     (72, 230, 540, 330),
-                    f"* {ENTRY_TWO}",
+                    "* The second note records the access date of the same copy.",
                     10.0,
                 ),
             ],
@@ -1865,8 +1626,8 @@ def test_a_pdf_note_apparatus_running_onto_the_next_page_is_removed(
     documents, units = _extracted(project)
 
     combined = _combined(units)
-    assert ENTRY_ONE not in combined
-    assert ENTRY_TWO not in combined
+    assert "The first note names the archive box" not in combined
+    assert "The second note records the access date" not in combined
     assert "The next chapter opens a new argument" in combined
     # The heading and both notes.
     assert documents[0]["removed_note_segments"] == 3
@@ -2128,7 +1889,7 @@ def test_every_removal_category_the_record_carries_is_registered(
                 ((72, 20, 540, 92), RUNNING_HEAD, 8.0),
                 ((72, 100, 540, 320), BODY_PROSE, 10.0),
                 ((24, 100, 58, 320), "A marginal note about the margin rule.", 8.0),
-                ((72, 700, 540, 760), f"1 {ENTRY_ONE}", 7.0),
+                ((72, 700, 540, 760), "1 The note explains the definition used.", 7.0),
             ]
         ]
         * 3,
@@ -2185,7 +1946,7 @@ def test_epub_sidebar_and_note_elements_are_not_indexed(project: Path) -> None:
                 "<h1>Chapter</h1>"
                 "<p>The chapter argues that the archive decides the reading.</p>"
                 "<aside><p>A sidebar about the margin rule of the archive.</p></aside>"
-                f'<div class="footnotes"><p>1 {ENTRY_ONE}</p></div>'
+                '<div class="footnotes"><p>1 A note about the identifier.</p></div>'
                 '<div class="sidenote"><p>A side note about the archive.</p></div>'
             )
         },
@@ -2195,37 +1956,8 @@ def test_epub_sidebar_and_note_elements_are_not_indexed(project: Path) -> None:
 
     assert "the archive decides the reading" in _combined(units)
     assert "A sidebar about the margin rule" not in _combined(units)
-    assert ENTRY_ONE not in _combined(units)
+    assert "A note about the identifier" not in _combined(units)
     assert "A side note about the archive" not in _combined(units)
-
-
-@pytest.mark.parametrize(
-    "markup",
-    [
-        '<div class="footnotes">{note}</div>',
-        '<section role="doc-endnotes">{note}</section>',
-        '<aside role="doc-footnote">{note}</aside>',
-        '<div id="endnotes">{note}</div>',
-        '<aside epub:type="footnote">{note}</aside>',
-        '<aside epub:type="endnote">{note}</aside>',
-    ],
-)
-def test_epub_marked_note_markup_preserves_explanation(
-    project: Path, markup: str
-) -> None:
-    note = "1 The note explains why the archive evidence supports the author's claim."
-    _epub(
-        project / "sources" / "explanatory-notes.epub",
-        {
-            "chapter.xhtml": "<h1>Chapter</h1><p>"
-            + BODY_PROSE
-            + "</p>"
-            + markup.format(note="<p>" + note + "</p>")
-        },
-    )
-    documents, units = _extracted(project)
-    assert note in _combined(units)
-    assert documents[0]["removed_epub_furniture_elements"] == 0
 
 
 def test_epub_body_text_mentioning_footnotes_survives(project: Path) -> None:
@@ -2274,8 +2006,8 @@ def test_an_epub_note_apparatus_is_removed_from_the_unit_text(project: Path) -> 
                 "<h1>Chapter</h1>"
                 "<p>The chapter states its evidence in the body of the argument.</p>"
                 "<h2>Notes</h2>"
-                f"<p>* {ENTRY_ONE}</p>"
-                f"<p>* {ENTRY_TWO}</p>"
+                "<p>* The first note names the archive box the copy came from.</p>"
+                "<p>* The second note records the access date of the same copy.</p>"
             )
         },
     )
@@ -2283,7 +2015,7 @@ def test_an_epub_note_apparatus_is_removed_from_the_unit_text(project: Path) -> 
     _documents, units = _extracted(project)
 
     assert "states its evidence in the body" in _combined(units)
-    assert ENTRY_ONE not in _combined(units)
+    assert "names the archive box" not in _combined(units)
 
 
 # ---------------------------------------------------------------------------
@@ -2609,37 +2341,6 @@ def test_the_staged_path_applies_the_same_gate_as_a_direct_build(
         result["excluded_corrupt_unit_count"]
         == (direct_documents[0]["excluded_corrupt_unit_count"])
     )
-
-
-def test_staged_and_direct_structural_screen_agree_on_synthetic_pdf(
-    project: Path,
-) -> None:
-    _pdf(
-        project / "sources" / "structure.pdf",
-        [
-            [((72, 100, 540, 300), PRODUCTION_DEBRIS, 10.0)],
-            [((72, 100, 540, 300), BODY_PROSE, 10.0)],
-        ],
-    )
-    direct_documents, direct_units = _extracted(project)
-    result = asyncio.run(_service(project).ingest(chunk_size=200, chunk_overlap=10))
-    generation_root = Path(result["generation_root"])
-    staged_units = [
-        json.loads(line)
-        for line in (generation_root / "corpus" / "extracted-units.jsonl")
-        .read_text(encoding="utf-8")
-        .splitlines()
-        if line.strip()
-    ]
-    for field in ("contents", "id", "locator"):
-        assert [unit[field] for unit in staged_units] == [
-            unit[field] for unit in direct_units
-        ]
-    assert "archive_front.indd" not in _combined(staged_units)
-    assert "layout decision before it is a reading one" in _combined(staged_units)
-    assert direct_documents[0]["excluded_structural_non_evidence_counts"] == {
-        "production_debris": 1
-    }
 
 
 def test_the_staged_path_removes_a_reference_list_the_direct_path_removes(
