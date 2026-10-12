@@ -1,0 +1,7 @@
+{
+  "name": "research-rag",
+  "version": "2.0.0",
+  "description": "A browser workspace for reviewing research evidence over a project's own PDF, EPUB and MOBI corpus",
+  "repository": "https://github.com/AhmedKishki/research-rag",
+  "license": "Apache-2.0"
+}
