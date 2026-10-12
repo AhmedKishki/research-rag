@@ -210,10 +210,18 @@ def extract_mobi_payload(path: Path, request: dict) -> tuple[dict, list[dict]]:
 
 def _worker_payload(path: Path, request: dict | None = None) -> dict:
     """Drain both pipes under byte/time caps before loading any JSON in the parent."""
-    command = [sys.executable, "-m", "research_rag.corpus.mobi_reader", str(path)]
+    # Insert only our known package root, never the caller's PYTHONPATH or cwd.
+    # This supports source-tree use as well as installed distributions.
+    package_root = Path(__file__).resolve().parents[2]
+    bootstrap = (
+        "import runpy, sys; "
+        f"sys.path.insert(0, {str(package_root)!r}); "
+        "runpy.run_module('research_rag.corpus.mobi_reader', run_name='__main__')"
+    )
+    command = [sys.executable, "-I", "-c", bootstrap, str(path)]
     if request is not None:
         command.append("--extract")
-    environment = child_process_environment()
+    environment = child_process_environment(purpose="parser")
     # HTML worker imports the shared extraction helpers lazily. Do not let a
     # numerical library's idle thread stacks consume the worker's address budget.
     environment["OPENBLAS_NUM_THREADS"] = "1"

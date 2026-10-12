@@ -1172,6 +1172,9 @@ def test_the_desktop_viewer_is_started_without_a_shell_and_reaped(
 
     monkeypatch.setattr(viewer.sys, "platform", "linux")
     monkeypatch.setenv("DISPLAY", ":0")
+    monkeypatch.setenv("DBUS_SESSION_BUS_ADDRESS", "unix:path=/desktop-bus")
+    monkeypatch.setenv("XDG_RUNTIME_DIR", "/run/user/1000")
+    monkeypatch.setenv("OPENAI_API_KEY", "must-not-leak")
     monkeypatch.setattr(viewer.shutil, "which", lambda name: f"/usr/bin/{name}")
     monkeypatch.setattr(viewer.subprocess, "Popen", popen)
 
@@ -1179,6 +1182,10 @@ def test_the_desktop_viewer_is_started_without_a_shell_and_reaped(
     assert started[0]["command"] == ["/usr/bin/xdg-open", str(target)]
     assert started[0].get("shell") is None
     assert started[0]["start_new_session"] is True
+    assert started[0]["env"]["DISPLAY"] == ":0"
+    assert started[0]["env"]["DBUS_SESSION_BUS_ADDRESS"] == "unix:path=/desktop-bus"
+    assert started[0]["env"]["XDG_RUNTIME_DIR"] == "/run/user/1000"
+    assert "OPENAI_API_KEY" not in started[0]["env"]
 
     monkeypatch.delenv("DISPLAY")
     monkeypatch.delenv("WAYLAND_DISPLAY", raising=False)

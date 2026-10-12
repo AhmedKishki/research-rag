@@ -325,7 +325,9 @@ def docling_cache_has_models(model_cache_root: Path | None) -> bool:
 def _worker_environment(
     mode: str, offline: bool, model_cache_root: Path | None
 ) -> dict[str, str]:
-    environment = child_process_environment()
+    environment = child_process_environment(
+        purpose="docling-offline" if offline and mode == MODE_EXTRACT else "docling"
+    )
     cache = docling_cache_root(model_cache_root)
     environment["HF_HOME"] = str(cache)
     environment["HUGGINGFACE_HUB_CACHE"] = str(cache / "hub")
@@ -357,6 +359,7 @@ def _terminate_scope(unit: str, process: subprocess.Popen[Any]) -> None:
                     unit,
                 ],
                 capture_output=True,
+                env=child_process_environment(purpose="systemctl"),
                 timeout=15,
                 check=False,
             )

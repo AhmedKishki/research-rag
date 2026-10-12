@@ -62,7 +62,7 @@ def open_in_default_viewer(path: Path) -> str:
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
             start_new_session=True,
-            env=child_process_environment(),
+            env=child_process_environment(purpose="viewer"),
         )
     except OSError as exc:
         raise ViewerUnavailable(f"{command[0]} could not start: {exc}") from exc

@@ -240,7 +240,7 @@ def install_small_pipe_worker(monkeypatch, script: str):
     processes = []
 
     def launch(command, **kwargs):
-        if "research_rag.corpus.mobi_reader" not in command:
+        if not any("research_rag.corpus.mobi_reader" in arg for arg in command):
             return original(command, **kwargs)
         process = original([sys.executable, "-c", script], pipesize=4096, **kwargs)
         processes.append(process)

@@ -385,7 +385,7 @@ def _install_environment() -> dict[str, str]:
     no user-supplied path or wheel is honoured.
     """
 
-    environment = child_process_environment()
+    environment = child_process_environment(purpose="provisioner")
     for name in (
         "PYTHONPATH",
         "PYTHONHOME",
@@ -437,6 +437,7 @@ def _terminate_scope(unit: str, process: subprocess.Popen[Any]) -> None:
                     unit,
                 ],
                 capture_output=True,
+                env=child_process_environment(purpose="systemctl"),
                 timeout=15,
                 check=False,
             )
