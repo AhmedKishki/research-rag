@@ -3218,6 +3218,7 @@ async def _assert_processing_policy_drift_preserves_generation(
     current = await service.status()
     assert current["generation_upgrade_required"] is False
     assert current["upgrade_reasons"] == []
+    assert current["generation_diagnostics"]["policy_differences"] == []
 
     # A generation recorded under an earlier extraction policy is reported, named,
     # and still answers, rather than being discarded.

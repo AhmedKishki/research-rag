@@ -10,6 +10,7 @@ import uuid
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Literal
 
 from platformdirs import user_cache_path
 
@@ -58,17 +59,104 @@ OWNER_PID_ENV = "RESEARCH_RAG_OWNER_PID"
 TOP_LEVEL_ONLY_ENV = ("RESEARCH_RAG_UI_PORT",)
 
 
-def child_process_environment() -> dict[str, str]:
-    """The environment for a server this process starts.
+ChildProcessPurpose = Literal[
+    "parser", "docling-offline", "docling", "provisioner", "viewer", "systemctl"
+]
+_BASE_CHILD_ENV = frozenset(
+    {
+        "PATH",
+        "HOME",
+        "USER",
+        "LOGNAME",
+        "LANG",
+        "LANGUAGE",
+        "TZ",
+        "TMPDIR",
+        "TMP",
+        "TEMP",
+        "XDG_CACHE_HOME",
+        "XDG_CONFIG_HOME",
+        "XDG_DATA_HOME",
+        "XDG_STATE_HOME",
+    }
+)
+_SESSION_CHILD_ENV = frozenset({"XDG_RUNTIME_DIR", "DBUS_SESSION_BUS_ADDRESS"})
+_DESKTOP_CHILD_ENV = frozenset(
+    {
+        "DISPLAY",
+        "WAYLAND_DISPLAY",
+        "XAUTHORITY",
+        "XDG_CURRENT_DESKTOP",
+        "XDG_SESSION_DESKTOP",
+        "XDG_SESSION_TYPE",
+        "DESKTOP_SESSION",
+        "XDG_CONFIG_DIRS",
+        "XDG_DATA_DIRS",
+    }
+)
+_NETWORK_CHILD_ENV = frozenset(
+    {
+        "HTTP_PROXY",
+        "HTTPS_PROXY",
+        "ALL_PROXY",
+        "NO_PROXY",
+        "http_proxy",
+        "https_proxy",
+        "all_proxy",
+        "no_proxy",
+        "SSL_CERT_FILE",
+        "SSL_CERT_DIR",
+        "REQUESTS_CA_BUNDLE",
+        "CURL_CA_BUNDLE",
+    }
+)
 
-    The child inherits this process's environment except the top-level-only variables,
-    plus the marker that makes it refuse to host a UI and the identity of its owner.
-    An inherited owner id is overwritten.
+
+def child_process_environment(*, purpose: ChildProcessPurpose) -> dict[str, str]:
+    """Allow only the variables needed by this child purpose.
+
+    Network-enabled Docling and provisioning deliberately retain proxy/certificate
+    configuration. Proxy URLs may contain credentials; this is not a sandbox and
+    HOME/XDG paths still permit programs to read on-disk configuration. No general
+    token, credential, Python import, or dynamic-loader variables are inherited.
     """
-
-    environment = dict(os.environ)
-    for name in TOP_LEVEL_ONLY_ENV:
-        environment.pop(name, None)
+    if purpose not in {
+        "parser",
+        "docling-offline",
+        "docling",
+        "provisioner",
+        "viewer",
+        "systemctl",
+    }:
+        raise ValueError(f"Unknown child process purpose: {purpose}")
+    allowed = _BASE_CHILD_ENV
+    if purpose != "parser":
+        allowed |= _SESSION_CHILD_ENV
+    if purpose == "viewer":
+        allowed |= _DESKTOP_CHILD_ENV
+    if purpose in {"docling", "provisioner"}:
+        allowed |= _NETWORK_CHILD_ENV
+    environment = {
+        name: value
+        for name, value in os.environ.items()
+        if name in allowed
+        or name
+        in {
+            "LC_ALL",
+            "LC_COLLATE",
+            "LC_CTYPE",
+            "LC_MESSAGES",
+            "LC_MONETARY",
+            "LC_NUMERIC",
+            "LC_TIME",
+            "LC_PAPER",
+            "LC_NAME",
+            "LC_ADDRESS",
+            "LC_TELEPHONE",
+            "LC_MEASUREMENT",
+            "LC_IDENTIFICATION",
+        }
+    }
     environment[MANAGED_CHILD_ENV] = "1"
     environment[OWNER_PID_ENV] = str(os.getpid())
     return environment

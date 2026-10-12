@@ -151,7 +151,8 @@ def test_mobi_timeout_is_explicit_and_uses_sanitized_environment(monkeypatch, tm
     processes = []
 
     def observe(command, **kwargs):
-        environment = mobi_reader.child_process_environment()
+        assert command[1:3] == ["-I", "-c"]
+        environment = mobi_reader.child_process_environment(purpose="parser")
         environment.update(OPENBLAS_NUM_THREADS="1", OMP_NUM_THREADS="1")
         assert kwargs["env"] == environment
         process = original(command, **kwargs)
@@ -163,6 +164,20 @@ def test_mobi_timeout_is_explicit_and_uses_sanitized_environment(monkeypatch, tm
     with pytest.raises(MobiReadError, match="45-second"):
         read_mobi(tmp_path / "book.mobi")
     assert processes[0].poll() is not None
+
+
+def test_source_tree_worker_ignores_ambient_import_paths(
+    project, monkeypatch, tmp_path
+):
+    # A hostile cwd/PYTHONPATH package must not replace the trusted source package.
+    hostile = tmp_path / "research_rag"
+    hostile.mkdir()
+    (hostile / "__init__.py").write_text("raise RuntimeError('ambient package loaded')")
+    monkeypatch.setenv("PYTHONPATH", str(tmp_path))
+    monkeypatch.chdir(tmp_path)
+    path = project / "sources" / "trusted.mobi"
+    write_mobi(path, "<p>trusted worker evidence</p>")
+    assert "trusted worker evidence" in read_mobi(path).parts[0]
 
 
 def test_dual_mobi_refuses_unsupported_unused_compression(project):

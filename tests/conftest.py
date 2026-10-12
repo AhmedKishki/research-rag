@@ -109,9 +109,8 @@ def _synthetic_docling_worker(
     exercises the real boundary marks itself ``real_docling`` and keeps the real
     code path.
 
-    The environment resolver itself is deliberately not replaced: tests of that
-    resolver must keep seeing the real function. A direct extraction test that
-    needs a resolved environment requests ``fake_docling_env`` and passes it to
+    Tests of the environment resolver keep seeing the real function. A direct
+    extraction test requests ``fake_docling_env`` and passes it to
     ``extract_sources`` explicitly.
     """
 
@@ -124,6 +123,7 @@ def _synthetic_docling_worker(
         return
     import research_rag.corpus.docling_env as docling_env_module
     import research_rag.corpus.extraction as extraction_module
+    import research_rag.corpus.pdf_backend as pdf_backend_module
     import research_rag.generations.ingestion as ingestion_module
 
     # Direct extraction helpers call the module-level resolver and pass the
@@ -131,6 +131,13 @@ def _synthetic_docling_worker(
     # one on its own.
     monkeypatch.setattr(
         docling_env_module,
+        "resolve_docling_env",
+        lambda *args, **kwargs: _FAKE_DOCLING_ENV,
+    )
+    # Backend diagnostics imported the resolver directly. Use the same runtime
+    # identity as extraction, rather than the developer's installed environment.
+    monkeypatch.setattr(
+        pdf_backend_module,
         "resolve_docling_env",
         lambda *args, **kwargs: _FAKE_DOCLING_ENV,
     )
