@@ -1,11 +1,11 @@
-"""The managed, versioned environment the optional Docling backend runs in.
+"""The managed, versioned environment the Docling PDF extractor runs in.
 
-Docling is never installed into this app's own environment. On first use of
-``ingestion.pdf_backend=docling`` — a real PDF conversion, or the explicit
+Docling is never installed into this app's own environment. On the first real
+PDF conversion, or the explicit
 ``doctor --prefetch-models`` — a dedicated virtual environment is built under the
 runtime cache, pinned to the releases this app was tested against, and the shipped
 worker runs in it. The app's environment and the managed one stay separate, so a
-custom install never carries Docling and the optional extra is not required.
+serving process never imports Docling. Reading existing evidence provisions nothing.
 
 The environment is versioned by a spec fingerprint (the pins, the interpreter
 ABI, and a bootstrap policy version). It is built in a staging directory on the
@@ -405,7 +405,7 @@ def _require_uv() -> str:
     if executable is None:
         raise DoclingEnvironmentError(
             "installing the managed Docling environment needs `uv` on PATH. "
-            "Install uv, or set ingestion.pdf_backend=custom. No source was "
+            "Install uv before converting PDFs. No source was "
             "changed and the selected generation is unchanged."
         )
     return executable
@@ -417,7 +417,7 @@ def _require_systemd_run() -> str:
         raise DoclingEnvironmentError(
             "building the managed Docling environment needs a systemd user "
             "session (`systemd-run` and `systemctl`) to bound the installer. "
-            "Install one, or set ingestion.pdf_backend=custom. No source was "
+            "Start a systemd user session before converting PDFs. No source was "
             "changed and the selected generation is unchanged."
         )
     return executable
@@ -527,7 +527,7 @@ def _run_bounded(
             raise DoclingEnvironmentError(
                 f"{description} exceeded the {timeout:g}s limit; the installer "
                 "scope was killed. Run `research-rag doctor --prefetch-models` "
-                "again, or set ingestion.pdf_backend=custom."
+                "again after inspecting the installer diagnostics."
             ) from exc
         finally:
             _terminate_scope(unit, process)

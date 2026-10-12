@@ -1,9 +1,11 @@
-"""The PDF extraction backend: the bundled reader, or an optional Docling worker.
+"""The PDF extraction backend: the resource-bounded Docling worker.
 
-``custom`` is the default and the only backend the app ships. ``docling`` is an
-explicit opt-in project setting; when selected, every PDF is converted by a
-separate resource-bounded child process, and the parent process never imports
-Docling.
+``docling`` is the only operational reader: every PDF is converted by a separate
+resource-bounded child process, and the parent process never imports Docling.
+``custom`` names the retired bundled text-only reader. It is kept only as a read
+token so a generation built before the default moved keeps its recorded
+provenance and an existing config selecting it still resolves; it is never a
+selectable extractor.
 
 The worker runs under ``systemd-run --user --scope`` with a 2 GiB memory cap, no
 swap, and a 200% CPU quota. The worker itself verifies those exact cgroup values
@@ -13,9 +15,10 @@ hung conversion leaves no orphan.
 
 The backend name, its version, its adapter policy, the versions of its
 extraction packages, and its disabled-enrichment options are one fingerprint. It
-invalidates extraction reuse only when it changes: a legacy manifest with no
-recorded backend is the default ``custom`` fingerprint, so the default selection
-never rebuilds a corpus on the strength of this feature.
+invalidates extraction reuse only when it changes. A manifest that predates the
+field carries the retired ``custom`` fingerprint: that recorded identity is read
+as-is, so an existing generation keeps its provenance and stays searchable rather
+than being relabelled from the operational default.
 
 An extraction run reads the local cache. With ``runtime.offline = false`` the
 worker may fetch a missing model lazily on first use, inside the same verified
@@ -49,8 +52,14 @@ from .docling_env import (
 
 PDF_BACKEND_CUSTOM = "custom"
 PDF_BACKEND_DOCLING = "docling"
+# The names a caller may configure: `docling` only, because it is the sole
+# operational reader. `PDF_BACKEND_CUSTOM` is accepted below as a read alias.
 PDF_BACKENDS = PDF_BACKEND_CHOICES
-DEFAULT_PDF_BACKEND = PDF_BACKEND_CUSTOM
+# The values a configured setting may still carry. `custom` is the retired token
+# an existing file or environment may hold; it resolves to the operational
+# reader and is never a selectable extractor.
+_KNOWN_PDF_BACKENDS = (PDF_BACKEND_CUSTOM, PDF_BACKEND_DOCLING)
+DEFAULT_PDF_BACKEND = PDF_BACKEND_DOCLING
 
 # The pinned, tested Docling release. The optional extra carries it; a different
 # installed version still runs but changes the fingerprint and so forces a
@@ -58,8 +67,10 @@ DEFAULT_PDF_BACKEND = PDF_BACKEND_CUSTOM
 DOCLING_PINNED_VERSION = "2.135.0"
 # The adapter's own emission policy. Bump it when the mapping from a Docling
 # payload to units changes, so a recorded generation re-extracts rather than
-# reusing units the new adapter would not produce.
-DOCLING_ADAPTER_POLICY_VERSION = 1
+# reusing units the new adapter would not produce. Version 2 carries the
+# structural labels (heading/reference/caption/item) that gate cleaning; a
+# generation with the version-1 adapter keeps its own fingerprint and provenance.
+DOCLING_ADAPTER_POLICY_VERSION = 2
 # The Docling extraction packages whose versions shape the payload. They move
 # independently of the `docling` metapackage, so their versions join the
 # fingerprint.
@@ -125,12 +136,20 @@ class DoclingConversionError(PdfBackendError):
 
 
 def normalize_pdf_backend(value: Any) -> str:
+    """The operational reader a configured value selects.
+
+    ``docling`` is the only operational reader. The retired ``custom`` token is a
+    read alias: an existing config or environment selecting it resolves to
+    ``docling`` rather than failing, so a project keeps loading without an
+    on-disk rewrite. Any other value is refused.
+    """
+
     text = str(value or "").strip().casefold()
-    if text not in PDF_BACKENDS:
+    if text not in _KNOWN_PDF_BACKENDS:
         raise ValueError(
             f"ingestion.pdf_backend must be one of {', '.join(PDF_BACKENDS)}: {value!r}"
         )
-    return text
+    return PDF_BACKEND_DOCLING
 
 
 def effective_maximum_unclean_percent(backend: str, configured: float) -> float:
@@ -146,15 +165,14 @@ def effective_maximum_unclean_percent(backend: str, configured: float) -> float:
 
 
 def pdf_backend_available(backend: str, config: ResearchConfig | None = None) -> bool:
-    """Whether the selected backend can run a future build on this machine.
+    """Whether the operational reader can run a future build on this machine.
 
-    The default reader always can. Docling can when its managed environment is
-    ready; a missing environment is a readiness warning for the next ingest, not
-    a reason to report an existing servable generation as needing a rebuild.
+    Docling can when its managed environment is ready. A missing environment is a
+    readiness warning for the next ingest, never a reason to report an existing
+    servable generation as needing a rebuild or to refuse it.
     """
 
-    if normalize_pdf_backend(backend) == PDF_BACKEND_CUSTOM:
-        return True
+    normalize_pdf_backend(backend)
     return config is not None and resolve_docling_env(config) is not None
 
 
@@ -171,29 +189,39 @@ def docling_component_versions(
     return dict(env.versions) if env is not None else {}
 
 
+def legacy_custom_backend_record() -> dict[str, Any]:
+    """The recorded identity of a generation built by the retired bundled reader.
+
+    Preserved so a historical artifact keeps its own provenance. This is never a
+    selectable extractor and never a target for a new build; it exists only to
+    stamp or read what already ran. The value is a constant, so it matches a
+    manifest that predates the ``extraction_backend`` field.
+    """
+
+    return {
+        "backend": PDF_BACKEND_CUSTOM,
+        "version": None,
+        "adapter_policy_version": None,
+        "components": {},
+        "options": {},
+        "fingerprint": CUSTOM_BACKEND_FINGERPRINT,
+    }
+
+
 def pdf_backend_record(
     backend: str, config: ResearchConfig | None = None
 ) -> dict[str, Any]:
-    """The recorded backend identity and its fingerprint.
+    """The recorded identity of the operational reader and its fingerprint.
 
-    ``custom`` is a constant, so a manifest from before this feature matches the
-    default. ``docling`` folds the managed environment's *spec* fingerprint, the
-    adapter policy, every recorded package version, and the disabled options in.
-    The spec fingerprint is stable before and after the first install, so an
-    environment built at the start of a build does not move the checkpoint
-    identity.
+    The value is normalized, so a retired ``custom`` resolves to ``docling``: a
+    new build always records the operational reader. Docling folds the managed
+    environment's *spec* fingerprint, the adapter policy, every recorded package
+    version, and the disabled options in. The spec fingerprint is stable before
+    and after the first install, so an environment built at the start of a build
+    does not move the checkpoint identity.
     """
 
-    resolved = normalize_pdf_backend(backend)
-    if resolved == PDF_BACKEND_CUSTOM:
-        return {
-            "backend": PDF_BACKEND_CUSTOM,
-            "version": None,
-            "adapter_policy_version": None,
-            "components": {},
-            "options": {},
-            "fingerprint": CUSTOM_BACKEND_FINGERPRINT,
-        }
+    normalize_pdf_backend(backend)
     env = resolve_docling_env(config) if config is not None else None
     components = dict(env.versions) if env is not None else {}
     spec = env.spec_fingerprint if env is not None else _expected_spec_fingerprint()
@@ -254,16 +282,16 @@ def _require_systemd_run() -> str:
     executable = shutil.which("systemd-run")
     if executable is None:
         raise DoclingUnavailableError(
-            "ingestion.pdf_backend=docling needs `systemd-run` to bound the "
+            "PDF extraction uses Docling, which needs `systemd-run` to bound the "
             "conversion worker's memory, swap, and CPU. It is not on PATH. "
-            "Install a systemd user session, or set ingestion.pdf_backend=custom. "
+            "Install a systemd user session, then retry the ingest. "
             "No source was changed and the selected generation is unchanged."
         )
     if shutil.which("systemctl") is None:
         raise DoclingUnavailableError(
-            "ingestion.pdf_backend=docling needs `systemctl` to terminate the "
-            "bounded worker scope. Install a systemd user session, or set "
-            "ingestion.pdf_backend=custom."
+            "PDF extraction uses Docling, which needs `systemctl` to terminate "
+            "the bounded worker scope. Install a systemd user session, then retry "
+            "the ingest."
         )
     return executable
 
@@ -393,8 +421,8 @@ def _launch_worker(
         except subprocess.TimeoutExpired as exc:
             raise DoclingResourceError(
                 f"{description} exceeded the {timeout:g}s wall limit; the worker "
-                "scope was killed. Lower ingestion.pdf_page_batch_size, or set "
-                "ingestion.pdf_backend=custom."
+                "scope was killed. Lower ingestion.pdf_page_batch_size, then retry "
+                "the ingest."
             ) from exc
         finally:
             # Retire the named scope even on interruption or a successful worker

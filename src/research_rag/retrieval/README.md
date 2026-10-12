@@ -12,7 +12,7 @@ Answering a query against a built generation.
 | `rerankers.py` | The reranker catalogue |
 | `artifact_lookup.py` | Reading a chunk or a document out of a generation without loading its vectors |
 | `direct.py` | Compatible direct Chonkie token chunking and bm25s indexing/search, with lazy dependency loading |
-| `ultrarag.py` | The typed MCP client to the gateway in `../gateway/`, and the lazy container that defers its spawn |
+| `lexical.py` | The lightweight contract for chunking, BM25 indexing, and lexical search |
 
 ## Rules
 
@@ -25,4 +25,4 @@ Answering a query against a built generation.
   the index path being written. One backend instance serves one process, so a
   second build in the same instance must not inherit the first one's rows.
 - `direct.py` owns normal chunking and lexical retrieval. Blocking dependency calls run off the event loop, and one live BM25 index serves each backend.
-- `ultrarag.py` retains the optional legacy MCP client. Normal app and CLI operations do not instantiate it.
+- The engine imports no MCP client or UltraRAG library. Historical backend labels and index formats remain compatible through the direct implementation.

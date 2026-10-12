@@ -40,14 +40,13 @@ uv run python scripts/evaluate_retrieval.py --project /path/to/project --offline
 ## What a reader waits for
 
 - The first search loads the query embedding model and the cross-encoder from disk. Nothing downloads, because the models are cached.
-- A gateway that cannot start is reported by the operation that needed it, with the tail of the transport's logs and each log's path.
 - The source-tree walk behind the staleness answer is the only per-query cost that grows with the number of source files.
   - The engine therefore takes a staleness switch. Only a measurement run sets it. A search that cannot say whether its corpus moved answers about something unknown.
 - Nothing else per query is cached.
   - A cached document map adds cross-request state that needs correct invalidation.
   - A shared SQLite connection must be reachable from whichever thread serves the next call.
   - At a scale where either matters, manifest parsing dominates, and the answer is a persistent document-metadata index.
-- The dependency report reads outside the project, because it validates the managed UltraRAG runtime against the installed snapshot. It is cached per process and re-read when the snapshot marker changes, which a reinstall or repair rewrites.
+- The dependency report reads direct-library and model-cache readiness without validating an external source runtime or performing network requests.
 - `runtime.nice` reaches the whole process tree, because children inherit it. Processes started before the setting existed keep their own value until restarted.
 - An `ingest` call yields between atomic units and returns a checkpointed `in_progress` result when `ingestion.work_budget_seconds` runs out. Cancelling between calls loses nothing. The project lock serializes builds.
 
@@ -136,9 +135,9 @@ uv run python scripts/evaluate_retrieval.py --project /mnt/data/my-project \
 
 ### What a ranking change costs the corpus
 
-- Query-time ranking changes do not rewrite generation artifacts. `generation_is_reusable` compares processing and artifact identity, not query-time weights, gates, caps, or windows.
+- Query-time ranking changes do not rewrite generation artifacts. An otherwise unchanged `ingest` remains a no-op after a ranking change. Text and vector reuse compare their own processing and model identities, not query-time weights, gates, caps, or windows.
 - Record the generation's policy and the experiment's effective policy separately.
-- The staging checkpoint identity excludes the retrieval-policy fingerprint, so editing a ranking value resumes an interrupted build. Only disposable staging works this way. A published generation records its policy in its manifest, and a test pins that a ranking change reuses every chunk and vector.
+- The staging checkpoint identity excludes the retrieval-policy fingerprint, so editing a ranking value resumes an interrupted build. A published generation retains its recorded build policy. Tests pin that a ranking change neither creates a generation nor rewrites its manifest or selected pointer.
 
 ## Tunable mechanisms
 
@@ -214,7 +213,7 @@ uv run python scripts/evaluate_retrieval.py --project /mnt/data/my-project \
 ## Local exploratory measurements
 
 - Generation `20261002T080853Z-f1ec4db7`. No new generation was built or activated.
-- Its manifest records extraction policy 7. The shipped policy 8 reports it as needing an upgrade, so these figures do not measure today's extraction.
+- Its manifest records extraction policy 7. These figures describe that recorded processing, not the current extraction policy.
 - Inputs: 30 known-item queries over 18 targets, split into partitions of 14 and 16 queries without shared target families.
   - Target `t12` is excluded because its source is absent from this generation.
   - The inputs are inspected and exploratory. Neither partition is a confirmation set.
@@ -335,6 +334,7 @@ Counts and MRR credit only the designated target chunk in the final top ten, wit
 
 ## Critical-realism preprocessing experiment (2026-10-10)
 
+- These figures describe the recorded custom/Docling arms, not the current Docling-only structural-cleaning policy. The default's retirement does not reprocess those generations or establish a new cleanup-quality measurement.
 - Private records live under `/tmp/kilo/critical-realism-preprocessing-20261010/`: `paired-diagnostics-costs.json`, `paired-anchor-retention.json`, `paired-negative-controls.json`, `paired-source-integrity.json`, `{custom,docling}-setup.json`, and `paired-retrieval-evaluation/{summary,protocol,artifact-integrity}.json`. `paired-analysis-provenance.json` records exact input and analysis-script SHA-256 identities; setup and integrity records retain per-source hashes. Private text and reports remain outside Git.
 - Both isolated private arms index the same 17 sources: 13 PDF, three EPUB and one MOBI. The byte-identical Naturalism EPUB duplicate is retained in both arms. Original before/after hashes, snapshot hashes and manifest hashes agree. No original source changes.
 - Effective settings differ only in `pdf_backend`; both use recorded defaults with two embedding threads, chunk size/overlap 384/64 and headers off. Dense inference uses `qdrant/bge-small-en-v1.5-onnx-q@aa8f8b060edb00e03bfdd08813a2949946c8ba55`; reranking uses `Xenova/ms-marco-MiniLM-L-6-v2@a09144355adeed5f58c8ed011d209bf8ee5a1fec`. Setup records retain installed packages and Docling runtime pins (`docling==2.135.0`, `rapidocr==3.9.1`, `pymupdf>=1.26,<2`).
@@ -367,4 +367,4 @@ Counts and MRR credit only the designated target chunk in the final top ten, wit
 - Forty variants are correlated within ten information-need families, not independent trials or evidence of statistical significance. These retrieval assessments establish neither overall source quality nor global superiority.
 - The separate blinded page-fidelity model review inspected all 17 supplied full-page renders and saved `preprocessing-fidelity-judgments.json` before reading the per-page arm mapping. Preferences are custom four, Docling two, mixed eight and tie three; these are ordinal model judgments, not human annotations or retrieval scores.
 - Custom shows advantages in visible opening coverage, title order and a causal contrast. Docling shows advantages in footnote qualifications, author attribution and column order. Both have diagram-structure defects, a footnote-interrupted sentence and a chemical-formula letter-to-digit substitution. Central negations survive; no differential negation reversal was observed.
-- Findings concern serialized page packets, not proven exclusion from retrievable evidence. Off-page unit continuations remain unverified except across the supplied consecutive Gorski pages; no exhaustive character transcription was performed. These qualitative mechanism tradeoffs establish no overall source-quality winner. Defaults remain unchanged.
+- Findings concern serialized page packets, not proven exclusion from retrievable evidence. Off-page unit continuations remain unverified except across the supplied consecutive Gorski pages; no exhaustive character transcription was performed. These qualitative mechanism tradeoffs establish no overall source-quality winner.

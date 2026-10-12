@@ -3,16 +3,14 @@
 With no repair flag the command reads: it runs the dependency checks
 `research-rag status` reports, prints one line per check, and exits nonzero when
 something is blocked. It writes nothing, not even a client entry, which it prints and
-validates with `--mcp-entry` and `--check-entry`. `--prefetch-models` and
-`--repair-runtime` are the only operations that reach the network, and neither
-implies the other.
+validates with `--mcp-entry` and `--check-entry`. `--prefetch-models` is the only
+operation that reaches the network or provisions anything; `--repair-runtime` is a
+deprecated, side-effect-free informational no-op.
 """
 
 from __future__ import annotations
 
 import json
-import os
-import re
 import shlex
 import shutil
 import sys
@@ -29,8 +27,6 @@ from ..project.config import (
 from ..retrieval.embeddings import resolve_embedding_model
 from ..retrieval.rerankers import resolve_reranker_model
 from .health import WARN, Check, HealthReport, health_report
-
-_HASH_IN_MESSAGE = re.compile(r"got\s+([0-9a-f]{8,64})")
 
 
 class DoctorError(ValueError):
@@ -55,56 +51,29 @@ def _check_line(check: Check) -> str:
     return line
 
 
-def _observed_hash(root: Path, message: str, runtime: Any) -> str:
-    tree_hash = getattr(runtime, "_tree_hash", None)
-    if tree_hash is not None:
-        try:
-            return str(tree_hash(root))[:12]
-        except OSError:
-            pass
-    found = _HASH_IN_MESSAGE.search(message)
-    return found.group(1)[:12] if found else "unknown"
-
-
 def repair_runtime(config: ResearchConfig) -> tuple[str, ...]:
-    """Move a mismatched snapshot aside, install the pinned one, and re-validate.
+    """Report that the external UltraRAG runtime is retired, changing nothing.
 
-    The evidence is kept rather than deleted: a tree that failed validation is what
-    explains the failure.
+    This is a deprecated, side-effect-free informational no-op. The app no longer
+    uses an external UltraRAG runtime, so this installs nothing, validates
+    nothing, imports nothing, renames no cache, quarantines and deletes nothing,
+    and reaches no network. It is safe and usable offline, and it works on a
+    project whose state was never provisioned. `--prefetch-models` is the only
+    doctor operation that may provision or fetch anything.
     """
 
-    from ..gateway import runtime as vanilla
-
-    root = vanilla.managed_runtime_path(config.runtime_cache_root)
-    if not root.is_dir():
-        vanilla.install_managed_runtime(config.runtime_cache_root)
-        return (
-            f"Installed the pinned UltraRAG runtime at {root}.",
-            f"It matches the pinned snapshot: {vanilla.validate_managed_runtime(root)}",
-        )
-    try:
-        vanilla.validate_managed_runtime(root)
-    except Exception as exc:  # noqa: BLE001 - a mismatch is a repair, whatever it raises.
-        observed = _observed_hash(root, str(exc), vanilla)
-        commit = root.name.rsplit("-", 1)[-1]
-        cache_root = root.parent.parent
-        quarantine = cache_root / "quarantine" / f"{commit}-{observed}"
-        quarantine.parent.mkdir(parents=True, exist_ok=True)
-        if quarantine.exists():
-            suffix = 1
-            while (quarantine.parent / f"{commit}-{observed}-{suffix}").exists():
-                suffix += 1
-            quarantine = quarantine.parent / f"{commit}-{observed}-{suffix}"
-        os.rename(root, quarantine)
-        vanilla.install_managed_runtime(config.runtime_cache_root)
-        return (
-            f"The mismatched runtime is preserved at {quarantine}.",
-            (
-                "Installed and validated the pinned runtime: "
-                f"{vanilla.validate_managed_runtime(root)}"
-            ),
-        )
-    return (f"The managed runtime at {root} already matches the pinned snapshot.",)
+    return (
+        "The external UltraRAG runtime is no longer used; nothing was repaired.",
+        (
+            "Normal retrieval uses the required direct libraries installed with "
+            "this app, not an external runtime."
+        ),
+        (
+            "This flag is a deprecated informational no-op; it works offline and "
+            "changes no file. Only --prefetch-models fetches or provisions "
+            "anything."
+        ),
+    )
 
 
 def prefetch_models(config: ResearchConfig) -> tuple[str, ...]:
@@ -131,23 +100,22 @@ def prefetch_models(config: ResearchConfig) -> tuple[str, ...]:
         "Cached the compatible GPT-2 chunk and passage-count tokenizer.",
         f"{config.model_cache_root} now holds {after - before} more bytes.",
     ]
-    if config.settings.pdf_backend == "docling":
-        # This is the one explicit path that may both build the managed Docling
-        # environment and fetch its models. Both run under the same verified
-        # resource boundary, in the managed interpreter, so the parent never
-        # imports Docling and the app environment is never changed.
-        try:
-            result = prefetch_docling_models(config)
-        except DoclingEnvironmentError as exc:
-            lines.append(f"Docling environment could not be built: {exc}")
-        except PdfBackendError as exc:
-            lines.append(f"Docling model provisioning failed: {exc}")
-        else:
-            lines.append(
-                "Provisioned the managed Docling environment and models "
-                f"(docling {result.get('version')}) with cache at "
-                f"{docling_cache_root(config.model_cache_root)}."
-            )
+    # Docling is the only PDF extractor, so this is the one explicit path that
+    # may both build the managed environment and fetch its models. Both run under
+    # the same verified resource boundary, in the managed interpreter, so the
+    # parent never imports Docling and the app environment is never changed.
+    try:
+        result = prefetch_docling_models(config)
+    except DoclingEnvironmentError as exc:
+        lines.append(f"Docling environment could not be built: {exc}")
+    except PdfBackendError as exc:
+        lines.append(f"Docling model provisioning failed: {exc}")
+    else:
+        lines.append(
+            "Provisioned the managed Docling environment and models "
+            f"(docling {result.get('version')}) with cache at "
+            f"{docling_cache_root(config.model_cache_root)}."
+        )
     return tuple(lines)
 
 

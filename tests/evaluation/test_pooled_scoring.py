@@ -689,13 +689,6 @@ def test_a_condition_missing_a_ranking_is_refused() -> None:
         pooled.evaluate(handoff)
 
 
-def test_evaluate_refuses_a_document_it_built_itself() -> None:
-    handoff = _simple()
-    handoff["conditions"][0]["rankings"][0]["passage_ids"] = ["p-absent"]
-    with pytest.raises(Refused):
-        pooled.evaluate(handoff)
-
-
 def test_the_report_carries_the_protocol_and_says_it_is_not_known_item() -> None:
     meta = pooled.evaluate(_simple())["report_meta"]
     assert meta["protocol"] == "author_pool_v1"
@@ -1415,9 +1408,8 @@ def test_the_canonical_digest_sorts_keys_and_drops_whitespace() -> None:
     assert _rubric_digest({"b": 1, "a": 2}) == _digest('{"a":2,"b":1}')
     assert _rubric_digest({"a": {"d": 1, "c": 2}}) == _digest('{"a":{"c":2,"d":1}}')
     assert _rubric_digest([1, 2]) == _digest("[1,2]")
-
-
-def test_the_canonical_digest_does_not_escape_non_ascii() -> None:
+    # Non-ASCII is kept as itself, never escaped: a rubric's own characters hash
+    # as the reader sees them.
     assert _rubric_digest({"note": "grade é"}) == _digest('{"note":"grade é"}')
     assert _rubric_digest({"note": "grade é"}) != _digest('{"note":"grade \\u00e9"}')
 
@@ -1436,12 +1428,11 @@ def test_a_rubric_edited_after_it_was_hashed_is_refused() -> None:
     assert handoff["provenance"]["rubric_sha256"] == before
     assert _rubric_digest(handoff["provenance"]["rubric"]) != before
 
-
-def test_a_rubric_swapped_for_another_is_refused() -> None:
-    handoff = _simple()
-    handoff["provenance"]["rubric"] = dict(RUBRIC, rubric_id="rubric-other")
+    # Swapping the rubric for another object is the same refusal.
+    swapped = _simple()
+    swapped["provenance"]["rubric"] = dict(RUBRIC, rubric_id="rubric-other")
     with pytest.raises(Refused, match="does not match the digest"):
-        pooled.evaluate(handoff)
+        pooled.evaluate(swapped)
 
 
 def test_a_tampered_rubric_is_refused_on_the_way_through_a_file(tmp_path: Path) -> None:

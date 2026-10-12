@@ -795,8 +795,12 @@ async def _assert_research_generation_and_structured_search(project: Path) -> No
         encoding="utf-8",
     )
     policy_status = await service.status()
-    assert policy_status["generation_upgrade_required"] is True
-    assert "retrieval_policy" in policy_status["upgrade_reasons"]
+    assert policy_status["generation_upgrade_required"] is False
+    assert policy_status["upgrade_reasons"] == []
+    assert (
+        "retrieval_policy"
+        in policy_status["generation_diagnostics"]["policy_differences"]
+    )
 
     legacy_manifest["schema_version"] = 1
     legacy_manifest["retrieval"] = {
@@ -810,17 +814,24 @@ async def _assert_research_generation_and_structured_search(project: Path) -> No
         encoding="utf-8",
     )
     legacy_status = await service.status()
-    assert legacy_status["hybrid_upgrade_required"] is True
-    assert legacy_status["generation_upgrade_required"] is True
-    assert "generation_schema" in legacy_status["upgrade_reasons"]
+    assert legacy_status["hybrid_upgrade_required"] is False
+    assert legacy_status["generation_upgrade_required"] is False
+    assert (
+        "generation_schema"
+        in legacy_status["generation_diagnostics"]["policy_differences"]
+    )
     with pytest.raises(ResearchError, match="does not support 'hybrid'"):
-        await service.search("cobalt", top_k=1)
+        await service.search("cobalt", top_k=1, retrieval_method="hybrid")
     legacy_search = await service.search(
         "cobalt",
         top_k=1,
-        retrieval_method="bm25",
     )
     assert legacy_search["hits"][0]["retrieval_method"] == "bm25"
+    assert legacy_search["generation_upgrade_required"] is False
+    assert legacy_search["retrieval_fallback"] is None
+    without_scan = await service.search("cobalt", top_k=1, include_staleness=False)
+    assert without_scan["retrieval_method"] == "bm25"
+    assert without_scan["generation_upgrade_required"] is False
 
     write_pdf(project / "sources" / "new.pdf", ["A newly added source."])
     stale = await service.status()
@@ -876,7 +887,7 @@ async def _assert_search_can_skip_the_staleness_walk(
         "patched-retrieval-policy",
     )
     upgraded = await service.search("cobalt labour", top_k=1, include_staleness=False)
-    assert upgraded["generation_upgrade_required"] is True
+    assert upgraded["generation_upgrade_required"] is False
     assert upgraded["staleness_checked"] is False
     assert upgraded["stale"] is None
 
@@ -886,6 +897,36 @@ def test_search_can_skip_the_staleness_walk(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     asyncio.run(_assert_search_can_skip_the_staleness_walk(project, monkeypatch))
+
+
+def test_foreign_generation_is_refused_before_loading_artifacts(
+    project: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    async def scenario() -> None:
+        write_pdf(project / "sources" / "article.pdf", ["Stable cobalt evidence."])
+        config = resolve_config(project, vanilla_executable=sys.executable)
+        service = ResearchService(config, FakeUltraRAG(), dense=FakeDenseBackend())  # type: ignore[arg-type]
+        built = await service.ingest(chunk_size=50, chunk_overlap=10)
+        path = Path(built["generation_root"]) / "manifest.json"
+        manifest = json.loads(path.read_text())
+        manifest["project_id"] = "different-project"
+        path.write_text(json.dumps(manifest))
+        before = path.read_bytes(), config.current_path.read_bytes()
+        status = await service.status()
+        assert status["ready"] is False
+        assert status["generation_upgrade_required"] is True
+        assert status["upgrade_reasons"] == ["project_identity"]
+        assert status["available_retrieval_methods"] == []
+
+        async def refuse(*args: Any) -> None:
+            raise AssertionError("foreign generation artifacts were loaded")
+
+        monkeypatch.setattr(service, "_ensure_artifact_lookup", refuse)
+        with pytest.raises(ResearchError, match="different project"):
+            await service.search("cobalt", include_staleness=False)
+        assert (path.read_bytes(), config.current_path.read_bytes()) == before
+
+    asyncio.run(scenario())
 
 
 async def _assert_incompatible_embedding_generation_serves_bm25(
@@ -965,7 +1006,8 @@ async def _assert_incompatible_embedding_generation_serves_bm25(
             "message": (
                 "The selected generation's dense index was built with a different "
                 "embedding model, so it cannot be scored with the current one. "
-                "BM25 results are returned; run ingest to rebuild the dense index."
+                "BM25 results are returned. Restore the recorded embedding model to "
+                "use existing vectors, or explicitly ingest to build matching vectors."
             ),
             "effect": "bm25_results_returned",
         }
@@ -1778,6 +1820,7 @@ def test_status_payload_is_one_vocabulary_with_or_without_a_generation(
         "hybrid_upgrade_required",
         "generation_upgrade_required",
         "upgrade_reasons",
+        "generation_diagnostics",
         "retrieval",
         "last_build_metrics",
         "ingestion_progress",
@@ -1801,6 +1844,7 @@ def test_status_payload_is_one_vocabulary_with_or_without_a_generation(
         "languages",
         "hybrid_ready",
         "hybrid_upgrade_required",
+        "generation_diagnostics",
         "retrieval",
         "changes",
         "generation_root",
@@ -2710,9 +2754,7 @@ def test_ingest_defers_unclean_source_and_commits_clean_evidence(
     "operation",
     [
         "pdf_page_count",
-        "scan_pdf_pages",
-        "prepare_scanned_pdf",
-        "extract_scanned_pdf_pages",
+        "docling_pdf_batch",
         "prepare_epub_extraction",
         "extract_epub_spine_item",
         "screen_source_units",
@@ -2771,14 +2813,13 @@ def test_source_local_extraction_failure_skips_and_retries_unchanged_source(
     asyncio.run(exercise())
 
 
-def test_staged_pdf_scan_reuses_one_native_cache_across_batches(
+def test_staged_docling_reads_a_long_pdf_in_two_batches(
     project: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """A source's scan batches share one native-reader cache and free it after.
+    """A nine-page source with the default eight-page batch uses two worker calls.
 
-    The default batch is eight pages, so a nine-page source needs two scan
-    batches. Both must receive the same cache object, and a finished build must
-    leave no parsed document behind.
+    Each batch covers a disjoint, half-open physical page range, so the whole
+    document is read once and every page reaches finalize.
     """
 
     from research_rag.generations import ingestion
@@ -2804,50 +2845,18 @@ def test_staged_pdf_scan_reuses_one_native_cache_across_batches(
         )
         config = resolve_config(project, vanilla_executable=sys.executable)
         service = ResearchService(config, FakeUltraRAG(), dense=FakeDenseBackend())
-        original = ingestion.scan_pdf_pages
-        seen_caches: list[object] = []
+        batch_ranges: list[tuple[int, int]] = []
+        original = ingestion.docling_pdf_batch
 
-        def record(source, *args, **kwargs):
-            seen_caches.append(kwargs.get("recovery_cache", args[-1] if args else None))
-            return original(source, *args, **kwargs)
+        def record(source, existing, start, end, **kwargs):
+            batch_ranges.append((start, end))
+            return original(source, existing, start, end, **kwargs)
 
-        monkeypatch.setattr(ingestion, "scan_pdf_pages", record)
+        monkeypatch.setattr(ingestion, "docling_pdf_batch", record)
         result = await service.ingest(chunk_size=50, chunk_overlap=10)
 
         assert result["status"] == "ready"
-        assert len(seen_caches) == 2
-        assert seen_caches[0] is not None
-        assert all(cache is seen_caches[0] for cache in seen_caches)
-        assert getattr(service, "_pdf_recovery_caches", {}) == {}
-
-    asyncio.run(exercise())
-
-
-def test_pdf_recovery_cache_is_scoped_to_project_and_source(tmp_path: Path) -> None:
-    """Caches are keyed by project and source digest and released explicitly."""
-
-    async def exercise():
-        roots = [tmp_path / "first", tmp_path / "second"]
-        for root in roots:
-            (root / "sources").mkdir(parents=True)
-            write_pdf(root / "sources" / "article.pdf", ["Stable evidence."])
-        configs = [
-            resolve_config(root, vanilla_executable=sys.executable) for root in roots
-        ]
-        first = ResearchService(configs[0], FakeUltraRAG(), dense=FakeDenseBackend())
-        second = ResearchService(configs[1], FakeUltraRAG(), dense=FakeDenseBackend())
-
-        cache = first._pdf_recovery_cache("digest")
-        assert cache is first._pdf_recovery_cache("digest")
-        assert cache is not first._pdf_recovery_cache("other-digest")
-        assert cache is not second._pdf_recovery_cache("digest")
-
-        first._release_pdf_recovery_cache("digest")
-        assert cache == {}
-        assert first._pdf_recovery_cache("digest") is not cache
-
-        first._release_pdf_recovery_caches()
-        second._release_pdf_recovery_caches()
+        assert batch_ranges == [(0, 8), (8, 9)]
 
     asyncio.run(exercise())
 
@@ -2871,7 +2880,7 @@ def test_untyped_extraction_failures_do_not_activate_partial_generation(
         def fail(*args, **kwargs):
             raise error
 
-        monkeypatch.setattr(ingestion, "scan_pdf_pages", fail)
+        monkeypatch.setattr(ingestion, "docling_pdf_batch", fail)
         with pytest.raises(type(error), match=str(error) or None):
             await service.ingest(chunk_size=50, chunk_overlap=10, force_recompute=True)
         assert config.current_path.read_bytes() == before
@@ -2884,7 +2893,7 @@ def test_skipped_source_state_recovers_before_global_checkpoint_commit(
 ) -> None:
     from research_rag.generations import ingestion
 
-    original = ingestion.scan_pdf_pages
+    original = ingestion.docling_pdf_batch
     calls = 0
 
     def fail(source, *args, **kwargs):
@@ -2894,7 +2903,7 @@ def test_skipped_source_state_recovers_before_global_checkpoint_commit(
             raise ExtractionError("Unusable PDF scan")
         return original(source, *args, **kwargs)
 
-    monkeypatch.setattr(ingestion, "scan_pdf_pages", fail)
+    monkeypatch.setattr(ingestion, "docling_pdf_batch", fail)
 
     async def exercise():
         write_pdf(project / "sources" / "bad.pdf", ["Bad evidence."])
@@ -3023,7 +3032,17 @@ def test_matching_sources_rebuild_a_corrupt_selected_generation(
         assert rebuilt["status"] == "ready"
         assert rebuilt["generation_changed"] is True
         assert rebuilt["generation_id"] != first["generation_id"]
-        assert rebuilt["rebuilt_document_count"] == 1
+        if artifact == "chunks":
+            assert rebuilt["rebuilt_document_count"] == 1
+        else:
+            assert rebuilt["rebuilt_document_count"] == 0
+            assert rebuilt["reused_document_count"] == 1
+            assert rebuilt["reused_chunk_count"] == rebuilt["chunk_count"]
+        if artifact in {"chunks", "vectors"}:
+            assert rebuilt["created_vector_count"] == rebuilt["chunk_count"]
+        else:
+            assert rebuilt["created_vector_count"] == 0
+            assert rebuilt["reused_vector_count"] == rebuilt["chunk_count"]
 
     asyncio.run(exercise())
 
@@ -3135,8 +3154,11 @@ async def _assert_ordinary_ingest_migrates_legacy_metadata_storage(
         encoding="utf-8",
     )
     legacy_status = await service.status()
-    assert legacy_status["generation_upgrade_required"] is True
-    assert "metadata_storage" in legacy_status["upgrade_reasons"]
+    assert legacy_status["generation_upgrade_required"] is False
+    assert (
+        "metadata_storage"
+        in legacy_status["generation_diagnostics"]["policy_differences"]
+    )
 
     migrated = await service.ingest(chunk_size=50, chunk_overlap=10)
 
@@ -3171,18 +3193,10 @@ def test_ordinary_ingest_migrates_legacy_metadata_storage(project: Path) -> None
     asyncio.run(_assert_ordinary_ingest_migrates_legacy_metadata_storage(project))
 
 
-async def _assert_a_changed_extraction_policy_requires_a_rebuild(
+async def _assert_processing_policy_drift_preserves_generation(
     project: Path,
 ) -> None:
-    """A generation states the extraction and cleaning policies it was built under.
-
-    Extraction decides what a chunk holds and cleaning decides the text of a unit
-    that survived, so neither a changed extraction policy nor a changed cleaning
-    policy can be served from the chunks an earlier policy produced. The
-    generation stays searchable under the old policies and says an upgrade is
-    required; the next ingestion re-extracts rather than reusing what they
-    produced.
-    """
+    """Processing drift stays diagnostic; explicit ingestion adopts new policies."""
 
     write_pdf(project / "sources" / "article.pdf", ["Cobalt evidence about labour."])
     config = resolve_config(project, vanilla_executable=sys.executable)
@@ -3213,11 +3227,19 @@ async def _assert_a_changed_extraction_policy_requires_a_rebuild(
         encoding="utf-8",
     )
     superseded = await service.status()
-    assert superseded["generation_upgrade_required"] is True
-    assert superseded["upgrade_reasons"] == ["layout_extraction"]
+    assert superseded["generation_upgrade_required"] is False
+    assert superseded["upgrade_reasons"] == []
+    assert superseded["generation_diagnostics"]["policy_differences"] == [
+        "layout_extraction"
+    ]
+    assert "regenerate" not in superseded["message"]
+    preserved_manifest = manifest_path.read_bytes()
+    preserved_pointer = config.current_path.read_bytes()
     answer = await service.search("cobalt labour", top_k=1, include_staleness=False)
     assert answer["hits"]
-    assert answer["generation_upgrade_required"] is True
+    assert answer["generation_upgrade_required"] is False
+    assert manifest_path.read_bytes() == preserved_manifest
+    assert config.current_path.read_bytes() == preserved_pointer
 
     # The two policies are reported separately, because a generation can be behind
     # one and not the other and a reader is told which.
@@ -3227,16 +3249,22 @@ async def _assert_a_changed_extraction_policy_requires_a_rebuild(
         encoding="utf-8",
     )
     both = await service.status()
-    assert both["upgrade_reasons"] == ["layout_extraction", "semantic_cleaning"]
+    assert both["upgrade_reasons"] == []
+    assert both["generation_diagnostics"]["policy_differences"] == [
+        "layout_extraction",
+        "semantic_cleaning",
+    ]
 
-    # Re-ingestion replaces the generation and re-extracts every source, because a
-    # changed extraction policy cannot reuse units or vectors the old one produced.
+    # Explicit re-ingestion adopts new extraction, but identical embedded input
+    # can still reuse vectors from the preserved generation.
     rebuilt = await service.ingest(chunk_size=50, chunk_overlap=10)
     assert rebuilt["status"] == "ready"
     assert rebuilt["generation_changed"] is True
     assert rebuilt["generation_id"] != first["generation_id"]
     assert rebuilt["rebuilt_document_count"] == 1
     assert rebuilt["reused_document_count"] == 0
+    assert rebuilt["reused_vector_count"] == rebuilt["chunk_count"]
+    assert rebuilt["created_vector_count"] == 0
     rebuilt_manifest = json.loads(
         (Path(rebuilt["generation_root"]) / "manifest.json").read_text(encoding="utf-8")
     )
@@ -3250,8 +3278,10 @@ async def _assert_a_changed_extraction_policy_requires_a_rebuild(
     assert (project / "sources" / "article.pdf").read_bytes().startswith(b"%PDF")
 
 
-def test_a_changed_extraction_policy_requires_a_rebuild(project: Path) -> None:
-    asyncio.run(_assert_a_changed_extraction_policy_requires_a_rebuild(project))
+def test_processing_policy_drift_preserves_generation_until_explicit_ingestion(
+    project: Path,
+) -> None:
+    asyncio.run(_assert_processing_policy_drift_preserves_generation(project))
 
 
 async def _assert_pending_metadata_status_is_not_reported_as_active(
@@ -3291,7 +3321,7 @@ async def _assert_pending_metadata_status_is_not_reported_as_active(
     assert status["metadata_overlay_active"] is False
     assert status["metadata_pending_source_paths"] == ["second.pdf"]
     assert status["generation_metadata_snapshot_outdated"] is True
-    assert "call ingest" in status["message"]
+    assert "ingest only to update the source snapshot" in status["message"]
     assert "ingestion is not required" not in status["message"]
 
 
@@ -3368,6 +3398,7 @@ def test_checkpoint_progress_is_reconciled_from_per_source_state(
                 "extraction_stage": "complete",
                 "total": 2,
                 "next_index": 2,
+                "page_batch_size": 1,
                 "chunking_work_total": 2,
                 "chunked_unit_count": 1,
             }
@@ -3388,10 +3419,12 @@ def test_checkpoint_progress_is_reconciled_from_per_source_state(
 
     service._reconcile_checkpoint_progress(root, checkpoint)  # type: ignore[arg-type]
 
-    assert checkpoint["extraction_work_total"] == 11
+    # Each PDF batch plus finalize is two units; the EPUB's total is its sections
+    # plus finalize.
+    assert checkpoint["extraction_work_total"] == 9
     # The EPUB final state is committed, but its global completion checkpoint is
     # not; the normal resume path will account for that last atomic unit once.
-    assert checkpoint["extraction_work_completed"] == 10
+    assert checkpoint["extraction_work_completed"] == 8
     assert checkpoint["chunking_work_total"] == 2
     assert checkpoint["chunking_work_completed"] == 1
 
@@ -3442,14 +3475,15 @@ async def _assert_pdf_ingestion_checkpoints_fixed_page_batches(
 
     assert first["phase"] == "source_hashing"
     assert initialized["phase"] == "extraction"
+    # Nine pages in two batches, then finalize.
     assert initialized["progress"] == {
         "completed": 0,
-        "total": 6,
+        "total": 4,
         "unit": "pdf_page_batches_or_epub_sections",
     }
     assert scanned["progress"] == {
         "completed": 1,
-        "total": 6,
+        "total": 4,
         "unit": "pdf_page_batches_or_epub_sections",
     }
     staging_root = next(config.staging_root.iterdir())
@@ -3508,27 +3542,25 @@ async def _assert_partial_pdf_batch_is_replayed_after_hard_crash(
     class SimulatedProcessExit(BaseException):
         pass
 
-    original_atomic_write = ingestion_module.atomic_write_json
+    original_atomic_write_jsonl = ingestion_module.atomic_write_jsonl
     crashed = False
 
-    def fail_during_first_scan_batch(
-        path: Path, value: object, **kwargs: object
-    ) -> None:
+    def fail_during_first_batch(path: Path, value: object, **kwargs: object) -> None:
         nonlocal crashed
         if (
             not crashed
-            and path.parent.name == "page-scans"
-            and path.name == "00000001.json"
+            and path.parent.name == "unit-batches"
+            and path.name == "00000007.jsonl"
         ):
             crashed = True
             raise SimulatedProcessExit
-        original_atomic_write(path, value, **kwargs)
+        original_atomic_write_jsonl(path, value, **kwargs)
 
     with monkeypatch.context() as patcher:
         patcher.setattr(
             ingestion_module,
-            "atomic_write_json",
-            fail_during_first_scan_batch,
+            "atomic_write_jsonl",
+            fail_during_first_batch,
         )
         with pytest.raises(SimulatedProcessExit):
             await service.ingest(chunk_size=50, chunk_overlap=10)
@@ -3536,10 +3568,13 @@ async def _assert_partial_pdf_batch_is_replayed_after_hard_crash(
     staging_root = next(config.staging_root.iterdir())
     state_path = next((staging_root / "work" / "sources").glob("*/state.json"))
     state = json.loads(state_path.read_text(encoding="utf-8"))
-    assert state["extraction_stage"] == "pdf_scan"
+    assert state["extraction_stage"] == "docling_pages"
     assert state["next_index"] == 0
-    assert (state_path.parent / "page-scans/00000000.json").is_file()
-    assert not (state_path.parent / "page-scans/00000001.json").exists()
+    # The document record was written before the first batch; the batch that was
+    # interrupted is not committed, so it is replayed whole.
+    assert (state_path.parent / "document.json").is_file()
+    assert (state_path.parent / "unit-batches/00000000.jsonl").is_file()
+    assert not (state_path.parent / "unit-batches/00000007.jsonl").exists()
 
     resumed = ResearchService(  # type: ignore[arg-type]
         config,
@@ -4472,14 +4507,14 @@ def test_partial_publication_crash_never_selects_candidate(
         )
         pointer = config.current_path.read_bytes() if with_current else None
         write_pdf(project / "sources" / "bad.pdf", ["Failed source evidence."])
-        original_scan = ingestion_module.scan_pdf_pages
+        original_scan = ingestion_module.docling_pdf_batch
 
         def fail_source(source, *args, **kwargs):
             if source.source_relative_path == "bad.pdf":
                 raise ExtractionError("Source-local parser failure")
             return original_scan(source, *args, **kwargs)
 
-        monkeypatch.setattr(ingestion_module, "scan_pdf_pages", fail_source)
+        monkeypatch.setattr(ingestion_module, "docling_pdf_batch", fail_source)
         journal_path = config.state_root / "pending-activation.json"
         original_write = ingestion_module.atomic_write_json
         original_replace = os.replace
@@ -5274,7 +5309,7 @@ def test_the_reranked_window_follows_its_settings(project: Path) -> None:
     asyncio.run(exercise())
 
 
-def test_a_ranking_change_reuses_chunks_and_vectors(project: Path) -> None:
+def test_a_ranking_change_preserves_the_generation(project: Path) -> None:
     async def exercise() -> None:
         source = project / "sources" / "article.pdf"
         write_pdf(
@@ -5299,6 +5334,8 @@ def test_a_ranking_change_reuses_chunks_and_vectors(project: Path) -> None:
         )
         first = await service.ingest(chunk_size=50, chunk_overlap=10)
         assert first["chunk_count"] >= 2, first["chunk_count"]
+        manifest_path = Path(first["generation_root"]) / "manifest.json"
+        preserved = manifest_path.read_bytes(), base.current_path.read_bytes()
 
         changed_config = resolve_config(
             project,
@@ -5310,11 +5347,13 @@ def test_a_ranking_change_reuses_chunks_and_vectors(project: Path) -> None:
         )
         second = await changed.ingest(chunk_size=50, chunk_overlap=10)
 
-        assert second["generation_changed"] is True
-        assert second["rebuilt_document_count"] == 0
-        assert second["reused_chunk_count"] == second["chunk_count"]
-        assert second["rebuilt_chunk_count"] == 0
-        assert second["created_vector_count"] == 0
+        assert second["status"] == "unchanged"
+        assert second["generation_changed"] is False
+        assert second["generation_id"] == first["generation_id"]
+        answer = await changed.search("commodity fetishism", top_k=1)
+        assert answer["fusion"]["rrf_k"] == 30
+        assert answer["generation_upgrade_required"] is False
+        assert (manifest_path.read_bytes(), base.current_path.read_bytes()) == preserved
 
     asyncio.run(exercise())
 

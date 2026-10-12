@@ -1,10 +1,10 @@
-"""The PDF backend is a per-source reuse rule, never a generation-wide gate.
+"""The PDF backend is provenance, never a generation-wide reuse gate.
 
-A backend change must not discard an otherwise compatible generation, because its
-EPUB units and text-keyed vectors are still reusable. The staged path refuses to
-reuse a PDF whose recorded backend differs; that is exercised in
-`test_docling_staged_ingestion.py`, and here the generation-wide rule is shown
-not to fire.
+A backend or adapter change must not discard an otherwise compatible generation,
+because its EPUB units and text-keyed vectors are still reusable and an unchanged
+PDF is passed through whole. The staged path that keeps an unchanged legacy PDF's
+own provenance is exercised in `test_docling_staged_ingestion.py`, and here the
+generation-wide rule is shown not to fire.
 """
 
 from __future__ import annotations
@@ -112,7 +112,7 @@ def test_checkpoint_identity_changes_with_the_backend() -> None:
 
 
 @pytest.mark.parametrize("extension", [".epub", ".pdf"])
-def test_backend_upgrade_reason_only_applies_to_pdf_sources(
+def test_backend_drift_is_diagnostic_and_pdf_scoped(
     tmp_path, monkeypatch, extension
 ) -> None:
     config = resolve_config(tmp_path)
@@ -125,6 +125,10 @@ def test_backend_upgrade_reason_only_applies_to_pdf_sources(
         status_module, "pdf_backend_fingerprint", lambda backend, config: "new"
     )
 
-    reasons = status_module.generation_upgrade_reasons(config, manifest, "test")
-
-    assert ("extraction_backend" in reasons) is (extension == ".pdf")
+    # A recorded backend is provenance, so it never names a serving upgrade. It is
+    # a diagnostic difference, and only a PDF source carries one.
+    assert "extraction_backend" not in status_module.generation_upgrade_reasons(
+        config, manifest, "test"
+    )
+    differences = status_module.generation_policy_differences(config, manifest, "test")
+    assert ("extraction_backend" in differences) is (extension == ".pdf")

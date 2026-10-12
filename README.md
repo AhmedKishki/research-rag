@@ -8,7 +8,8 @@
 ## Requirements
 
 - Linux, Python 3.11 or 3.12, [uv](https://docs.astral.sh/uv/), and Git.
-- Internet access for initial model and GPT-2 tokenizer downloads. Cached installations can use `--offline`; normal retrieval needs no UltraRAG runtime download.
+- Internet access for initial model and GPT-2 tokenizer downloads. Cached installations can use `--offline`; no UltraRAG package or source runtime is installed or downloaded.
+- A systemd user session for PDF conversion through the isolated Docling runtime.
 
 ## Install
 
@@ -42,6 +43,8 @@ research-rag --project-root "/path/to/project" ingest
 ```
 
 - The first build can take time. Repeat `ingest` if it reports an unfinished build.
+- The first PDF conversion provisions Docling separately from the app. Run `research-rag --project-root "/path/to/project" doctor --prefetch-models` online before an offline first build.
+- Existing generations remain searchable without conversion. Normal ingestion preserves unchanged PDF artifacts; `ingest --force-recompute` explicitly reprocesses them.
 - If a source cannot be extracted, a validated generation containing the remaining sources is retained as **partial**, not selected. Review the omitted sources in the result or generation list. Repair them and run `ingest` again, or select the partial generation with `research-rag --project-root "/path/to/project" generations --use GENERATION_ID`.
 
 ## Read the evidence
@@ -105,8 +108,7 @@ research-rag --project-root "/path/to/project" doctor --mcp-entry
 
 ## UltraRAG credit and licensing
 
-- Derived from [UltraRAG](https://github.com/OpenBMB/UltraRAG)'s MCP architecture, corpus chunker, and BM25 retriever. Normal retrieval calls Chonkie and bm25s directly with the historical chunk and index semantics.
+- Derived from [UltraRAG](https://github.com/OpenBMB/UltraRAG)'s MCP architecture, corpus chunker, and BM25 retriever. Retrieval calls Chonkie and bm25s directly with the historical chunk and index semantics. UltraRAG itself is not a dependency.
   - UltraRAG credits THUNLP at Tsinghua University, NEUIR at Northeastern University, OpenBMB, AI9stars, and its contributors.
 - This is an independent project, not an official UltraRAG release, and is not affiliated with or endorsed by those organizations or contributors.
 - This repository's code uses the [Apache License 2.0](LICENSE). Extraction dependencies carry separate AGPL and GPL obligations. [NOTICE](NOTICE) records their terms, model licences, and upstream revisions.
-- The legacy `research-rag-gateway` and `research-rag-runtime` helper commands remain available. The gateway needs the optional `legacy` dependency: use `uv sync --locked --extra legacy` in a checkout or install `research-rag[legacy]` as a package. It is not needed by the workspace, CLI retrieval, or agent tools.

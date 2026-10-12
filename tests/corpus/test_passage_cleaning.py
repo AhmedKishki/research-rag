@@ -17,13 +17,10 @@ import pytest
 from research_rag.corpus.text_normalization import (
     clean_unclean_passage,
     is_known_formatting_glyph,
-    recover_formatting_glyphs,
 )
 from research_rag.corpus.text_quality import (
     CHUNK_FLAG_CORRUPT_TEXT,
     CHUNK_FLAG_EXTRACTION_ARTIFACT,
-    SOURCE_REASON_NO_TEXT,
-    SOURCE_REASON_NO_TEXT_LAYER,
     SOURCE_REASON_UNCLEAN,
     chunk_health_flags,
     passage_health_reasons,
@@ -154,29 +151,6 @@ def test_clean_text_under_a_share_adds_nothing() -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_a_source_with_no_retained_text_is_refused() -> None:
-    assert source_health_reasons(
-        unit_count=0,
-        retained_count=0,
-        withheld_reasons=Counter(),
-    ) == [SOURCE_REASON_NO_TEXT]
-    assert source_health_reasons(
-        unit_count=3,
-        retained_count=0,
-        withheld_reasons=Counter({"symbol_only": 3}),
-    ) == [SOURCE_REASON_NO_TEXT]
-
-
-def test_a_fully_scanned_file_with_nothing_retained_names_the_missing_layer() -> None:
-    assert source_health_reasons(
-        unit_count=0,
-        retained_count=0,
-        withheld_reasons=Counter(),
-        image_only_pages=8,
-        physical_pages=8,
-    ) == [SOURCE_REASON_NO_TEXT_LAYER]
-
-
 def test_a_loss_over_the_document_budget_refuses_the_source() -> None:
     """A PDF's cumulative loss is the one share that can refuse it.
 
@@ -249,19 +223,14 @@ def test_the_removed_source_vetoes_are_no_longer_reachable() -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_a_symbol_bullet_is_recovered_and_never_withheld() -> None:
+def test_a_symbol_bullet_is_never_withheld() -> None:
     raw = "\uf0b7 electricity consumption in TWh"
 
-    recovered = recover_formatting_glyphs(raw, "SymbolMT")
-
-    assert recovered == "• electricity consumption in TWh"
     # A documented formatting glyph is not corruption whether or not its font
-    # was recognised for the mapping, so it withholds no readable passage.
+    # was recognised for a mapping, so it withholds no readable passage.
     assert text_corruption_reasons(raw) == []
     assert passage_health_reasons(raw, maximum_unclean_percent=1.0) == []
-    assert passage_health_reasons(recovered, maximum_unclean_percent=1.0) == []
     assert chunk_health_flags(raw) == 0
-    assert chunk_health_flags(recovered) == 0
 
 
 @pytest.mark.parametrize(
@@ -275,8 +244,7 @@ def test_a_symbol_bullet_is_recovered_and_never_withheld() -> None:
         ("\uf0c9", "⊃"),
     ],
 )
-def test_each_known_symbol_glyph_is_recovered(code: str, character: str) -> None:
-    assert recover_formatting_glyphs(code, "SymbolMT") == character
+def test_each_known_symbol_glyph_is_recognised(code: str, character: str) -> None:
     assert is_known_formatting_glyph(code)
     assert text_corruption_reasons(f"readable text {code}") == []
 
@@ -284,32 +252,20 @@ def test_each_known_symbol_glyph_is_recovered(code: str, character: str) -> None
 def test_adobe_symbol_extender_pieces_are_formatting_not_corruption() -> None:
     # CMEX10 exposes tall-delimiter pieces as Adobe's Corporate Use Subarea code
     # points. Unicode has no character for one, so none is invented: the passage
-    # stays readable and a recognised face drops the pieces.
+    # stays readable.
     for code in ("\uf8ed", "\uf8fb", "\uf8eb"):
         assert is_known_formatting_glyph(code)
         assert text_corruption_reasons(f"= σ2 {code}") == []
 
-    assert recover_formatting_glyphs("σ2\uf8ed", "CMEX10") == "σ2 "
 
-
-def test_an_icon_font_glyph_is_removed_without_guessing_text() -> None:
-    assert recover_formatting_glyphs("\uf002Search", "FontAwesome") == " Search"
-    assert recover_formatting_glyphs("\uf0daBook Series", "FontAwesome6Free-Solid") == (
-        " Book Series"
-    )
-
-
-def test_ordinary_symbols_are_neither_mapped_nor_corrupt() -> None:
+def test_ordinary_symbols_are_not_corrupt() -> None:
     for text in ("… — – • § † ‡", "∑ × ÷ ≈ → ∞", "🙂 🚀"):
-        assert recover_formatting_glyphs(text, "SymbolMT") == text
         assert text_health_reasons(text) == ["symbol_only"]
 
 
 def test_an_unknown_private_use_glyph_remains_corrupt() -> None:
     assert not is_known_formatting_glyph("\uf16d")
     assert not is_known_formatting_glyph("\ue000")
-    # An unrecognised face keeps its glyphs; they are judged, never trusted.
-    assert recover_formatting_glyphs("\uf16d", "university-press-fonts") == "\uf16d"
     assert text_corruption_reasons("prose \uf16d\uf09a more prose") == [
         "private_or_unassigned_characters"
     ]

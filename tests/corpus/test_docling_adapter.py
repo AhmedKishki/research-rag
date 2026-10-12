@@ -87,11 +87,14 @@ def _payload(**overrides: object) -> dict:
 # --- furniture -----------------------------------------------------------------
 
 
-def test_header_label_is_excluded_even_on_the_body_layer() -> None:
+@pytest.mark.parametrize(
+    "label", ["page_header", "page_footer", "page_number", "document_index"]
+)
+def test_furniture_label_is_excluded_even_on_the_body_layer(label: str) -> None:
     payload = _payload(
         body=_body("#/texts/0", "#/texts/1"),
         texts=[
-            _text("#/texts/0", "RUNNING HEAD", label="page_header", layer="body"),
+            _text("#/texts/0", "RUNNING HEAD", label=label, layer="body"),
             _text("#/texts/1", "Body evidence.", page_no=1),
         ],
     )
@@ -147,6 +150,8 @@ def test_picture_keeps_its_body_position_and_chart_child_is_excluded() -> None:
     assert diagnostics["excluded_picture_child_item_count"] == 1
     assert diagnostics["caption_item_count"] == 1
     figure = next(unit for unit in pages[1] if unit["content_kind"] == "figure")
+    assert figure["docling_label"] == "caption"
+    assert figure["docling_ref"] == "#/pictures/0"
     assert figure["provenance"][0]["page_no"] == 1
     assert figure["provenance"][-1]["page_no"] == 1
 
@@ -206,6 +211,21 @@ def test_nested_group_chart_descendants_are_excluded() -> None:
     assert diagnostics["excluded_picture_child_item_count"] == 1
 
 
+@pytest.mark.parametrize("label", ["formula", "code", "footnote", "unknown"])
+def test_specialised_and_unknown_picture_children_are_not_discarded(label: str) -> None:
+    payload = _payload(
+        body=_body("#/pictures/0"),
+        texts=[_text("#/texts/0", "E[X] = μ", label=label, parent="#/pictures/0")],
+        pictures=[_picture("#/pictures/0", children=["#/texts/0"], captions=[])],
+    )
+
+    pages, diagnostics = adapt_document(payload, page_first=1, page_last=1)
+
+    assert [unit["contents"] for unit in pages[1]] == ["E[X] = μ"]
+    assert pages[1][0]["docling_label"] == label
+    assert diagnostics["excluded_picture_child_item_count"] == 0
+
+
 def test_caption_order_is_stable_in_declared_order() -> None:
     payload = _payload(
         body=_body("#/pictures/0"),
@@ -256,6 +276,8 @@ def test_out_of_range_picture_caption_is_emitted_on_its_own_page() -> None:
     assert pages[5][0]["provenance"][0]["page_no"] == 5
     assert diagnostics["orphan_caption_item_count"] == 1
     assert diagnostics["caption_item_count"] == 1
+    assert pages[5][0]["docling_label"] == "caption"
+    assert pages[5][0]["docling_ref"] == "#/texts/0"
 
 
 def test_stray_message_refs_are_counted_not_silent() -> None:
@@ -439,7 +461,17 @@ def test_key_value_graph_cells_are_adapted() -> None:
 
 @pytest.mark.parametrize(
     ("label", "expected"),
-    [("list_item", "list"), ("table", "table"), ("text", "prose")],
+    [
+        ("list_item", "list"),
+        ("table", "table"),
+        ("text", "prose"),
+        ("section_header", "prose"),
+        ("reference", "prose"),
+        ("formula", "prose"),
+        ("footnote", "prose"),
+        ("code", "prose"),
+        ("unknown", "prose"),
+    ],
 )
 def test_content_kind_follows_the_label(label: str, expected: str) -> None:
     payload = _payload(
@@ -448,6 +480,9 @@ def test_content_kind_follows_the_label(label: str, expected: str) -> None:
     )
     pages, _diagnostics = adapt_document(payload, page_first=1, page_last=1)
     assert pages[1][0]["content_kind"] == expected
+    assert pages[1][0]["docling_label"] == label
+    assert pages[1][0]["docling_content_layer"] == "body"
+    assert pages[1][0]["docling_ref"] == "#/texts/0"
 
 
 def test_fallback_order_is_payload_texts_then_pictures_without_a_body() -> None:

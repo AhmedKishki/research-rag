@@ -17,9 +17,13 @@ one contiguous, non-overlapping partition of the whole text; otherwise the text
 stays whole and all provenance is retained, so no page is given words it never
 held.
 
-A picture's caption is kept and a picture's non-caption descendants — nested
-through groups as well as listed directly — are excluded and counted, because a
-recognised figure's interior text is unreadable on a scanned body. A caption that
+Each unit retains its Docling label, content layer, and item reference. The
+source-wide cleaner uses those signals to distinguish an apparatus from body
+text without treating a caption, formula, or explanatory footnote as a list.
+
+A picture's caption is kept and its ordinary interior text/list descendants —
+nested through groups as well as listed directly — are excluded and counted.
+Declared formulas, code, notes, and unknown item kinds remain evidence. A caption that
 cannot be hung on an in-range picture is emitted on its own physical page rather
 than dropped. Tables, key-value regions, and forms are adapted from their cell
 text with provenance; a nonempty unsupported item is counted and named rather
@@ -349,10 +353,24 @@ class _DocumentAdapter:
         return layer == "furniture" or _label(item) in FURNITURE_LABELS
 
     def _add(
-        self, page_no: int, contents: str, kind: str, provenance: list[dict[str, Any]]
+        self,
+        page_no: int,
+        contents: str,
+        kind: str,
+        provenance: list[dict[str, Any]],
+        *,
+        item: dict[str, Any],
+        label: str | None = None,
     ) -> None:
         self.pages.setdefault(page_no, []).append(
-            {"contents": contents, "content_kind": kind, "provenance": provenance}
+            {
+                "contents": contents,
+                "content_kind": kind,
+                "provenance": provenance,
+                "docling_label": label or _label(item),
+                "docling_content_layer": str(item.get("content_layer") or "body"),
+                "docling_ref": _self_ref(item) or "",
+            }
         )
         self.diagnostics["retained_item_count"] += 1
 
@@ -374,14 +392,19 @@ class _DocumentAdapter:
             ref for ref, item in self.texts.items() if _label(item) in CAPTION_LABELS
         )
 
-        # A picture's non-caption descendants are excluded structurally, nested
-        # groups included, never by a guess about how long a child's words are.
+        # Ordinary figure-interior text is excluded structurally, including nested
+        # groups. A specialised or unknown label is kept rather than assumed to be
+        # a diagram fragment: formulas and explanatory notes are still evidence.
         excluded: set[str] = set()
         for picture in self.pictures:
             for ref in _walk_children(picture, self.index, set()):
                 if ref in self.caption_refs or ref in excluded:
                     continue
-                if ref in self.texts:
+                if ref in self.texts and _label(self.texts[ref]) in {
+                    "text",
+                    "list_item",
+                    "list",
+                }:
                     excluded.add(ref)
 
         for picture in self.pictures:
@@ -447,13 +470,13 @@ class _DocumentAdapter:
                     continue
                 piece = text[start:end]
                 if piece.strip():
-                    self._add(int(entry["page_no"]), piece, kind, [entry])
+                    self._add(int(entry["page_no"]), piece, kind, [entry], item=item)
                     wrote = True
             return wrote
         page = _first_page(item)
         if not self._in_range(page):
             return False
-        self._add(int(page), text, kind, provenance)
+        self._add(int(page), text, kind, provenance, item=item)
         return True
 
     def _emit_picture(self, ref: str) -> bool:
@@ -478,7 +501,14 @@ class _DocumentAdapter:
             self.emitted.add(caption_ref)
             self.handled.add(caption_ref)
             self.diagnostics["caption_item_count"] += 1
-        self._add(page, "\n\n".join(contents), "figure", provenance)
+        self._add(
+            page,
+            "\n\n".join(contents),
+            "figure",
+            provenance,
+            item=picture,
+            label="caption",
+        )
         self.emitted.add(ref)
         return True
 
@@ -502,7 +532,7 @@ class _DocumentAdapter:
         page = self._first_page_in_range(table)
         if page is None:
             return False
-        self._add(page, text, "table", provenance)
+        self._add(page, text, "table", provenance, item=table)
         self.diagnostics["table_item_count"] += 1
         return True
 
@@ -523,7 +553,7 @@ class _DocumentAdapter:
         page = self._first_page_in_range(item)
         if page is None:
             return False
-        self._add(page, text, "prose", provenance)
+        self._add(page, text, "prose", provenance, item=item)
         self.diagnostics[f"{kind}_item_count"] += 1
         return True
 
@@ -538,7 +568,9 @@ class _DocumentAdapter:
             page = self._first_page_in_range(item)
             if page is None or not str(item.get("text") or "").strip():
                 continue
-            self._add(page, str(item.get("text")), "figure", _prov_entries(item))
+            self._add(
+                page, str(item.get("text")), "figure", _prov_entries(item), item=item
+            )
             self.emitted.add(ref)
             self.diagnostics["orphan_caption_item_count"] += 1
             self.diagnostics["caption_item_count"] += 1
@@ -585,7 +617,7 @@ def adapt_document(
     ``page_first`` and ``page_last`` are 1-based physical page numbers and bound
     the pages this payload was converted from. Returns a mapping from physical
     page number to that page's units, and a diagnostics mapping. Each unit is
-    ``{"contents", "content_kind", "provenance"}``.
+    text, content kind, provenance, and the item's Docling structural fields.
     """
 
     return _DocumentAdapter(payload, page_first, page_last).run()

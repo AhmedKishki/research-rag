@@ -399,9 +399,9 @@ def create_mcp(
     `caller` names who the request in hand came from, so the service can take its
     waiting callers in rounds; it is empty when the surface cannot tell.
 
-    `connect` opens the gateway on the first call, so a client that only lists
-    tools never starts a process. A client waits for the handshake before it calls
-    anything, so the handshake must not depend on unasked-for work.
+    `connect` resolves the service when a tool is called. Discovery and the
+    handshake start no process and load no retrieval models; neither depends on
+    work the caller has not requested.
     """
 
     app = FastMCP(
@@ -416,10 +416,10 @@ def create_mcp(
     async def _service_call(
         operation: Callable[[ResearchService], Awaitable[T]],
     ) -> T:
-        """Run one service operation, connecting the gateway if it is not up yet.
+        """Run one operation against the resolved project service.
 
-        Connection failures become workflow failures, so a gateway that cannot
-        start is reported by the tool the user called.
+        An unavailable service is reported by the tool the caller requested;
+        resolving it never starts an app or an upstream gateway.
         """
 
         async def run() -> T:

@@ -1,195 +1,84 @@
-"""One stdio MCP gateway over UltraRAG's existing MCP servers."""
+"""Retired `research-rag-gateway` shim.
+
+The stdio gateway that proxied UltraRAG's own MCP servers is removed. This
+entry point keeps the historical command name so an old wrapper or client
+fails with guidance instead of a missing executable. It accepts the flags the
+command used to take, starts no process, imports no upstream library, reads no
+cache, and writes no file.
+"""
 
 from __future__ import annotations
 
 import argparse
-import asyncio
-import os
 import sys
-from collections.abc import AsyncIterator
-from contextlib import asynccontextmanager
-from datetime import UTC, datetime
-from typing import Any
 
-from fastmcp import FastMCP
-from fastmcp.client.transports import StdioTransport
-from fastmcp.server.providers.proxy import ProxyClient, ProxyProvider
+RETIREMENT_MESSAGE = """\
+research-rag-gateway has been retired.
 
-from .config import ConfigurationError, GatewayConfig, resolve_config
-from .instructions import SERVER_INSTRUCTIONS
-from .manifest import SERVER_SPECS, ServerSpec
-from .runtime import RUNTIME_CACHE_ENV, RuntimeErrorBase, install_managed_runtime
+This app no longer proxies UltraRAG's MCP servers, so there is no gateway to
+start, no UltraRAG runtime to install, and no optional 'legacy' dependency to
+add. The app serves its own eight evidence-retrieval tools itself.
 
-SERVER_NAME = "vanilla-ultra-rag-mcp"
-SERVER_VERSION = "0.1.3"
+Use the app's own agent surface instead:
 
+    research-rag mcp --project-name <name>
 
-def _child_environment(config: GatewayConfig, namespace: str) -> dict[str, str]:
-    env = dict(os.environ)
-    source_root = str(config.ultrarag_root / "src")
-    existing_pythonpath = env.get("PYTHONPATH")
-    env["PYTHONPATH"] = (
-        os.pathsep.join((source_root, existing_pythonpath))
-        if existing_pythonpath
-        else source_root
-    )
-    env["ULTRARAG_UI_STORAGE_ROOT"] = str(config.workspace_root / "ui-storage")
-    env["ULTRARAG_LOG_TS"] = (
-        f"vanilla_{namespace}_{datetime.now(UTC).strftime('%Y%m%dT%H%M%SZ')}"
-    )
-    env["PYTHONDONTWRITEBYTECODE"] = "1"
-    env["log_level"] = config.log_level
-    return env
-
-
-def create_gateway(
-    config: GatewayConfig,
-    server_specs: tuple[ServerSpec, ...] = SERVER_SPECS,
-) -> FastMCP[Any]:
-    """Create the aggregate server without changing any upstream component."""
-    transports: list[StdioTransport] = []
-
-    @asynccontextmanager
-    async def lifespan(_: FastMCP[Any]) -> AsyncIterator[dict[str, Any]]:
-        try:
-            yield {}
-        finally:
-            if transports:
-                await asyncio.gather(
-                    *(transport.close() for transport in transports),
-                    return_exceptions=True,
-                )
-
-    gateway = FastMCP(
-        name=SERVER_NAME,
-        version=SERVER_VERSION,
-        instructions=SERVER_INSTRUCTIONS,
-        lifespan=lifespan,
-    )
-    # Missing child components must fail discovery instead of silently exposing
-    # an incomplete server.
-    gateway.provider_error_strategy = "raise"
-
-    for spec in server_specs:
-        entrypoint = config.ultrarag_root / spec.relative_entrypoint
-        transport = StdioTransport(
-            command=str(config.python_executable),
-            args=[str(entrypoint)],
-            env=_child_environment(config, spec.namespace),
-            cwd=str(config.workspace_root),
-            keep_alive=True,
-            log_file=config.workspace_root
-            / "logs"
-            / f"{spec.namespace}-child-stderr.log",
-        )
-        transports.append(transport)
-
-        def client_factory(
-            child_transport: StdioTransport = transport,
-        ) -> ProxyClient:
-            # Each short-lived proxy client shares one keep-alive transport, so
-            # the upstream child process and its initialized state persist.
-            return ProxyClient(child_transport)
-
-        gateway.add_provider(
-            ProxyProvider(client_factory),
-            namespace=spec.namespace,
-        )
-
-    return gateway
+Run 'research-rag help' for the command reference, or
+'research-rag help mcp' for the agent surface.
+"""
 
 
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        prog=SERVER_NAME,
+        prog="research-rag-gateway",
         description=(
-            "Expose an unmodified, pinned UltraRAG MCP surface through one "
-            "namespaced stdio server."
+            "Retired. This command no longer starts a gateway. It accepts the "
+            "historical flags, prints migration guidance, and exits without "
+            "starting anything. Use 'research-rag mcp --project-name <name>'."
         ),
     )
     parser.add_argument(
         "--namespace",
         action="append",
-        choices=tuple(spec.namespace for spec in SERVER_SPECS),
-        help=(
-            "Expose only this UltraRAG namespace. Repeat for multiple namespaces. "
-            "Omit to expose the complete vanilla surface."
-        ),
+        help="Retired. The app's own tools replace every UltraRAG namespace.",
     )
     parser.add_argument(
         "--ultrarag-root",
-        default=os.environ.get("ULTRARAG_ROOT"),
-        help=(
-            "Optional pinned development checkout. If omitted, install or use "
-            "the verified managed runtime snapshot."
-        ),
+        help="Retired. No UltraRAG checkout is read.",
     )
     parser.add_argument(
         "--runtime-cache-root",
-        default=os.environ.get(RUNTIME_CACHE_ENV),
-        help=f"Managed runtime cache root (default: ${RUNTIME_CACHE_ENV} or OS cache).",
+        help="Retired. No runtime cache is read or written.",
     )
     parser.add_argument(
         "--offline",
         action="store_true",
-        help="Do not download a missing managed runtime.",
+        help="Retired. The app never downloads a gateway runtime.",
     )
     parser.add_argument(
         "--workspace-root",
-        default=os.environ.get("ULTRARAG_WORKSPACE_ROOT"),
-        required=os.environ.get("ULTRARAG_WORKSPACE_ROOT") is None,
-        help="External working directory for logs and vanilla runtime data.",
+        help="Retired. No external working directory is used.",
     )
     parser.add_argument(
         "--python",
         dest="python_executable",
         default=sys.executable,
-        help="Python interpreter used for all upstream child servers.",
+        help="Retired. No child interpreter is started.",
     )
     parser.add_argument(
         "--log-level",
         choices=("debug", "info", "warn", "error"),
         default="warn",
-        help="UltraRAG child-process log level.",
+        help="Retired. No child process writes a log.",
     )
     return parser
 
 
 def main() -> None:
-    parser = _parser()
-    args = parser.parse_args()
-    # Refuse before downloading a runtime when its optional Python library is absent.
-    from importlib.util import find_spec
-
-    if find_spec("ultrarag") is None:
-        parser.error(
-            "The legacy UltraRAG gateway requires the optional legacy dependency. "
-            "Install it with 'uv sync --locked --extra legacy' (checkout) or "
-            "'pip install research-rag[legacy]' (package), then retry. "
-            "Normal research-rag retrieval does not need this gateway."
-        )
-    try:
-        ultrarag_root = args.ultrarag_root or install_managed_runtime(
-            cache_root=args.runtime_cache_root,
-            allow_download=not args.offline,
-        )
-        config = resolve_config(
-            ultrarag_root=ultrarag_root,
-            workspace_root=args.workspace_root,
-            python_executable=args.python_executable,
-            log_level=args.log_level,
-        )
-    except (ConfigurationError, RuntimeErrorBase) as exc:
-        parser.error(str(exc))
-
-    selected_namespaces = set(args.namespace or ())
-    selected_specs = tuple(
-        spec
-        for spec in SERVER_SPECS
-        if not selected_namespaces or spec.namespace in selected_namespaces
-    )
-    gateway = create_gateway(config, selected_specs)
-    gateway.run(transport="stdio", show_banner=False)
+    # Parse so a historical invocation is recognized, then refuse clearly. The
+    # parse produces no side effect: --help prints this retirement and exits 0.
+    _parser().parse_args()
+    raise SystemExit(RETIREMENT_MESSAGE)
 
 
 if __name__ == "__main__":

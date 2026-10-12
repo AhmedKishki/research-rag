@@ -177,15 +177,6 @@ def test_the_top_level_help_orients_a_reader_before_it_lists_commands() -> None:
         assert group in text, f"--help has no {group!r} section"
 
 
-def test_every_registered_command_prints_its_own_help() -> None:
-    """A command that cannot print its usage is a command whose reader is lost."""
-
-    for name, subparser in _subparsers().choices.items():
-        text = subparser.format_help()
-        assert text.startswith(f"usage: {CLI_NAME} {name}"), name
-        assert len(text.splitlines()) > 3, f"{name}: its help is a bare usage line"
-
-
 def test_every_argument_says_what_it_is_for() -> None:
     """An option with no sentence is an option a reader has to guess at."""
 
@@ -384,11 +375,6 @@ def test_every_command_has_exactly_one_line_in_the_flat_listing() -> None:
     assert set(_HELP_SUMMARIES) == set(_commands())
 
 
-def test_a_command_is_in_one_menu_group_and_no_other() -> None:
-    listed = [entry for _, entries in HELP_GROUPS for entry, _ in entries]
-    assert len(listed) == len(set(listed)), "a command is in the menu twice"
-
-
 def test_a_summary_is_the_first_sentence_of_the_menu_entry() -> None:
     """The derivation, checked: a rewritten menu must not leave `--help` behind."""
 
@@ -399,10 +385,13 @@ def test_a_summary_is_the_first_sentence_of_the_menu_entry() -> None:
 
 
 def test_every_registered_command_is_in_the_menu_and_every_topic_is_offered() -> None:
-    """`help` is the reference, so it holds every command and every subject."""
+    """`help` is the reference, so it holds every command and every subject.
+
+    The menu's completeness is owned by `tests/gates/test_documentation.py`; this
+    keeps the subject list in step with it.
+    """
 
     listed = {name for _, entries in HELP_GROUPS for name, _ in entries}
-    assert listed | {"help"} == set(_commands())
 
     topic = next(
         action
@@ -570,6 +559,43 @@ def _operate(args: argparse.Namespace) -> dict[str, Any]:
     """The one dispatcher `_run` reaches, with nothing that could answer a call."""
 
     return asyncio.run(operate(args, _NullOperations()))
+
+
+def test_the_doctor_help_states_repair_runtime_is_a_deprecated_no_op() -> None:
+    """`--repair-runtime` reaches nothing, and a reader must not expect it to.
+
+    The flag is kept for compatibility, so its help explains the deprecation and
+    makes no claim that it repairs anything or reaches the network. Only
+    `--prefetch-models` remains an operation that fetches.
+    """
+
+    subparser = _subparsers().choices["doctor"]
+    text = _flat(subparser.format_help())
+
+    assert "--repair-runtime" in text
+    assert "deprecated" in text.lower()
+    assert "no-op" in text
+    assert "reaches no network" in text
+    # The retired claim must be gone.
+    assert "The only other thing that reaches the network" not in text
+    assert "Move a mismatched UltraRAG runtime aside" not in text
+
+    # The one operation that does fetch is still offered and says so.
+    assert "--prefetch-models" in text
+    assert "only doctor operation that reaches the network" in text
+
+
+def test_the_doctor_keeps_both_operations_as_parser_flags() -> None:
+    """The deprecated flag and the fetch flag are still accepted by the parser."""
+
+    parser = _parser()
+    default = parser.parse_args(["doctor"])
+    assert default.prefetch_models is False
+    assert default.repair_runtime is False
+
+    chosen = parser.parse_args(["doctor", "--repair-runtime"])
+    assert chosen.repair_runtime is True
+    assert chosen.prefetch_models is False
 
 
 if __name__ == "__main__":

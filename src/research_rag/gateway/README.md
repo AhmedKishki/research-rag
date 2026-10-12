@@ -1,26 +1,20 @@
 # `gateway`
 
-The optional legacy stdio MCP gateway and the UltraRAG runtime it proxies. Normal retrieval uses `retrieval/direct.py` and does not spawn this gateway.
+Migration guidance for retired gateway/runtime command names. No component here
+serves MCP tools or acquires an external source runtime.
 
 | Module | Holds |
 |---|---|
-| `server.py` | The MCP server: one tool per UltraRAG stage, over stdio |
-| `runtime.py` | The immutable UltraRAG snapshot, installed into a runtime cache and validated against a tree manifest |
-| `config.py` | What the gateway resolves from its arguments |
-| `manifest.py` | The pinned upstream commit, version, and the servers each snapshot exposes |
-| `tree_manifest.py` | The files a complete snapshot contains |
-| `instructions.py` | What an agent is told before it calls the gateway |
+| `server.py` | Parses historical gateway flags and refuses with project-bridge migration guidance |
+| `runtime.py` | Parses historical runtime flags and reports that no external runtime is required |
 | `__main__.py` | `python -m research_rag.gateway` |
 
 ## Rules
 
-- The gateway is a legacy helper, not part of normal retrieval or the app's agent surface. Its own clients reach it over MCP.
-- Install the optional `legacy` extra before starting `research-rag-gateway`. Missing library support fails before a runtime download and names the install command. `research-rag-runtime` manages the source snapshot without requiring the library.
-- The runtime cache directory, its marker file, and the environment variable that
-  relocates it are found by name, so a rename re-downloads a runtime for every
-  machine that already has one.
-- `runtime.py` imports the standard library and `platformdirs`. It installs a
-  clone-free snapshot at run time, so the gateway has no import-time dependency on
-  UltraRAG itself.
-- `SERVER_NAME` and the runtime's user agent name the upstream gateway, and they
-  say so in a log line a reader has to interpret alongside an installed copy.
+- Both shims import only the standard library.
+- Historical flags are accepted only to explain migration. They select no runtime,
+  output path, namespace, or process.
+- The shims start no server or child process, perform no network request, and
+  never inspect, write, validate, quarantine, or delete caches.
+- The gateway command exits nonzero rather than pretending to offer retired tools.
+  Its help succeeds. The runtime command reports a no-op and exits successfully.

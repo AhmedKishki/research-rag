@@ -620,6 +620,7 @@ function renderStatusFacts(status) {
 // A build that saved a checkpoint resumes only under the parameters it started
 // with, so its own force flag is sent back rather than one read off the corpus.
 function ingestPlan(status) {
+  if ((status.upgrade_reasons || []).includes("project_identity")) return null;
   const progress = status.ingestion_progress;
   if (progress) {
     return { label: "Resume build", force: Boolean(progress.parameters?.force_recompute) };
@@ -817,15 +818,15 @@ function renderStatus(status) {
     byId("status-notice-text").textContent = progressSummary(status);
   } else if (!status.ready) {
     notice.hidden = false;
-    byId("status-notice-title").textContent = "No generation exists";
+    byId("status-notice-title").textContent = status.generation_id
+      ? "The selected generation cannot be served"
+      : "No generation exists";
     byId("status-notice-text").textContent = status.message || "Create the first knowledge-base generation.";
   } else if (status.generation_upgrade_required) {
     notice.hidden = false;
-    byId("status-notice-title").textContent = "This generation needs an upgrade";
-    const reasons = (status.upgrade_reasons || []).join(", ").replaceAll("_", " ");
-    byId("status-notice-text").textContent = reasons
-      ? `Upgrade to apply: ${reasons}. The existing generation remains searchable.`
-      : "Upgrade to apply the current extraction and retrieval policies.";
+    byId("status-notice-title").textContent = "Configured retrieval is incompatible";
+    byId("status-notice-text").textContent = status.message
+      || "The configured retrieval cannot use this generation. Restore its compatible configuration or explicitly build matching artifacts.";
   } else if (status.stale) {
     notice.hidden = false;
     byId("status-notice-title").textContent = "The current generation is stale";

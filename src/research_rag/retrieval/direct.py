@@ -1,5 +1,7 @@
 """Direct execution of the pinned UltraRAG token/BM25 compatibility contract.
 
+This backend implements the neutral `LexicalBackend` protocol in `lexical.py`:
+token chunking, loading a saved BM25 index, building one, and searching it.
 Dependencies stay lazy. A single serialized worker owns the mutable BM25 model;
 cancellation drains that worker before another operation can touch its state.
 No source documents or generation selection records are changed here.
@@ -386,7 +388,7 @@ class DirectRetrieval:
                 or not batches
                 or not isinstance(batches[0], list)
             ):
-                raise RuntimeError("UltraRAG BM25 returned an invalid passage result")
+                raise RuntimeError("BM25 returned an invalid passage result")
             return [str(item) for item in batches[0]]
 
         return await self._run(execute)

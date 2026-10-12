@@ -39,6 +39,7 @@ DIAGNOSTIC_KEYS = {
     "filters",
     "fusion",
     "fusion_score",
+    "generation_diagnostics",
     "generation_root",
     "grouping",
     "grouping_limited",
@@ -465,13 +466,6 @@ def test_a_blocked_surface_names_no_call_an_agent_cannot_make() -> None:
     assert blocked_by_health["requires"] == ["ingest"]
 
 
-def test_status_keeps_dependencies_out_of_the_answer_when_there_are_none() -> None:
-    lean = present_tool_response("status", _status_payload(), detail=LEAN_TOOL_DETAIL)
-
-    assert "blocked_by" not in lean
-    assert "degraded" not in lean
-
-
 def test_status_carries_its_sentence_only_while_there_is_a_reason() -> None:
     """A verdict with nothing to fix gets no sentence; one with a condition keeps it."""
 
@@ -558,20 +552,22 @@ def test_status_lean_states_the_verdict_and_nothing_else() -> None:
     assert lean["generation_id"] == "20260101T000000Z-abcdef"
     assert "requires" not in lean
 
+    # A generation that serves only BM25 is usable: its missing dense half is a
+    # limitation, not a build the caller must run, so the verdict asks for nothing.
     legacy = present_tool_response(
         "status",
         _status_payload(
             available_retrieval_methods=["bm25"],
             hybrid_ready=False,
             hybrid_upgrade_required=True,
-            generation_upgrade_required=True,
-            upgrade_reasons=["bm25_only_generation"],
+            generation_upgrade_required=False,
+            upgrade_reasons=[],
         ),
         detail=LEAN_TOOL_DETAIL,
     )
     assert legacy["ready"] is True
     assert legacy["stale"] is False
-    assert legacy["requires"] == ["ingest"]
+    assert "requires" not in legacy
     assert "hybrid_ready" not in legacy
     assert "generation_upgrade_required" not in legacy
     assert "upgrade_reasons" not in legacy
@@ -619,27 +615,75 @@ def test_status_lean_states_the_verdict_and_nothing_else() -> None:
 
 def test_status_names_every_call_the_verdict_requires() -> None:
     for overrides in (
-        {"stale": True},
-        {"generation_upgrade_required": True, "upgrade_reasons": ["retrieval_policy"]},
-        {"hybrid_ready": False},
-        {"metadata_pending_source_paths": ["a.pdf", "b.pdf"]},
+        {"generation_upgrade_required": True, "upgrade_reasons": ["embedding_model"]},
         {"ingestion_progress": {"phase": "embedding", "progress": 0.4}},
-        {"stale": True, "changes": {"source_exclusions_changed": True}},
     ):
         lean = present_tool_response(
             "status", _status_payload(**overrides), detail=LEAN_TOOL_DETAIL
         )
         assert lean["requires"] == ["ingest"], overrides
 
+    # A usable generation is not told to build for a snapshot that can be
+    # refreshed later, a source exclusion already enforced, a reviewed metadata
+    # source, a missing dense half, or a recorded policy difference: the verdict
+    # discloses those and prescribes nothing.
+    for overrides in (
+        {
+            "available_retrieval_methods": ["bm25"],
+            "hybrid_ready": False,
+            "hybrid_upgrade_required": True,
+        },
+        {"generation_diagnostics": _status_payload()["generation_diagnostics"]},
+        {"stale": True, "changes": {"added": ["new.pdf"]}},
+        {"metadata_pending_source_paths": ["a.pdf", "b.pdf"]},
+        {"stale": True, "changes": {"source_exclusions_changed": True}},
+    ):
+        lean = present_tool_response(
+            "status", _status_payload(**overrides), detail=LEAN_TOOL_DETAIL
+        )
+        assert lean["ready"] is True
+        assert "requires" not in lean, overrides
+
     pending = present_tool_response(
         "status",
-        _status_payload(metadata_pending_source_paths=["a.pdf", "b.pdf"]),
+        _status_payload(
+            metadata_pending_source_paths=["a.pdf", "b.pdf"],
+            message=(
+                "Reviewed metadata is saved for sources outside the selected "
+                "generation; include those sources if needed and ingest to index them."
+            ),
+        ),
         detail=LEAN_TOOL_DETAIL,
     )
     assert pending["ready"] is True
     assert pending["stale"] is False
-    assert pending["requires"] == ["ingest"]
+    assert "requires" not in pending
     assert "metadata_pending_source_count" not in pending
+    # The optional snapshot work is still explained, just not prescribed.
+    assert "ingest" in pending["message"]
+
+    # Source drift stays visible in the normal verdict even though no build is
+    # required: the counts and the sentence are what a researcher acts on.
+    drifted = present_tool_response(
+        "status",
+        _status_payload(
+            stale=True,
+            changes={
+                "added": ["new.pdf"],
+                "removed": ["gone.pdf"],
+                "modified": [],
+                "metadata_changed": False,
+                "source_exclusions_changed": False,
+            },
+        ),
+        detail=LEAN_TOOL_DETAIL,
+    )
+    assert drifted["stale"] is True
+    assert drifted["changes"] == {
+        "added_source_count": 1,
+        "removed_sources": ["gone.pdf"],
+    }
+    assert "requires" not in drifted
 
     restarting = present_tool_response(
         "status",
@@ -669,7 +713,78 @@ def test_status_names_every_call_the_verdict_requires() -> None:
         ),
         detail=LEAN_TOOL_DETAIL,
     )
-    assert both["requires"] == ["ingest", "restart_app"]
+    assert both["requires"] == ["restart_app"]
+
+
+def test_a_foreign_generation_blocks_without_prescribing_a_rebuild() -> None:
+    """A generation built for another project is not served here.
+
+    The verdict must not answer with an automatic ingest: selecting a matching
+    retained generation is the first remedy, and the blocked_by entry names that
+    command.
+    """
+
+    lean = present_tool_response(
+        "status",
+        _status_payload(
+            ready=False,
+            generation_id="20260101T000000Z-abcdef",
+            generation_upgrade_required=True,
+            upgrade_reasons=["project_identity"],
+            message=(
+                "The selected generation belongs to a different project and "
+                "cannot be served here. Select a generation belonging to this "
+                "project; build one only if no compatible generation is retained."
+            ),
+            blocked_by=[
+                {
+                    "check": "generation",
+                    "reason": (
+                        "The selected generation belongs to a different project "
+                        "and cannot be served here."
+                    ),
+                    "remedy": "research-rag --project-root /project generations",
+                }
+            ],
+        ),
+        detail=LEAN_TOOL_DETAIL,
+    )
+    assert lean["ready"] is False
+    assert "requires" not in lean
+    assert lean["blocked_by"] == [
+        {
+            "check": "generation",
+            "reason": (
+                "The selected generation belongs to a different project and "
+                "cannot be served here."
+            ),
+            "remedy": "research-rag --project-root /project generations",
+        }
+    ]
+    assert "build one only if" in lean["message"]
+    assert "ingest" not in json.dumps(lean["blocked_by"])
+
+
+def test_a_real_embedding_incompatibility_is_actionable() -> None:
+    """A generation whose dense index cannot be scored asks for the rebuild.
+
+    The BM25 half still serves, but the mismatch is the one condition that makes
+    the generation unable to answer as the project configured it.
+    """
+
+    lean = present_tool_response(
+        "status",
+        _status_payload(
+            generation_upgrade_required=True,
+            upgrade_reasons=["embedding_model"],
+            hybrid_ready=False,
+            hybrid_upgrade_required=True,
+            available_retrieval_methods=["bm25"],
+        ),
+        detail=LEAN_TOOL_DETAIL,
+    )
+    assert lean["ready"] is True
+    assert lean["requires"] == ["ingest"]
 
 
 def test_status_counts_available_source_changes_and_names_missing_ones() -> None:
@@ -694,7 +809,9 @@ def test_status_counts_available_source_changes_and_names_missing_ones() -> None
         detail=LEAN_TOOL_DETAIL,
     )
     assert stale["stale"] is True
-    assert stale["requires"] == ["ingest"]
+    # A changed snapshot is disclosed, not prescribed: the existing evidence
+    # stays searchable and a refresh is optional.
+    assert "requires" not in stale
     assert stale["changes"] == {
         "added_source_count": 3,
         "modified_source_count": 1,
@@ -1244,6 +1361,23 @@ def _status_payload(**overrides: object) -> dict[str, object]:
         "hybrid_upgrade_required": False,
         "generation_upgrade_required": False,
         "upgrade_reasons": [],
+        "generation_diagnostics": {
+            "policy_differences": ["retrieval_policy"],
+            "recorded": {
+                "schema_version": 5,
+                "extraction_policy_version": 3,
+                "cleaning_policy_version": 2,
+                "artifact_policy_version": 4,
+                "retrieval_policy_fingerprint": "a" * 64,
+            },
+            "current": {
+                "schema_version": 5,
+                "extraction_policy_version": 3,
+                "cleaning_policy_version": 2,
+                "artifact_policy_version": 4,
+                "retrieval_policy_fingerprint": "b" * 64,
+            },
+        },
         "retrieval": {"available_methods": ["bm25", "dense", "hybrid"]},
         "last_build_metrics": {"reused_chunk_count": 12},
         "ingestion_progress": None,

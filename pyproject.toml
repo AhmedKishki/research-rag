@@ -43,17 +43,12 @@ dependencies = [
     "uvicorn>=0.53,<1",
 ]
 
-[project.optional-dependencies]
-# The historical gateway remains available, but normal retrieval does not spawn it.
-legacy = [
-    "ultrarag @ https://github.com/OpenBMB/UltraRAG/archive/3a709a2aea3fbe46acca59c422621c94b6e86857.tar.gz",
-]
-
 [project.scripts]
 research-rag = "research_rag.surfaces.cli:main"
-# The gateway this app spawns to reach UltraRAG's own stages, and the runtime
-# installer behind `doctor --repair-runtime`. Both were a separate product's
-# console scripts and are this app's own now.
+# Retired command names kept so an old wrapper or client fails with guidance
+# instead of a missing executable. Each parses the historical flags and prints
+# a migration notice; neither starts a process, imports UltraRAG, or writes a
+# file. The app serves its own eight tools through `research-rag mcp`.
 research-rag-gateway = "research_rag.gateway.server:main"
 research-rag-runtime = "research_rag.gateway.runtime:main"
 
@@ -87,6 +82,7 @@ package = true
 testpaths = ["tests"]
 markers = [
     "integration: exercises external runtimes, process contention, live transport waits, or shipped scripts",
+    "real_docling: keeps the real Docling worker and managed environment instead of the offline synthetic stub",
 ]
 # A hang has no diagnostic and blocks CI until the GitHub limit, and several
 # tests spawn real subprocesses. The thread method is deliberate: the signal

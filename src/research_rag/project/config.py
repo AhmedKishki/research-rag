@@ -20,9 +20,10 @@ from .settings_layers import SettingsError, resolve_settings
 # prints commands an operator can paste.
 CLI_COMMAND = "research-rag"
 
-# The gateway this app spawns, installed by this package beside the command above.
-# It is named for this app rather than for the project it proxies, because the
-# reader pastes it and has to be able to see which product it belongs to.
+# The gateway this app used to spawn. It is retired: no ordinary command resolves
+# it, checks for it, spawns it, or acquires anything for it. The name survives
+# only as passive compatibility data, so a project that still records a path keeps
+# resolving and an old client entry remains readable.
 GATEWAY_EXECUTABLE = "research-rag-gateway"
 
 # Where a remedy points when the reader has to supply the directory themselves.
@@ -617,15 +618,15 @@ def resolve_config(
                 "--runtime-root must not be the project root or its .research-rag"
             )
 
+    # Passive compatibility data only. A caller may still pass the retired
+    # gateway's path, and a project may still carry the recorded default, but
+    # resolving the configuration never touches the disk: no existence check,
+    # spawn, or dependency acquisition, and no effect on the source root.
     executable = (
         Path(vanilla_executable or Path(sys.executable).parent / GATEWAY_EXECUTABLE)
         .expanduser()
         .absolute()
     )
-    if not executable.is_file():
-        raise ConfigurationError(
-            f"{GATEWAY_EXECUTABLE} executable was not found: {executable}"
-        )
 
     overrides = list(settings_overrides)
     for key, value in (

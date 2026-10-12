@@ -1,16 +1,8 @@
-"""Aggregate MCP gateway for a pinned, unmodified UltraRAG release."""
+"""Retired UltraRAG gateway command names, kept as migration shims.
 
-from .manifest import (
-    BASELINE_COMMIT,
-    BASELINE_VERSION,
-    SERVER_SPECS,
-    STATEFUL_NAMESPACES,
-)
-
-__all__ = [
-    "BASELINE_COMMIT",
-    "BASELINE_VERSION",
-    "SERVER_SPECS",
-    "STATEFUL_NAMESPACES",
-]
-__version__ = "0.1.3"
+`server.py` and `runtime.py` keep the historical console names so an old
+wrapper or client fails with guidance instead of a missing executable. The
+stdio proxy gateway and its source-snapshot installer are removed: the app
+serves its own eight evidence-retrieval tools through `research-rag mcp` and
+needs no UltraRAG runtime.
+"""

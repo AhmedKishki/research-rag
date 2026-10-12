@@ -1,24 +1,27 @@
-"""Pinned upstream differential checks without runtime provisioning or downloads."""
+"""Pinned compatibility checks without runtime provisioning or downloads.
+
+The chunk window and the BM25 artifacts are locked here against their historical
+contract directly: the token window `direct.py` forwards to the chunker, the
+normalization of a chunk row, and the bytes of a saved index reloaded by a fresh
+backend. Nothing here reads the retired gateway package or a cached upstream
+checkout, so no model, download, or skip stands in for the golden coverage.
+"""
 
 from __future__ import annotations
 
-import ast
 import asyncio
 import hashlib
 import io
 import json
-import logging
 import os
-import pwd
 import threading
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
+import chonkie
 import pytest
-from fastmcp.exceptions import ToolError
 
-from research_rag.gateway.manifest import BASELINE_COMMIT
 from research_rag.project.policy import ResearchError
 from research_rag.retrieval import direct
 
@@ -262,109 +265,126 @@ def encoding(dependencies):
         pytest.skip(str(exc))
 
 
-@pytest.fixture
-def upstream(dependencies):
-    """Execute original pinned method ASTs, not a rewritten reference algorithm.
+def _recording_token_chunker(windows: list[tuple[int, int]]) -> type:
+    """A stand-in for Chonkie's chunker that records the token window it is asked for.
 
-    Strip only registration decorators and defer annotations. Heavy unrelated
-    imports/server startup never execute. The BM25 init/build/search bodies and
-    corpus chunk/save/load bodies run unchanged from the cached pinned checkout.
+    The app-owned chunk contract is the window it forwards, not Chonkie's own
+    windowing, so this keeps the assertion on configuration and row normalization
+    and needs neither a tokenizer model nor a network fetch.
     """
-    import numpy as np
-    import orjson
-    from tqdm import tqdm
 
-    root = (
-        Path(pwd.getpwuid(os.getuid()).pw_dir)
-        / ".cache/vanilla-ultra-rag-mcp/runtime"
-        / f"UltraRAG-{BASELINE_COMMIT}"
-    )
-    if not root.is_dir():
-        pytest.skip("Pinned UltraRAG checkout is not cached; no download permitted")
-    namespace = {
-        "app": SimpleNamespace(logger=logging.getLogger("direct-compat-test")),
-        "os": os,
-        "Path": Path,
-        "json": json,
-        "orjson": orjson,
-        "np": np,
-        "tqdm": tqdm,
-        "ToolError": ToolError,
-    }
-    tokenizer_path = root / "servers/retriever/src/bm25_tokenizer.py"
-    exec(compile(tokenizer_path.read_text(), str(tokenizer_path), "exec"), namespace)  # noqa: S102 - cached pinned upstream fixture
-    selected = []
-    for component, names in (
-        ("corpus", {"chunk_documents", "_save_jsonl", "_load_jsonl"}),
-        ("retriever", {"retriever_init", "bm25_index", "bm25_search"}),
-    ):
-        path = root / f"servers/{component}/src/{component}.py"
-        tree = ast.parse(path.read_text())
-        for node in ast.walk(tree):
-            if (
-                isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
-                and node.name in names
-            ):
-                node.decorator_list = []
-                selected.append(node)
-    module = ast.Module(
-        body=[
-            ast.ImportFrom(
-                module="__future__", names=[ast.alias(name="annotations")], level=0
-            ),
-            *selected,
-        ],
-        type_ignores=[],
-    )
-    exec(  # noqa: S102 - execute unchanged pinned upstream method bodies
-        compile(ast.fix_missing_locations(module), "pinned-upstream-methods", "exec"),
-        namespace,
-    )
-    return SimpleNamespace(**namespace)
+    class RecordingTokenChunker:
+        def __init__(
+            self,
+            *,
+            tokenizer: Any,
+            chunk_size: int,
+            chunk_overlap: int,
+        ) -> None:
+            windows.append((chunk_size, chunk_overlap))
+
+        def chunk(self, text: str) -> list[Any]:
+            return [SimpleNamespace(text=text)]
+
+    return RecordingTokenChunker
 
 
 @pytest.mark.anyio
-@pytest.mark.parametrize("size,overlap", [(12, 3), (8, 8), (24, 0)])
-async def test_chunk_matches_upstream(
-    tmp_path, upstream, encoding, monkeypatch, size, overlap
+@pytest.mark.parametrize(
+    "size,overlap,forwarded_overlap",
+    [
+        (12, 3, 3),  # an explicit overlap below the size is used unchanged
+        (8, 8, 2),  # an overlap at or above the size becomes a quarter of it
+        (24, 0, 0),
+    ],
+)
+async def test_chunk_forwards_the_historical_token_window_and_normalizes_rows(
+    tmp_path, monkeypatch, size, overlap, forwarded_overlap
 ):
-    import tiktoken
-
-    monkeypatch.setattr(tiktoken, "get_encoding", lambda name: encoding)
-    source, expected, actual = (
-        tmp_path / name for name in ("source.jsonl", "upstream.jsonl", "direct.jsonl")
+    windows: list[tuple[int, int]] = []
+    monkeypatch.setattr(chonkie, "TokenChunker", _recording_token_chunker(windows))
+    monkeypatch.setattr(
+        direct, "load_gpt2_tokenizer", lambda **kwargs: SimpleNamespace()
     )
+    source, output = tmp_path / "source.jsonl", tmp_path / "chunks.jsonl"
     write_rows(
         source,
         [
             {
                 "id": "unit-1",
                 "title": " Heading ",
-                "contents": "  " + "Labor and capital — Arbeit, café, 中文.\n" * 6,
+                "contents": "  The cobalt heron — Arbeit, café.  ",
             },
             {"id": "unit-empty", "contents": "  "},
-            {"id": "unit-2", "contents": "Second unit retains punctuation! " * 4},
-            {"id": 0, "contents": "last"},
+            {"id": "unit-2", "contents": "  Second unit keeps punctuation!  "},
         ],
     )
-    await upstream.chunk_documents(
-        str(source),
-        {"token": {"chunk_overlap": overlap}},
-        "token",
-        "gpt2",
-        size,
-        str(expected),
-        False,
-    )
     await direct.DirectRetrieval().chunk(
-        source, actual, chunk_size=size, chunk_overlap=overlap
+        source, output, chunk_size=size, chunk_overlap=overlap
     )
-    assert actual.read_bytes() == expected.read_bytes()
+    assert windows == [(size, forwarded_overlap)]
+    # Unit order is preserved, empty units are dropped, titles and contents are
+    # stripped, and identifiers are reassigned in order.
+    assert [
+        json.loads(line) for line in output.read_text(encoding="utf-8").splitlines()
+    ] == [
+        {
+            "id": 0,
+            "doc_id": "unit-1",
+            "title": "Heading",
+            "contents": "The cobalt heron — Arbeit, café.",
+        },
+        {
+            "id": 1,
+            "doc_id": "unit-2",
+            "title": "",
+            "contents": "Second unit keeps punctuation!",
+        },
+    ]
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("overlap", [1, 4])
+async def test_real_chunker_preserves_the_historical_windows_without_model_assets(
+    tmp_path, monkeypatch, overlap
+):
+    import tiktoken
+
+    tokenizer = tiktoken.Encoding(
+        name="historical-window-fixture",
+        pat_str=r"(?s).",
+        mergeable_ranks={bytes([value]): value for value in range(256)},
+        special_tokens={},
+    )
+    monkeypatch.setattr(direct, "load_gpt2_tokenizer", lambda **kwargs: tokenizer)
+    source, output = tmp_path / "source.jsonl", tmp_path / "chunks.jsonl"
+    write_rows(
+        source, [{"id": "unit-1", "title": " Heading ", "contents": " AaBbCcDd "}]
+    )
+
+    await direct.DirectRetrieval().chunk(
+        source, output, chunk_size=4, chunk_overlap=overlap
+    )
+
+    assert [
+        json.loads(line) for line in output.read_text(encoding="utf-8").splitlines()
+    ] == [
+        {"id": index, "doc_id": "unit-1", "title": "Heading", "contents": text}
+        for index, text in enumerate(["AaBb", "bCcD", "Dd"])
+    ]
 
 
 @pytest.mark.anyio
 @pytest.mark.parametrize("language", ["en", "de", "fr"])
-async def test_bm25_differential_and_cross_load(tmp_path, upstream, language):
+async def test_bm25_build_is_deterministic_and_cross_loads(
+    tmp_path, dependencies, language
+):
+    """Two builds of one corpus are byte-identical and a fresh backend reloads them.
+
+    The correlation between a build and a load is the contract a search relies on,
+    and the saved artifacts are compared byte for byte so a silent rewrite fails.
+    """
+
     chunks = tmp_path / "chunks.jsonl"
     write_rows(
         chunks,
@@ -379,50 +399,65 @@ async def test_bm25_differential_and_cross_load(tmp_path, upstream, language):
             ]
         ],
     )
-    old, new = tmp_path / "upstream", tmp_path / "direct"
-    reference = SimpleNamespace()
+    first, second = tmp_path / "first", tmp_path / "second"
+    builder = direct.DirectRetrieval()
+    await builder.build_bm25(chunks, first, language=language)
+    twin = direct.DirectRetrieval()
+    await twin.build_bm25(chunks, second, language=language)
+    assert {p.name for p in first.iterdir()} == {p.name for p in second.iterdir()}
+    for name in (p.name for p in first.iterdir()):
+        assert (first / name).read_bytes() == (second / name).read_bytes()
 
-    async def initialize(index):
-        await upstream.retriever_init(
-            reference,
-            "",
-            {
-                "bm25": {
-                    "lang": language,
-                    "tokenizer": "default",
-                    "save_path": str(index),
-                }
-            },
-            32,
-            str(chunks),
-            backend="bm25",
-        )
-
-    await initialize(old)
-    await upstream.bm25_index(reference, overwrite=False)
-    await initialize(old)
-    backend = direct.DirectRetrieval()
-    await backend.build_bm25(chunks, new, language=language)
-    assert {p.name for p in old.iterdir()} == {p.name for p in new.iterdir()}
-    for name in (p.name for p in old.iterdir()):
-        assert (old / name).read_bytes() == (new / name).read_bytes()
     queries = ["capital", "Arbeit", "café", "absentword", "", "the and", "alpha-beta"]
-    expected = {}
+    baseline = {query: await builder.search_bm25(query, 3) for query in queries}
     for query in queries:
-        expected[query] = (await upstream.bm25_search(reference, [query], top_k=3))[
-            "ret_psg"
-        ][0]
-        assert await backend.search_bm25(query, 3) == expected[query]
-    await initialize(new)  # upstream reads directly produced artifacts
-    await backend.initialize_bm25(chunks, old, language=language)  # and vice versa
+        assert await twin.search_bm25(query, 3) == baseline[query]
+
+    loader = direct.DirectRetrieval()
+    await loader.initialize_bm25(chunks, first, language=language)
     for query in queries:
-        assert (await upstream.bm25_search(reference, [query], top_k=3))["ret_psg"][
-            0
-        ] == expected[query]
-        assert await backend.search_bm25(query, 3) == expected[query]
-    before = {p.name: p.read_bytes() for p in new.iterdir()}
-    await backend.build_bm25(chunks, new, language=language)
-    assert before == {p.name: p.read_bytes() for p in new.iterdir()}
+        assert await loader.search_bm25(query, 3) == baseline[query]
+
+    # Rebuilding over an existing index rewrites nothing.
+    before = {p.name: p.read_bytes() for p in first.iterdir()}
+    await builder.build_bm25(chunks, first, language=language)
+    assert before == {p.name: p.read_bytes() for p in first.iterdir()}
+    await builder.close()
+    await twin.close()
+    await loader.close()
+
+
+@pytest.mark.anyio
+async def test_bm25_cross_load_round_trips_non_ascii_stopwords(tmp_path, dependencies):
+    """A saved non-ASCII stopword list survives the trip to a fresh backend."""
+
+    chunks = tmp_path / "chunks.jsonl"
+    write_rows(
+        chunks,
+        [
+            {
+                "contents": (
+                    "Arbeit und Übergang für größere Wähler während der Übung, "
+                    "über die Warenproduktion"
+                )
+            }
+        ],
+    )
+    index = tmp_path / "index"
+    builder = direct.DirectRetrieval()
+    await builder.build_bm25(chunks, index, language="de")
+    saved = json.loads((index / "stopwords.tokenizer.json").read_text(encoding="utf-8"))
+    non_ascii = [word for word in saved if any(ord(char) > 127 for char in word)]
+    assert {"für", "über", "während", "können"} <= set(non_ascii)
+
+    loader = direct.DirectRetrieval()
+    await loader.initialize_bm25(chunks, index, language="de")
+    assert list(loader._tokenizer.stopwords) == saved
+    assert await loader.search_bm25("Übergang", 1) == await builder.search_bm25(
+        "Übergang", 1
+    )
+    await builder.close()
+    await loader.close()
 
 
 @pytest.mark.anyio

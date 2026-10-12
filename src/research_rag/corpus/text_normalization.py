@@ -6,11 +6,10 @@ package.
 
 Normalization never rewrites source prose. `clean_unclean_passage` is one
 exception: it rewrites only a run of characters that were decoded with the wrong
-single-byte codec, so its repair is exact and invents nothing. `recover_formatting_glyphs`
-is the other: it decodes a glyph a recognised symbol face exposed as private use
-or as a control code, using Adobe's published encoding, and removes the non-prose
-glyphs of a recognised icon or mathematics face. `text_quality` decides whether the
-result is usable, and `extraction` assembles it into PDF and EPUB units.
+single-byte codec, so its repair is exact and invents nothing. `text_quality`
+decides whether the result is usable, and `extraction` assembles it into PDF and
+EPUB units. `is_known_formatting_glyph` recognises a formatting glyph a symbol
+face exposed as private use, so it never withholds a readable passage.
 """
 
 from __future__ import annotations
@@ -256,80 +255,6 @@ def is_known_formatting_glyph(character: str) -> bool:
     if 0xF020 <= code <= 0xF0FF and (code - 0xF000) in _SYMBOL_FORMATTING_CODES:
         return True
     return code in _SYMBOL_EXTENDERS
-
-
-def formatting_font_kind(font: str) -> str:
-    """The glyph-recovery family a font name names, or an empty string.
-
-    A recognised face is a symbol font, a dingbat font, a named icon font, or a
-    TeX mathematics font. The family is taken from the name alone, so a font a
-    producer named arbitrarily is not recognised and keeps every glyph it drew.
-    """
-
-    name = font.casefold()
-    if "symbol" in name:
-        return "symbol"
-    if "dingbat" in name:
-        return "dingbat"
-    if any(
-        marker in name
-        for marker in ("fontawesome", "materialicons", "glyphicons", "icomoon")
-    ):
-        return "icon"
-    if any(marker in name for marker in ("cmex", "cmsy", "cmmi", "msam", "msbm")):
-        return "math"
-    return ""
-
-
-def _is_formatting_control(character: str) -> bool:
-    """Whether a character is a control code a recognised face drew a glyph at.
-
-    A C0 control or DEL carries no text, but a mathematics face exposes its
-    large delimiters as the low codes: CMEX10 shows code 0x00 and 0x01 where it
-    drew an opening and a closing big parenthesis. The layout whitespace controls
-    are left alone so line structure survives.
-    """
-
-    return is_control_character(character) and character not in "\v\f"
-
-
-def recover_formatting_glyphs(value: str, font: str = "") -> str:
-    """Recover the formatting glyphs a symbol face exposed as private use.
-
-    A Symbol face is decoded with Adobe's published encoding, so U+F0B7 becomes
-    the bullet it drew and U+F031 becomes the digit. A recognised dingbat, icon,
-    mathematics, or symbol face also draws a glyph at a control code; such a code
-    is removed rather than left to read as corruption, and a private-use code the
-    encoding does not document is removed the same way. No glyph is guessed at,
-    which keeps the prose around it. Text from any other face, and every other
-    character, is returned unchanged; nothing is invented and no missing glyph is
-    supplied.
-    """
-
-    kind = formatting_font_kind(font)
-    if not kind:
-        return value
-    recovered: list[str] = []
-    for character in value:
-        if _is_formatting_control(character):
-            # A control code from a recognised face is a drawn glyph, not the
-            # corruption a broken character map leaves behind.
-            recovered.append(" ")
-            continue
-        if unicodedata.category(character) != "Co":
-            recovered.append(character)
-            continue
-        code = ord(character)
-        if kind == "symbol" and 0xF020 <= code <= 0xF0FF:
-            mapped = _ADOBE_SYMBOL_ENCODING.get(code - 0xF000)
-            if mapped is not None:
-                recovered.append(mapped)
-                continue
-        # A recognised symbol, dingbat, icon, or mathematics face carries no
-        # prose in this glyph. Drop it instead of guessing a character; a space
-        # keeps the words on either side from joining.
-        recovered.append(" ")
-    return "".join(recovered)
 
 
 def _fold_compatibility_characters(value: str) -> str:

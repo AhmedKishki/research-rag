@@ -17,8 +17,6 @@ import pytest
 
 import research_rag.runtime.health as health_module
 import research_rag.runtime.version as version_module
-from research_rag import gateway as vanilla_package
-from research_rag.gateway import runtime as vanilla_runtime
 from research_rag.project.config import ResearchConfig, resolve_config
 from research_rag.retrieval.embeddings import (
     EMBEDDING_MODELS,
@@ -37,6 +35,7 @@ EXPECTED_CHECKS = (
     "runtime_root",
     "direct_retrieval",
     "chunk_tokenizer",
+    "docling_backend",
     "embedding_model",
     "reranker_model",
     "lock",
@@ -55,15 +54,6 @@ READY_STATUS: dict[str, Any] = {
 }
 
 GIB = 1024**3
-
-
-@pytest.fixture(autouse=True)
-def _clear_the_runtime_cache():
-    """Each test starts with no runtime answer cached from another test."""
-
-    health_module._VANILLA_CACHE.clear()
-    yield
-    health_module._VANILLA_CACHE.clear()
 
 
 def _cache_model(
@@ -92,8 +82,20 @@ def _install_models(config: ResearchConfig) -> None:
     _cache_model(config.model_cache_root, reranker, revision, RERANKER_REQUIRED_FILES)
 
 
-def _fake_runtime(root: Path) -> None:
-    root.mkdir(parents=True, exist_ok=True)
+def _docling_ready(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Report Docling as provisioned, so unrelated checks stay the only finding.
+
+    Docling is the only PDF reader, so a healthy project has its managed
+    environment ready. Tests that exercise its absence override these two calls.
+    """
+
+    env = SimpleNamespace(
+        root=Path("/nonexistent/docling-env"),
+        spec_fingerprint="spec-test",
+        versions={"docling": "2.135.0"},
+    )
+    monkeypatch.setattr(health_module, "resolve_docling_env", lambda _config: env)
+    monkeypatch.setattr(health_module, "docling_cache_has_models", lambda _root: True)
 
 
 def _report(
@@ -103,9 +105,12 @@ def _report(
 
 
 @pytest.fixture
-def config(project: Path, tmp_path: Path) -> ResearchConfig:
+def config(
+    project: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> ResearchConfig:
     """A project whose caches are this test's own, not the machine's."""
 
+    _docling_ready(monkeypatch)
     return _isolated(project, tmp_path)
 
 
@@ -120,17 +125,16 @@ def _isolated(project: Path, tmp_path: Path, **overrides: Any) -> ResearchConfig
 
 @pytest.fixture
 def healthy(config: ResearchConfig, monkeypatch: pytest.MonkeyPatch) -> ResearchConfig:
-    """A project whose dependencies are all in place."""
+    """A project whose direct dependencies are all in place.
+
+    No external runtime is involved: health reports the direct components this
+    app retrieves with.
+    """
 
     _install_models(config)
     import research_rag.retrieval.direct as direct_module
 
     monkeypatch.setattr(direct_module, "tokenizer_cache_status", lambda _root: True)
-    root = config.model_cache_root.parent / "runtime-cache" / "UltraRAG-test"
-    _fake_runtime(root)
-    (root / vanilla_runtime.MARKER_FILENAME).write_text("{}\n", encoding="utf-8")
-    monkeypatch.setattr(vanilla_runtime, "managed_runtime_path", lambda _cache: root)
-    monkeypatch.setattr(vanilla_runtime, "validate_managed_runtime", lambda path: path)
     return config
 
 
@@ -144,14 +148,35 @@ def test_a_healthy_project_reports_nothing_to_act_on(healthy: ResearchConfig) ->
     assert report.has_blocker is False
 
 
-def test_normal_health_never_validates_optional_legacy_runtime(
+def test_the_active_report_needs_no_gateway_or_web_framework(
     healthy: ResearchConfig, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    def refuse(_config: ResearchConfig) -> None:
-        raise AssertionError("normal health reached the optional legacy runtime")
+    """The report reads direct components, never the retired gateway.
 
-    monkeypatch.setattr(health_module, "_vanilla_runtime_check", refuse)
-    assert _report(healthy).named("direct_retrieval").state == "ok"
+    Blocking the import proves the checks neither reach for an external UltraRAG
+    runtime nor pull in a web framework: retrieval is served by the direct
+    libraries installed with this app.
+    """
+
+    import builtins
+
+    real_import = builtins.__import__
+
+    def refuse(name: str, *args: Any, **kwargs: Any) -> Any:
+        if name.startswith(("research_rag.gateway", "starlette", "fastmcp")):
+            raise ImportError(f"health reached the unsupported dependency {name}")
+        return real_import(name, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "__import__", refuse)
+
+    report = _report(healthy)
+
+    assert report.named("direct_retrieval").state == "ok"
+    assert "does not require the optional UltraRAG gateway" not in (
+        report.named("direct_retrieval").reason
+    )
+    assert "direct libraries" in report.named("direct_retrieval").reason
+    assert report.blocked_by == []
 
 
 def test_direct_dependency_pin_mismatch_is_actionable(
@@ -183,120 +208,6 @@ def test_missing_tokenizer_does_not_block_existing_indexes_offline(
     assert "Offline mode forbids fetching" in check.reason
     assert "--prefetch-models" in check.remedy_command
     assert report.blocked_by == []
-
-
-def test_a_mismatched_runtime_is_blocked_and_names_the_file(
-    healthy: ResearchConfig, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """The file is named, not guessed."""
-
-    class ValidationError(vanilla_runtime.RuntimeErrorBase):
-        difference = SimpleNamespace(
-            path="servers/memory/src/__pycache__/memory.cpython-311.pyc",
-            kind="unexpected",
-            mode="-rw-r--r--",
-        )
-
-    def refuse(path: Path) -> Path:
-        raise ValidationError(
-            "Managed runtime content hash mismatch: got dead, expected cafe. "
-            "The tree differs at servers/memory/src/__pycache__/"
-            "memory.cpython-311.pyc: unexpected in the installed tree, mode "
-            "-rw-r--r--. Use a fresh cache location rather than modifying the "
-            "snapshot."
-        )
-
-    monkeypatch.setattr(vanilla_runtime, "validate_managed_runtime", refuse)
-    health_module._VANILLA_CACHE.clear()
-    report = health_module.HealthReport(
-        (health_module._vanilla_runtime_check(healthy),)
-    )
-
-    blocked = report.named("vanilla_runtime")
-    assert blocked.state == "blocked"
-    assert "servers/memory/src/__pycache__/memory.cpython-311.pyc" in blocked.reason
-    assert blocked.remedy_command == (
-        f"research-rag --project-root {healthy.project_root} doctor --repair-runtime"
-    )
-    assert [entry["check"] for entry in report.blocked_by] == ["vanilla_runtime"]
-
-
-def test_an_older_vanilla_still_blocks_and_says_it_cannot_name_the_file(
-    healthy: ResearchConfig, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """A release that cannot name a path is not a pass; it is a named limit."""
-
-    class ValidationError(vanilla_runtime.RuntimeErrorBase):
-        pass
-
-    def refuse(path: Path) -> Path:
-        raise ValidationError(
-            "Managed runtime content hash mismatch: got dead, expected cafe. "
-            "Use a fresh cache location rather than modifying the snapshot."
-        )
-
-    monkeypatch.setattr(vanilla_runtime, "validate_managed_runtime", refuse)
-    health_module._VANILLA_CACHE.clear()
-    report = health_module.HealthReport(
-        (health_module._vanilla_runtime_check(healthy),)
-    )
-
-    blocked = report.named("vanilla_runtime")
-    assert blocked.state == "blocked"
-    assert "does not name the differing file" in blocked.reason
-    assert "research-rag-runtime --offline" in blocked.reason
-    assert report.has_blocker is True
-
-
-@pytest.mark.parametrize("release", ["older", "broken"])
-def test_a_vanilla_release_that_cannot_be_used_is_unknown(
-    config: ResearchConfig,
-    monkeypatch: pytest.MonkeyPatch,
-    release: str,
-) -> None:
-    """Neither an old release nor a broken install may read as healthy."""
-
-    class Broken(SimpleNamespace):
-        def __getattr__(self, name: str) -> Any:
-            raise ImportError("the gateway runtime is not usable")
-
-    monkeypatch.setattr(
-        vanilla_package,
-        "runtime",
-        Broken() if release == "broken" else SimpleNamespace(),
-    )
-    health_module._VANILLA_CACHE.clear()
-
-    report = health_module.HealthReport((health_module._vanilla_runtime_check(config),))
-
-    checked = report.named("vanilla_runtime")
-    assert checked.state == "unknown"
-    assert report.not_checked == ["vanilla_runtime"]
-    # Unchecked is its own state, and never appears among the conditions a caller may
-    # dismiss as fine.
-    disclosed = {entry["check"] for entry in report.blocked_by + report.degraded}
-    assert "vanilla_runtime" not in disclosed
-    assert checked.reason
-
-
-def test_a_missing_runtime_blocks_offline_and_warns_online(
-    config: ResearchConfig, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    absent = config.model_cache_root.parent / "no-such-cache"
-    monkeypatch.setattr(
-        vanilla_runtime, "managed_runtime_path", lambda _cache: absent / "UltraRAG-x"
-    )
-    health_module._VANILLA_CACHE.clear()
-
-    offline = resolve_config(config.project_root, offline=True)
-    online = resolve_config(config.project_root)
-    offline_check = health_module._vanilla_runtime_check(offline)
-    online_check = health_module._vanilla_runtime_check(online)
-
-    assert offline_check.state == "blocked"
-    assert "offline mode forbids downloading it" in offline_check.reason
-    assert online_check.state == "warn"
-    assert "downloads it" in online_check.reason
 
 
 def test_a_missing_embedding_model_blocks_and_a_missing_reranker_degrades(
@@ -448,16 +359,83 @@ def test_a_generation_nobody_ingested_blocks_and_says_what_to_run(
     )
 
 
-def test_a_generation_built_by_an_older_policy_warns(healthy: ResearchConfig) -> None:
-    report = _report(
-        healthy,
-        {**READY_STATUS, "upgrade_reasons": ["retrieval_policy", "embedding_model"]},
-    )
+def test_an_incompatible_embedding_names_the_fix(healthy: ResearchConfig) -> None:
+    """The only upgrade reason left is an embedding-identity mismatch.
+
+    The finding names what is actually wrong — dense scoring against another
+    model's vectors — and the two ways out: restore the recorded model, or ingest.
+    It must not fall back to a generic "older policy" sentence.
+    """
+
+    report = _report(healthy, {**READY_STATUS, "upgrade_reasons": ["embedding_model"]})
 
     check = report.named("generation")
     assert check.state == "warn"
-    assert "retrieval_policy" in check.reason
+    assert "embedding model" in check.reason
+    assert "BM25" in check.reason
+    assert "older policy" not in check.reason
+    assert "extraction" not in check.reason
+    assert check.remedy_command is not None
+    assert check.remedy_command.endswith(" ingest")
     assert [entry["check"] for entry in report.degraded] == ["generation"]
+
+
+def test_a_foreign_generation_blocks_and_names_selection(
+    healthy: ResearchConfig,
+) -> None:
+    """A generation built for another project is blocked, not rebuilt.
+
+    Selecting a matching retained generation is the first remedy. The finding
+    must not answer with an automatic ingest, because a rebuild is only needed
+    when no compatible generation is retained.
+    """
+
+    report = _report(
+        healthy,
+        {**READY_STATUS, "ready": False, "upgrade_reasons": ["project_identity"]},
+    )
+
+    check = report.named("generation")
+    assert check.state == "blocked"
+    assert "different project" in check.reason
+    assert "Select a retained generation" in check.reason
+    assert check.remedy_command is not None
+    assert check.remedy_command.endswith(" generations")
+    assert "ingest" not in check.remedy_command
+    assert [entry["check"] for entry in report.blocked_by] == ["generation"]
+
+
+def test_a_non_breaking_policy_difference_does_not_warn(
+    healthy: ResearchConfig,
+) -> None:
+    """A generation the project can still serve is `ok`, diagnostics or not.
+
+    `generation_diagnostics` records the policy differences a rebuild would apply.
+    They leave the corpus serviceable now, so they are not a health finding and
+    must not surface as `degraded`.
+    """
+
+    diagnostics = {
+        "policy_differences": ["layout_extraction", "retrieval_policy"],
+        "recorded": {
+            "extraction_policy_version": 2,
+            "retrieval_policy_fingerprint": "a",
+        },
+        "current": {
+            "extraction_policy_version": 3,
+            "retrieval_policy_fingerprint": "b",
+        },
+    }
+    report = _report(
+        healthy,
+        {**READY_STATUS, "upgrade_reasons": [], "generation_diagnostics": diagnostics},
+    )
+
+    check = report.named("generation")
+    assert check.state == "ok"
+    assert "layout_extraction" not in check.reason
+    assert report.degraded == []
+    assert report.blocked_by == []
 
 
 def test_a_stale_generation_warns(healthy: ResearchConfig) -> None:
@@ -540,38 +518,6 @@ def test_one_checkout_is_not_reported_as_drift(
     assert report.named("code_currency").state == "ok"
 
 
-def test_the_tree_is_read_once_per_marker(
-    healthy: ResearchConfig,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """The tree hash reads every byte of it, so a repeated status must not repeat it."""
-
-    reads: list[Path] = []
-    root = Path(healthy.model_cache_root).parent / "runtime-cache" / "UltraRAG-test"
-
-    def counted(path: Path) -> Path:
-        reads.append(path)
-        return path
-
-    monkeypatch.setattr(vanilla_runtime, "validate_managed_runtime", counted)
-    health_module._VANILLA_CACHE.clear()
-
-    first = health_module._vanilla_runtime_check(healthy)
-    second = health_module._vanilla_runtime_check(healthy)
-
-    assert reads == [root]
-    assert first is second
-
-    # A reinstalled runtime is written with a new marker, and that re-reads the tree.
-    (root / vanilla_runtime.MARKER_FILENAME).write_text(
-        '{"repaired": true}\n', encoding="utf-8"
-    )
-    third = health_module._vanilla_runtime_check(healthy)
-
-    assert reads == [root, root]
-    assert third is not first
-
-
 def test_every_check_carries_a_reason_and_a_remedy_when_it_blocks(
     healthy: ResearchConfig,
 ) -> None:
@@ -652,6 +598,17 @@ def test_docling_backend_readiness_is_reported(
     assert check is not None and check.state == "ok"
 
 
-def test_custom_backend_adds_no_docling_check(healthy: ResearchConfig) -> None:
-    with pytest.raises(KeyError):
-        _report(healthy).named("docling_backend")
+def test_a_missing_docling_is_a_future_build_warning_never_a_blocker(
+    healthy: ResearchConfig, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Docling is the only PDF reader, so its readiness is always reported. A
+    # missing environment warns about the next PDF ingest and never blocks the
+    # selected generation, which still serves.
+    monkeypatch.setattr(health_module, "resolve_docling_env", lambda _config: None)
+
+    report = _report(healthy)
+
+    check = report.named("docling_backend")
+    assert check.state == "warn"
+    assert "--prefetch-models" in (check.remedy_command or "")
+    assert [entry["check"] for entry in report.blocked_by] == []

@@ -9,13 +9,13 @@ from __future__ import annotations
 import json
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
 
 import research_rag.retrieval.direct as direct_module
 import research_rag.runtime.doctor as doctor_module
-from research_rag.gateway import runtime as vanilla_runtime
 from research_rag.project.config import ResearchConfig, resolve_config
 from research_rag.runtime.doctor import (
     DoctorError,
@@ -76,12 +76,18 @@ def healthy(config: ResearchConfig, monkeypatch: pytest.MonkeyPatch) -> Research
             path = snapshot / filename
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_text("cached", encoding="utf-8")
-    root = Path(config.runtime_cache_root) / "runtime" / "UltraRAG-test"
-    root.mkdir(parents=True, exist_ok=True)
-    (root / vanilla_runtime.MARKER_FILENAME).write_text("{}\n", encoding="utf-8")
     monkeypatch.setattr(direct_module, "tokenizer_cache_status", lambda _root: True)
-    monkeypatch.setattr(vanilla_runtime, "managed_runtime_path", lambda _c: root)
-    monkeypatch.setattr(vanilla_runtime, "validate_managed_runtime", lambda p: p)
+    # Docling is the only PDF extractor, so a healthy installation has its managed
+    # environment ready; the check would otherwise warn.
+    import research_rag.runtime.health as health_module
+
+    env = SimpleNamespace(
+        root=Path("/nonexistent/docling-env"),
+        spec_fingerprint="spec-test",
+        versions={"docling": "2.135.0"},
+    )
+    monkeypatch.setattr(health_module, "resolve_docling_env", lambda _config: env)
+    monkeypatch.setattr(health_module, "docling_cache_has_models", lambda _root: True)
     return config
 
 
@@ -125,7 +131,7 @@ def test_every_check_is_one_line_naming_its_state_and_its_remedy(
     checks = [
         line for line in result.lines if line[:8].strip() in {"ok", "warn", "blocked"}
     ]
-    assert len(checks) == 10
+    assert len(checks) == 11
     for line in checks:
         state, name, _rest = line.split(maxsplit=2)
         assert state in {"ok", "warn", "blocked", "unknown"}
@@ -206,70 +212,66 @@ def test_a_relocated_root_in_use_is_named(
     assert "--runtime-root" in text
 
 
-def test_repair_moves_a_mismatched_tree_aside_and_installs(
-    config: ResearchConfig, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
-    """A tree that failed validation is evidence, so it is kept, never deleted."""
-
-    root = Path(config.runtime_cache_root) / "runtime" / "UltraRAG-deadbeef"
-    (root / "servers").mkdir(parents=True)
-    (root / "servers" / "stray.pyc").write_bytes(b"stale")
-    installed: list[bool] = []
-
-    def install(cache_root: Any) -> Path:
-        installed.append(True)
-        root.mkdir(parents=True, exist_ok=True)
-        (root / "servers").mkdir(parents=True, exist_ok=True)
-        (root / "servers" / "stray.pyc").unlink(missing_ok=True)
-        return root
-
-    monkeypatch.setattr(vanilla_runtime, "managed_runtime_path", lambda _c: root)
-    monkeypatch.setattr(
-        vanilla_runtime,
-        "validate_managed_runtime",
-        lambda path: _raise_unless_fresh(path, root),
-    )
-    monkeypatch.setattr(vanilla_runtime, "install_managed_runtime", install)
-
-    lines = doctor_module.repair_runtime(config)
-
-    assert installed == [True]
-    preserved = next(line for line in lines if "preserved" in line)
-    assert "quarantine" in preserved
-    assert "deadbeef" in preserved
-    # The evidence stays on disk, and the new tree is beside it.
-    assert Path(preserved.split()[-1].rstrip(".")).is_dir()
-    assert (root / "servers" / "stray.pyc").exists() is False
-
-
-def _raise_unless_fresh(path: Path, root: Path) -> Path:
-    if (root / "servers" / "stray.pyc").exists():
-        raise vanilla_runtime.RuntimeValidationError(
-            "Managed runtime content hash mismatch: got 0123456789abcdef, "
-            "expected fedcba9876543210. The tree differs at "
-            "servers/stray.pyc: unexpected in the installed tree, mode -rw-r--r--."
-        )
-    return path
-
-
-def test_repair_leaves_a_valid_tree_alone(
+def test_repair_runtime_is_a_side_effect_free_no_op_online(
     config: ResearchConfig, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    root = Path(config.runtime_cache_root) / "runtime" / "UltraRAG-good"
-    root.mkdir(parents=True)
-    monkeypatch.setattr(vanilla_runtime, "managed_runtime_path", lambda _c: root)
-    monkeypatch.setattr(vanilla_runtime, "validate_managed_runtime", lambda p: p)
+    """The deprecated flag installs, validates, fetches, and renames nothing.
+
+    It reports that the external runtime is retired and that normal retrieval
+    uses the direct libraries, and it changes no byte of the cache or the state
+    root.
+    """
+
+    import builtins
+
+    before_cache = sorted(str(path) for path in config.runtime_cache_root.rglob("*"))
+    before_state = sorted(str(path) for path in config.state_root.rglob("*"))
+    network: list[dict[str, Any]] = []
     monkeypatch.setattr(
-        vanilla_runtime,
-        "install_managed_runtime",
-        lambda _c: pytest.fail("a valid tree must not be reinstalled"),
+        direct_module,
+        "prefetch_gpt2_tokenizer",
+        lambda **kwargs: network.append(kwargs),
     )
+    real_import = builtins.__import__
 
-    lines = doctor_module.repair_runtime(config)
+    def refuse(name: str, *args: Any, **kwargs: Any) -> Any:
+        if name.startswith("research_rag.gateway"):
+            raise AssertionError(f"repair reached the retired gateway: {name}")
+        return real_import(name, *args, **kwargs)
 
-    assert lines == (
-        f"The managed runtime at {root} already matches the pinned snapshot.",
+    monkeypatch.setattr(builtins, "__import__", refuse)
+
+    result = _run(config, repair=True)
+
+    assert network == []
+    assert (
+        sorted(str(path) for path in config.runtime_cache_root.rglob("*"))
+        == before_cache
     )
+    assert sorted(str(path) for path in config.state_root.rglob("*")) == before_state
+    text = result.text()
+    assert "no longer used" in text
+    assert "required direct libraries" in text
+    assert "changes no file" in text
+
+
+def test_repair_runtime_no_op_answers_offline(
+    config: ResearchConfig,
+) -> None:
+    """The no-op works offline, where nothing could be fetched anyway."""
+
+    offline = resolve_config(
+        project_root=config.project_root,
+        model_cache_root=config.model_cache_root,
+        runtime_cache_root=config.runtime_cache_root,
+        offline=True,
+    )
+    before = sorted(str(path) for path in offline.runtime_cache_root.rglob("*"))
+
+    result = _run(offline, repair=True)
+
+    assert "no longer used" in result.text()
+    assert sorted(str(path) for path in offline.runtime_cache_root.rglob("*")) == before
 
 
 def test_prefetch_reports_what_it_cached(
@@ -293,6 +295,15 @@ def test_prefetch_reports_what_it_cached(
         lambda _root, offline, model: loaded.append(model),
     )
 
+    # Docling is the only PDF extractor, so prefetch reaches it; this test is
+    # about the shared model cache and must not build a managed environment.
+    import research_rag.corpus.pdf_backend as pdf_backend_module
+
+    monkeypatch.setattr(
+        pdf_backend_module,
+        "prefetch_docling_models",
+        lambda _cfg, **_k: {"version": "2.135.0"},
+    )
     lines = doctor_module.prefetch_models(config)
 
     assert len(loaded) == 2
@@ -391,6 +402,14 @@ def test_prefetch_clears_the_model_cache_warnings(
     monkeypatch.setattr(runtime, "snapshot_download", download)
     monkeypatch.setattr(runtime, "TextEmbedding", lambda **kwargs: object())
     monkeypatch.setattr(runtime, "TextCrossEncoder", lambda **kwargs: object())
+    # Docling is reached unconditionally now; keep this test off the network.
+    import research_rag.corpus.pdf_backend as pdf_backend_module
+
+    monkeypatch.setattr(
+        pdf_backend_module,
+        "prefetch_docling_models",
+        lambda _cfg, **_k: {"version": "2.135.0"},
+    )
     assert health_report(config, READY_STATUS).named("embedding_model").state == "warn"
     assert health_report(config, READY_STATUS).named("reranker_model").state == "warn"
     doctor_module.prefetch_models(config)

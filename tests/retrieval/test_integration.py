@@ -1,25 +1,23 @@
-"""The app answers in process, so there is no handshake, no tool schema, and no resource
-to read.
+"""The direct backend serves one app process, in process.
 
-What this file proves is that the workspace reaches the same generations, indexes,
-review state, and gateway as the terminal does, and that a gateway which cannot start
-is reported by the operation that needed it.
+The workspace and the terminal reach the same generation, both indexes, review
+state, and direct retrieval backend, so there is no handshake, tool schema, or
+child process to start. Offline mode repeats a hybrid reranked search from the
+caches the build left behind.
 """
 
 from __future__ import annotations
 
 import asyncio
 import json
-import sys
 from pathlib import Path
 from typing import Any
 
 import pytest
 
 from research_rag.core.service import ResearchService
-from research_rag.project.config import GATEWAY_EXECUTABLE, resolve_config
+from research_rag.project.config import resolve_config
 from research_rag.retrieval.direct import DirectRetrieval
-from research_rag.retrieval.ultrarag import LazyGateway, VanillaUltraRAG
 from tests.conftest import write_pdf
 
 # Answer-level keys the workspace always carries, because it always returns the
@@ -56,33 +54,22 @@ FULL_HIT_KEYS = (
 
 
 class Research:
-    """The gateway opens on the first call that needs it, so a test can prove a project reads
-    fine against a gateway that could never start.
-    """
+    """One direct backend and the service that speaks through it, closed together."""
 
-    def __init__(self, config: Any, *, legacy: bool = False) -> None:
+    def __init__(self, config: Any) -> None:
         self.config = config
-        self.legacy = legacy
-        self.gateway = LazyGateway(config) if legacy else DirectRetrieval(config)
+        self.backend = DirectRetrieval(config)
         self.service: ResearchService | None = None
 
     async def __aenter__(self) -> ResearchService:
-        self.service = ResearchService(
-            self.config,
-            VanillaUltraRAG(self.gateway, self.config) if self.legacy else self.gateway,
-        )
+        self.service = ResearchService(self.config, self.backend)
         return self.service
 
     async def __aexit__(self, *_: object) -> None:
-        await self.gateway.aclose()
-
-
-# The gateway is a second process this app installs and spawns.
-VANILLA_EXECUTABLE = Path(sys.executable).parent / GATEWAY_EXECUTABLE
+        await self.backend.aclose()
 
 
 def _config(project: Path, **options: Any) -> Any:
-    options.setdefault("vanilla_executable", VANILLA_EXECUTABLE)
     return resolve_config(project, **options)
 
 
@@ -93,18 +80,8 @@ async def _ingest_until_complete(service: ResearchService) -> dict[str, Any]:
             return ingestion
 
 
-def _search(
-    service: ResearchService, query: str, top_k: int = 1, **filters: Any
-) -> dict[str, Any]:
-    return asyncio.run(
-        service.search(
-            query, top_k=top_k, retrieval_method="hybrid", rerank=True, **filters
-        )
-    )
-
-
 @pytest.mark.integration
-def test_the_real_vanilla_research_flow(project: Path) -> None:
+def test_the_real_direct_research_flow(project: Path) -> None:
     write_pdf(
         project / "sources" / "evidence.pdf",
         [
@@ -170,13 +147,16 @@ def test_the_real_vanilla_research_flow(project: Path) -> None:
             manifest = json.loads(
                 (generation_root / "manifest.json").read_text(encoding="utf-8")
             )
+            # Both indexes exist and are recorded: the lexical BM25 index and the
+            # portable dense vectors.
+            assert (generation_root / manifest["files"]["bm25_index"]).is_dir()
+            assert (generation_root / "indexes" / "vectors" / "index.json").is_file()
             assert manifest["retrieval"]["dense"]["point_count"] == 1
             assert (
                 manifest["retrieval"]["dense"]["dense_backend"]
                 == "portable-exact-vectors"
             )
             assert manifest["files"]["dense_index"] == "indexes/vectors"
-            assert (generation_root / "indexes" / "vectors" / "index.json").is_file()
 
             ready = await service.status()
             assert ready["ready"] is True
@@ -222,6 +202,16 @@ def test_the_real_vanilla_research_flow(project: Path) -> None:
                 assert key in initial_hit, key
             assert initial_hit["rerank_score"] is not None
             assert result["retrieval_method"] == "hybrid"
+
+            # The dense half alone answers the same known passage.
+            dense = await service.search(
+                "cobalt heron amber marsh",
+                top_k=1,
+                retrieval_method="dense",
+                rerank=True,
+            )
+            assert dense["retrieval_method"] == "dense"
+            assert dense["hits"][0]["chunk_id"] == initial_hit["chunk_id"]
 
             from research_rag.surfaces.ui import ResearchUIAdapter
 
@@ -372,34 +362,63 @@ def test_the_real_vanilla_research_flow(project: Path) -> None:
 
 
 @pytest.mark.integration
-def test_a_gateway_that_cannot_start_is_reported_by_the_operation_that_needed_it(
-    project: Path,
-) -> None:
-    """Nothing here opens a gateway until an operation needs one, so a status read succeeds
-    against a gateway that cannot start.
+def test_a_neighbour_exclusion_is_held_by_the_real_backend(project: Path) -> None:
+    """A passage decision applies to the corpus that has neighbours to withhold from.
+
+    Neither retrieval half may answer with the excluded passage, and a reader that
+    opens the passage beside it still sees the decision on that neighbour.
     """
 
-    write_pdf(project / "sources" / "evidence.pdf", ["The cobalt heron is evidence."])
-    broken = project / "broken-vanilla-gateway"
-    broken.write_text(
-        "#!/bin/sh\necho 'no runtime at /nowhere' >&2\nexit 3\n", encoding="utf-8"
+    write_pdf(
+        project / "sources" / "wide.pdf",
+        [
+            "Cobalt labour evidence of the northern mine. "
+            + "detail " * 40
+            + "end one.",
+            "Cobalt labour evidence of the southern mine. "
+            + "detail " * 40
+            + "end two.",
+        ],
     )
-    broken.chmod(0o755)
-    config = _config(project, vanilla_executable=str(broken))
 
     async def scenario() -> None:
-        async with Research(config, legacy=True) as service:
-            assert (await service.status())["ready"] is False
-            # A search refuses a project with no generation before it reaches for
-            # anything, so the build is the first operation that needs the gateway.
-            with pytest.raises(Exception) as failure:
-                await service.ingest()
+        async with Research(_config(project)) as service:
+            await _ingest_until_complete(service)
+            hits = (
+                await service.search("cobalt labour evidence", top_k=10, rerank=False)
+            )["hits"]
+            assert len(hits) >= 2
+            target = hits[0]["chunk_id"]
+            context = await service.get_passage(target, context_chunks=1)
+            neighbours = [
+                passage["chunk_id"]
+                for passage in context["context"]
+                if passage["chunk_id"] != target
+            ]
+            assert neighbours
+            neighbour = neighbours[0]
 
-        message = str(failure.value)
-        assert "The UltraRAG gateway could not start" in message
-        assert "no runtime at /nowhere" in message
-        runtime_root = project / ".research-rag" / "runtime"
-        assert str(runtime_root / "logs" / "vanilla-gateway-stderr.log") in message
-        assert str(runtime_root / "ultrarag-runtime" / "logs") in message
+            decision = await service.set_chunk_inclusion(
+                neighbour, included=False, reason="Reviewed fragment."
+            )
+            assert decision["in_current_generation"] is True
+            assert decision["effective_immediately"] is True
+
+            for method in ("bm25", "dense", "hybrid"):
+                answer = await service.search(
+                    "cobalt labour evidence",
+                    top_k=10,
+                    rerank=False,
+                    retrieval_method=method,
+                )
+                assert neighbour not in [hit["chunk_id"] for hit in answer["hits"]], (
+                    method
+                )
+
+            beside = await service.get_passage(target, context_chunks=1)
+            marked = {passage["chunk_id"]: passage for passage in beside["context"]}
+            assert neighbour in marked
+            assert marked[neighbour]["excluded_from_search"] is True
+            assert "excluded_from_search" not in marked[target]
 
     asyncio.run(scenario())

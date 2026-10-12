@@ -176,17 +176,52 @@ def test_docling_units_pass_the_shared_gate_with_the_configured_budget(
     assert captured == [2.0]
 
 
-def test_custom_keeps_the_configured_budget(
+def test_structural_labels_travel_with_a_unit_and_absent_labels_add_no_key(
     project: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    write_pdf(project / "sources" / "labels.pdf", ["one"], title="T")
+    config = resolve_config(project, vanilla_executable=sys.executable)
+    source = scan_sources(config).selected[0]
+    digest = sha256_file(source.path)
+
+    result = _canned_result({1: "Labelled evidence."}, 1, 1)
+    labelled = result["pages"]["1"][0]
+    labelled["docling_label"] = "section_header"
+    labelled["docling_content_layer"] = "body"
+    labelled["docling_ref"] = "#/texts/0"
+    result["pages"]["1"].append(
+        {"contents": "Plain evidence.", "content_kind": "prose", "provenance": []}
+    )
+    monkeypatch.setattr(extraction_module, "run_docling_batch", lambda **_k: result)
+
+    pages, _document, _empty, _removals, _diagnostics = docling_pdf_batch(
+        source,
+        None,
+        0,
+        1,
+        digest=digest,
+        offline=True,
+        model_cache_root=None,
+        docling_env=_FAKE_ENV,
+        total_pages=1,
+    )
+
+    labelled_unit, plain_unit = pages[0]
+    assert labelled_unit["docling_label"] == "section_header"
+    assert labelled_unit["docling_content_layer"] == "body"
+    assert labelled_unit["docling_ref"] == "#/texts/0"
+    # A raw unit without a label carries no key for one.
+    assert "docling_label" not in plain_unit
+    assert "docling_content_layer" not in plain_unit
+    assert "docling_ref" not in plain_unit
+
+
+def test_retired_custom_alias_routes_to_docling_with_the_configured_budget(
+    project: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _install_fake_worker(monkeypatch)
     _config, source = _source(project)
     captured: list[float | None] = []
-
-    monkeypatch.setattr(
-        extraction_module,
-        "_extract_pdf",
-        lambda source, digest=None: ({"document_id": "doc"}, []),
-    )
 
     def spy(
         screen_source, document, units, *, removals=None, maximum_unclean_percent=None
@@ -196,10 +231,13 @@ def test_custom_keeps_the_configured_budget(
 
     monkeypatch.setattr(extraction_module, "screen_source_units", spy)
 
+    # "custom" is a retired read alias: settings/backend normalize it to the
+    # operational Docling backend, and the configured budget is preserved.
     extract_sources(
         [source],
         maximum_unclean_percent=2.0,
         pdf_backend="custom",
+        docling_env=_FAKE_ENV,
     )
 
     assert captured == [2.0]

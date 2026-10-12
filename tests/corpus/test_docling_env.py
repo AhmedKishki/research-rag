@@ -311,12 +311,17 @@ def test_install_lock_does_not_deadlock_the_run_lock(
     assert result == b""
 
 
-def test_custom_never_builds_the_environment(project: Path) -> None:
+def test_the_legacy_custom_read_never_builds_the_environment(project: Path) -> None:
     from research_rag.corpus import pdf_backend
 
     config = _config(project)
 
-    assert pdf_backend.pdf_backend_available("custom", config) is True
+    # Reading the retired token resolves to the operational reader and touches
+    # nothing: availability only reports the managed environment's readiness.
+    assert pdf_backend.normalize_pdf_backend("custom") == "docling"
+    assert pdf_backend.pdf_backend_available("custom", config) == (
+        pdf_backend.pdf_backend_available("docling", config)
+    )
     assert pdf_backend.pdf_backend_fingerprint("custom", config)
     assert not backend_root(config).exists()
 

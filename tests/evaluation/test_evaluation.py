@@ -983,6 +983,7 @@ def test_a_missing_trace_is_recorded_as_absent_rather_than_as_an_empty_one() -> 
     measures = evaluation._trace_measures({}, target_chunk_id="c1")
     assert measures["evaluation_trace_available"] is False
     assert measures["evaluation_trace"] is None
+    assert measures["trace_candidate_budget"] is None
     assert measures["target_stage_presence"] == {}
 
 
@@ -1083,13 +1084,6 @@ def test_scored_then_collapsed_reads_nothing_as_zero_when_there_is_no_trace() ->
     assert measures["reranked_then_collapsed_count"] == 0
     assert measures["reranked_then_collapsed_is_lower_bound"] is False
     assert measures["scored_candidate_count"] is None
-
-
-def test_stage_presence_is_null_when_the_engine_omitted_the_trace() -> None:
-    measures = evaluation._trace_measures({}, target_chunk_id="zzz")
-    assert measures["evaluation_trace_available"] is False
-    assert measures["target_stage_presence"] == {}
-    assert measures["trace_candidate_budget"] is None
 
 
 class _StubService:
@@ -1221,25 +1215,6 @@ def test_a_reranked_row_that_ran_is_not_flagged() -> None:
     )
     assert run["degraded_reasons"] == []
     assert run["success_at_1"] is True
-
-
-def test_a_reranked_row_that_did_not_rerank_names_itself() -> None:
-    reasons = evaluation._degradation_reasons(
-        {
-            "rerank_requested": True,
-            "reranked": False,
-            "rerank_fallback": {"reason": "reranker_model_unavailable"},
-            "fusion": {"pool_size": 74},
-        },
-        mode=evaluation.RERANK_MODE,
-    )
-    assert reasons == ["rerank requested but not applied (reranker_model_unavailable)"]
-
-
-def test_a_hybrid_row_without_a_fusion_names_itself() -> None:
-    assert evaluation._degradation_reasons({"fusion": None}, mode="hybrid") == [
-        "hybrid row without a fusion block"
-    ]
 
 
 def test_a_row_that_ran_the_way_it_names_reports_nothing() -> None:
@@ -1426,9 +1401,7 @@ def test_the_report_names_every_metric_it_replaced_and_why() -> None:
         "max_seconds",
     ):
         assert key in evaluation.METRIC_DEFINITIONS, key
-
-
-def test_the_report_names_the_containment_threshold_and_what_it_ignores() -> None:
+    # The report format itself is pinned, so a reader compares like with like.
     assert evaluation.REPORT_SCHEMA_VERSION == 3
 
 

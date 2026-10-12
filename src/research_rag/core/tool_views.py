@@ -195,9 +195,17 @@ SURFACE_CONDITIONS = frozenset({"project.initialised", "app.serving"})
 
 
 def _required_actions(payload: Mapping[str, Any]) -> list[str]:
-    """Name required generation work or an operator restart.
+    """Name a generation that must be built, continued, or an operator restart.
 
-    Uninitialized or stopped projects instead carry terminal remedies in blocked_by.
+    Only work that changes what the project can serve is required. A generation
+    that serves only BM25, records policy differences, is stale against changed
+    sources, awaits a reviewed-metadata source, or has source exclusions already
+    enforced is usable now: its snapshot can be refreshed with an opt-in ingest,
+    but that is not a call the verdict prescribes. A generation built for another
+    project is not served here, yet the first remedy is to select a matching
+    retained generation, which the blocked_by entry names, so no rebuild is
+    prescribed either. Uninitialized or stopped projects instead carry terminal
+    remedies in blocked_by.
     """
 
     if payload.get("project_initialised") is False:
@@ -208,16 +216,12 @@ def _required_actions(payload: Mapping[str, Any]) -> list[str]:
         if isinstance(entry, Mapping)
     ):
         return []
-    changes = payload.get("changes") or {}
+    foreign_generation = "project_identity" in (payload.get("upgrade_reasons") or [])
     actions: list[str] = []
-    if (
+    if not foreign_generation and (
         payload.get("ready") is not True
-        or payload.get("stale")
         or payload.get("generation_upgrade_required")
-        or payload.get("hybrid_ready") is False
         or payload.get("ingestion_progress")
-        or payload.get("metadata_pending_source_paths")
-        or changes.get("source_exclusions_changed")
     ):
         actions.append(INGEST)
     if (payload.get("version") or {}).get("restart_required"):
@@ -229,16 +233,23 @@ def lean_status(payload: Mapping[str, Any]) -> dict[str, Any]:
     """Return whether this project can be searched, and what must happen first.
 
     `ready` and `stale` are booleans rather than an absence, `requires` names the
-    calls that make this generation serve what the project holds, and `message`
-    says why in one sentence while there is a why. `changes`,
-    `ingestion_progress`, `blocked_by`, and `degraded` appear only while they
-    hold. `project_initialised` appears only when it is false, which is the one
-    answer with no project behind it. A ready, current project with nothing
-    required gets the two booleans and its generation, because its own message
-    then restates them.
+    calls that make this project serve what it cannot yet — a first build, a
+    dense index that cannot be scored with the current model, a continuation, or
+    a restart — and `message` says why in one sentence while there is a why. A
+    stale snapshot, a source exclusion already enforced, and a reviewed-metadata
+    source waiting to be indexed are disclosed through `stale`, `changes`, and the
+    message rather than prescribed as a build. `changes`, `ingestion_progress`,
+    `blocked_by`, and `degraded` appear only while they hold.
+    `project_initialised` appears only when it is false, which is the one answer
+    with no project behind it. A ready, current project with nothing required
+    gets the two booleans and its generation, because its own message then
+    restates them.
 
-    The corpus counts, the retained generations, the retrieval policy, and the
-    per-check detail are the command line's and the workspace's answer. The
+    The corpus counts, the retained generations, the retrieval policy, the
+    generation diagnostics, and the per-check detail are the command line's and
+    the workspace's answer. Diagnostics name the policy differences a rebuild
+    would apply and stay in the full payload, because a compatible generation is
+    usable now and an agent reading this verdict has no build to plan. The
     reviewed-metadata overlay is not news: it is applied at read time, and the
     message says so when reviewed sources are still waiting to be indexed.
     """
@@ -289,6 +300,11 @@ def lean_status(payload: Mapping[str, Any]) -> dict[str, Any]:
             or bool(required)
             or bool(payload.get("blocked_by"))
             or bool(payload.get("degraded"))
+            # A snapshot that could be refreshed, and a reviewed source waiting
+            # to be indexed, are optional work the message explains; the verdict
+            # does not prescribe the build.
+            or bool(payload.get("metadata_pending_source_paths"))
+            or bool((payload.get("changes") or {}).get("source_exclusions_changed"))
         ),
     )
     return result

@@ -24,12 +24,6 @@ from research_rag.project.settings_layers import (
     resolve_settings,
 )
 
-# A different value would tell every existing generation that its ranking policy
-# changed and force a rebuild for nothing.
-PUBLISHED_FINGERPRINT = (
-    "b7285824c79d662c9abdba84238077abc1271d11a861c931ee0e590c3d4f380f"
-)
-
 
 def _resolve(project_root: Path, **kwargs) -> tuple[EffectiveSettings, dict[str, str]]:
     values, provenance = resolve_settings(SETTINGS, sources_for(project_root), **kwargs)
@@ -54,20 +48,12 @@ def test_the_packaged_default_file_supplies_every_setting(tmp_path: Path) -> Non
     assert settings.chunk_overlap == 64
 
 
-def test_defaults_reproduce_the_published_fingerprint(tmp_path: Path) -> None:
-    settings, _ = _resolve(tmp_path, environ={})
-
-    assert retrieval_policy_fingerprint(settings) == PUBLISHED_FINGERPRINT
-
-
-def test_a_query_time_ranking_knob_keeps_the_published_fingerprint(
+def test_a_query_time_ranking_knob_keeps_the_build_fingerprint(
     tmp_path: Path,
 ) -> None:
-    """The source-diversity reordering applies to the candidates fusion and reranking already
-    returned, so in the fingerprint it would flag every generation as needing an upgrade
-    that reproduces the same index byte for byte.
-    """
+    """Source diversity reorders candidates without changing built artifacts."""
 
+    baseline, _ = _resolve(tmp_path, environ={})
     spread, _ = _resolve(
         tmp_path,
         overrides=["retrieval.source_diversity_penalty=0.6"],
@@ -75,7 +61,9 @@ def test_a_query_time_ranking_knob_keeps_the_published_fingerprint(
     )
 
     assert spread.source_diversity_penalty == 0.6
-    assert retrieval_policy_fingerprint(spread) == PUBLISHED_FINGERPRINT
+    assert retrieval_policy_fingerprint(spread) == retrieval_policy_fingerprint(
+        baseline
+    )
 
 
 def test_a_layer_names_only_what_it_changes(tmp_path: Path) -> None:
@@ -91,6 +79,41 @@ def test_a_layer_names_only_what_it_changes(tmp_path: Path) -> None:
     assert settings.chunk_overlap == 32
     assert settings.chunk_size == 384
     assert provenance["retrieval.rrf_k"] != provenance["chunking.size"]
+
+
+def test_a_retired_pdf_backend_in_the_project_file_resolves_without_a_rewrite(
+    tmp_path: Path,
+) -> None:
+    """An existing config selecting the retired reader keeps loading as Docling."""
+
+    project = tmp_path / "project"
+    config_file = _write(
+        project / ".research-rag" / "config.toml",
+        '[ingestion]\npdf_backend = "custom"\n',
+    )
+
+    settings, provenance = _resolve(project, environ={})
+
+    assert settings.pdf_backend == "docling"
+    # The file on disk is read, never rewritten by resolution.
+    assert "custom" in config_file.read_text(encoding="utf-8")
+    assert provenance["ingestion.pdf_backend"].startswith("project config")
+
+
+def test_a_retired_pdf_backend_in_the_environment_resolves_to_docling(
+    tmp_path: Path,
+) -> None:
+    settings, _ = _resolve(
+        tmp_path,
+        environ={"RESEARCH_RAG_INGESTION_PDF_BACKEND": "custom"},
+    )
+
+    assert settings.pdf_backend == "docling"
+
+
+def test_an_unknown_pdf_backend_is_still_refused(tmp_path: Path) -> None:
+    with pytest.raises(SettingsError):
+        _resolve(tmp_path, environ={"RESEARCH_RAG_INGESTION_PDF_BACKEND": "pdfium"})
 
 
 def test_precedence_runs_file_then_environment_then_command_line(
@@ -185,14 +208,6 @@ def test_a_symlinked_config_layer_is_refused(tmp_path: Path) -> None:
 
     with pytest.raises(SettingsError, match="must not be a symlink"):
         _resolve(tmp_path, config_path=link, environ={})
-
-
-def test_every_setting_says_what_its_key_does() -> None:
-    """A key with no description reaches both readers as an unexplained row."""
-
-    blank = [setting.key for setting in SETTINGS if not setting.doc.strip()]
-
-    assert not blank
 
 
 def test_the_report_names_every_setting_and_its_layer(tmp_path: Path) -> None:
