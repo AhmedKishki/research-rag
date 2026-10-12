@@ -4,7 +4,7 @@
 
 - Project-scoped PDF/EPUB/MOBI evidence retrieval, not answer generation.
 - One process and port per project, shared by the workspace, MCP, and CLI. Loopback is the default; explicit home-LAN mode exposes only the workspace.
-- Ship the gateway, workspace, and settings layer here. Do not depend on a sibling project.
+- Ship the project MCP surfaces, workspace, and settings layer here. Do not depend on a sibling project.
 
 ## Documentation
 
@@ -56,10 +56,10 @@
 - `LICENSE` grants Apache-2.0 for this code. `NOTICE` owns separate dependency terms, including AGPL-3.0 extraction.
 - Preserve `USER_CONFIG_DIRECTORY = research-rag`, `SETTINGS_ENVIRONMENT_PREFIX = RESEARCH_RAG_`, and the `research-rag` model cache.
   - Do not use these names for another product. `tests/project/test_data_roots.py` covers them.
-- Pins live in `pyproject.toml` and `gateway/manifest.py`.
+- Dependency pins live in `pyproject.toml`. Embedding and reranker registries own model revisions.
   - `corpus/docling_env.py` owns the separately installed Docling runtime pins.
   - Keep the `bm25s` non-ASCII stopword fork until upstream fixes round-tripping. Reject invalid lists promptly.
-  - `_pdf_locator` falls back to the physical page on `Page.get_label()`'s `IndexError`. Narrow the guard when upstream issue 5140 closes.
+  - The Docling worker's page-label probe falls back to the physical page on `Page.get_label()`'s `IndexError`. Narrow the guard when upstream issue 5140 closes.
 
 ## Rules
 
@@ -73,6 +73,8 @@
 - An agent gets eight tools and one resource with bounded answers, never a corpus inventory.
   - The workspace and CLI `sources` own inventory access.
 - A generation the app cannot serve is stated as `hybrid_ready: false` beside `generation_upgrade_required`. The old generation stays searchable with a warning.
+  - Report an upgrade requirement only for a serving incompatibility, not a newer extraction, cleaning, or ranking policy. Preserve compatible generations; expose policy differences through verbose diagnostics and DEBUG logs.
+  - A source snapshot change or read-time exclusion does not require discarding the selected generation. Distinguish optional ingestion from required recovery.
 - Expose only caller decisions, not engine tuning.
   - Agents get no retrieval mode, output view, or chunk tuning.
   - CLI `search --method` and `--no-rerank` are diagnostic exceptions.
@@ -125,6 +127,9 @@
   - Checkpoint bounded batches, not whole phases.
 - Allow one ingestion build per project. Reject contention promptly and name the resident phase instead of queuing.
 - Reuse extraction only when bytes, storage policy, and processing fingerprints match.
+  - Ordinary ingestion may carry an unchanged PDF's complete existing artifacts forward with their recorded processing provenance. This preserves evidence; it does not reuse custom extraction under a Docling fingerprint. `force_recompute` disables this passthrough.
+  - Record each PDF's actual extractor when a build mixes retained legacy artifacts with new Docling output. Never relabel a selected generation or claim its target backend produced every retained document.
+  - Decide extraction/chunk reuse and vector reuse independently. A processing change must not discard a valid exact-input vector, and a model change must not discard compatible extracted text.
   - Vector reuse also requires exact canonical text, model revision, and dimension.
   - `force_recompute=True` disables all reuse.
 - Dispatch dense backends from the manifest. Never substitute one during reuse.
@@ -141,7 +146,8 @@
   - Explicit home-LAN mode accepts private IPv4 peers and detected local-interface hosts. Remote browser writes require an exact validated HTTP origin; cross-site writes are refused.
   - Home-LAN HTTP has no authentication or encryption. Other remote exposure requires an explicit security design.
 - Ingest only regular PDF/EPUB/MOBI files beneath the configured source root. Reject symlinks and traversal.
-- Do not patch UltraRAG, expose vanilla operations, or move dense backends into the gateway.
+- Do not import or install UltraRAG, acquire its source runtime, or expose upstream stage operations. Preserve its attribution and historical artifact identifiers without a runtime dependency.
+  - Retired gateway/runtime console names provide side-effect-free migration guidance. They never start a server, download, validate, delete, or quarantine an upstream cache.
 - Preserve CLI access to every workspace capability.
   - Settings writes belong to the workspace, not agents. `research-rag config` is read-only.
   - Open a browser only with `--start-ui`.
@@ -165,9 +171,9 @@
   - Start no process, network request, or write while building health reports.
   - Omit empty `blocked_by` and `degraded`.
 - Default `doctor` reads the same report without writing.
-  - Only explicit `--prefetch-models` and `--repair-runtime` may fetch or write. Quarantine discarded evidence.
-- Diagnose gateway failures through the requesting operation and component logs, not process-tree inspection.
-- Resolve settings and serve before loading retrieval dependencies. Local reads must work without a managed legacy runtime.
+  - Only explicit `--prefetch-models` may provision models or the Docling environment. `--repair-runtime` remains an informational no-op, including offline.
+- Diagnose component failures through the requesting operation and its logs, not process-tree inspection.
+- Resolve settings and serve before loading retrieval dependencies. Local reads must work without a gateway executable.
   - Lightweight commands must not require the retrieval stack.
 - Move blocking extraction and filesystem scans off the event loop.
 - Serialize project writes with both the in-process lock and the cross-process `project.lock`. Bound both waits and refuse after them.
@@ -176,13 +182,16 @@
 - Search counts store ranks, ids, times, result counts, and who asked. They store the question and its filters only while `runtime.search_history` is on, and `history --clear` removes them and leaves the counts. A measurement does not count.
 - Extraction reads existing PDF, EPUB, or MOBI text only. Scanned PDFs need OCR performed outside this app; no OCR command, agent tool, control route, or workspace action exists.
 - MOBI parsing runs offline in a resource-bounded child without conversion or resource output. Reject DRM and unsupported or corrupt containers; retain logical-part locators rather than inventing printed pages. `FEATURES.md` owns supported variants and safety limits.
-- PDF cleaning runs locally. Unhealthy PDF blocks trigger the bundled native text extractor automatically; irrecoverable lexical tokens are omitted with visible gaps and loss diagnostics.
+- Docling is the only PDF extractor. PDF structural cleanup uses its labels, content layers, and reading order before chunking; the custom reader and native fallback are retired.
+  - Existing generations remain readable. The retirement alone never starts ingestion or reprocesses unchanged PDFs. New or changed PDFs use Docling; full reprocessing requires `force_recompute`.
+  - Preserve declared captions, formulas, tables, code, explanatory footnotes, and unknown content. A reference label still needs bibliographic structure before removal, and only a declared heading opens an apparatus section.
+  - Local normalization and corruption/loss checks consume Docling text. Irrecoverable lexical tokens leave visible gaps and loss diagnostics; no alternate PDF extractor repairs them.
   - Recognised formatting and math glyphs are not corruption. Harmless symbol-only fragments may be omitted as non-evidence and must be counted separately.
   - `ingestion.maximum_unclean_percent` caps cumulative substantive-character loss per PDF document after confirmed furniture and non-evidence are removed.
   - Over-budget or completely unreadable PDFs are omitted through the source-local partial-generation path. They never alter the selected generation automatically.
   - Preserve EPUB's existing unit and source quality rules.
   - Keep physical PDF page locators. Do not infer printed numbers from recovered text.
-  - `ingestion.pdf_backend=docling` is opt-in and runs Docling in a resource-bounded child with OCR, VLM, and every enrichment off. Docling is never installed into this app's environment: an online first use builds a pinned, versioned managed environment under the user cache, in isolation, and fetches models lazily on that same first call; an offline run never fetches and needs a ready environment or fails closed. `doctor --prefetch-models` provisions environment and models ahead of an offline run, and a ready environment or cached model is reused without a fetch.
+  - Docling runs in a resource-bounded child with OCR, VLM, and every enrichment off. It is never installed into this app's environment: an online first PDF conversion builds a pinned, versioned managed environment under the user cache, in isolation, and fetches models lazily; an offline conversion never fetches and needs a ready environment or fails closed. `doctor --prefetch-models` provisions environment and models ahead of an offline run, and a ready environment or cached model is reused without a fetch. Serving or carrying forward existing evidence never provisions Docling.
 - Opening a source asks the desktop's own viewer through an authorised path, and falls back to the browser only where there is no desktop.
 
 ## Architecture
@@ -223,6 +232,10 @@ Terminal ── control ───┘      ├── the workspace and its adapte
 
 ## Validation
 
+- Keep one primary test for each supported behavior or failure mechanism.
+  - Extend an existing behavioral test when it already exercises the same input and assertion.
+  - Add parameter cases for distinct boundaries, not equivalent spellings or arbitrary sample values.
+  - Do not freeze cosmetic wording, obsolete filenames, or private implementation spellings when they do not express a supported contract.
 - During ordinary edits, run `uv run pytest -q -m "not integration"`.
 - `integration` covers external runtimes, process contention, live transport waits, and shipped scripts.
   - Cheap interpreter checks and shortened in-process waits stay in the fast subset.

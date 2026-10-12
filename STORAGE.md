@@ -24,7 +24,7 @@ my-research-project/
         ├── logs/
         ├── failures/                     small failed-build records
         ├── staging/<build-id>/           resumable incomplete build plus checkpoint
-        ├── ultrarag-runtime/              retained optional legacy gateway state
+        ├── ultrarag-runtime/              retained inert compatibility path
         └── generations/<generation-id>/
             ├── manifest.json
             ├── corpus/extracted-units.jsonl
@@ -43,9 +43,10 @@ my-research-project/
 - `~/.config/research-rag/projects.json` is the account's project register.
 - `projects.lock` beside the register serializes read-modify-write operations across processes. Readers use atomic snapshots without the lock.
 - `~/.cache/research-rag/models/` holds the embedding and reranker binaries, about 150 MB in total. It is the only cross-project shared state, because the binaries are immutable once downloaded.
-- `~/.cache/research-rag/backend-envs/<spec>/` is the optional Docling backend's own virtual environment, named by a spec fingerprint of its pinned packages and the interpreter ABI. It is built on the first real `ingestion.pdf_backend=docling` conversion, or by `doctor --prefetch-models`, under a bounded installer, and published only after its pinned versions are read back. An incomplete install leaves no `ready.json` and is never used; an environment that was already ready is never touched. The app's own environment never carries Docling.
+- `~/.cache/research-rag/backend-envs/<spec>/` is Docling's own virtual environment, named by a spec fingerprint of its pinned packages and the interpreter ABI. It is built on the first PDF conversion, or by `doctor --prefetch-models`, under a bounded installer, and published only after its pinned versions are read back. An incomplete install leaves no `ready.json` and is never used; an environment that was already ready is never touched. The app's own environment never carries Docling.
 - Model snapshots use `models--<repository>/snapshots/<commit>`, with `/` in the repository replaced by `--`. Health checks require the pinned repository, commit, ONNX files, and tokenizer files. They do not hash the cached binaries.
 - `tests/project/test_data_roots.py` asserts both roots and why each is named for this app.
+- The `ultrarag-runtime` path and legacy `vanilla_executable` configuration argument remain passive compatibility names. Neither requires a gateway binary or an external runtime. Historical source-snapshot caches are not read, migrated, or deleted by the retirement shims.
 
 ## Portable state
 
@@ -88,6 +89,7 @@ my-research-project/
   - It drops comments.
 - A key supplied by the environment, the command line, or `--config` cannot be written here, because those layers outrank this file.
 - `research-rag config` prints every value with its layer and change cost.
+- A legacy `ingestion.pdf_backend="custom"` value resolves to Docling without rewriting the settings file. It never enables a custom extractor.
 
 ## Derived state
 
@@ -135,8 +137,11 @@ generations/<generation-id>/
 - Correcting a mirror's revision requires re-embedding. Existing generations remain unchanged and searchable through BM25 until ingestion builds a compatible generation.
 - `retrieval.bm25.language` records the stopword list the BM25 index was built with. It is `language.bm25_stopwords` and can differ from `language.corpus`.
 - `passage_cleaning.maximum_unclean_percent` records the per-document substantive-loss cap. The name is preserved; its meaning is the share of a PDF's substantive text it may lose to unrecoverable corruption. Extraction reuse requires the same threshold.
-- Two generations are interchangeable only when their manifests agree, which makes reuse safe.
-- A generation whose policy fingerprint does not match current settings requires a new ingestion.
+- Recorded policies describe the generation's build; a different current policy does not rewrite its manifest.
+- Historical UltraRAG-compatible backend labels remain readable identifiers. Dependency retirement changes no chunk boundaries, index layout, source/chunk IDs, or policy fingerprints and does not trigger ingestion.
+- A PDF document's `extraction_backend` identifies the extractor that produced its retained text. A generation can contain unchanged legacy PDF artifacts beside new Docling artifacts; its configured backend describes new extraction, not a conversion of every document.
+- New Docling units retain `docling_label`, `docling_content_layer`, and `docling_ref` beside their provenance. These guide pre-chunk filtering and are not quotation offsets.
+- A query-time retrieval-policy fingerprint change does not invalidate stored evidence or require ingestion.
 - Directory names under `indexes/` vary by backend. No reader may assume a fixed name.
 
 ### The artifact lookup
@@ -149,8 +154,9 @@ generations/<generation-id>/
 ## Ingestion
 
 - `ingest` hashes every source.
-- An exact input match returns the selected generation unchanged.
-- Otherwise `ingest` reuses compatible unchanged documents, chunks, and exact-text vectors, and builds complete new BM25 and dense indexes.
+- An exact artifact-affecting input match returns the selected generation unchanged, even when query-time ranking settings differ.
+- A Docling backend or adapter change alone does not reprocess unchanged PDFs. Normal ingestion carries their existing artifacts and provenance forward; `force_recompute` explicitly reprocesses them. Existing generation files are never relabelled in place.
+- Otherwise `ingest` checks text and vector reuse independently and builds complete new BM25 and dense indexes. Vector reuse requires matching model identity and exact embedding input; a text-processing mismatch does not alone discard reusable vectors.
 - Work is checkpointed between bounded units. An interrupted build resumes, and `status.ingestion_progress` reports it.
 - `current.json` changes only after both indexes succeed. A failed or cancelled build leaves the selected generation in place.
 - A cancelled or timed-out build keeps its checkpoint.
@@ -170,7 +176,7 @@ generations/<generation-id>/
 - A MOBI locator has type `mobi_section`: a logical rendition part index, the current heading, and element-path, block-index, or existing `id`/`name` anchors. Its synthetic `part-NNNNNN.html` reference identifies reconstructed text, not a printed page or an EPUB archive path.
 - Search returns, and the index holds, cleaned semantic text. It is not a transcript, so `text` is not quotable.
 - Document records keep `cleaned_passage_count`, `partially_cleaned_passage_count`, `excluded_corrupt_passage_count`, `substantive_character_count`, `discarded_corrupt_character_count`, `cleaned_corrupt_span_count`, `unclean_character_rate`, and the corresponding `cleaned_passages` and `excluded_corrupt_passages` decisions. Each decision carries a unit ID, a zero-based paragraph index, a locator, its reasons, the span offsets it covers, and the characters it lost, never damaged passage text.
-- `pdf_text_recovery_pages` counts PDF pages retried through the bundled text interpreter. `recovered_pdf_blocks` counts accepted replacements. Build metrics aggregate these counts.
+- Historical `pdf_text_recovery_pages` and `recovered_pdf_blocks` record native-reader retries and accepted replacements. They remain readable; new Docling extraction writes zero for both compatibility counters.
 - In passage context, `excluded_from_search: true` marks a reviewed excluded neighbour. It is context, not an eligible hit.
 - A result names its source by `source_id` and `title`. A path handle (`source_relative_path`) is returned by `find_source` and the workspace source list, not repeated on every passage.
 - The untouched original, found through `find_source`, and the `locator` are the quote authority.

@@ -57,6 +57,12 @@ class Setting:
     # of them. A setting that names a model, a path, or a revision does not:
     # those are case-sensitive identifiers, not mode words.
     normalize_case: bool = False
+    # A read alias maps a retired value a layer may still carry onto the value in
+    # force, so an existing file or environment keeps resolving without a rewrite.
+    # It is applied after case folding and before the choices check, so the value
+    # a reader sees is always one of `choices`. Held as pairs rather than a dict
+    # so the frozen setting stays hashable.
+    read_aliases: tuple[tuple[str, str], ...] = ()
 
     def coerce(self, raw: Any, *, source: str) -> Any:
         """Return `raw` as this setting's type, or refuse it by name.
@@ -89,6 +95,8 @@ class Setting:
             value = value.strip()
             if self.normalize_case:
                 value = value.casefold()
+            if self.read_aliases:
+                value = dict(self.read_aliases).get(value, value)
         if self.choices and value not in self.choices:
             raise SettingsError(f"{where} must be one of: " + ", ".join(self.choices))
         if self.minimum is not None and value < self.minimum:

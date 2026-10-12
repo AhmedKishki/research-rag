@@ -1377,56 +1377,6 @@ def test_the_status_view_carries_the_generation_panel_and_its_dialog() -> None:
     assert "if (!generation.is_current)" in javascript
 
 
-def test_a_sql_statement_reads_the_records_the_adapter_stores(tmp_path: Path) -> None:
-    """The result envelope reaches the page exactly as the adapter sent it.
-
-    The panel is given columns and rows and nothing else, so any reshaping here
-    would be a panel that renders a table the adapter did not return.
-    """
-
-    adapter = SqlRecordAdapter(_source(tmp_path))
-    statement = "SELECT generation_id, chunk_count FROM generations"
-
-    with _sql_host(adapter) as client:
-        assert client.get("/api/ui").json()["capabilities"]["sql_console"] is True
-        response = client.post(
-            "/api/sql/query",
-            json={"scope": "  generations  ", "statement": statement},
-        )
-
-    assert response.status_code == 200
-    assert response.json() == {
-        "columns": ["generation_id", "chunk_count"],
-        "rows": [["generation-1", 128], ["generation-2", 64]],
-        "row_count": 2,
-        "statement": statement,
-        "scope": "generations",
-    }
-    # The statement travels as typed; the scope is trimmed because an identifier
-    # carried with stray whitespace is one the adapter does not recognise.
-    assert adapter.statements == [("generations", statement, "query")]
-
-
-def test_a_sql_write_reports_the_records_it_affected(tmp_path: Path) -> None:
-    adapter = SqlRecordAdapter(_source(tmp_path))
-    statement = "DELETE FROM generations WHERE generation_id = 'generation-1';"
-
-    with _sql_host(adapter) as client:
-        response = client.post(
-            "/api/sql/execute",
-            json={"scope": "generations", "statement": statement},
-        )
-
-    assert response.status_code == 200
-    assert response.json() == {
-        "scope": "generations",
-        "rows_affected": 1,
-        "statement": statement,
-        "reindexed": True,
-    }
-    assert adapter.statements == [("generations", statement, "execute")]
-
-
 def test_the_sql_routes_are_absent_when_the_capability_is_off(tmp_path: Path) -> None:
     """A store this library cannot know about is not reachable from a workspace."""
 

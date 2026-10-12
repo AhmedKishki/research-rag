@@ -10,7 +10,7 @@ rather than here, so the terminal and the browser answer from the same call on t
 same payload.
 
 Retrieval loads its direct dependencies only when an operation needs them. A
-command that reads local state starts no gateway and needs no UltraRAG runtime.
+command that reads local state starts no retrieval child process.
 """
 
 from __future__ import annotations
@@ -19,6 +19,7 @@ import argparse
 import asyncio
 import contextlib
 import json
+import logging
 import math
 import os
 import shutil
@@ -719,7 +720,9 @@ def _parser() -> argparse.ArgumentParser:
         help=(
             "Print the complete status payload instead of the readiness answer: "
             "the corpus counts, the retained generations, the retrieval policy, "
-            "and every dependency check."
+            "every dependency check, and the generation diagnostics — the policy "
+            "differences a rebuild would apply, which do not make the generation "
+            "unserviceable."
         ),
     )
 
@@ -1208,16 +1211,19 @@ def _parser() -> argparse.ArgumentParser:
         "--prefetch-models",
         action="store_true",
         help=(
-            "Download the pinned embedding and reranker models into the cache. "
-            "The only other thing that reaches the network is --repair-runtime."
+            "Download the pinned embedding and reranker models into the cache, "
+            "and provision the managed Docling environment. This is the only "
+            "doctor operation that reaches the network or fetches anything."
         ),
     )
     examine.add_argument(
         "--repair-runtime",
         action="store_true",
         help=(
-            "Move a mismatched UltraRAG runtime aside, install the pinned one, "
-            "and validate it. Evidence it discards is moved aside, not deleted."
+            "Deprecated informational no-op. The external UltraRAG runtime is no "
+            "longer used, so this repairs nothing, reaches no network, and "
+            "changes no file: it only reports that normal retrieval uses the "
+            "required direct libraries. Kept for compatibility."
         ),
     )
 
@@ -1550,9 +1556,8 @@ def _service_processes(
 
     The name must be a whole argument, not a substring of one. This app's own
     projects all contain ``.research-rag`` in their paths, so a substring test
-    matches every process that touches a project, including the vanilla gateway
-    the other product in this collection starts, whose ``--workspace-root`` names
-    the same directory.
+    matches unrelated processes that touch the project. Only the app entrypoint
+    and its matching ``--project-root`` prove ownership.
     """
 
     try:
@@ -1637,7 +1642,7 @@ def _stop(args: argparse.Namespace, config: ResearchConfig) -> dict[str, Any]:
         "detached": app_state.get("detached"),
         "url": app_state.get("url"),
     }
-    # Asked, never killed: the app closes its own gateway and releases its own lock
+    # Asked, never killed: the app runs its own cleanup and releases its own lock
     # on the way out. A pid record names a number, so `ownership` establishes that
     # the process behind it is this project's app before anything is signalled.
     pid = recorded_pid(config)
@@ -2401,7 +2406,7 @@ async def _serve_attached(
 
     Attached is the whole point: the process stays in the foreground and in this
     terminal's process group, so Ctrl-C and a closed window both reach it, and
-    the stop below shuts the gateway it opened down rather than orphaning one.
+    the stop below releases the app's owned resources.
 
     The port is claimed by binding it, so a second project on the same machine
     walks past a taken one rather than failing where a second app would have
@@ -2449,7 +2454,7 @@ async def _wait_until_stopped(app: App, closing: _Closing) -> None:
     Three things can end an attached run and they are the same ending: the
     serving task finishing on its own, this terminal going away, and the reader
     pressing Ctrl-C. Whichever arrives first, the caller stops the app on the way
-    out, so a gateway this app opened is never left serving nothing.
+    out, so no owned serving task is left running.
     """
 
     serving = asyncio.ensure_future(app.wait())
@@ -2534,8 +2539,7 @@ def _closing_with_the_terminal() -> Iterator[_Closing]:
     """Treat a closed window and a `kill` as the Ctrl-C they are.
 
     Closing a terminal sends SIGHUP and a `kill` sends SIGTERM. Python's default
-    for both ends the process, which would leave the gateway this app opened
-    running with nothing serving it, so each is turned into the orderly stop a
+    for both ends the process without app cleanup, so each becomes the orderly stop a
     Ctrl-C already performs. A platform that cannot install a handler for one of
     them keeps its default rather than refusing to serve.
     """
@@ -2660,8 +2664,8 @@ def _bare_workspace(args: argparse.Namespace) -> CommandResult:
     the reader out of it.
 
     An app already up for the project is reported rather than started a second
-    time, because two apps on one project would each hold the lock and open a
-    gateway. Its terminal is not this one, so this call says so and returns the
+    time, because two apps on one project would contend for its lock and indexes.
+    Its terminal is not this one, so this call says so and returns the
     reader to their prompt instead of occupying it.
     """
 
@@ -2707,8 +2711,8 @@ async def _start(args: argparse.Namespace, config: ResearchConfig) -> CommandRes
     Ctrl-C and a closed window both reach it.
 
     An app already serving this project is reported rather than started a second
-    time, because two apps on one project would each hold the lock and open a
-    gateway. Its terminal is not this one, so this call says so and returns the
+    time, because two apps on one project would contend for its lock and indexes.
+    Its terminal is not this one, so this call says so and returns the
     reader to their prompt instead of occupying it.
     """
 
@@ -3192,6 +3196,44 @@ def _bridge_project_name(args: argparse.Namespace) -> str:
     return name.strip()
 
 
+# The named logger this process's own records travel on. A child logger of it
+# (`research_rag.runtime.app`, `research_rag.core.service`) reaches the same
+# handler; `logging.lastResort` is not used, so nothing prints unless this is set.
+_LOGGER_NAME = "research_rag"
+_LOG_LEVELS: dict[str, int] = {
+    "debug": logging.DEBUG,
+    "info": logging.INFO,
+    "warn": logging.WARNING,
+    "error": logging.ERROR,
+}
+
+
+def _configure_logging(config: ResearchConfig) -> None:
+    """Let this process's own records reach stderr at the level the project set.
+
+    The handler is attached to the named logger alone, so a dependency's DEBUG
+    traffic stays silent and no root handler is installed or replaced. The
+    handler is installed once, so a command that resolves logging twice does not
+    double every line. This app never logs passage or query text: the records
+    that become visible are reuse and compatibility decisions, which is why
+    `runtime.log_level=debug` is the way to see why a build reused or rebuilt.
+    """
+
+    level = _LOG_LEVELS.get(str(config.settings.log_level).lower())
+    if level is None:
+        return
+    logger = logging.getLogger(_LOGGER_NAME)
+    logger.setLevel(level)
+    logger.propagate = False
+    if not any(
+        getattr(handler, "_research_rag_stderr", False) for handler in logger.handlers
+    ):
+        handler = logging.StreamHandler(sys.stderr)
+        handler.setFormatter(logging.Formatter("%(levelname)s %(name)s: %(message)s"))
+        handler._research_rag_stderr = True  # type: ignore[attr-defined]
+        logger.addHandler(handler)
+
+
 async def _run(args: argparse.Namespace) -> CommandResult:
 
     if args.command == "projects":
@@ -3207,6 +3249,7 @@ async def _run(args: argparse.Namespace) -> CommandResult:
         return CommandResult(payload=await _update(args))
     config = _resolve(args)
     apply_process_priority(config.nice)
+    _configure_logging(config)
     if args.command == "config":
         print(
             describe_settings(

@@ -15,7 +15,7 @@ code the build itself runs. `AGENTS.md` states the rule.
 
 A write adopts the settled values in this process rather than resolving every
 layer again, because the layers this app was started with are not recoverable
-from the files it reads. The settings the dense backends and the gateway were
+from the files it reads. The settings the dense and lexical backends were
 constructed from are named separately, because a change to one of those is read
 by what this process already loaded rather than by the next search.
 
@@ -323,8 +323,9 @@ def _recorded_identity(settings: EffectiveSettings) -> dict[str, Any]:
         # A generation records the PDF passage-cleaning threshold, and a rebuild
         # reads it, so a change here moves what the generation holds.
         "passage_cleaning": (settings.maximum_unclean_percent,),
-        # A generation records which reader produced its PDF units, and a rebuild
-        # reads it, so switching readers moves what the generation holds.
+        # The generation records its target reader; retained PDFs have their own
+        # provenance. Docling is the only operational choice, so its legacy read
+        # alias does not create a switch or require reprocessing existing evidence.
         "extraction_backend": (settings.pdf_backend,),
         "embedding_model": (facts.name, facts.revision, facts.dimension),
         "reranker_model": settings.reranker_model,

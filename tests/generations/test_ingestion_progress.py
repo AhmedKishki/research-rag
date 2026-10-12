@@ -50,7 +50,7 @@ def test_extraction_uses_source_totals_without_changing_checkpoint(
     atomic_write_json(
         path,
         {
-            "extraction_stage": "pdf_pages",
+            "extraction_stage": "docling_pages",
             "total": 10,
             "next_index": 4,
             "page_batch_size": 2,
@@ -59,9 +59,11 @@ def test_extraction_uses_source_totals_without_changing_checkpoint(
     before = deepcopy(checkpoint)
     result = workflow._ingestion_progress(checkpoint)
     assert result["source"] == "nested/b.pdf"
+    # Five page batches plus finalize counted as a prepare and a finalize step; two
+    # batches are done.
     assert result["source_progress"] == {
-        "completed": 8,
-        "total": 12,
+        "completed": 2,
+        "total": 7,
         "unit": "pdf_page_batches_or_epub_sections",
     }
     assert result["overall_progress"] == {"completed": 1, "total": 2, "unit": "sources"}
@@ -123,7 +125,6 @@ def test_docling_page_batches_report_progress(workflow, checkpoint):
     atomic_write_json(
         path,
         {
-            "docling": True,
             "extraction_stage": "docling_pages",
             "total": 4,
             "next_index": 2,
@@ -135,7 +136,7 @@ def test_docling_page_batches_report_progress(workflow, checkpoint):
         workflow.config.staging_root / checkpoint["build_id"], checkpoint
     )
 
-    # Two source batches plus prepare and finalize; two batches done.
+    # Two source batches plus prepare and finalize; one batch is done.
     assert checkpoint["extraction_work_total"] == 4
     assert checkpoint["extraction_work_completed"] == 1
 

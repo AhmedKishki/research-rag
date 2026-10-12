@@ -18,6 +18,8 @@ from research_rag.corpus.pdf_backend import (
     DoclingUnavailableError,
     PdfBackendError,
     effective_maximum_unclean_percent,
+    legacy_custom_backend_record,
+    normalize_pdf_backend,
     pdf_backend_fingerprint,
     prefetch_docling_models,
     recorded_pdf_backend_fingerprint,
@@ -37,10 +39,18 @@ _FAKE_ENV = DoclingEnv(
 )
 
 
-def test_custom_is_the_documented_legacy_default() -> None:
+def test_custom_is_a_read_alias_that_keeps_the_legacy_record() -> None:
+    # The retired token resolves to the operational reader, so an existing config
+    # keeps loading and a new build targets Docling.
+    assert normalize_pdf_backend("custom") == "docling"
+    assert pdf_backend_fingerprint("custom") == pdf_backend_fingerprint("docling")
+
+    # The historical record is a preserved constant, never relabelled: a manifest
+    # that predates the field and one that recorded 'custom' keep their identity.
     assert CUSTOM_BACKEND_FINGERPRINT == DEFAULT_PDF_BACKEND_FINGERPRINT
-    assert pdf_backend_fingerprint("custom") == DEFAULT_PDF_BACKEND_FINGERPRINT
-    # A manifest that predates the feature carries the same fingerprint.
+    assert (
+        legacy_custom_backend_record()["fingerprint"] == DEFAULT_PDF_BACKEND_FINGERPRINT
+    )
     assert recorded_pdf_backend_fingerprint({}) == DEFAULT_PDF_BACKEND_FINGERPRINT
     assert (
         recorded_pdf_backend_fingerprint({"extraction_backend": {"backend": "custom"}})
@@ -93,12 +103,20 @@ def test_docling_fingerprint_without_env_uses_the_stable_spec() -> None:
     assert first["version"] is None
 
 
-def test_custom_record_is_unchanged_and_records_no_components() -> None:
-    record = pdf_backend.pdf_backend_record("custom")
+def test_the_legacy_record_is_preserved_and_the_operational_record_is_docling() -> None:
+    legacy = legacy_custom_backend_record()
 
-    assert record["fingerprint"] == CUSTOM_BACKEND_FINGERPRINT
-    assert record["components"] == {}
-    assert record["adapter_policy_version"] is None
+    assert legacy["fingerprint"] == CUSTOM_BACKEND_FINGERPRINT
+    assert legacy["backend"] == "custom"
+    assert legacy["components"] == {}
+    assert legacy["adapter_policy_version"] is None
+
+    # The active record path never emits the retired token, even when handed it.
+    record = pdf_backend.pdf_backend_record("custom")
+    assert record["backend"] == "docling"
+    assert (
+        record["adapter_policy_version"] == pdf_backend.DOCLING_ADAPTER_POLICY_VERSION
+    )
 
 
 def test_the_shared_budget_is_the_projects_configured_one() -> None:

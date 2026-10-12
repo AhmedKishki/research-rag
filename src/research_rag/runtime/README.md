@@ -26,3 +26,4 @@ The running process, and the commands that manage it.
   absent. `import research_rag.runtime.update` is the test of it.
 - `process.py` is the only place a child process is run. A second `subprocess`
   call is a second way for a command to fail without saying why.
+- `doctor --repair-runtime` is a side-effect-free compatibility no-op. Only `--prefetch-models` provisions required models and the isolated Docling environment.

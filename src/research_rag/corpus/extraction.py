@@ -1,8 +1,11 @@
-"""Bibliographic inference and reading-order assembly for PDF and EPUB sources.
+"""Source extraction: Docling PDF routing, EPUB/MOBI units, and the shared gate.
 
 The originals are the quote authority, so this module never rewrites a source and
-never writes to `sources/`. It imports PyMuPDF, ebooklib, and BeautifulSoup at
-module level and therefore cannot be imported where the retrieval stack is absent.
+never writes to `sources/`. A PDF is converted by the managed Docling worker in
+`pdf_backend`; this module adapts that payload into units and never reads a PDF's
+own text. EPUB and MOBI are read in process. It imports PyMuPDF (page-count
+probing only), ebooklib, and BeautifulSoup at module level and therefore cannot be
+imported where the retrieval stack is absent.
 
 Normalization of extracted text lives in `text_normalization`, and the reasons a
 text is withheld live in `text_quality`. Both are pure string modules, so a
@@ -13,9 +16,8 @@ document libraries.
 from __future__ import annotations
 
 import hashlib
-import math
 import re
-from collections import Counter, defaultdict
+from collections import Counter
 from dataclasses import dataclass
 from pathlib import Path
 from statistics import median
@@ -31,27 +33,18 @@ from .docling_env import DoclingEnv, DoclingEnvironmentError
 from .mobi_reader import MobiReadError, MobiText, extract_mobi_payload
 from .pdf_backend import (
     DEFAULT_PDF_BACKEND,
-    PDF_BACKEND_DOCLING,
     DoclingConversionError,
     docling_backend_record_from_env,
     effective_maximum_unclean_percent,
+    normalize_pdf_backend,
     run_docling_batch,
-)
-from .pdf_text_recovery import (
-    PdfRecoveryCache,
-    close_pdf_recovery_cache,
-    recover_pdf_blocks,
 )
 from .sources import SourceFile, sha256_file
 from .text_normalization import (
-    HORIZONTAL_SPACE,
-    LIST_ITEM_PATTERN,
     clean_unclean_passage,
     ends_sentence,
-    is_control_character,
     normalize_inline_text,
     normalize_reading_text,
-    recover_formatting_glyphs,
 )
 from .text_quality import (
     EXTRACTION_ARTIFACT_TOKEN,
@@ -61,14 +54,11 @@ from .text_quality import (
     clean_damaged_pdf_passage,
     has_searchable_alphanumeric_content,
     non_argument_removal_flags,
-    opens_with_note_marker,
     passage_health_reasons,
     source_health_reasons,
     text_corruption_reasons,
     text_health_reasons,
 )
-
-pymupdf.no_recommend_layout()
 
 
 class ExtractionError(RuntimeError):
@@ -81,10 +71,6 @@ class UncleanSourceError(ExtractionError):
 
 _DOI = re.compile(r"\b10\.\d{4,9}/[-._;()/:A-Z0-9]+", re.IGNORECASE)
 _URL = re.compile(r"^(?:https?://|www\.|(?:dx\.)?doi\.org/)", re.IGNORECASE)
-_PAGE_NUMBER = re.compile(
-    r"^(?:page\s+)?(?:[ivxlcdm]+|\d+)(?:\s+(?:of|/|-|–)\s*\d+)?$",
-    re.IGNORECASE,
-)
 _TITLE_REJECTIONS = (
     re.compile(r"^untitled$", re.IGNORECASE),
     re.compile(
@@ -115,12 +101,6 @@ _DATED_LINE = re.compile(
     r"dec(?:ember)?)\b.*\b(?:18\d{2}|19\d{2}|20\d{2}|21\d{2})\b",
     re.IGNORECASE,
 )
-_LEADING_ASTERISK_MARKER = re.compile(r"^\s*\*\s*")
-_TRAILING_ASTERISK_MARKER = re.compile(r"(?<=\w)\*\s*$")
-_EXPLICIT_MARKER_LEGEND = re.compile(
-    r"^\s*\*\s*(?:(?:indicates?|denotes?|means?)\b|[:=])",
-    re.IGNORECASE,
-)
 _BYLINE = re.compile(r"^(?:by|written\s+by|author(?:s)?\s*:)\s+", re.IGNORECASE)
 _AUTHOR_JUNK = re.compile(
     r"^(?:unknown|anonymous|untitled|microsoft\s+word|adobe\s+(?:acrobat|indesign)|"
@@ -135,8 +115,6 @@ _AUTHOR_AFFILIATION = re.compile(
     r"\s*\([^)]*(?:university|institute|college)[^)]*\)\s*$", re.IGNORECASE
 )
 _AUTHOR_MARKER = re.compile(r"(?:\d+(?:\s*,\s*\d+)*|[*∗†‡§])+$")
-_FIGURE_CAPTION = re.compile(r"^(?:fig(?:ure)?\.?)\s*(?:\d|[ivxlcdm])", re.IGNORECASE)
-_TABLE_CAPTION = re.compile(r"^table\s*(?:\d|[ivxlcdm])", re.IGNORECASE)
 _EPUB_HEADING_ELEMENTS = frozenset({"h1", "h2", "h3", "h4", "h5", "h6"})
 _EPUB_CONTENT_ELEMENTS = frozenset({"p", "li", "blockquote", "table"})
 _EPUB_SEMANTIC_ELEMENTS = _EPUB_HEADING_ELEMENTS | _EPUB_CONTENT_ELEMENTS
@@ -155,88 +133,6 @@ class _TextBlock:
     @property
     def width(self) -> float:
         return max(0.0, self.bbox[2] - self.bbox[0])
-
-
-@dataclass(frozen=True, slots=True)
-class _Region:
-    kind: str
-    bbox: tuple[float, float, float, float]
-
-
-@dataclass(slots=True)
-class _PageRemovals:
-    """What one page gave up, so the document record can name each category.
-
-    The categories are separate because they are different decisions: a repeated
-    margin block is furniture, a sidebar is layout, a footnote is a note
-    apparatus, and text cleaning removed prose that was structurally not the
-    document's argument. A reader who disagrees with one can see which one fired.
-
-    The character counter is the one total rather than a category: it counts every
-    character any of these rules removed, because the source verdict that reads it
-    asks how much of the file is left, not which rule took it.
-    """
-
-    repeated_margin_blocks: int = 0
-    sidebar_blocks: int = 0
-    footnote_blocks: int = 0
-    removed_reference_segments: int = 0
-    removed_note_segments: int = 0
-    removed_text_characters: int = 0
-    image_only_pages: int = 0
-    pdf_text_recovery_pages: int = 0
-    recovered_pdf_blocks: int = 0
-
-    def with_counts(self, counts: dict[str, int]) -> _PageRemovals:
-        """Add a whole-source pass's counters into these page totals.
-
-        A pass over every unit at once returns a plain mapping, so this keeps the
-        counters the pages already recorded rather than replacing them.
-        """
-
-        return self.merge(
-            _PageRemovals(
-                removed_reference_segments=int(counts["removed_reference_segments"]),
-                removed_note_segments=int(counts["removed_note_segments"]),
-                removed_text_characters=int(counts["removed_non_argument_characters"]),
-            )
-        )
-
-    def merge(self, other: _PageRemovals) -> _PageRemovals:
-        return _PageRemovals(
-            repeated_margin_blocks=(
-                self.repeated_margin_blocks + other.repeated_margin_blocks
-            ),
-            sidebar_blocks=self.sidebar_blocks + other.sidebar_blocks,
-            footnote_blocks=self.footnote_blocks + other.footnote_blocks,
-            removed_reference_segments=(
-                self.removed_reference_segments + other.removed_reference_segments
-            ),
-            removed_note_segments=(
-                self.removed_note_segments + other.removed_note_segments
-            ),
-            removed_text_characters=(
-                self.removed_text_characters + other.removed_text_characters
-            ),
-            image_only_pages=self.image_only_pages + other.image_only_pages,
-            pdf_text_recovery_pages=(
-                self.pdf_text_recovery_pages + other.pdf_text_recovery_pages
-            ),
-            recovered_pdf_blocks=self.recovered_pdf_blocks + other.recovered_pdf_blocks,
-        )
-
-    def record_fields(self) -> dict[str, int]:
-        return {
-            "removed_repeated_margin_blocks": self.repeated_margin_blocks,
-            "removed_sidebar_blocks": self.sidebar_blocks,
-            "removed_footnote_blocks": self.footnote_blocks,
-            "removed_reference_segments": self.removed_reference_segments,
-            "removed_note_segments": self.removed_note_segments,
-            "removed_non_argument_characters": self.removed_text_characters,
-            "image_only_pages": self.image_only_pages,
-            "pdf_text_recovery_pages": self.pdf_text_recovery_pages,
-            "recovered_pdf_blocks": self.recovered_pdf_blocks,
-        }
 
 
 REMOVAL_FIELDS = (
@@ -556,134 +452,6 @@ def _pdf_author_list(metadata: dict[str, Any]) -> list[str]:
     return [item for item in parts if _valid_author(item)]
 
 
-def _pdf_line_text(spans: list[dict[str, Any]]) -> str:
-    """Join extracted spans, guessing no replacement for an ambiguous glyph.
-
-    A span's own font decides whether a private-use glyph is recovered: a symbol
-    face is decoded with Adobe's published encoding, and a recognised dingbat,
-    icon, or mathematics face has its non-prose glyphs removed. Text from any
-    other face is joined as it arrived, so an unknown private-use glyph is
-    preserved for the quality rules to judge rather than trusted as prose.
-    """
-
-    return "".join(
-        recover_formatting_glyphs(
-            str(span.get("text") or ""), str(span.get("font") or "")
-        )
-        for span in spans
-    )
-
-
-def _page_blocks(
-    page: pymupdf.Page,
-    *,
-    source_path: Path | None = None,
-    recovery_cache: PdfRecoveryCache | None = None,
-) -> list[_TextBlock]:
-    result: list[_TextBlock] = []
-    payload = page.get_text("dict", sort=False, flags=pymupdf.TEXTFLAGS_TEXT)
-    for number, block in enumerate(payload.get("blocks", [])):
-        if block.get("type") != 0:
-            continue
-        lines: list[str] = []
-        sizes: list[float] = []
-        for line in block.get("lines", []):
-            value = _pdf_line_text(line.get("spans", []))
-            # A bad font map can expose a control code as a glyph. Preserve its
-            # unreadability through normalization instead of silently joining
-            # the words on either side after stripping the code.
-            value = "".join(
-                "\ufffd"
-                if is_control_character(character) and character not in "\v\f"
-                else character
-                for character in value
-            )
-            value = HORIZONTAL_SPACE.sub(" ", value).strip()
-            if value:
-                lines.append(value)
-            sizes.extend(
-                float(span.get("size") or 0.0)
-                for span in line.get("spans", [])
-                if span.get("text")
-            )
-        if not lines:
-            continue
-        bbox = tuple(float(item) for item in block.get("bbox", (0, 0, 0, 0)))
-        result.append(
-            _TextBlock(
-                number=number,
-                bbox=(bbox[0], bbox[1], bbox[2], bbox[3]),
-                lines=tuple(lines),
-                text="\n".join(lines),
-                font_size=max(sizes, default=0.0),
-            )
-        )
-    if source_path is None:
-        return result
-    unhealthy = {
-        block.number: block.bbox
-        for block in result
-        if passage_health_reasons(block.text, maximum_unclean_percent=0.0)
-    }
-    if not result:
-        # A different text interpreter can find an existing layer that PyMuPDF
-        # missed. This reads content streams only; an image yields no text.
-        unhealthy[0] = tuple(page.rect)
-    if not unhealthy:
-        return result
-    candidates, _warning = recover_pdf_blocks(
-        source_path, int(page.number) + 1, unhealthy, recovery_cache
-    )
-    recovered: list[_TextBlock] = []
-    for block in result:
-        if block.number not in unhealthy:
-            recovered.append(block)
-            continue
-        candidate = candidates.get(block.number, "")
-        usable = bool(candidate) and not passage_health_reasons(
-            candidate, maximum_unclean_percent=0.0
-        )
-        if usable:
-            # Native font metrics can disagree with the primary block box.
-            # Do not accept a geometric retry that loses a line we already read,
-            # including a readable raised marker beside the damaged line.
-            covered = re.sub(r"\s+", "", normalize_inline_text(candidate))
-            usable = all(
-                re.sub(r"\s+", "", normalize_inline_text(line)) in covered
-                for line in block.lines
-                if not passage_health_reasons(line, maximum_unclean_percent=0.0)
-                and has_searchable_alphanumeric_content(line)
-            )
-        recovered.append(
-            _TextBlock(
-                number=block.number,
-                bbox=block.bbox,
-                lines=tuple(candidate.splitlines()) if usable else block.lines,
-                text=candidate if usable else block.text,
-                font_size=block.font_size,
-                recovery_attempted=True,
-                recovered=usable,
-            )
-        )
-    if (
-        not result
-        and (candidate := candidates.get(0, ""))
-        and not passage_health_reasons(candidate, maximum_unclean_percent=0.0)
-    ):
-        recovered.append(
-            _TextBlock(
-                number=0,
-                bbox=unhealthy[0],
-                lines=tuple(candidate.splitlines()),
-                text=candidate,
-                font_size=0.0,
-                recovery_attempted=True,
-                recovered=True,
-            )
-        )
-    return recovered
-
-
 def _front_matter_identity(
     pages: list[tuple[list[_TextBlock], float, float]],
     metadata: dict[str, Any],
@@ -878,466 +646,6 @@ def _front_matter_identity(
     )
 
 
-def _pdf_declared_language(document: pymupdf.Document) -> str:
-    """A `/Lang` entry in the PDF catalog, exposed as `Document.language`.
-
-    Many PDFs carry none, and the caller then detects over the text.
-    """
-
-    try:
-        return str(document.language or "")
-    except (RuntimeError, ValueError):
-        return ""
-
-
-def _block_signature(block: _TextBlock) -> str:
-    value = normalize_inline_text(block.text).casefold()
-    return re.sub(r"\d+", "#", value)
-
-
-def _block_characters(block: _TextBlock) -> int:
-    """The characters of one block, as the reader of the record would count them."""
-
-    return len(normalize_inline_text(block.text))
-
-
-# A margin block repeats across pages, so its own signature decides it is
-# furniture. The bands are the outer eighth of the page, which is where a running
-# head, a folio, and a journal line sit, and where a table of contents entry does
-# not.
-_MARGIN_TOP = 0.12
-_MARGIN_BOTTOM = 0.88
-# A page's own prose is a block long enough to be a paragraph rather than a title
-# line, a heading, or a caption. The body size is read from those blocks first and
-# from every block only when the page holds no such paragraph.
-_BODY_PROSE_CHARACTERS = 200
-# A sidebar is narrower than the body column and separated from it by a gutter,
-# so it is identified by its position relative to the widest block on the page
-# rather than by its own text: a sidebar may hold a figure caption, a pull quote,
-# or a glossary, none of which has a recognisable shape.
-_SIDEBAR_MAXIMUM_WIDTH = 0.34
-_SIDEBAR_MINIMUM_GUTTER = 12.0
-# A footnote takes four conditions at once, and each answers one way the size and
-# the position alone read prose wrongly. A lead paragraph set larger than the prose
-# it introduces makes the whole body "small"; a data table, a block quote, and a
-# credit line are all set small and all sit low on the page. What none of those
-# three has, and a note apparatus always has, is a place in the foot of the page
-# separated from the body and a marker printed at the start of the line. A block
-# that opens as a figure or table caption is kept as well, because a caption is
-# also set small and its text is evidence about the figure.
-_FOOTNOTE_MAXIMUM_SIZE_RATIO = 0.88
-_FOOTNOTE_MINIMUM_BODY_SIZE = 6.0
-# The foot of the page, as a share of its height, and the clear space a note block
-# needs below the body it belongs to, as a multiple of the body size.
-_FOOTNOTE_BOTTOM_BAND = 0.78
-_FOOTNOTE_MINIMUM_GAP_RATIO = 0.5
-# A table is set small whatever its position, so a block inside a detected table is
-# evidence whatever else it looks like.
-_FOOTNOTE_TABLE_OVERLAP = 0.35
-
-
-def _body_font_size(blocks: list[_TextBlock]) -> float:
-    """The size the page's own prose is set in, by the characters it carries.
-
-    The body is the size most of the page's characters are set in, not the middle
-    of the sizes the page happens to contain. A median moves as soon as one lead
-    paragraph, a deck or a standfirst, is set larger than the argument it
-    introduces, and then every body paragraph on that page reads as small. Weight
-    by characters instead, so one large paragraph cannot outweigh a page of prose,
-    and a tie goes to the larger size, so a page of prose with one short small block
-    on it keeps the prose as its body rather than the block.
-    """
-
-    for minimum_characters in (_BODY_PROSE_CHARACTERS, 0):
-        weights: Counter[float] = Counter()
-        for block in blocks:
-            characters = len(normalize_inline_text(block.text))
-            if block.font_size <= 0 or characters < minimum_characters:
-                continue
-            weights[round(block.font_size * 2) / 2] += characters
-        if weights:
-            return max(weights, key=lambda size: (weights[size], size))
-    return 0.0
-
-
-# A page whose only content is an image covering at least this share of it is a
-# scanned page, and the share is what separates a scan from a page that carries a
-# figure or a logo the text runs around. A page with any text at all is not
-# image-only whatever its images cover, because the text layer is what a reader
-# of the source has to search.
-_IMAGE_ONLY_MINIMUM_AREA_SHARE = 0.5
-
-
-def _image_only_page(page: pymupdf.Page, blocks: list[_TextBlock]) -> bool:
-    """Whether a page is a scan: no text, and one image covering most of it.
-
-    The share is what separates this from a page whose text is set around a
-    figure: a figure rarely covers half the page, and when it does the page still
-    carries text. Reporting this per page is what lets a mixed file be described
-    honestly rather than refused for the pages it can read.
-    """
-
-    if any(normalize_inline_text(block.text) for block in blocks):
-        return False
-    page_area = page.rect.get_area()
-    if page_area <= 0:
-        return False
-    try:
-        payload = page.get_text("dict", sort=False, flags=pymupdf.TEXT_PRESERVE_IMAGES)
-    except (RuntimeError, ValueError):
-        return False
-    covered = 0.0
-    for block in payload.get("blocks", []):
-        if block.get("type") == 1:
-            covered += _rect_area(
-                tuple(float(item) for item in block.get("bbox", (0, 0, 0, 0)))
-            )
-    return covered >= page_area * _IMAGE_ONLY_MINIMUM_AREA_SHARE
-
-
-def _repeated_margin_signatures(
-    pages: list[tuple[list[_TextBlock], float, float]],
-) -> set[str]:
-    if len(pages) < 3:
-        return set()
-    page_sets: list[set[str]] = []
-    for blocks, _width, height in pages:
-        page_sets.append(
-            {
-                signature
-                for block in blocks
-                if (
-                    block.bbox[3] <= height * _MARGIN_TOP
-                    or block.bbox[1] >= height * _MARGIN_BOTTOM
-                )
-                and (signature := _block_signature(block))
-            }
-        )
-    counts = Counter(signature for values in page_sets for signature in values)
-    threshold = max(3, math.ceil(len(pages) * 0.30))
-    confirmed = {signature for signature, count in counts.items() if count >= threshold}
-    positions: defaultdict[str, list[int]] = defaultdict(list)
-    for page_index, signatures in enumerate(page_sets):
-        for signature in signatures:
-            positions[signature].append(page_index)
-    for signature, indices in positions.items():
-        # A book's chapter header may occupy much less than 30% of the book.
-        # Confirm a damaged separator as furniture only with repeated marginal
-        # placement, a folio, and dense repetition within its local page span.
-        # This classifies the whole header, never guesses the missing glyph or
-        # converts its printed folio into a locator.
-        if (
-            len(indices) >= 3
-            and "#" in signature
-            and len(signature) <= 160
-            and sum(character.isalpha() for character in signature) >= 6
-            and passage_health_reasons(signature, maximum_unclean_percent=0.0)
-            and len(indices) / (indices[-1] - indices[0] + 1) >= 0.35
-        ):
-            confirmed.add(signature)
-    return confirmed
-
-
-def _sidebar_blocks(
-    blocks: list[_TextBlock],
-    page_width: float,
-) -> list[_TextBlock]:
-    """Blocks that sit in a narrow column beside the body, not in it.
-
-    The body column is the widest block on the page, so a block narrower than a
-    third of the page that clears it by more than a gutter is beside the text
-    rather than part of it. A page with no full-width block has no body column to
-    measure against and yields nothing, which is the conservative direction: a
-    two-column page and a table page both keep everything.
-    """
-
-    body = max(blocks, key=lambda block: block.width, default=None)
-    if body is None or body.width < page_width * 0.5:
-        return []
-    sidebars: list[_TextBlock] = []
-    for block in blocks:
-        if block.width > page_width * _SIDEBAR_MAXIMUM_WIDTH:
-            continue
-        gutter_left = body.bbox[0] - block.bbox[2]
-        gutter_right = block.bbox[0] - body.bbox[2]
-        if max(gutter_left, gutter_right) >= _SIDEBAR_MINIMUM_GUTTER:
-            sidebars.append(block)
-    return sidebars
-
-
-def _footnote_blocks(
-    blocks: list[_TextBlock],
-    body_size: float,
-    page_height: float,
-    table_regions: list[_Region],
-) -> list[_TextBlock]:
-    """Blocks that are a note apparatus, which takes four things at once.
-
-    All four are required: a size below the page's own body size, a place in the
-    foot of the page separated from the body, a leading note marker, and no overlap
-    with a detected table. The page must also establish a body size from prose of
-    its own, so a page that is uniformly small — a table page, a page of
-    equations — keeps every block.
-
-    The marker is what makes this safe rather than merely cautious. A data table, a
-    block quote, a credit line, and the last paragraph of a chapter are all set
-    small and sit low, and each of them is evidence; a note apparatus is the one of
-    those shapes that is numbered. A note printed without its marker stays in the
-    index, which is the direction that keeps text.
-    """
-
-    if body_size < _FOOTNOTE_MINIMUM_BODY_SIZE or page_height <= 0:
-        return []
-    limit = body_size * _FOOTNOTE_MAXIMUM_SIZE_RATIO
-    foot = page_height * _FOOTNOTE_BOTTOM_BAND
-    body_bottom = max(
-        (block.bbox[3] for block in blocks if block.font_size > limit),
-        default=0.0,
-    )
-    if body_bottom <= 0.0:
-        return []
-    gap = body_size * _FOOTNOTE_MINIMUM_GAP_RATIO
-    notes: list[_TextBlock] = []
-    for block in blocks:
-        if block.font_size <= 0 or block.font_size > limit:
-            continue
-        if block.bbox[1] < max(foot, body_bottom + gap):
-            continue
-        if not opens_with_note_marker(block.lines[0] if block.lines else ""):
-            continue
-        text = normalize_inline_text(block.text)
-        if _FIGURE_CAPTION.match(text) or _TABLE_CAPTION.match(text):
-            continue
-        if any(
-            _rect_intersection_ratio(block.bbox, region.bbox) >= _FOOTNOTE_TABLE_OVERLAP
-            for region in table_regions
-        ):
-            continue
-        notes.append(block)
-    return notes
-
-
-def _rect_area(rect: tuple[float, float, float, float]) -> float:
-    return max(0.0, rect[2] - rect[0]) * max(0.0, rect[3] - rect[1])
-
-
-def _rect_intersection_ratio(
-    left: tuple[float, float, float, float],
-    right: tuple[float, float, float, float],
-) -> float:
-    intersection = (
-        max(left[0], right[0]),
-        max(left[1], right[1]),
-        min(left[2], right[2]),
-        min(left[3], right[3]),
-    )
-    return _rect_area(intersection) / max(_rect_area(left), 1.0)
-
-
-def _merge_rectangles(
-    rectangles: list[pymupdf.Rect], padding: float = 8.0
-) -> list[pymupdf.Rect]:
-    merged: list[pymupdf.Rect] = []
-    for original in rectangles:
-        candidate = pymupdf.Rect(original)
-        changed = True
-        while changed:
-            changed = False
-            remaining: list[pymupdf.Rect] = []
-            padded = candidate + (-padding, -padding, padding, padding)
-            for existing in merged:
-                if padded.intersects(existing):
-                    candidate |= existing
-                    changed = True
-                else:
-                    remaining.append(existing)
-            merged = remaining
-        merged.append(candidate)
-    return merged
-
-
-def _non_prose_regions(page: pymupdf.Page) -> list[_Region]:
-    regions: list[_Region] = []
-    try:
-        finder = page.find_tables()
-    except (RuntimeError, ValueError):
-        finder = None
-    if finder is not None:
-        for table in finder.tables:
-            bbox = tuple(float(item) for item in table.bbox)
-            regions.append(_Region("table", bbox))
-
-    payload = page.get_text("dict", sort=False, flags=pymupdf.TEXTFLAGS_TEXT)
-    for block in payload.get("blocks", []):
-        if block.get("type") == 1:
-            bbox = tuple(float(item) for item in block.get("bbox", (0, 0, 0, 0)))
-            if _rect_area(bbox) >= page.rect.get_area() * 0.02:
-                regions.append(_Region("figure", bbox))
-
-    try:
-        drawing_rectangles = [
-            pymupdf.Rect(item["rect"])
-            for item in page.get_drawings()
-            if item.get("rect") is not None
-            and pymupdf.Rect(item["rect"]).get_area() > 4
-        ]
-    except (RuntimeError, ValueError):
-        drawing_rectangles = []
-    for rect in _merge_rectangles(drawing_rectangles):
-        if rect.get_area() >= page.rect.get_area() * 0.025:
-            expanded = rect + (-12, -24, 12, 12)
-            expanded &= page.rect
-            regions.append(_Region("figure", tuple(float(item) for item in expanded)))
-
-    figures = [region for region in regions if region.kind == "figure"]
-    regions = [
-        region
-        for region in regions
-        if region.kind != "table"
-        or not any(
-            _rect_intersection_ratio(region.bbox, figure.bbox) >= 0.55
-            for figure in figures
-        )
-    ]
-    deduplicated: list[_Region] = []
-    for region in sorted(
-        regions, key=lambda item: (item.kind != "table", -_rect_area(item.bbox))
-    ):
-        if any(
-            _rect_intersection_ratio(region.bbox, item.bbox) > 0.8
-            for item in deduplicated
-        ):
-            continue
-        deduplicated.append(region)
-    return sorted(deduplicated, key=lambda item: (item.bbox[1], item.bbox[0]))
-
-
-def _sort_band(blocks: list[_TextBlock], page_width: float) -> list[_TextBlock]:
-    center = page_width / 2
-    left = [block for block in blocks if block.bbox[2] <= center * 1.03]
-    right = [block for block in blocks if block.bbox[0] >= center * 0.97]
-    other = [block for block in blocks if block not in left and block not in right]
-    if len(left) >= 2 and len(right) >= 2 and not other:
-        return sorted(left, key=lambda item: (item.bbox[1], item.bbox[0])) + sorted(
-            right, key=lambda item: (item.bbox[1], item.bbox[0])
-        )
-    return sorted(blocks, key=lambda item: (item.bbox[1], item.bbox[0]))
-
-
-def _reading_order(blocks: list[_TextBlock], page_width: float) -> list[_TextBlock]:
-    full_width = [block for block in blocks if block.width >= page_width * 0.62]
-    narrow = [block for block in blocks if block not in full_width]
-    ordered: list[_TextBlock] = []
-    previous_bottom = -1.0
-    for anchor in sorted(full_width, key=lambda item: (item.bbox[1], item.bbox[0])):
-        band = [
-            block
-            for block in narrow
-            if previous_bottom <= block.bbox[1] < anchor.bbox[1]
-        ]
-        ordered.extend(_sort_band(band, page_width))
-        ordered.append(anchor)
-        previous_bottom = anchor.bbox[3]
-    ordered.extend(
-        _sort_band([block for block in narrow if block not in ordered], page_width)
-    )
-    return list(dict.fromkeys(ordered))
-
-
-def _marker_annotations(blocks: list[_TextBlock]) -> list[dict[str, Any]]:
-    legend = ""
-    for block in blocks:
-        normalized = normalize_inline_text(block.text)
-        if _EXPLICIT_MARKER_LEGEND.search(normalized):
-            legend = normalized
-        if legend:
-            break
-    if not legend:
-        return []
-    affected: list[str] = []
-    for block in blocks:
-        for line in block.lines:
-            if (
-                line.count("*") != 1
-                or not _TRAILING_ASTERISK_MARKER.search(line)
-                or _EXPLICIT_MARKER_LEGEND.search(line)
-            ):
-                continue
-            cleaned = normalize_inline_text(
-                _TRAILING_ASTERISK_MARKER.sub("", line, count=1)
-            )
-            if cleaned and cleaned not in affected:
-                affected.append(cleaned)
-    return [
-        {
-            "type": "legend_marker",
-            "marker": "*",
-            "legend_text": legend,
-            "meaning": normalize_inline_text(
-                _LEADING_ASTERISK_MARKER.sub("", legend, count=1)
-            ),
-            "applies_to": affected,
-        }
-    ]
-
-
-def _vertical_gap(
-    block: tuple[float, float, float, float],
-    region: tuple[float, float, float, float],
-) -> float:
-    if block[3] < region[1]:
-        return region[1] - block[3]
-    if block[1] > region[3]:
-        return block[1] - region[3]
-    return 0.0
-
-
-def _horizontal_overlap_ratio(
-    block: tuple[float, float, float, float],
-    region: tuple[float, float, float, float],
-) -> float:
-    overlap = max(0.0, min(block[2], region[2]) - max(block[0], region[0]))
-    return overlap / max(1.0, min(block[2] - block[0], region[2] - region[0]))
-
-
-def _nearby_region_labels(
-    region: _Region,
-    blocks: list[_TextBlock],
-) -> list[_TextBlock]:
-    """Attach only explicit, nearby captions and marker legends."""
-
-    caption_pattern = _TABLE_CAPTION if region.kind == "table" else _FIGURE_CAPTION
-    result: list[_TextBlock] = []
-    for block in blocks:
-        normalized = normalize_inline_text(block.text)
-        explicit_caption = bool(caption_pattern.match(normalized))
-        explicit_legend = bool(_EXPLICIT_MARKER_LEGEND.search(normalized))
-        if not (explicit_caption or explicit_legend):
-            continue
-        if _vertical_gap(block.bbox, region.bbox) > 96:
-            continue
-        if _horizontal_overlap_ratio(block.bbox, region.bbox) < 0.20:
-            continue
-        result.append(block)
-    return sorted(result, key=lambda item: (item.bbox[1], item.bbox[0]))
-
-
-def _label_annotations(
-    kind: str,
-    blocks: list[_TextBlock],
-) -> list[dict[str, Any]]:
-    caption_pattern = _TABLE_CAPTION if kind == "table" else _FIGURE_CAPTION
-    return [
-        {
-            "type": "caption",
-            "content_kind": kind,
-            "text": normalize_reading_text(block.text),
-        }
-        for block in blocks
-        if caption_pattern.match(normalize_inline_text(block.text))
-    ]
-
-
 def _quality_flags(text: str, kind: str) -> list[str]:
     normalized = normalize_inline_text(text)
     alphabetic = sum(character.isalpha() for character in normalized)
@@ -1347,264 +655,6 @@ def _quality_flags(text: str, kind: str) -> list[str]:
     ):
         flags.append(EXTRACTION_ARTIFACT_TOKEN)
     return flags
-
-
-def _split_prose_and_lists(
-    blocks: list[_TextBlock],
-) -> list[tuple[str, list[_TextBlock]]]:
-    groups: list[tuple[str, list[_TextBlock]]] = []
-    for block in blocks:
-        populated_lines = [line for line in block.lines if line.strip()]
-        list_lines = sum(
-            bool(LIST_ITEM_PATTERN.match(line.strip())) for line in populated_lines
-        )
-        kind = (
-            "list"
-            if populated_lines and list_lines * 2 >= len(populated_lines)
-            else "prose"
-        )
-        if groups and groups[-1][0] == kind:
-            groups[-1][1].append(block)
-        else:
-            groups.append((kind, [block]))
-    return groups
-
-
-def _pdf_locator(page: pymupdf.Page, page_number: int) -> dict[str, Any]:
-    # PyMuPDF's own label lookup filters the document's label tree and indexes
-    # the result, so a tree that starts after the page being asked about makes it
-    # index an empty list and raise IndexError: a document whose labels begin on
-    # page 2 raises on page 1. A locator has to resolve, and the physical page
-    # number always does.
-    try:
-        page_label = str(page.get_label() or page_number)
-    except (RuntimeError, ValueError, IndexError):
-        page_label = str(page_number)
-    return {"type": "pdf_page", "page": page_number, "page_label": page_label}
-
-
-def _pdf_page_units(
-    page: pymupdf.Page,
-    *,
-    page_number: int,
-    blocks: list[_TextBlock],
-    page_width: float,
-    page_height: float,
-    repeated_margins: set[str],
-    document_id: str,
-    source_id: str,
-    title: str,
-) -> tuple[list[dict[str, Any]], bool, _PageRemovals]:
-    locator = _pdf_locator(page, page_number)
-    removals = _PageRemovals(
-        image_only_pages=int(_image_only_page(page, blocks)),
-        pdf_text_recovery_pages=int(any(block.recovery_attempted for block in blocks)),
-        recovered_pdf_blocks=sum(block.recovered for block in blocks),
-    )
-    filtered: list[_TextBlock] = []
-    for block in blocks:
-        in_margin = (
-            block.bbox[3] <= page_height * _MARGIN_TOP
-            or block.bbox[1] >= page_height * _MARGIN_BOTTOM
-        )
-        if in_margin and (
-            _block_signature(block) in repeated_margins
-            or _PAGE_NUMBER.fullmatch(normalize_inline_text(block.text))
-        ):
-            removals.repeated_margin_blocks += 1
-            removals.removed_text_characters += _block_characters(block)
-            continue
-        filtered.append(block)
-    if not filtered:
-        return [], True, removals
-
-    # The non-prose regions are resolved before the layout rules run, because a
-    # detected table is what tells a small block of figures at the foot of the page
-    # apart from a note apparatus. They are not resolved again afterwards.
-    regions = _non_prose_regions(page)
-
-    # Sidebars and footnotes are found after the running furniture is gone, so a
-    # page's own repeated head cannot be mistaken for a narrow column beside its
-    # text, and before the regions are assigned, so a figure's caption is still
-    # reachable as that figure's label.
-    sidebar_numbers = {block.number for block in _sidebar_blocks(filtered, page_width)}
-    footnote_numbers = {
-        block.number
-        for block in _footnote_blocks(
-            [block for block in filtered if block.number not in sidebar_numbers],
-            _body_font_size(filtered),
-            page_height,
-            [region for region in regions if region.kind == "table"],
-        )
-    }
-    if sidebar_numbers or footnote_numbers:
-        removals.sidebar_blocks += len(sidebar_numbers)
-        removals.footnote_blocks += len(footnote_numbers)
-        removed_numbers = sidebar_numbers | footnote_numbers
-        # What the geometry removed is text the file did hold, so it is counted
-        # with the prose the section rules removed. These counts disclose loss;
-        # they do not veto the readable passages elsewhere in the source.
-        removals.removed_text_characters += sum(
-            _block_characters(block)
-            for block in filtered
-            if block.number in removed_numbers
-        )
-        filtered = [block for block in filtered if block.number not in removed_numbers]
-    if not filtered:
-        return [], True, removals
-
-    assigned: set[int] = set()
-    page_units: list[tuple[str, list[_TextBlock]]] = []
-    for region in regions:
-        members = [
-            block
-            for block in filtered
-            if _rect_intersection_ratio(block.bbox, region.bbox) >= 0.35
-        ]
-        nearby_labels = _nearby_region_labels(
-            region,
-            [
-                block
-                for block in filtered
-                if block.number not in assigned and block not in members
-            ],
-        )
-        members.extend(nearby_labels)
-        if not members:
-            continue
-        assigned.update(block.number for block in members)
-        page_units.append((region.kind, members))
-    prose = [block for block in filtered if block.number not in assigned]
-    if prose:
-        page_units[0:0] = _split_prose_and_lists(_reading_order(prose, page_width))
-
-    units: list[dict[str, Any]] = []
-    for region_index, (kind, members) in enumerate(page_units, 1):
-        ordered = (
-            members
-            if kind == "prose"
-            else sorted(members, key=lambda item: (item.bbox[1], item.bbox[0]))
-        )
-        annotations = _label_annotations(kind, ordered)
-        annotations.extend(_marker_annotations(ordered))
-        paragraphs = []
-        for block in ordered:
-            if normalized := normalize_reading_text(block.text):
-                paragraphs.append(normalized)
-        text = "\n\n".join(paragraphs)
-        if not text:
-            continue
-        units.append(
-            {
-                "id": (
-                    f"{document_id}:pdf-page:{page_number:06d}:"
-                    f"region:{region_index:03d}"
-                ),
-                "document_id": document_id,
-                "source_id": source_id,
-                "title": title,
-                "contents": text,
-                "content_kind": kind,
-                "annotations": annotations,
-                "quality_flags": _quality_flags(text, kind),
-                "locator": locator,
-            }
-        )
-    return units, False, removals
-
-
-def _extract_pdf(
-    source: SourceFile,
-    digest: str | None = None,
-) -> tuple[dict[str, Any], list[dict[str, Any]]]:
-    digest = digest or sha256_file(source.path)
-    document_id = _document_id(source, digest)
-    try:
-        document = pymupdf.open(source.path)
-    except Exception as exc:
-        raise ExtractionError(f"Cannot open PDF source: {source.path}") from exc
-
-    recovery_cache: PdfRecoveryCache = {}
-    try:
-        if document.needs_pass:
-            raise ExtractionError(
-                f"Password-protected PDF is unsupported: {source.path}"
-            )
-        metadata = document.metadata or {}
-        pages: list[tuple[list[_TextBlock], float, float]] = [
-            (
-                _page_blocks(
-                    page, source_path=source.path, recovery_cache=recovery_cache
-                ),
-                float(page.rect.width),
-                float(page.rect.height),
-            )
-            for page in document
-        ]
-        automatic, provenance, warnings = _front_matter_identity(
-            pages,
-            metadata,
-            source.path.stem,
-            declared_language=_pdf_declared_language(document),
-        )
-        record = _base_metadata(
-            source=source,
-            document_id=document_id,
-            digest=digest,
-            automatic=automatic,
-            provenance=provenance,
-            warnings=warnings,
-        )
-        repeated_margins = _repeated_margin_signatures(pages)
-        units: list[dict[str, Any]] = []
-        empty_pages = 0
-        removals = _PageRemovals()
-        for page_index, page in enumerate(document):
-            page_number = page_index + 1
-            blocks, page_width, page_height = pages[page_index]
-            page_units, empty, removed = _pdf_page_units(
-                page,
-                page_number=page_number,
-                blocks=blocks,
-                page_width=page_width,
-                page_height=page_height,
-                repeated_margins=repeated_margins,
-                document_id=document_id,
-                source_id=source.source_id,
-                title=str(record["title"]),
-            )
-            units.extend(page_units)
-            empty_pages += int(empty)
-            removals = removals.merge(removed)
-
-        units, section_counts = strip_non_argument_units(units)
-        removals = removals.with_counts(section_counts)
-        record.update(
-            {
-                "physical_pages": document.page_count,
-                "extracted_units": len(units),
-                "empty_units": empty_pages,
-                **removals.record_fields(),
-            }
-        )
-        if removals.image_only_pages >= document.page_count:
-            record["no_text_layer"] = True
-        elif removals.image_only_pages:
-            record["metadata_warnings"] = list(
-                dict.fromkeys(
-                    [
-                        *record.get("metadata_warnings", []),
-                        "image_only_pages_present",
-                    ]
-                )
-            )
-    finally:
-        close_pdf_recovery_cache(recovery_cache)
-        document.close()
-
-    if not units:
-        raise ExtractionError(_no_text_layer_message(source, "PDF"))
-    return record, units
 
 
 def _epub_metadata_values(book: epub.EpubBook, name: str) -> list[str]:
@@ -1714,178 +764,6 @@ def pdf_page_count(source: SourceFile) -> int:
                 f"Password-protected PDF is unsupported: {source.path}"
             )
         return document.page_count
-    finally:
-        document.close()
-
-
-def scan_pdf_pages(
-    source: SourceFile,
-    start_index: int,
-    page_count: int,
-    recovery_cache: PdfRecoveryCache | None = None,
-) -> list[dict[str, Any]]:
-    """A consecutive page batch, from one PDF document handle.
-
-    A caller staging a build passes one source-scoped ``recovery_cache`` for
-    every batch and closes it when the source is done, so the bundled native
-    reader parses the file once per source, not once per batch. Without a cache
-    this call owns a fresh one and closes it before returning.
-    """
-
-    if start_index < 0:
-        raise ValueError("start_index must be non-negative")
-    if page_count <= 0:
-        raise ValueError("page_count must be positive")
-
-    try:
-        document = pymupdf.open(source.path)
-    except Exception as exc:
-        raise ExtractionError(f"Cannot open PDF source: {source.path}") from exc
-    owns_cache = recovery_cache is None
-    cache: PdfRecoveryCache = recovery_cache if recovery_cache is not None else {}
-    try:
-        if document.needs_pass:
-            raise ExtractionError(
-                f"Password-protected PDF is unsupported: {source.path}"
-            )
-        end_index = min(start_index + page_count, document.page_count)
-        scans: list[dict[str, Any]] = []
-        for page_index in range(start_index, end_index):
-            page = document.load_page(page_index)
-            blocks = _page_blocks(page, source_path=source.path, recovery_cache=cache)
-            scans.append(
-                {
-                    "page_index": page_index,
-                    "page_width": float(page.rect.width),
-                    "page_height": float(page.rect.height),
-                    "blocks": [
-                        {
-                            "number": block.number,
-                            "bbox": list(block.bbox),
-                            "lines": list(block.lines),
-                            "text": block.text,
-                            "font_size": block.font_size,
-                            "recovery_attempted": block.recovery_attempted,
-                            "recovered": block.recovered,
-                        }
-                        for block in blocks
-                    ],
-                }
-            )
-        return scans
-    finally:
-        if owns_cache:
-            close_pdf_recovery_cache(cache)
-        document.close()
-
-
-def _blocks_from_scan(scan: dict[str, Any]) -> list[_TextBlock]:
-    return [
-        _TextBlock(
-            number=int(item["number"]),
-            bbox=tuple(float(value) for value in item["bbox"]),
-            lines=tuple(str(value) for value in item["lines"]),
-            text=str(item["text"]),
-            font_size=float(item["font_size"]),
-            recovery_attempted=bool(item.get("recovery_attempted")),
-            recovered=bool(item.get("recovered")),
-        )
-        for item in scan["blocks"]
-    ]
-
-
-def prepare_scanned_pdf(
-    source: SourceFile,
-    digest: str,
-    page_scans: list[dict[str, Any]],
-) -> tuple[dict[str, Any], list[str]]:
-    """PDF metadata and repeated margins, from completed page scans."""
-
-    try:
-        document = pymupdf.open(source.path)
-    except Exception as exc:
-        raise ExtractionError(f"Cannot open PDF source: {source.path}") from exc
-    try:
-        if document.needs_pass:
-            raise ExtractionError(
-                f"Password-protected PDF is unsupported: {source.path}"
-            )
-        pages = [
-            (
-                _blocks_from_scan(scan),
-                float(scan["page_width"]),
-                float(scan["page_height"]),
-            )
-            for scan in page_scans
-        ]
-        automatic, provenance, warnings = _front_matter_identity(
-            pages,
-            document.metadata or {},
-            source.path.stem,
-            declared_language=_pdf_declared_language(document),
-        )
-        record = _base_metadata(
-            source=source,
-            document_id=_document_id(source, digest),
-            digest=digest,
-            automatic=automatic,
-            provenance=provenance,
-            warnings=warnings,
-        )
-        record.update(
-            {
-                "physical_pages": document.page_count,
-                "extracted_units": 0,
-                "empty_units": 0,
-                **empty_removal_counts(),
-            }
-        )
-        return record, sorted(_repeated_margin_signatures(pages))
-    finally:
-        document.close()
-
-
-def extract_scanned_pdf_pages(
-    source: SourceFile,
-    document_record: dict[str, Any],
-    page_scans: list[dict[str, Any]],
-    repeated_margins: list[str],
-) -> list[tuple[int, list[dict[str, Any]], bool, dict[str, int]]]:
-    """A scanned page batch, from one PDF document handle.
-
-    Each entry carries the page's removal counts as a plain mapping, so a staged
-    caller can add them into its checkpoint without holding an extraction type.
-    """
-
-    if not page_scans:
-        raise ValueError("page_scans must not be empty")
-    try:
-        document = pymupdf.open(source.path)
-    except Exception as exc:
-        raise ExtractionError(f"Cannot open PDF source: {source.path}") from exc
-    try:
-        if document.needs_pass:
-            raise ExtractionError(
-                f"Password-protected PDF is unsupported: {source.path}"
-            )
-        repeated_margin_set = set(repeated_margins)
-        batches: list[tuple[int, list[dict[str, Any]], bool, dict[str, int]]] = []
-        for scan in page_scans:
-            page_index = int(scan["page_index"])
-            page = document.load_page(page_index)
-            units, empty, removed = _pdf_page_units(
-                page,
-                page_number=page_index + 1,
-                blocks=_blocks_from_scan(scan),
-                page_width=float(scan["page_width"]),
-                page_height=float(scan["page_height"]),
-                repeated_margins=repeated_margin_set,
-                document_id=str(document_record["document_id"]),
-                source_id=str(document_record["source_id"]),
-                title=str(document_record["title"]),
-            )
-            batches.append((page_index, units, empty, removed.record_fields()))
-        return batches
     finally:
         document.close()
 
@@ -2757,7 +1635,7 @@ def screen_source_units(
 def strip_non_argument_units(
     units: list[dict[str, Any]],
 ) -> tuple[list[dict[str, Any]], dict[str, int]]:
-    """Remove reference and note sections across a whole source's units.
+    """Remove confirmed apparatus across a whole source's units.
 
     A reference list does not fit in one unit. A book's may open with a heading on
     its own page and run over the next three, and an EPUB emits its heading as one
@@ -2770,11 +1648,17 @@ def strip_non_argument_units(
     nothing but entries contributes no unit at all. The counters say what went:
     how many reference paragraphs, how many note paragraphs, and how many
     characters.
+
+    Docling units carry their original structural labels. Their headings and
+    reference entries guide the decision; other item kinds preserve substantive
+    captions, formulas, and notes. EPUB and MOBI keep their markup/text rules.
     """
 
     units_by_index = list(enumerate(units))
     paragraphs: list[str] = []
     positions: list[tuple[int, int]] = []
+    labels: list[str] = []
+    structured = any("docling_label" in unit for unit in units)
     for unit_index, unit in units_by_index:
         for offset, paragraph in enumerate(
             str(unit.get("contents") or "").split("\n\n")
@@ -2783,8 +1667,11 @@ def strip_non_argument_units(
                 continue
             paragraphs.append(paragraph)
             positions.append((unit_index, offset))
+            labels.append(str(unit.get("docling_label") or ""))
 
-    removed_kinds = non_argument_removal_flags(paragraphs)
+    removed_kinds = non_argument_removal_flags(
+        paragraphs, labels=labels if structured else None
+    )
     surviving: dict[int, list[str]] = {index: [] for index, _unit in units_by_index}
     removed_reference = 0
     removed_notes = 0
@@ -2977,23 +1864,27 @@ def _docling_page_units(
         if not text.strip():
             continue
         kind = str(raw.get("content_kind") or "prose")
-        units.append(
-            {
-                "id": (
-                    f"{document['document_id']}:pdf-page:{page_number:06d}:"
-                    f"docling:{index:04d}"
-                ),
-                "document_id": str(document["document_id"]),
-                "source_id": str(document["source_id"]),
-                "title": str(document["title"]),
-                "contents": text,
-                "content_kind": kind,
-                "annotations": [],
-                "quality_flags": _quality_flags(text, kind),
-                "locator": locator,
-                "provenance": list(raw.get("provenance") or []),
-            }
-        )
+        unit = {
+            "id": (
+                f"{document['document_id']}:pdf-page:{page_number:06d}:"
+                f"docling:{index:04d}"
+            ),
+            "document_id": str(document["document_id"]),
+            "source_id": str(document["source_id"]),
+            "title": str(document["title"]),
+            "contents": text,
+            "content_kind": kind,
+            "annotations": [],
+            "quality_flags": _quality_flags(text, kind),
+            "locator": locator,
+            "provenance": list(raw.get("provenance") or []),
+        }
+        # Structural labels the adapter attached to a raw unit travel with it, so
+        # the shared gate can read them. A raw unit without them keeps no key.
+        for field in ("docling_label", "docling_content_layer", "docling_ref"):
+            if (value := raw.get(field)) is not None:
+                unit[field] = value
+        units.append(unit)
     return units
 
 
@@ -3197,12 +2088,23 @@ def extract_sources(
     model_cache_root: Path | None = None,
     docling_env: DoclingEnv | None = None,
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    """Extract every source, routing every PDF through the Docling worker.
+
+    ``pdf_backend`` stays a public keyword for a caller that still passes a
+    project setting, but it is only normalized and never selects a reader: the
+    bundled native reader is retired, so a PDF is always converted by the
+    managed Docling worker. ``docling_env`` must be the environment the caller
+    resolved, because this path never provisions one. EPUB and MOBI are
+    unchanged.
+    """
+
+    backend = normalize_pdf_backend(pdf_backend)
     documents: list[dict[str, Any]] = []
     units: list[dict[str, Any]] = []
-    limit = _effective_pdf_loss_limit(pdf_backend, maximum_unclean_percent)
+    limit = _effective_pdf_loss_limit(backend, maximum_unclean_percent)
     for source in sources:
         digest = (source_digests or {}).get(source.source_relative_path)
-        if source.extension == ".pdf" and pdf_backend == PDF_BACKEND_DOCLING:
+        if source.extension == ".pdf":
             if docling_env is None:
                 raise DoclingEnvironmentError(
                     "Docling extraction requires the managed environment, which "
@@ -3216,8 +2118,6 @@ def extract_sources(
                 model_cache_root=model_cache_root,
                 docling_env=docling_env,
             )
-        elif source.extension == ".pdf":
-            document, extracted = _extract_pdf(source, digest)
         elif source.extension == ".epub":
             document, extracted = _extract_epub(source, digest)
         elif source.extension == ".mobi":

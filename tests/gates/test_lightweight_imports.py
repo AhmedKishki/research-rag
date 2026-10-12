@@ -74,7 +74,11 @@ def run_without_the_model_stack(
     (home / "config" / "research-rag").mkdir(parents=True, exist_ok=True)
     (home / "project" / "sources").mkdir(parents=True, exist_ok=True)
     return subprocess.run(
-        [sys.executable, "-c", _CHILD.format(stack=list(MODEL_STACK), argv=argv)],
+        [
+            sys.executable,
+            "-c",
+            _CHILD.format(stack=list(MODEL_STACK), argv=["research-rag", *argv]),
+        ],
         check=False,
         capture_output=True,
         text=True,
@@ -107,7 +111,7 @@ def _refused_a_missing_stack(completed: subprocess.CompletedProcess[str]) -> str
         ("help", ["help"]),
         ("config", ["--project-root", ".", "config"]),
         ("install", ["install", "--help"]),
-        ("update", ["update"]),
+        ("update", ["--offline", "update"]),
     ),
 )
 def test_a_command_that_only_reports_never_reaches_for_the_model_stack(
@@ -128,6 +132,9 @@ def test_a_command_that_only_reports_never_reaches_for_the_model_stack(
         completed.stderr
     )
     assert "Traceback" not in completed.stderr, completed.stderr
+    assert "invalid choice" not in completed.stderr, completed.stderr
+    if name in {"--version", "help", "install"}:
+        assert "STATUS=0" in completed.stderr, completed.stderr
 
 
 def test_default_doctor_reports_the_missing_stack_rather_than_crashing(
@@ -141,7 +148,7 @@ def test_default_doctor_reports_the_missing_stack_rather_than_crashing(
     """
 
     completed = run_without_the_model_stack(
-        ["research-rag", "--project-root", ".", "doctor"], tmp_path / "home"
+        ["--project-root", ".", "doctor"], tmp_path / "home"
     )
 
     assert not _refused_a_missing_stack(completed), completed.stderr

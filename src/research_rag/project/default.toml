@@ -172,19 +172,19 @@ work_budget_seconds = 1800
 # (identity: recorded in the generation, so a change rebuilds extraction.) EPUB keeps
 # its source-level limit.
 maximum_unclean_percent = 1.0
-# Chunks embedded per gateway call, and PDF pages extracted per call. Throughput only.
+# Chunks per embedding batch and PDF pages per conversion batch. Throughput only.
 embedding_batch_size = 64
 pdf_page_batch_size = 8
-# Which reader turns a PDF into extraction units. "custom" is this app's bundled
-# text-only reader and the default. "docling" converts through a separate,
-# resource-bounded Docling worker with OCR, VLM, and every enrichment disabled.
-# Docling is not part of the app install: an online first use builds a pinned
-# managed environment and fetches models lazily, inside the verified worker, and
-# an offline run needs that environment or fails closed. Both backends reach the
-# same text-quality gate with this project's own loss budget. Changing this
-# rebuilds PDF extraction; a generation built before this key existed is
-# "custom". (identity: recorded in the generation.)
-pdf_backend = "custom"
+# Which reader turns a PDF into extraction units. "docling" is the only
+# operational reader: it converts through a separate, resource-bounded Docling
+# worker with OCR, VLM, and every enrichment disabled. Docling is not part of the
+# app install: an online first use builds a pinned managed environment and
+# fetches models lazily, inside the verified worker, and an offline run needs
+# that environment or fails closed. Extracted text still reaches the
+# text-quality gate with this project's own loss budget. The retired value
+# "custom" (the old bundled reader) is accepted so an existing config keeps
+# resolving, and reads as "docling". (identity: recorded in the generation.)
+pdf_backend = "docling"
 
 [dense]
 # Embedding model for the dense half of retrieval. Every supported name is pinned to

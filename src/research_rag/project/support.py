@@ -781,7 +781,7 @@ def _enrich_chunks(
         unit = units_by_id.get(unit_id)
         if unit is None:
             raise ResearchError(
-                f"UltraRAG returned an unknown extraction unit: {unit_id}"
+                f"Chunker returned an unknown extraction unit: {unit_id}"
             )
         document_id = str(unit["document_id"])
         document = documents_by_id[document_id]

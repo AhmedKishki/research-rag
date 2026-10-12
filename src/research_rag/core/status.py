@@ -18,6 +18,7 @@ branches interleave them differently: `excluded_source_count`,
 from __future__ import annotations
 
 import asyncio
+import logging
 from pathlib import Path
 from typing import Any
 
@@ -57,17 +58,19 @@ from ..runtime.health import health_report
 from ..runtime.version import version_block
 from .source_inventory import exclusion_records
 
+LOGGER = logging.getLogger(__name__)
 
-def generation_upgrade_reasons(
+
+def generation_policy_differences(
     config: ResearchConfig,
     manifest: dict[str, Any],
     policy_fingerprint: str,
 ) -> list[str]:
-    """Return the policy mismatches a generation has, without touching disk.
+    """Return diagnostic policy differences, not instructions to rebuild.
 
     Only the manifest and the current policy constants decide the answer, so a
-    caller that skipped the staleness check can still report whether the
-    generation needs an upgrade. The fingerprint is the caller's: a process
+    caller that skipped the staleness check can still inspect recorded policy
+    provenance. The fingerprint is the caller's: a process
     computes it once from the settings it resolved.
     """
 
@@ -86,25 +89,37 @@ def generation_upgrade_reasons(
         config.settings.maximum_unclean_percent
     ):
         reasons.append("passage_cleaning")
-    # A backend change makes a future build differ, but a selected optional
-    # backend that is not installed cannot run that build: it is a readiness
-    # warning for the next ingest, not a reason an existing servable generation
-    # is reported as needing one.
+    # An unavailable Docling runtime is a future-extraction readiness condition,
+    # not a serving incompatibility. Mixed builds retain per-document provenance;
+    # their target backend never implies every retained PDF was reprocessed.
     source_files = manifest.get("source_files")
     has_pdf = not isinstance(source_files, list) or any(
         str(item.get("source_relative_path") or "").casefold().endswith(".pdf")
         for item in source_files
         if isinstance(item, dict)
     )
-    if (
-        has_pdf
-        and pdf_backend_available(config.settings.pdf_backend, config)
-        and (
-            recorded_pdf_backend_fingerprint(manifest)
-            != pdf_backend_fingerprint(config.settings.pdf_backend, config)
+    if has_pdf and pdf_backend_available(config.settings.pdf_backend, config):
+        current_backend = pdf_backend_fingerprint(config.settings.pdf_backend, config)
+        documents = manifest.get("documents")
+        pdf_documents = (
+            [
+                document
+                for document in documents
+                if isinstance(document, dict)
+                and str(document.get("source_relative_path") or "")
+                .casefold()
+                .endswith(".pdf")
+            ]
+            if isinstance(documents, list)
+            else []
         )
-    ):
-        reasons.append("extraction_backend")
+        recorded_backends = (
+            [recorded_pdf_backend_fingerprint(document) for document in pdf_documents]
+            if pdf_documents
+            else [recorded_pdf_backend_fingerprint(manifest)]
+        )
+        if any(recorded != current_backend for recorded in recorded_backends):
+            reasons.append("extraction_backend")
     if int(manifest.get("artifact_policy_version") or 0) != ARTIFACT_POLICY_VERSION:
         reasons.append("generation_artifacts")
     if manifest.get("metadata_storage_policy") != METADATA_STORAGE_POLICY:
@@ -134,6 +149,62 @@ def generation_upgrade_reasons(
     ):
         reasons.append("retrieval_policy")
     return reasons
+
+
+def generation_upgrade_reasons(
+    config: ResearchConfig,
+    manifest: dict[str, Any],
+    policy_fingerprint: str,
+) -> list[str]:
+    """Name serving incompatibilities, keeping processing drift diagnostic-only.
+
+    A recorded policy describes how immutable evidence was built. A newer policy
+    does not make that evidence unreadable. Query vectors, however, must match
+    the stored embedding identity; incompatible dense retrieval is never served.
+    """
+    differences = generation_policy_differences(config, manifest, policy_fingerprint)
+    required = [
+        reason
+        for reason in differences
+        if reason in {"embedding_model", "project_identity"}
+    ]
+    LOGGER.debug(
+        "Generation %s compatibility: recorded_schema=%s current_schema=%s "
+        "recorded_extraction=%s current_extraction=%s recorded_cleaning=%s "
+        "current_cleaning=%s policy_differences=%s serving_incompatibilities=%s",
+        manifest.get("generation_id"),
+        manifest.get("schema_version"),
+        SCHEMA_VERSION,
+        manifest.get("extraction_policy_version"),
+        EXTRACTION_POLICY_VERSION,
+        manifest.get("cleaning_policy_version"),
+        CLEANING_POLICY_VERSION,
+        differences,
+        required,
+    )
+    return required
+
+
+def generation_diagnostics(
+    config: ResearchConfig,
+    manifest: dict[str, Any],
+    policy_fingerprint: str,
+) -> dict[str, Any]:
+    """Bounded build provenance for verbose status, never an ingestion remedy."""
+    current = {
+        "schema_version": SCHEMA_VERSION,
+        "extraction_policy_version": EXTRACTION_POLICY_VERSION,
+        "cleaning_policy_version": CLEANING_POLICY_VERSION,
+        "artifact_policy_version": ARTIFACT_POLICY_VERSION,
+        "retrieval_policy_fingerprint": policy_fingerprint,
+    }
+    return {
+        "policy_differences": generation_policy_differences(
+            config, manifest, policy_fingerprint
+        ),
+        "recorded": {key: manifest.get(key) for key in current},
+        "current": current,
+    }
 
 
 # Each builder below is one group of the payload, held together because both
@@ -205,7 +276,7 @@ def _upgrade_payload(
     upgrade_required: bool,
     upgrade_reasons: list[str],
 ) -> dict[str, Any]:
-    """Whether the policy moved under this generation, and which policies moved."""
+    """Whether the configured retrieval cannot serve the stored generation."""
 
     return {
         "generation_upgrade_required": upgrade_required,
@@ -374,8 +445,11 @@ class StatusWorkflow:
         # against another's, so the dense and hybrid methods are not served. BM25
         # needs no query embeddings and keeps working.
         embedding_incompatible = "embedding_model" in upgrade_reasons
+        project_incompatible = "project_identity" in upgrade_reasons
         recorded_methods = list(retrieval.get("available_methods") or ["bm25"])
-        if embedding_incompatible:
+        if project_incompatible:
+            available_methods = []
+        elif embedding_incompatible:
             available_methods = [
                 method for method in recorded_methods if method == "bm25"
             ] or ["bm25"]
@@ -399,31 +473,33 @@ class StatusWorkflow:
             for record in chunk_exclusions.values()
             if record["generation_id"] != str(manifest["generation_id"])
         )
-        if ingestion_progress is not None:
+        if project_incompatible:
+            status_message = (
+                "The selected generation belongs to a different project and cannot "
+                "be served here. Select a generation belonging to this project; "
+                "build one only if no compatible generation is retained."
+            )
+        elif ingestion_progress is not None:
             status_message = (
                 "A new generation is in progress; the selected generation remains "
                 "searchable. Call ingest again with the same settings to continue."
             )
         elif source_exclusions_changed:
             status_message = (
-                "Source exclusions are already enforced by retrieval; run ingest "
-                "to rebuild the stored indexes without excluded sources."
+                "Source exclusions are enforced immediately by retrieval; the "
+                "selected generation remains available without ingestion."
             )
         elif embedding_incompatible:
             status_message = (
                 "The selected generation was built with a different embedding "
                 "model, so its dense index cannot be served with the current one. "
-                "BM25 remains available; run ingest to rebuild the dense index."
-            )
-        elif upgrade_reasons:
-            status_message = (
-                "The current generation uses an older extraction or storage schema; "
-                "regenerate it with ingest."
+                "BM25 remains available. Restore the recorded embedding model to "
+                "use existing vectors, or explicitly ingest to build matching vectors."
             )
         elif added or removed or modified:
             status_message = (
-                "Source files differ from the selected generation; call ingest to "
-                "index the current source set."
+                "Source files differ from the selected generation. Existing indexed "
+                "evidence remains searchable; ingest only to update the source snapshot."
             )
         elif metadata_pending_source_paths:
             status_message = (
@@ -439,10 +515,7 @@ class StatusWorkflow:
         elif hybrid_ready:
             status_message = "Current generation supports hybrid retrieval."
         else:
-            status_message = (
-                "Current generation is BM25-only; run ingest to build its "
-                "project-local dense index."
-            )
+            status_message = "Current generation supports BM25 retrieval."
         if absent_chunk_exclusions:
             status_message += (
                 f" {absent_chunk_exclusions} of {len(chunk_exclusions)} chunk "
@@ -457,7 +530,7 @@ class StatusWorkflow:
                 "skipped. Call ingest to retry them; existing passages remain searchable."
             )
         return {
-            **_base_payload(self.config, ready=True, stale=stale),
+            **_base_payload(self.config, ready=not project_incompatible, stale=stale),
             "generation_id": manifest["generation_id"],
             "created_at": manifest["created_at"],
             **_selection_payload(scan, len(selected)),
@@ -497,10 +570,13 @@ class StatusWorkflow:
                 available_methods=available_methods,
             ),
             "hybrid_ready": hybrid_ready,
-            "hybrid_upgrade_required": not hybrid_ready,
+            "hybrid_upgrade_required": embedding_incompatible or project_incompatible,
             **_upgrade_payload(
                 upgrade_required=bool(upgrade_reasons),
                 upgrade_reasons=upgrade_reasons,
+            ),
+            "generation_diagnostics": generation_diagnostics(
+                self.config, manifest, self.retrieval_policy_fingerprint
             ),
             "retrieval": retrieval,
             **_build_payload(

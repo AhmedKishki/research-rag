@@ -873,7 +873,7 @@ async def _http_error(_: Request, exc: Exception) -> JSONResponse:
 
 
 async def _unexpected_error(_: Request, exc: Exception) -> JSONResponse:
-    LOGGER.exception("UltraRAG MCP UI request failed", exc_info=exc)
+    LOGGER.exception("Research workspace request failed", exc_info=exc)
     return JSONResponse(
         {"error": "Unexpected UI failure; inspect the UI host log."},
         status_code=500,

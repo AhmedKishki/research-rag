@@ -59,10 +59,13 @@ FULL_TOOL_DETAIL = "full"
 TOOL_DETAIL_MODES = (LEAN_TOOL_DETAIL, FULL_TOOL_DETAIL)
 LOG_LEVELS = ("debug", "info", "warn", "error")
 DENSE_BACKENDS = ("auto", "exact", "qdrant")
-# Which reader turns a PDF into extraction units. `custom` is the bundled
-# text-only reader; `docling` is the optional, resource-bounded backend. The
-# names live here so the registry and the backend module agree on one source.
-PDF_BACKEND_CHOICES = ("custom", "docling")
+# Which reader turns a PDF into extraction units. `docling` is the only
+# operational reader: it converts through a separate, resource-bounded worker.
+# `custom` names the retired bundled text-only reader and is kept only as a read
+# alias so an existing config or environment that selects it keeps resolving.
+# The names live here so the registry and the backend module agree on one source.
+PDF_BACKEND_CHOICES = ("docling",)
+PDF_BACKEND_READ_ALIASES = (("custom", "docling"),)
 DEFAULT_LANGUAGE = "en"
 LANGUAGE_PATTERN = r"^[a-z]{2,3}$"
 # The longest one ingest call may be told to run. A caller driving a build in one
@@ -698,7 +701,7 @@ SETTINGS: tuple[Setting, ...] = (
         field="embedding_batch_size",
         kind=int,
         layer="runtime",
-        doc="Chunks embedded per gateway call during ingestion.",
+        doc="Chunks handled per embedding batch during ingestion.",
         minimum=1,
         maximum=1024,
         env="RESEARCH_RAG_INGESTION_EMBEDDING_BATCH_SIZE",
@@ -708,7 +711,7 @@ SETTINGS: tuple[Setting, ...] = (
         field="pdf_page_batch_size",
         kind=int,
         layer="runtime",
-        doc="PDF pages extracted per gateway call.",
+        doc="PDF pages extracted per Docling conversion batch.",
         minimum=1,
         maximum=64,
         env="RESEARCH_RAG_INGESTION_PDF_PAGE_BATCH_SIZE",
@@ -720,18 +723,20 @@ SETTINGS: tuple[Setting, ...] = (
         layer="identity",
         normalize_case=True,
         doc=(
-            "Which reader turns a PDF into extraction units. 'custom' is this "
-            "app's bundled text-only reader and the default. 'docling' converts "
-            "through a separate resource-bounded Docling worker with OCR, VLM, "
-            "and every enrichment disabled. Docling is not part of the app "
-            "install: an online first use builds a pinned managed environment "
-            "and fetches models lazily, inside the verified worker, and an "
-            "offline run needs it or fails closed. Both backends reach the same "
-            "text-quality gate with the project's own loss budget. Changing this "
-            "rebuilds PDF extraction; a generation built before it existed is "
-            "'custom'."
+            "Which reader turns a PDF into extraction units. 'docling' is the "
+            "only operational reader: it converts through a separate "
+            "resource-bounded Docling worker with OCR, VLM, and every enrichment "
+            "disabled. Docling is not part of the app install: an online first "
+            "use builds a pinned managed environment and fetches models lazily, "
+            "inside the verified worker, and an offline run needs it or fails "
+            "closed. Extracted text still reaches the text-quality gate with the "
+            "project's own loss budget. The retired value 'custom' (the old "
+            "bundled reader) is accepted so an existing config keeps resolving, "
+            "and reads as 'docling'; a generation built before this default is "
+            "recorded as 'custom' for its own provenance."
         ),
         choices=PDF_BACKEND_CHOICES,
+        read_aliases=PDF_BACKEND_READ_ALIASES,
         env="RESEARCH_RAG_INGESTION_PDF_BACKEND",
     ),
     Setting(

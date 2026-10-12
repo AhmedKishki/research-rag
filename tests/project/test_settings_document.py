@@ -424,47 +424,26 @@ async def test_a_hostile_json_value_is_answered_with_a_refusal_naming_the_key(
     assert not (project / ".research-rag" / "config.toml").exists()
 
 
-async def test_every_key_carries_the_description_the_registry_declares(
+async def test_settings_rows_publish_registry_metadata_and_workspace_schema(
     project: Path,
 ) -> None:
-    answer = await _service(project).settings_read()
-    rows = _rows(answer)
-
-    assert set(rows) == {setting.key for setting in SETTINGS}
-    for setting in SETTINGS:
-        assert rows[setting.key]["doc"] == setting.doc
-        assert rows[setting.key]["doc"].strip()
-
-
-async def test_every_key_carries_the_default_the_packaged_file_declares(
-    project: Path,
-) -> None:
-    """A reader is told what a key starts from, and the file it starts from, once."""
-
     answer = await _service(project).settings_read()
     rows = _rows(answer)
     defaults = packaged_defaults()
 
+    assert json.loads(json.dumps(answer)) == answer
     assert answer["default_file"] == str(default_config_file())
-    assert answer["default_file"].endswith("default.toml")
-    for setting in SETTINGS:
-        assert rows[setting.key]["default"] == defaults[setting.key]
-    # The value in force is the default for every key this project did not write,
-    # and the row says so in one fact rather than by naming the file again. The
-    # suite's own environment supplies the duplicate threshold.
-    assert {row["key"] for row in rows.values() if row["defaulted"]} == set(
-        defaults
-    ) - {"retrieval.duplicate_cosine"}
-
-
-async def test_a_bound_a_choice_or_a_variable_travels_only_where_one_is_declared(
-    project: Path,
-) -> None:
-    answer = await _service(project).settings_read()
-    rows = _rows(answer)
-
+    assert set(rows) == {setting.key for setting in SETTINGS}
     for setting in SETTINGS:
         row = rows[setting.key]
+        assert set(row) >= WORKSPACE_KEYS
+        assert row["doc"] == setting.doc
+        assert row["doc"].strip()
+        assert row["default"] == defaults[setting.key]
+        assert row["writable"] is (row["key"] != "retrieval.duplicate_cosine")
+        assert row["origin"]
+        assert row["cost"]["level"] in {"none", "regeneration", "model"}
+        assert row["cost"]["message"]
         for name, declared in (
             ("minimum", setting.minimum is not None),
             ("maximum", setting.maximum is not None),
@@ -476,42 +455,17 @@ async def test_a_bound_a_choice_or_a_variable_travels_only_where_one_is_declared
         assert row.get("maximum", setting.maximum) == setting.maximum
         assert row.get("choices", list(setting.choices)) == list(setting.choices)
         assert row.get("env", setting.env) == setting.env
+    # The suite's environment overrides only the duplicate threshold.
+    assert {row["key"] for row in rows.values() if row["defaulted"]} == set(
+        defaults
+    ) - {"retrieval.duplicate_cosine"}
     assert rows["runtime.nice"]["minimum"] == 0
     assert rows["runtime.nice"]["maximum"] == 19
     assert rows["runtime.log_level"]["choices"] == list(LOG_LEVELS)
     assert "minimum" not in rows["runtime.offline"]
     assert "choices" not in rows["retrieval.rrf_k"]
 
-
-async def test_the_answer_adds_keys_the_workspace_ignores_and_removes_none(
-    project: Path,
-) -> None:
-    answer = await _service(project).settings_read()
-
-    assert json.loads(json.dumps(answer)) == answer
-    for section in answer["sections"]:
-        for row in section["settings"]:
-            assert set(row) >= WORKSPACE_KEYS
-
-
-async def test_the_settings_answer_names_a_layer_and_a_cost_for_every_key(
-    project: Path,
-) -> None:
-    service = _service(project)
-
-    answer = await service.settings_read()
-
-    rows = [
-        setting for section in answer["sections"] for setting in section["settings"]
-    ]
-    assert {row["key"] for row in rows} == {setting.key for setting in SETTINGS}
-    for row in rows:
-        # The suite's own environment supplies the duplicate threshold.
-        assert row["writable"] is (row["key"] != "retrieval.duplicate_cosine")
-        assert row["origin"]
-        assert row["cost"]["level"] in {"none", "regeneration", "model"}
-        assert row["cost"]["message"]
-    assert answer["message"].endswith(f"{project / '.research-rag' / 'config.toml'}.")
+    assert str(project / ".research-rag" / "config.toml") in answer["message"]
 
 
 async def test_the_read_answer_is_the_one_the_workspace_writes_through(
@@ -590,21 +544,6 @@ async def test_a_key_that_changes_the_reranker_keeps_the_stored_vectors(
     assert cost["requires_ingest"] is False
 
 
-def test_a_change_to_the_passage_cleaning_threshold_costs_a_regeneration(
-    project: Path,
-) -> None:
-    """The threshold is recorded in the generation, so moving it rebuilds text."""
-
-    service = _service(project)
-    before = service.config.settings
-
-    cost = change_cost(before, replace(before, maximum_unclean_percent=2.0))
-
-    assert cost["level"] == "regeneration"
-    assert cost["moved"] == ["passage_cleaning"]
-    assert cost["requires_ingest"] is True
-
-
 def test_setting_cost_names_a_proposed_passage_cleaning_threshold(
     project: Path,
 ) -> None:
@@ -622,28 +561,20 @@ def test_setting_cost_names_a_proposed_passage_cleaning_threshold(
         assert cost["requires_ingest"] is True
 
 
-def test_a_change_to_the_pdf_backend_costs_a_regeneration(project: Path) -> None:
-    """The reader is recorded in the generation, so switching it rebuilds PDFs."""
+def test_the_pdf_backend_setting_has_no_operational_alternative(project: Path) -> None:
+    """Docling is the only reader, so there is no backend switch left to cost.
 
-    service = _service(project)
-    before = service.config.settings
+    A generation still records the reader that produced its PDF units, but the
+    retired bundled reader is a read alias and not a selectable value, so changing
+    this key moves nothing and never obliges a rebuild on its own.
+    """
 
-    cost = change_cost(before, replace(before, pdf_backend="docling"))
-
-    assert cost["level"] == "regeneration"
-    assert cost["moved"] == ["extraction_backend"]
-    assert cost["requires_ingest"] is True
-
-
-def test_the_pdf_backend_setting_costs_a_regeneration(project: Path) -> None:
     service = _service(project)
     key = SETTINGS_BY_KEY["ingestion.pdf_backend"]
 
-    cost = setting_cost(service.config.settings, key, value="docling")
-
-    assert cost["level"] == "regeneration"
-    assert cost["moved"] == ["extraction_backend"]
-    assert cost["requires_ingest"] is True
+    assert key.choices == ("docling",)
+    assert setting_cost(service.config.settings, key)["level"] == "none"
+    assert setting_cost(service.config.settings, key)["requires_ingest"] is False
 
 
 def test_a_passage_cleaning_threshold_that_does_not_move_costs_nothing(

@@ -457,7 +457,9 @@ def _continuation_entry(paragraph: str, kind: str) -> bool:
     )
 
 
-def non_argument_removal_flags(paragraphs: Sequence[str]) -> list[str | None]:
+def non_argument_removal_flags(
+    paragraphs: Sequence[str], *, labels: Sequence[str] | None = None
+) -> list[str | None]:
     """Mark which paragraphs of a sequence belong to a confirmed non-argument section.
 
     Returns one entry per paragraph: the kind removed (`"bibliography"` or
@@ -476,8 +478,17 @@ def non_argument_removal_flags(paragraphs: Sequence[str]) -> list[str | None]:
     section's own shape has confirmed it, so a "References" heading above ordinary
     prose marks nothing at all, and a citation inside an argument is never inside a
     section to begin with.
+
+    Docling callers supply one structural label per paragraph. Only declared
+    headings open sections, and captions, formulas, tables, code, footnotes, and
+    unknown item kinds end them without losing their content. A declared reference
+    still needs an entry's shape. Marked notes need bibliographic content as well,
+    so explanatory notes are not discarded merely because they carry a number.
+    Unlabelled EPUB and MOBI callers retain their existing section rules.
     """
 
+    if labels is not None and len(labels) != len(paragraphs):
+        raise ValueError("Structural labels must match the paragraph sequence")
     flags: list[str | None] = [None] * len(paragraphs)
     heading_index: int | None = None
     kind: str | None = None
@@ -494,16 +505,43 @@ def non_argument_removal_flags(paragraphs: Sequence[str]) -> list[str | None]:
     for index, paragraph in enumerate(paragraphs):
         if not paragraph.strip():
             continue
-        opened = non_argument_section_heading(paragraph)
+        label = labels[index].casefold() if labels is not None else None
+        heading = label in {"section_header", "title"}
+        if (
+            label is not None
+            and not heading
+            and label
+            not in {
+                "text",
+                "reference",
+                "list_item",
+                "list",
+            }
+        ):
+            close()
+            continue
+        opened = (
+            non_argument_section_heading(paragraph)
+            if label is None or heading
+            else None
+        )
         if opened is not None:
             close()
             heading_index, kind = index, opened
             continue
-        if kind is not None and _continuation_entry(paragraph, kind):
+        if heading:
+            close()
+            continue
+        continuation = kind is not None and _continuation_entry(paragraph, kind)
+        if continuation and label is not None and kind == "footnotes":
+            continuation = is_reference_entry(_NOTE_MARKER.sub("", paragraph, count=1))
+        if continuation:
             flags[index] = kind
             confirmed = True
             continue
         close()
+        if label == "reference" and is_reference_entry(paragraph):
+            flags[index] = "bibliography"
     close()
     return flags
 

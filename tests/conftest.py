@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from pathlib import Path
 from typing import Any
 
@@ -8,11 +9,153 @@ import pytest
 from ebooklib import epub
 from platformdirs import user_cache_dir
 
+from research_rag.corpus.docling_env import DoclingEnv
 from research_rag.project.config import ResearchConfig
 from research_rag.storage.records import (
     load_metadata_overrides,
     write_metadata_overrides,
 )
+
+# The managed Docling environment a synthetic test stands in for. No interpreter,
+# no package, no model, and no network is ever touched: `resolve_docling_env`
+# and `ensure_docling_env` are replaced by this value, and the conversion worker
+# by `_synthetic_docling_batch`.
+_FAKE_DOCLING_ENV = DoclingEnv(
+    root=Path("/nonexistent/research-rag-docling-test-env"),
+    spec_fingerprint="test-spec",
+    versions={"docling": "2.135.0", "rapidocr": "3.9.1"},
+)
+
+
+def _synthetic_docling_batch(
+    *,
+    source_path: Path,
+    start: int,
+    end: int,
+    offline: bool,
+    model_cache_root: Path | None,
+    docling_env: DoclingEnv,
+    timeout: float = 180,
+) -> dict[str, Any]:
+    """A Docling-shaped worker result built from a synthetic test PDF.
+
+    This is test-only. It reads the requested 1-based physical pages with
+    pymupdf and emits one prose unit per paragraph, so the staged build, the
+    shared cleaning gate, chunk identity, and search behave as they do over a
+    real conversion without importing Docling or fetching a model. The payload
+    shape is the one ``corpus/extraction.docling_pdf_batch`` consumes.
+    """
+
+    del offline, model_cache_root, docling_env, timeout
+    pages: dict[str, list[dict[str, Any]]] = {}
+    with pymupdf.open(source_path) as document:
+        page_count = document.page_count
+        metadata = document.metadata or {}
+        for page_number in range(max(1, start), min(end, page_count) + 1):
+            raw = document[page_number - 1].get_text("text")
+            # Paragraph breaks survive; a wrapped line inside a paragraph joins.
+            for paragraph in re.split(r"\n\s*\n", raw):
+                text = re.sub(r"\s*\n\s*", " ", paragraph).strip()
+                if not text:
+                    continue
+                pages.setdefault(str(page_number), []).append(
+                    {
+                        "contents": text,
+                        "content_kind": "prose",
+                        "provenance": [
+                            {
+                                "page_no": page_number,
+                                "charspan": [0, len(text)],
+                                "bbox": {"l": 0.0, "t": 0.0, "r": 1.0, "b": 1.0},
+                            }
+                        ],
+                    }
+                )
+    return {
+        "version": "2.135.0",
+        "options": {
+            "ocr": False,
+            "vlm": False,
+            "table_structure": False,
+            "enrichments": False,
+        },
+        "boundary": {"memory.max": str(2 * 1024**3)},
+        "pages": pages,
+        "diagnostics": {
+            "retained_item_count": sum(len(units) for units in pages.values()),
+            "excluded_furniture_item_count": 0,
+            "excluded_picture_child_item_count": 0,
+        },
+        "pdf_metadata": {
+            "title": str(metadata.get("title") or ""),
+            "author": str(metadata.get("author") or ""),
+        },
+        "page_labels": {str(page): str(page) for page in range(1, page_count + 1)},
+        "image_only_pages": 0,
+    }
+
+
+@pytest.fixture(autouse=True)
+def _synthetic_docling_worker(
+    monkeypatch: pytest.MonkeyPatch,
+    request: pytest.FixtureRequest,
+) -> None:
+    """Keep the fast suite offline: never provision or import Docling.
+
+    Docling is the default PDF backend, so an unchanged `write_pdf` test would
+    otherwise try to build a managed environment and download a model. The
+    ingestion workflow resolves that environment lazily, only when a PDF actually
+    extracts, and this fixture replaces it and the conversion worker. A test that
+    exercises the real boundary marks itself ``real_docling`` and keeps the real
+    code path.
+
+    The environment resolver itself is deliberately not replaced: tests of that
+    resolver must keep seeing the real function. A direct extraction test that
+    needs a resolved environment requests ``fake_docling_env`` and passes it to
+    ``extract_sources`` explicitly.
+    """
+
+    if request.node.get_closest_marker("real_docling") is not None:
+        return
+    # The resolver's own tests must keep exercising the real resolver, including
+    # its install path, so they are left untouched.
+    module = getattr(request, "module", None)
+    if module is not None and module.__name__.endswith("test_docling_env"):
+        return
+    import research_rag.corpus.docling_env as docling_env_module
+    import research_rag.corpus.extraction as extraction_module
+    import research_rag.generations.ingestion as ingestion_module
+
+    # Direct extraction helpers call the module-level resolver and pass the
+    # result to `extract_sources` explicitly; production still never provisions
+    # one on its own.
+    monkeypatch.setattr(
+        docling_env_module,
+        "resolve_docling_env",
+        lambda *args, **kwargs: _FAKE_DOCLING_ENV,
+    )
+    monkeypatch.setattr(
+        ingestion_module,
+        "ensure_docling_env",
+        lambda *args, **kwargs: _FAKE_DOCLING_ENV,
+    )
+    monkeypatch.setattr(
+        extraction_module,
+        "run_docling_batch",
+        _synthetic_docling_batch,
+    )
+
+
+@pytest.fixture
+def fake_docling_env() -> DoclingEnv:
+    """The resolved environment a direct extraction test passes explicitly.
+
+    `extract_sources` keeps taking an explicit environment; this only saves a
+    caller from reaching into the autouse stub. It is intentionally not a
+    production auto-resolve.
+    """
+
+    return _FAKE_DOCLING_ENV
 
 
 def write_reviewed_metadata(

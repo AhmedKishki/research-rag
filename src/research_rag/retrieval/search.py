@@ -246,7 +246,7 @@ class SearchWorkflow:
         generation_id = str(manifest["generation_id"])
         if self._loaded_generation == generation_id:
             return
-        await self.ultrarag.initialize_bm25(
+        await self.lexical.initialize_bm25(
             generation_root / manifest["files"]["chunks"],
             generation_root / manifest["files"]["bm25_index"],
             language=self.config.settings.bm25_stopwords_language,
@@ -401,7 +401,7 @@ class SearchWorkflow:
         int,
         int,
     ]:
-        """Rank lexically with the gateway's retriever held for this generation."""
+        """Rank lexically with the lexical retriever held for this generation."""
 
         async with self._retriever(*generation):
             return await self._bm25_ranking_loaded(*args, **kwargs)
@@ -488,7 +488,7 @@ class SearchWorkflow:
         flags_cache: dict[str, int] = {}
         tokens_cache: dict[str, frozenset[str]] = {}
         while True:
-            passages = await self.ultrarag.search_bm25(query, requested)
+            passages = await self.lexical.search_bm25(query, requested)
             missing_contents = [
                 passage for passage in passages if passage not in loaded_contents
             ]
@@ -515,7 +515,7 @@ class SearchWorkflow:
                 candidates = by_contents.get(passage)
                 if not candidates:
                     raise ResearchError(
-                        "UltraRAG returned a passage absent from the current chunk store"
+                        "Lexical backend returned a passage absent from the current chunk store"
                     )
                 chunk = next(
                     (
@@ -734,6 +734,13 @@ class SearchWorkflow:
                 raise ResearchError("No knowledge base exists; call ingest first")
             generation_root, manifest = current
             lease.hold(str(manifest["generation_id"]))
+            guard_upgrade_reasons = tuple(self._generation_upgrade_reasons(manifest))
+            if "project_identity" in guard_upgrade_reasons:
+                raise ResearchError(
+                    "The selected generation belongs to a different project. "
+                    "Select a generation belonging to this project; build one only "
+                    "if no compatible generation is retained."
+                )
             passage_token_policy = self._passage_token_policy(manifest)
             gate_stopwords = self.config.settings.gate_stopwords
             lookup = await self._ensure_artifact_lookup(generation_root, manifest)
@@ -761,7 +768,6 @@ class SearchWorkflow:
             # even where the manifest records them. The reasons are computed from
             # the manifest and the resolved settings only, so a caller that skips
             # the staleness walk cannot bypass this guard.
-            guard_upgrade_reasons = tuple(self._generation_upgrade_reasons(manifest))
             embedding_incompatible = "embedding_model" in guard_upgrade_reasons
             recorded_methods = set(retrieval.get("available_methods") or ["bm25"])
             if embedding_incompatible:
@@ -773,6 +779,14 @@ class SearchWorkflow:
             retrieval_fallback: dict[str, Any] | None = None
             if retrieval_method not in available_methods:
                 if (
+                    method_was_default
+                    and not embedding_incompatible
+                    and "bm25" in available_methods
+                ):
+                    # A readable lexical generation must answer the normal agent
+                    # search surface without requiring an optional dense build.
+                    retrieval_method = "bm25"
+                elif (
                     method_was_default
                     and embedding_incompatible
                     and retrieval_method in {"dense", "hybrid"}
@@ -786,8 +800,9 @@ class SearchWorkflow:
                         "message": (
                             "The selected generation's dense index was built with "
                             "a different embedding model, so it cannot be scored "
-                            "with the current one. BM25 results are returned; run "
-                            "ingest to rebuild the dense index."
+                            "with the current one. BM25 results are returned. Restore "
+                            "the recorded embedding model to use existing vectors, "
+                            "or explicitly ingest to build matching vectors."
                         ),
                         "effect": "bm25_results_returned",
                     }
@@ -796,7 +811,7 @@ class SearchWorkflow:
                     raise ResearchError(
                         f"Current generation does not support {retrieval_method!r}; "
                         f"available methods: {', '.join(sorted(available_methods))}. "
-                        "Run ingest to build a hybrid generation."
+                        "Choose an available method; adding another method is optional."
                     )
 
             requested_source_ids = _requested_ids(source_ids)

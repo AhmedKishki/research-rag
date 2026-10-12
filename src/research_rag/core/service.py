@@ -84,7 +84,7 @@ from ..retrieval.dense import (
     LocalQdrantDenseBackend,
     LocalVectorDenseBackend,
 )
-from ..retrieval.direct import DirectRetrieval
+from ..retrieval.lexical import LexicalBackend
 from ..retrieval.search import SearchWorkflow
 from ..storage.records import (  # noqa: F401
     StorageError,
@@ -131,13 +131,23 @@ class ResearchService(
     def __init__(
         self,
         config: ResearchConfig,
-        ultrarag: DirectRetrieval | None,
+        lexical: LexicalBackend | None = None,
         dense: DenseBackend | None = None,
         *,
         record_searches: bool = True,
+        ultrarag: LexicalBackend | None = None,
     ) -> None:
+        # `ultrarag` is the retired name of this backend, kept so an existing
+        # caller keeps working. Nothing here imports or spawns UltraRAG.
+        if ultrarag is not None:
+            if lexical is not None:
+                raise TypeError(
+                    "ResearchService takes one lexical backend: pass 'lexical', "
+                    "or the retired 'ultrarag' alias, not both."
+                )
+            lexical = ultrarag
         self.config = config
-        self.ultrarag = ultrarag
+        self.lexical = lexical
         # A measurement builds its own service and runs hundreds of searches, so
         # it turns the counts off rather than filling them with its query set.
         self._records_searches = record_searches
@@ -204,9 +214,9 @@ class ResearchService(
         self._loaded_generation: str | None = None
         # Reads take neither lock above, so a search, a passage, the source list,
         # and the status answer while a build runs. Two things are still shared
-        # with a build. The gateway holds one BM25 retriever, which a build points
-        # at the index it is writing, so its use is taken in turn. And a read
-        # names the generation it is reading, so a removal waits for it.
+        # with a build. The lexical backend holds one BM25 retriever, which a build
+        # points at the index it is writing, so its use is taken in turn. And a
+        # read names the generation it is reading, so a removal waits for it.
         self._retriever_lock = asyncio.Lock()
         self._generation_readers: dict[str, int] = {}
         self._readers_left = asyncio.Condition()
@@ -217,6 +227,16 @@ class ResearchService(
         self._document_frequencies: (
             tuple[str, frozenset[str], dict[str, int]] | None
         ) = None
+
+    @property
+    def ultrarag(self) -> LexicalBackend | None:
+        """The retired name for the lexical backend, kept for existing callers."""
+
+        return self.lexical
+
+    @ultrarag.setter
+    def ultrarag(self, backend: LexicalBackend | None) -> None:
+        self.lexical = backend
 
     @asynccontextmanager
     async def _operation(self, *, busy_command: str = "") -> AsyncIterator[None]:
@@ -287,7 +307,7 @@ class ResearchService(
     async def _retriever(
         self, generation_root: Path, manifest: dict[str, Any]
     ) -> AsyncIterator[None]:
-        """The gateway's BM25 retriever, loaded with this generation, for one use.
+        """The lexical backend's BM25 retriever, loaded with this generation, for one use.
 
         A build points the retriever at the index it is writing, so a search
         takes it in turn and loads the generation it is reading on the way in.

@@ -16,7 +16,13 @@ The two retrieval paths, the fusion, the models, chunk identifiers, filters, and
   - A BM25 payload reporting no dense counts, not zeros.
   - An unavailable reranker traced as not applied.
   - A traced search answering identically to an untraced one.
-- `test_ultrarag.py`: a failed start names the reason and both logs, a mid-call exit becomes a tool error naming its log, and the handshake has its own timeout.
-- `test_direct.py`: pinned upstream chunk/BM25 differential checks, exact artifact bytes, bidirectional historical index loading, offline tokenizer caches, and cancellation/concurrency boundaries. Upstream reference checks use a cached source snapshot and skip when it is unavailable; normal backend tests need no legacy library.
+- `test_direct.py`: self-contained historical chunk normalization/window checks,
+  saved-index loading and non-ASCII stopword round-tripping through bm25s, offline
+  tokenizer caches, and cancellation/concurrency boundaries. No upstream source
+  checkout or framework library is required.
+- `test_integration.py` exercises the real direct backend, both indexes, hybrid
+  and dense search, a known passage and excluded neighbour, workspace forwarding,
+  and an offline restart with a reranked search from caches. It needs the cached
+  embedding/reranker models and GPT-2 tokenizer, not an upstream runtime.
 
 - `test_search_filters.py`, `test_chunk_exclusions.py`, and `test_search_evaluation_trace.py` import `FakeDenseBackend`, `FakeUltraRAG`, `ProgressivelyFilteredUltraRAG`, and `UnavailableRerankerDenseBackend` from `tests/core/test_service.py`. The last two take the PDF writer from `tests/conftest.py`. Do not move them without updating those imports.

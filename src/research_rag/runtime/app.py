@@ -631,7 +631,7 @@ def _claim_loopback_port(host: str, port: int) -> socket.socket:
 
 
 def _service_pair(config: ResearchConfig) -> tuple[Any, ResearchService]:
-    """The gateway and the service that speaks through it, built together.
+    """The lexical backend and the service that speaks through it, built together.
 
     The engine is imported here rather than at module scope so that importing this
     module — to read a port record, name a pid, or claim a port — does not need the
@@ -664,15 +664,25 @@ class App:
         )
         self.error: str | None = None
         self.started_at: float | None = None
-        self.gateway, self.service = _service_pair(config)
+        self.lexical, self.service = _service_pair(config)
         self.clients = ClientRegistry()
         self._server: uvicorn.Server | None = None
         self._task: asyncio.Task[None] | None = None
         self._socket: socket.socket | None = None
         self._network_lock = asyncio.Lock()
 
+    @property
+    def gateway(self) -> Any:
+        """The retired name for the lexical backend, kept for existing callers."""
+
+        return self.lexical
+
+    @gateway.setter
+    def gateway(self, backend: Any) -> None:
+        self.lexical = backend
+
     async def set_lan(self, enabled: bool) -> dict[str, Any]:
-        """Replace accepting sockets, not the app, gateway, lifespan, or port.
+        """Replace accepting sockets, not the app, backend, lifespan, or port.
 
         Existing connections stay alive but every request checks the live policy.
         A failed bind restores the old listener before returning a refusal.
@@ -818,7 +828,7 @@ class App:
                 try:
                     yield
                 finally:
-                    await self.gateway.aclose()
+                    await self.lexical.aclose()
 
         return Starlette(
             routes=[
@@ -934,7 +944,7 @@ class App:
             with contextlib.suppress(asyncio.CancelledError, Exception):
                 await task
         self._release_claim()
-        await self.gateway.aclose()
+        await self.lexical.aclose()
         _forget_state(self.config)
 
 

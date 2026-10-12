@@ -5,16 +5,14 @@ What is on disk, how it is read, and what a file's text says about itself.
 | Module | Holds |
 |---|---|
 | `sources.py` | The scan of `sources/`, the policy that decides what is a source, and the stable source ID |
-| `extraction.py` | PDF page extraction, EPUB traversal, MOBI text-part adaptation, the units they yield, the stripping of non-argument sections across a source, and the gate both build paths apply |
+| `extraction.py` | Docling PDF page-unit adaptation, EPUB traversal, MOBI text-part adaptation, source-wide apparatus cleanup, and the shared quality/loss gate |
 | `mobi_reader.py` | Offline, resource-bounded MOBI parsing, in-memory KF8 reconstruction, and bounded serialized-unit handoff; calls shared extraction helpers inside the worker without conversion output |
 | `text_normalization.py` | Reading text as it is read: compatibility characters, whitespace, sentence ends, and the formatting glyphs a symbol face exposed as private use |
 | `text_quality.py` | Whether a string is usable: corruption, scripts, the flags a chunk carries, which paragraphs belong to a non-argument section, and whether a whole source is readable |
-| `pdf_text_recovery.py` | Automatic native-text retries for unhealthy PDF blocks, matched by page geometry |
-| `pdf_native/` | The bundled text-only PDF content-stream interpreter adapted from pdf-tools; no OCR, rendering, or image export |
-| `pdf_backend.py` | The PDF backend registry: the default bundled reader or the optional Docling worker, its resource boundary, availability and its reuse fingerprint |
+| `pdf_backend.py` | The sole operational Docling PDF backend, its resource boundary, readiness, and active versus historical provenance |
 | `docling_env.py` | The managed, versioned Docling environment: lazy first-use install under a bounded lock and cgroup, spec/ABI completion manifest, atomic publish, and the isolated worker bootstrap |
 | `docling_worker.py` | The bounded subprocess entry point; verifies its cgroup before importing Docling and never runs in the parent |
-| `docling_adapter.py` | Pure conversion of a Docling export into units: physical page locators, every provenance character span, caption-only figures, and furniture exclusion |
+| `docling_adapter.py` | Pure conversion of a Docling export into units: physical page provenance, retained structural labels, figure captions and specialised children, and furniture/index exclusion |
 
 ## Rules
 
@@ -24,7 +22,7 @@ What is on disk, how it is read, and what a file's text says about itself.
 - `docling_adapter.py` imports neither Docling nor a PDF library; it reads a plain mapping. `docling_worker.py` imports Docling only inside its `run`, after the resource-boundary check, and the parent process imports neither.
 - An offline Docling extraction never fetches and fails closed on a missing model; an online extraction may fetch one lazily on its first call, inside the verified worker. An online first use also builds the managed environment through `docling_env.py`; an offline run with no ready environment fails closed. `doctor --prefetch-models` provisions both ahead of an offline run.
 - The managed environment is separate from the app's own: its interpreter is run isolated (`-I`) with only the shipped worker pointed at from the app source, so the app's site-packages never reach it and Docling never enters the app's environment.
-- `pymupdf.no_recommend_layout()` runs at import of `extraction.py`, so importing that module has a cost.
+- PyMuPDF supplies PDF page-count probing in the parent; it is not a text-extraction fallback. The Docling worker probes metadata and printed page labels inside its managed runtime.
 - The stored flags a chunk carries (`text_quality.CHUNK_FLAG_*`) and the token
   `extraction.py` writes into `quality_flags` are one contract:
   `EXTRACTION_ARTIFACT_TOKEN` is its name and lives in `text_quality.py`.
@@ -43,17 +41,14 @@ What is on disk, how it is read, and what a file's text says about itself.
 
 ## What the cleanup removes, and what it does not
 
-- Running furniture, a sidebar, and a footnote block are prose-shaped, so no
-  corruption signal can tell them from evidence. They are recognised by page
-  geometry in `extraction._pdf_page_units`, which asks `_repeated_margin_signatures`,
-  `_sidebar_blocks`, and `_footnote_blocks` in that order, so a page's own running
-  head cannot be read as a narrow column beside its text and a caption stays
-  reachable as a figure's label. A page that cannot establish a body block or a
-  body size yields no sidebar and no footnote, which is the direction that keeps a
-  two-column page and a page of tables whole.
-- `_footnote_blocks` requires a leading note marker, smaller type, and a bottom-page
-  position outside detected table regions. Unmarked small-font prose stays.
-  `_body_font_size` uses the character-weighted modal size rather than the median.
+- Docling separates page furniture and document indexes from body text. Its
+  adapter excludes those declared items before chunking and retains labels,
+  content layers, item references, and every provenance span on surviving units.
+- Only declared PDF headings open an apparatus section. Confirmed bibliographic
+  entries can be removed across pages; a reference label alone does not remove
+  prose. Captions, formulas, tables, code, explanatory footnotes, and unknown
+  labels end the section without losing their text. A marked note needs
+  bibliographic content, not merely a number.
 - An EPUB has no page geometry, so `extraction._is_epub_furniture` names it
   instead of measuring it, from the element's own `role`, `class`, and `id`. Only
   the markup is read, so a paragraph that mentions footnotes is untouched.
@@ -73,14 +68,10 @@ What is on disk, how it is read, and what a file's text says about itself.
   scholarship produces; combining marks, accents, superscripts, and subscripts are
   preserved, so a script or a diacritic that a query cannot type is not made
   unreadable by normalization.
-- A PDF font with no usable `ToUnicode` exposes a glyph as the private-use code
-  point `0xF000 + code`. `text_normalization.recover_formatting_glyphs` decodes a
-  Symbol face with Adobe's published encoding, so a bullet written as U+F0B7
-  becomes U+2022, and removes the non-prose glyphs of a recognised dingbat, icon,
-  or mathematics face. Any other face keeps its glyph, which `text_quality` then
-  judges. `text_quality.is_known_formatting_glyph` recognises the Symbol encoding's
-  symbol codes and Adobe's delimiter extenders wherever they appear, so a
-  documented formatting glyph never withholds a readable passage on its own.
+- Recognised formatting glyphs are not evidence of corrupt prose.
+  `text_quality.is_known_formatting_glyph` keeps those glyphs out of the
+  corruption count. Docling supplies the PDF text; no custom font decoder or
+  alternate content-stream reader repairs it.
 - Cleanup counts are recorded per source in `REMOVAL_FIELDS`.
   `removed_non_argument_characters` includes geometric furniture removals and
   reference/note section removals. A source that lost
@@ -88,10 +79,6 @@ What is on disk, how it is read, and what a file's text says about itself.
   reason. A source with image-only pages records the count and adds the
   `image_only_pages_present` warning even when it is indexed, because a mixed file
   is a fact about it rather than a refusal.
-- `extraction._page_blocks` automatically retries unhealthy PDF blocks with the
-  bundled content-stream interpreter. It retries only affected pages and replaces
-  only blocks whose recovered text passes the quality checks. Clean blocks keep
-  their original text and geometry. Images contribute no text.
 - `screen_source_units` evaluates each PDF paragraph before chunking. Clean paragraphs
   bypass repair. `clean_unclean_passage` reverses recognizable UTF-8 mojibake without
   inventing missing glyphs. Paragraphs still unreadable are withheld individually.
@@ -124,8 +111,8 @@ What is on disk, how it is read, and what a file's text says about itself.
   omission.
 - EPUB keeps its existing majority-readable unit and aggregate source checks.
 - Extraction performs no OCR. It reads existing PDF, EPUB, or MOBI text only, so a scanned
-  source needs OCR performed outside this app before it is added. A page is judged
-  a scan by `extraction._image_only_page`, which asks whether the page has no text
-  and an image covering most of it; a share of digits or symbols is not a scan.
+  source needs OCR performed outside this app before it is added. The Docling
+  worker reports image-only pages from its source probe; digits or symbols do not
+  make a page a scan.
   A PDF with no readable text is refused with the remedy to exclude it or open it.
 - No judged precision or recall exists for these cleanup rules. Garbled text without detectable corruption or structure can pass the gate.

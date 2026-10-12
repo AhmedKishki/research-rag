@@ -1,28 +1,28 @@
-"""No test here starts the vanilla gateway, and that is part of what is under test.
+"""CLI routing and local reads do not start a retrieval child process.
 
-The routing tests hand `_operate` a recording stand-in and the laziness tests make the
-transport refuse to be built.
+The routing tests hand `_operate` a recording stand-in. Read-only commands refuse
+subprocess creation and normal service scopes hold the direct lexical backend.
 """
 
 from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import os
 import signal
+import subprocess
 from pathlib import Path
-from typing import Any, ClassVar, Self
+from typing import Any
 
 import pytest
 
-import research_rag.retrieval.ultrarag as ultrarag_module
 import research_rag.runtime.app as app_module
 import research_rag.runtime.ownership as ownership_module
 import research_rag.surfaces.cli as cli_module
 from research_rag.project import registry
 from research_rag.project.config import GATEWAY_EXECUTABLE, ConfigurationError
 from research_rag.project.policy import ResearchError
-from research_rag.retrieval.ultrarag import LazyGateway
 from research_rag.surfaces.cli import (
     _init,
     _metadata_body,
@@ -446,6 +446,92 @@ def test_the_command_line_routes_each_command_to_its_service_operation() -> None
     assert restored["arguments"]["source_path"] == "a.pdf"
 
 
+class _StatusStub:
+    """A status answer with a diagnostic block a lean projection must drop."""
+
+    def __init__(self, payload: dict[str, Any]) -> None:
+        self._payload = payload
+
+    async def status(self) -> dict[str, Any]:
+        return self._payload
+
+
+def test_status_verbose_exposes_generation_diagnostics_that_lean_hides() -> None:
+    diagnostics = {
+        "policy_differences": ["layout_extraction", "retrieval_policy"],
+        "recorded": {
+            "extraction_policy_version": 2,
+            "retrieval_policy_fingerprint": "a",
+        },
+        "current": {
+            "extraction_policy_version": 3,
+            "retrieval_policy_fingerprint": "b",
+        },
+    }
+    payload = {
+        "ready": True,
+        "stale": False,
+        "generation_id": "20260101T000000Z-abcdef",
+        # A usable generation that serves only BM25: the missing dense half is a
+        # limitation, and `generation_upgrade_required` is about serving, not drift.
+        "hybrid_ready": False,
+        "hybrid_upgrade_required": True,
+        "generation_upgrade_required": False,
+        "upgrade_reasons": [],
+        "generation_diagnostics": diagnostics,
+    }
+    operations = _StatusStub(payload)
+
+    # The normal projection is the bounded verdict: diagnostics stay behind
+    # `--verbose`, and a usable generation asks for no build.
+    lean = asyncio.run(_operate(_args("status"), operations))
+    assert "generation_diagnostics" not in lean
+    assert "requires" not in lean
+
+    verbose = asyncio.run(_operate(_args("status", "--verbose"), operations))
+    assert verbose["generation_diagnostics"] == diagnostics
+
+
+class _LoggingSettings:
+    def __init__(self, log_level: str) -> None:
+        self.log_level = log_level
+
+
+class _LoggingConfig:
+    def __init__(self, log_level: str) -> None:
+        self.settings = _LoggingSettings(log_level)
+
+
+def test_cli_logging_follows_the_project_level_on_the_named_logger() -> None:
+    """Only `research_rag` is configured; a dependency keeps its own level.
+
+    The handler is installed once, so a command that resolves logging twice does
+    not stack duplicates, and an unknown level leaves the logger as it was.
+    """
+
+    logger = logging.getLogger(cli_module._LOGGER_NAME)
+    saved_handlers = list(logger.handlers)
+    saved_level = logger.level
+    saved_propagate = logger.propagate
+    logger.handlers.clear()
+    try:
+        cli_module._configure_logging(_LoggingConfig("debug"))
+        assert logger.level == logging.DEBUG
+        assert logger.propagate is False
+        assert len(logger.handlers) == 1
+
+        cli_module._configure_logging(_LoggingConfig("warn"))
+        assert logger.level == logging.WARNING
+        assert len(logger.handlers) == 1
+
+        cli_module._configure_logging(_LoggingConfig("not-a-level"))
+        assert logger.level == logging.WARNING
+    finally:
+        logger.handlers[:] = saved_handlers
+        logger.setLevel(saved_level)
+        logger.propagate = saved_propagate
+
+
 def test_search_carries_its_filters_and_reranks_by_default() -> None:
     service = RecordingService()
 
@@ -580,63 +666,14 @@ def test_metadata_clear_cannot_be_combined_with_a_field() -> None:
     ) == {"title": "T", "authors": ["A", "B"]}
 
 
-class _FakeGatewayClient:
-    """A stand-in for the vanilla stdio client, counting how often it is opened."""
-
-    opened: ClassVar[int] = 0
-    calls: ClassVar[list[str]] = []
-
-    def __init__(self, *_args: Any, **_kwargs: Any) -> None:
-        type(self).opened += 1
-
-    async def __aenter__(self) -> Self:
-        return self
-
-    async def __aexit__(self, *_args: object) -> None:
-        return None
-
-    async def call_tool(self, name: str, *_args: Any, **_kwargs: Any) -> dict[str, str]:
-        type(self).calls.append(name)
-        return {"tool": name}
-
-
-def test_the_gateway_is_opened_by_the_first_call_and_then_reused(
+def test_a_reading_command_never_starts_a_child_process(
     project: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    _FakeGatewayClient.opened = 0
-    _FakeGatewayClient.calls = []
-    monkeypatch.setattr(ultrarag_module, "Client", _FakeGatewayClient)
-    monkeypatch.setattr(
-        ultrarag_module, "create_vanilla_transport", lambda _config: object()
-    )
-    gateway = LazyGateway(_resolve(_args("--project-root", str(project), "status")))
+    def refuse(*_args: Any, **_kwargs: Any) -> Any:
+        raise AssertionError("a command that only reads started a child process")
 
-    async def scenario() -> None:
-        first = await gateway.call_tool("retriever_retriever_init", {})
-        second = await gateway.call_tool("retriever_retriever_search", {})
-        await gateway.aclose()
-
-        assert first == {"tool": "retriever_retriever_init"}
-        assert second == {"tool": "retriever_retriever_search"}
-
-    asyncio.run(scenario())
-
-    assert _FakeGatewayClient.opened == 1
-    assert _FakeGatewayClient.calls == [
-        "retriever_retriever_init",
-        "retriever_retriever_search",
-    ]
-
-
-def test_a_reading_command_never_opens_the_gateway(
-    project: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    def refuse(_config: Any) -> Any:
-        raise AssertionError("a command that only reads opened the vanilla gateway")
-
-    monkeypatch.setattr(ultrarag_module, "create_vanilla_transport", refuse)
+    monkeypatch.setattr(subprocess, "Popen", refuse)
 
     result = asyncio.run(_run(_args("--project-root", str(project), "sources")))
 
@@ -652,22 +689,39 @@ def test_normal_service_scope_uses_direct_backend(project: Path) -> None:
 
     async def scenario() -> None:
         async with _service(config) as service:
-            assert isinstance(service.ultrarag, DirectRetrieval)
+            assert isinstance(service.lexical, DirectRetrieval)
+            assert service.ultrarag is service.lexical
             assert (await service.status())["ready"] is False
 
     asyncio.run(scenario())
 
 
-def test_the_doctor_reports_without_opening_the_gateway(
+def test_the_legacy_service_backend_name_remains_a_passive_alias(project: Path) -> None:
+    from research_rag.core.service import ResearchService
+    from research_rag.retrieval.direct import DirectRetrieval
+
+    config = _resolve(_args("--project-root", str(project), "status"))
+    original, replacement = DirectRetrieval(config), DirectRetrieval(config)
+    service = ResearchService(config, ultrarag=original)
+
+    assert service.lexical is original
+    service.ultrarag = replacement
+    assert service.lexical is replacement
+    assert service.ultrarag is replacement
+    with pytest.raises(TypeError, match="one lexical backend"):
+        ResearchService(config, original, ultrarag=replacement)
+
+
+def test_the_doctor_reports_without_starting_a_child_process(
     project: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Every dependency check reads, so the doctor never starts the gateway."""
+    """Every default dependency check reads; none starts a serving component."""
 
-    def refuse(_config: Any) -> Any:
-        raise AssertionError("the doctor opened the vanilla gateway")
+    def refuse(*_args: Any, **_kwargs: Any) -> Any:
+        raise AssertionError("the doctor started a child process")
 
-    monkeypatch.setattr(ultrarag_module, "create_vanilla_transport", refuse)
+    monkeypatch.setattr(subprocess, "Popen", refuse)
     write_pdf(project / "sources" / "evidence.pdf", ["The cobalt heron."])
 
     result = asyncio.run(_run(_args("--project-root", str(project), "doctor")))

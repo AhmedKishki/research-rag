@@ -7,8 +7,6 @@ import pytest
 from research_rag.corpus.extraction import (
     ExtractionError,
     UncleanSourceError,
-    _repeated_margin_signatures,
-    _TextBlock,
     screen_source_units,
 )
 from research_rag.corpus.sources import SourceFile
@@ -128,29 +126,3 @@ def test_loss_budget_measures_removed_words_not_only_unknown_glyphs() -> None:
             maximum_unclean_percent=2.0,
         )
     assert record["discarded_corrupt_character_count"] == 10
-
-
-def test_chapter_local_damaged_folio_headers_are_confirmed_furniture() -> None:
-    pages = []
-    for index in range(30):
-        text = (
-            f"Introduction \ufffd {index + 1}"
-            if index < 6
-            else f"Unique heading {index}"
-        )
-        block = _TextBlock(0, (20, 20, 200, 35), (text,), text, 8)
-        pages.append(([block], 400.0, 600.0))
-    assert "introduction \ufffd #" in _repeated_margin_signatures(pages)
-
-
-def test_sparse_damaged_margin_text_is_not_assumed_furniture() -> None:
-    pages = []
-    for index in range(30):
-        text = (
-            f"Introduction \ufffd {index + 1}"
-            if index in (0, 15, 29)
-            else f"Unique heading {index}"
-        )
-        block = _TextBlock(0, (20, 20, 200, 35), (text,), text, 8)
-        pages.append(([block], 400.0, 600.0))
-    assert "introduction \ufffd #" not in _repeated_margin_signatures(pages)

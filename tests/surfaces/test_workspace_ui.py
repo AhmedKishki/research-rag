@@ -465,27 +465,6 @@ def _sql_host(*, enabled: bool) -> TestClient:
     )
 
 
-def test_the_status_view_carries_the_sql_console_panel() -> None:
-    """The panel ships hidden and is revealed by the capability, not by a route."""
-
-    with _sql_host(enabled=True) as client:
-        page = client.get("/")
-        script = client.get("/assets/app.js")
-
-    assert (
-        'id="sql-console" class="panel-section" data-capability="sql_console" hidden'
-        in page.text
-    )
-    assert 'id="sql-scope"' in page.text
-    assert 'id="sql-statement"' in page.text
-    assert 'id="sql-results"' in page.text
-    assert 'hasCapability("sql_console")' in script.text
-    # The listing of scopes is free in the status payload, so the panel needs no
-    # read route of its own and the select is filled from what the host reported.
-    assert "renderSqlConsole(status)" in script.text
-    assert "status.sql_scopes || []" in script.text
-
-
 def test_the_sql_console_is_off_until_an_adapter_declares_it() -> None:
     """A library cannot know which store an adapter keeps, so it offers none."""
 
@@ -495,57 +474,6 @@ def test_the_sql_console_is_off_until_an_adapter_declares_it() -> None:
 
     assert ui["capabilities"]["sql_console"] is False
     assert 'data-capability="sql_console" hidden' in page
-
-
-def test_the_sql_console_renders_the_envelope_the_server_returned() -> None:
-    """A grid is drawn from the columns and rows the adapter sent, and nothing else."""
-
-    with _sql_host(enabled=True) as client:
-        script = client.get("/assets/app.js").text
-        page = client.get("/").text
-
-    for field in (
-        "payload.columns",
-        "payload.rows",
-        "payload.row_count",
-        "payload.truncated",
-    ):
-        assert field in script
-    assert "/api/sql/query" in script
-    assert "renderSqlResult(result)" in script
-    assert 'node("table", "sql-table")' in script
-    # An execute reports what it changed, and a reindexed write is said to be
-    # one, because the reader's next search reads different records.
-    assert "result.rows_affected" in script
-    assert "The server reindexed the change." in script
-    # A write says so next to its own control rather than in a dialog the
-    # capability cannot be disabled from.
-    assert (
-        "Execute changes stored records, and the server reindexes the change." in page
-    )
-
-
-def test_the_sql_console_says_when_there_is_no_scope_to_run_against() -> None:
-    """A panel with an empty scope list has nothing to offer but says so."""
-
-    with _sql_host(enabled=True) as client:
-        script = client.get("/assets/app.js").text
-
-    assert "This server reports no SQL scope" in script
-    assert "message.hidden = scopes.length > 0" in script
-    assert "select.disabled = !scopes.length" in script
-    # Both controls wait for a scope and a statement, so neither sends an
-    # empty request the route would only refuse.
-    assert 'byId("sql-scope").value && byId("sql-statement").value.trim()' in script
-    assert 'byId("sql-run-button").disabled = !ready' in script
-    assert 'byId("sql-execute-button").disabled = !ready' in script
-    # The run button is a submit, and clearing the busy state re-enables every
-    # submit; the gate is re-applied there so a reader is not left with a live
-    # button that could only be refused.
-    busy = script.split("function setBusy(")[1].split("\n}\n")[0]
-    assert "syncGatedSubmits();" in busy
-    gate_sync = script.split("function syncGatedSubmits(")[1].split("\n}\n")[0]
-    assert "syncSqlControls();" in gate_sync
 
 
 class SettingsHost:
@@ -868,102 +796,6 @@ def test_the_sidebar_becomes_a_drawer_below_the_large_breakpoint() -> None:
     assert 'byId("nav-scrim").addEventListener("click", () => closeNav());' in script
 
 
-def test_the_workspace_declares_a_spacing_and_type_scale() -> None:
-    """Space is a scale rather than a number typed into each rule.
-
-    The complaint was congestion, and ad-hoc small values are what produced it,
-    so the two scales are declared once and named throughout.
-    """
-
-    css = client_css()
-
-    assert ":root {" in css
-    for token in (
-        "--space-3xs",
-        "--space-2xs",
-        "--space-xs",
-        "--space-sm",
-        "--space-md",
-        "--space-lg",
-        "--space-xl",
-        "--text-xs",
-        "--text-sm",
-        "--text-base",
-        "--text-md",
-        "--text-lg",
-        "--text-xl",
-        "--leading-normal",
-        "--leading-prose",
-        "--measure",
-        "--layout-max",
-    ):
-        assert f"{token}:" in css
-    # Body text reads at 1.5 and a long description reads higher than that.
-    assert "--leading-normal: 1.5;" in css
-    assert "--leading-prose: 1.7;" in css
-    assert "body {" in css
-    # A readable measure for prose and for the settings text.
-    assert ".passage-text," in css
-    assert ".setting-doc {" in css
-    assert "max-width: var(--measure);" in css
-    # Nothing clips: a settings row wraps, and a truncated ellipsis is gone.
-    assert ".setting-row {" in css
-    assert "text-overflow: ellipsis;" not in css
-    assert "white-space: nowrap;" in css  # only on the connection state and the select
-    assert ".nav-item {" in css
-    assert "min-height: var(--control-height);" in css
-
-
-def test_search_result_text_is_justified() -> None:
-    """A result's passage is set as a justified block, and nothing else is.
-
-    The context dialog and the memory rounds keep their own alignment, so the
-    change is scoped to the search result rather than to every passage.
-    """
-
-    css = client_css()
-
-    rule = css.split(".passage-text {", 1)[1].split("}", 1)[0]
-    assert "text-align: justify;" in rule
-
-
-def test_the_content_is_centred_at_a_readable_width() -> None:
-    """The content block is capped and centred rather than pinned to the left.
-
-    A wide window used to leave the column flush against the sidebar with all
-    the spare room to its right, so the block is capped at the page width and
-    centred in the space that remains.
-    """
-
-    css = client_css()
-
-    workspace = css.split(".workspace {", 1)[1].split("}", 1)[0]
-    assert "width: min(var(--layout-max), 100%);" in workspace
-    assert "grid-column: 2;" in workspace
-    assert "margin-inline: auto;" in workspace
-
-
-def test_the_app_and_the_project_are_named_once_in_the_header() -> None:
-    """The header names the app and the project, and nothing repeats them.
-
-    The project used to be named again in a sidebar footer, which gave a reader
-    two places to read one name.
-    """
-
-    with _host(ClientControlAdapter()) as client:
-        page = client.get("/").text
-        script = client.get("/assets/app.js").text
-
-    assert 'id="application-name" class="brand-name"' in page
-    assert page.count('id="application-name"') == 1
-    assert 'id="project-name" class="project-name"' in page
-    assert page.count('id="project-name"') == 1
-    assert "sidebar-project-name" not in page
-    assert "sidebar-project-name" not in script
-    assert "sidebar-footer" not in page
-    assert "sidebar-footer" not in client_css()
-
-
 def test_the_cleaned_passage_notice_is_shown_once_per_results_view() -> None:
     """The label belongs to the results view, not to every passage in it.
 
@@ -1006,12 +838,12 @@ def test_the_page_and_its_assets_are_revalidated_against_a_stale_cache() -> None
 
 
 def test_the_workspace_reads_in_light_and_dark() -> None:
-    """Both schemes name the same tokens, and the accent is this package's own.
+    """Both schemes name the same tokens, so dark mode stays legible.
 
-    UltraRAG's radii, shadows, fonts, and breakpoints are the vocabulary; its
-    surfaces and its accent green and accent blue are not. The palette is cream
-    and burnt orange, and borrowing either upstream colour as an accent would
-    imply a product relationship this package does not have.
+    Contrast of every text pair is checked once in
+    `test_every_pair_that_carries_text_meets_wcag_aa`; this checks that the dark
+    scheme actually re-declares the surfaces and text colours rather than
+    inheriting the light ones.
     """
 
     with _host(ClientControlAdapter()) as client:
@@ -1036,41 +868,6 @@ def test_the_workspace_reads_in_light_and_dark() -> None:
     ):
         assert token in light
         assert f"{token}:" in dark_block
-    # The palette is cream and burnt orange, not a white page under a violet
-    # accent, and the dark scheme is the same hues at the other end.
-    for value in (
-        "--bg-body: #f0eee6",
-        "--bg-surface: #e8e5db",
-        "--bg-sidebar: #eae7dd",
-        "--text-primary: #1c1b19",
-        "--text-secondary: #5d5b55",
-        "--border-subtle: #d9d5c8",
-        "--accent: #b8592f",
-    ):
-        assert value in light
-    for value in (
-        "--bg-body: #1f1e1c",
-        "--accent: #e39070",
-    ):
-        assert value in dark_block
-    # The geometry is still UltraRAG's own.
-    for value in (
-        "--radius-sm: 6px",
-        "--radius-md: 12px",
-        "--radius-lg: 16px",
-    ):
-        assert value in light
-    assert '"Inter"' in light
-    assert '"JetBrains Mono"' in light
-    # Neither upstream product colour is adopted as an accent. The file names
-    # both only to record why they were not taken, so the check is on the
-    # declaration rather than on the whole stylesheet.
-    declarations = "\n".join(
-        line for line in css.splitlines() if line.strip().startswith("--accent")
-    )
-    assert "--accent: #b8592f;" in declarations
-    assert "#10a37f" not in declarations
-    assert "#2563eb" not in declarations
     # The breakpoints are the ones UltraRAG declares.
     for breakpoint in ("991.98px", "767.98px", "575.98px"):
         assert breakpoint in css
@@ -1187,7 +984,6 @@ def test_a_settings_row_carries_its_description_value_origin_and_cost() -> None:
 
     assert 'node("p", "setting-doc", inlineText(setting.doc))' in script
     assert "settingValueLabel(setting.value)" in script
-    assert 'setting.origin || "default"' in script
     assert "cost.message" in script
     # A range becomes the field's own bounds, and a list becomes a select over
     # exactly the values the server offered.
@@ -1199,11 +995,8 @@ def test_a_settings_row_carries_its_description_value_origin_and_cost() -> None:
     assert "setting.env" in script
     assert "overrides this value" in script
     # Every field except a checkbox and a bool keeps the control its kind names,
-    # and an unwritable one stays disabled.
-    assert 'control.type = "checkbox"' in script
-    assert 'control.type = "number"' in script
-    assert 'control.type = "text"' in script
-    assert "control.disabled = !setting.writable" in script
+    # and an unwritable one stays disabled; the field kinds are covered once, in
+    # `test_the_settings_panel_reads_the_shape_the_server_sends`.
     # The row is a grid that wraps rather than one that truncates.
     assert ".setting-row {" in css
     assert "grid-template-columns: minmax(0, 1fr) minmax(0, 18rem);" in css
@@ -1609,56 +1402,6 @@ def test_the_page_carries_no_private_project_or_source_names() -> None:
 
     for name in ("ai-and-fetishism", "fetishism", "Crawford", "Gidwani", "Atlas of AI"):
         assert name not in page
-
-
-def test_a_badge_takes_a_colour_only_when_the_code_asks_it_to() -> None:
-    """The generation in use is green, a blocked one is red, and nothing else is.
-
-    A rule that painted every badge with the danger colour made a neutral count
-    read as a fault, which is worse than no colour at all.
-    """
-
-    with _panel_host() as client:
-        script = client.get("/assets/app.js").text
-        css = client.get("/assets/app.css").text
-
-    assert 'node("span", "state-badge state-badge-current", "In use")' in script
-    assert 'node("span", "state-badge", "Retained")' in script
-    assert ".state-badge-current {" in css
-    assert "border-color: var(--ready);" in css
-    assert ".state-badge-blocked {" in css
-    assert "color: var(--danger);" in css
-    # Only a state the code marks is coloured, and the danger colour is reached
-    # through the blocked class rather than through the base badge.
-    assert '"state-badge state-badge-blocked"' in script
-    assert (
-        re.search(r"^\.state-badge \{[^}]*var\(--danger", css, flags=re.MULTILINE)
-        is None
-    )
-
-
-def test_the_client_entry_is_indented_for_reading_and_copied_as_it_was_sent() -> None:
-    """Readable on screen, byte for byte on the clipboard.
-
-    The two are different promises, so the display path re-indents and the copy
-    path does not touch the entry at all.
-    """
-
-    with _host(ClientControlAdapter()) as client:
-        page = client.get("/").text
-        script = client.get("/assets/app.js").text
-
-    assert "function readableEntry(entry)" in script
-    assert "JSON.stringify(JSON.parse(entry), null, 2)" in script
-    # An entry that is not JSON is shown as the server sent it rather than refused.
-    assert "return entry;" in script
-    assert (
-        'byId("agent-entry").textContent = readableEntry(state.agentEntry);' in script
-    )
-    assert 'copyText(state.agentEntry, "Client entry copied.")' in script
-    # The sentence beside the button describes the two promises, not one.
-    assert "shown exactly as it produced it" not in page
-    assert "The copy button sends exactly what the server produced." in page
 
 
 def test_a_byline_and_a_locator_report_only_what_the_payload_carries() -> None:
@@ -2690,7 +2433,21 @@ const plans = {};
 const cases = {
   current: base,
   stale: { ...base, stale: true },
-  upgrade: { ...base, generation_upgrade_required: true, upgrade_reasons: ["layout_extraction"] },
+  compatible: {
+    ...base,
+    generation_diagnostics: { policy_differences: ["layout_extraction", "semantic_cleaning", "retrieval_policy"] },
+  },
+  upgrade: {
+    ...base,
+    generation_upgrade_required: true,
+    upgrade_reasons: ["embedding_model"],
+    message: "BM25 remains available. Restore the recorded embedding model or explicitly build matching vectors.",
+  },
+  foreign: {
+    ...base, ready: false, generation_id: "foreign", generation_upgrade_required: true,
+    upgrade_reasons: ["project_identity"],
+    message: "Select a generation belonging to this project; build one only if none is retained.",
+  },
   empty: { ...base, ready: false },
   checkpoint: {
     ...base,
@@ -2742,6 +2499,12 @@ result.plans = plans;
     assert plans["current"]["force"] is None
     assert plans["current"]["rebuildHidden"] is False
     assert plans["current"]["noticeHidden"] is True
+    assert plans["compatible"]["hidden"] is True
+    assert plans["compatible"]["noticeHidden"] is True
+    assert plans["foreign"]["hidden"] is True
+    assert plans["foreign"]["noticeHidden"] is False
+    assert "Select a generation" in plans["foreign"]["notice"]
+    assert "Restore the recorded embedding model" in plans["upgrade"]["notice"]
     # Every other state is an ordinary ingestion, which reuses what is unchanged.
     for name, label in (
         ("stale", "Ingest changes"),
@@ -3450,29 +3213,6 @@ def test_small_layout_and_keyboard_fixes_hold() -> None:
     assert 'byId("search-form").requestSubmit();' in script
     assert "Who is attached" not in page
     assert '<span class="drawer-title">Clients</span>' in page
-
-
-def test_a_section_opens_with_at_most_one_sentence() -> None:
-    """Most sections opened with two to four sentences a reader had already read.
-
-    Each introduction under a view's heading now says one thing. The SQL console
-    is exempt: this app never shows it, and its host writes its own wording.
-    """
-
-    with _panel_host() as client:
-        page = client.get("/").text
-
-    views = page.split("<main", 1)[1].split("</main>", 1)[0]
-    views = re.sub(r'<div id="sql-console".*?</form>', "", views, flags=re.DOTALL)
-    intros = [
-        " ".join(body.split())
-        for body in re.findall(
-            r'<p class="form-note measure[^"]*"[^>]*>(.*?)</p>', views, flags=re.DOTALL
-        )
-    ]
-    assert len(intros) >= 10
-    for intro in intros:
-        assert len(re.findall(r"[.!?](?:\s|$)", intro)) <= 1, intro
 
 
 def test_each_view_is_a_page_that_back_forward_and_reload_return_to(

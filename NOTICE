@@ -1,7 +1,8 @@
 UPSTREAM ATTRIBUTION
 
-research-rag is an independent research workspace built on the UltraRAG project
-through vanilla-ultra-rag-mcp-server:
+research-rag is an independent research workspace whose architectural patterns
+and compatible lexical behavior derive from UltraRAG through the historical
+vanilla-ultra-rag-mcp-server:
 
     UltraRAG
     https://github.com/OpenBMB/UltraRAG
@@ -21,8 +22,7 @@ together with the wider UltraRAG contributor community:
     https://github.com/OpenBMB/UltraRAG/graphs/contributors
 
 This app derives its MCP architecture and compatible direct chunker and BM25
-retriever from UltraRAG. The optional legacy gateway retains this pinned
-dependency chain:
+retriever from UltraRAG. The historical upstream revisions are:
 
     vanilla-ultra-rag-mcp-server commit
     fc339c259a672ca4dacb525840eba851d01c4b75
@@ -37,8 +37,8 @@ contains the notice "Copyright 2023 OpenBMB":
     https://github.com/OpenBMB/UltraRAG/blob/3a709a2aea3fbe46acca59c422621c94b6e86857/LICENSE.txt
     https://www.apache.org/licenses/LICENSE-2.0
 
-The verified UltraRAG source snapshot installed by the vanilla gateway retains
-the upstream LICENSE.txt and all upstream notices.
+This project retains the upstream attribution and licence notices for that
+derivation. No UltraRAG source snapshot is installed, executed, or validated.
 
 ADDITIONAL RETRIEVAL COMPONENTS
 
@@ -54,8 +54,8 @@ The hybrid retrieval implementation also depends on:
     https://github.com/AhmedKishki/bm25s/tree/20f6c02612b8114dca4662131ba09d5102c53308
 
 The direct backend preserves the historical GPT-2 chunk windows, BM25 semantics,
-and saved index layout. The legacy UltraRAG library is optional, not a required
-dependency of normal retrieval.
+and saved index layout. UltraRAG is not an installation or runtime dependency;
+the retired gateway exposes no upstream tools.
 
     Qdrant Python client 1.19.1 (Apache License 2.0)
     https://github.com/qdrant/qdrant-client
@@ -76,16 +76,7 @@ dependency of normal retrieval.
 
 DOCUMENT EXTRACTION COMPONENTS
 
-The text-only PDF fallback in src/research_rag/corpus/pdf_native/ is adapted from
-the same author's pdf-tools content-stream interpreter with the author's permission:
-
-    pdf-tools
-    https://github.com/AhmedKishki/pdf-tools
-
-This copy is maintained and licensed as part of research-rag. It resolves no
-dependency on pdf-tools and includes no OCR, rendering, or image export.
-
-PDF page extraction and EPUB section extraction depend on components that are
+PDF page probing and EPUB section extraction depend on components that are
 NOT permissively licensed. A recipient or redistributor must satisfy their
 terms, which are separate from whatever license this repository's own code
 carries:
@@ -134,10 +125,10 @@ covered combination, including applicable license, notice, and corresponding
 source requirements. The Apache grant for this repository's own code does not
 relicense mobi or make the installed dependency combination Apache-only.
 
-OPTIONAL DOCLING PDF BACKEND
+DOCLING PDF EXTRACTION
 
-`ingestion.pdf_backend=docling` is opt-in and installs the `docling` extra. The
-default installation does not carry it.
+Docling is the PDF extractor. It runs in a separately managed environment rather
+than being installed into the app's environment.
 
     Docling 2.135.0 (MIT License)
     https://pypi.org/project/docling/
@@ -151,12 +142,12 @@ The pins are explicit because docling 2.135.0 imports a symbol rapidocr 3.10.0
 removed, so docling and rapidocr 3.9.1 install together even though this app runs
 with OCR disabled.
 
-Docling is not installed with this app. When `ingestion.pdf_backend=docling` is
-selected, the app builds a separate, pinned virtual environment for it under the
-user cache on first use, and runs it there; the app's own environment never
+Docling is not installed with this app. The first PDF conversion builds a
+separate, pinned virtual environment for it under the user cache and runs it
+there; the app's own environment never
 carries Docling. Docling resolves its own Python dependency chain, which carries
 packages under their own licenses; this repository makes no claim about them and
-does not relicense them. An online run may fetch Docling's own layout and table
+does not relicense them. An online run may fetch Docling's required layout
 model artifacts to a local cache lazily on first use, inside the bounded worker;
 an offline run never fetches them. Those model files are separate works under
 their own licenses, are not redistributed here, and must be reviewed against the
@@ -184,38 +175,37 @@ Local phone-access QR generation depends on:
     python-qrcode (BSD License)
     https://github.com/lincolnloop/python-qrcode
 
-The browser workspace, the settings layer, and the UltraRAG gateway are this
+The browser workspace, the settings layer, and the retirement command shims are this
 project's own code:
 
     src/research_rag/surfaces/workspace/
     src/research_rag/project/settings_layers/
     src/research_rag/gateway/
 
-The workspace, the settings layer, and the gateway were each developed in an
-earlier repository of the same author and were part of this codebase from the
-start, so this project resolves no dependency on another of that author's
-projects. None of them carries UltraRAG source: the gateway installs a pinned,
-clone-free UltraRAG snapshot at run time and proxies its stages over MCP.
+The workspace and settings layer originated in earlier repositories of the same
+author. This project maintains them here and resolves no dependency on those
+projects. The gateway/runtime command names remain only as side-effect-free
+migration guidance. None carries an UltraRAG source runtime.
 
 PROVENANCE
 
 This repository was created from `research-ultra-rag-mcp-server`, an independent
-MCP server over the same engine. That server is archived and still installed on
-the machines that carry it, and both read and write the same projects. The
-on-disk state format is byte-compatible, so both may serve one project.
+MCP server over the same engine. That server is archived. Historical on-disk
+compatibility identifiers remain so existing research projects stay readable;
+dependency retirement does not rewrite their artifacts.
 
     research-ultra-rag-mcp-server
     seed commit 0f5da3d611ae12b9807bae93c7f270b7d303b35f
     https://github.com/AhmedKishki/research-ultra-rag-mcp-server
 
-The retrieval, extraction, generation, and storage code is that project's. The
-changes are the product surface, the command names, the launcher and settings
-names described in `AGENTS.md`, and the documents. The upstream project's own
-history remains there.
+The early retrieval, extraction, generation, and storage implementations derive
+from that project. This repository maintains its own implementations, product
+surfaces, command names, settings, and documents. The original history remains
+in the archived repository.
 
 SUGGESTED SOFTWARE CITATION
 
-The pinned UltraRAG revision does not include a dedicated UltraRAG BibTeX entry.
+The historical UltraRAG revision does not include a dedicated UltraRAG BibTeX entry.
 When citing the software, a suitable repository citation is:
 
     UltraRAG contributors. UltraRAG, version 0.3.0.2, commit
@@ -230,5 +220,5 @@ INDEPENDENT PROJECT NOTICE
 
 This repository is not an official UltraRAG release and is not affiliated with
 or endorsed by OpenBMB, THUNLP, NEUIR, AI9stars, or the UltraRAG contributors.
-The UltraRAG name is used only to identify the upstream software on which this
-app depends.
+The UltraRAG name identifies the upstream work from which compatible lexical
+behavior and architectural patterns derive, not a current runtime dependency.

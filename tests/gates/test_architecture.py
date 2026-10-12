@@ -8,7 +8,11 @@ environment cannot fool the test.
 from __future__ import annotations
 
 import ast
+from collections.abc import Iterator
+from functools import cache
 from pathlib import Path
+
+import pytest
 
 PACKAGE = Path(__file__).resolve().parents[2] / "src" / "research_rag"
 SURFACES = PACKAGE / "surfaces"
@@ -19,9 +23,7 @@ SURFACES = PACKAGE / "surfaces"
 # `surfaces/workspace/app.py` is the workspace that adapter serves;
 # `surfaces/mcp.py` declares the agent's tools; and `bridge.py` proxies stdio to
 # the app the workspace and the agent surface are already served by.
-# `ultrarag.py` is the typed boundary over the gateway, which is reached over
-# MCP, so it has always been allowed to name FastMCP, and `gateway/server.py` is
-# that gateway: the process this app spawns and speaks MCP to.
+# Retired gateway command shims import no web stack or external framework.
 #
 # `surfaces/cli.py` is deliberately absent: the command line reaches the app
 # through `app.py` and `control.py` and imports no web stack of its own, which is
@@ -33,11 +35,9 @@ WEB_MODULES = frozenset(
         "surfaces/bridge.py",
         "runtime/control.py",
         "surfaces/workspace/write_guard.py",
-        "gateway/server.py",
         "surfaces/mcp.py",
         "surfaces/ui.py",
         "surfaces/workspace/app.py",
-        "retrieval/ultrarag.py",
     }
 )
 
@@ -50,8 +50,7 @@ CROSS_SURFACE = {
     "surfaces/ui.py": frozenset({"surfaces/cli.py", "surfaces/mcp.py"}),
 }
 
-# `mcp` stays listed beside `fastmcp` because the gateway is reached over MCP, so an
-# engine module importing either has changed the architecture.
+# An engine module importing either MCP implementation crosses the surface boundary.
 WEB_IMPORTS = frozenset({"fastmcp", "mcp", "pydantic", "starlette", "uvicorn"})
 
 
@@ -67,8 +66,17 @@ def _relative(relative: str) -> str:
     return relative.replace("\\", "/")
 
 
+@cache
 def _parse(path: Path) -> ast.Module:
     return ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+
+
+@pytest.fixture(scope="module", autouse=True)
+def _parsed_source_snapshot() -> Iterator[None]:
+    """Share trees within a gate run, not across subsequent pytest invocations."""
+    _parse.cache_clear()
+    yield
+    _parse.cache_clear()
 
 
 def _absolute_imports(path: Path) -> set[str]:
@@ -113,6 +121,15 @@ def test_only_a_surface_imports_the_web_stack() -> None:
         "modules importing the web stack changed; the surface set is "
         f"{sorted(WEB_MODULES)}"
     )
+
+
+def test_no_module_imports_the_retired_ultrarag_library() -> None:
+    offenders = [
+        path.relative_to(PACKAGE).as_posix()
+        for path in sorted(PACKAGE.rglob("*.py"))
+        if "ultrarag" in _absolute_imports(path)
+    ]
+    assert offenders == [], f"modules still importing UltraRAG: {offenders}"
 
 
 def test_no_engine_module_imports_a_surface() -> None:

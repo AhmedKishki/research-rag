@@ -1,8 +1,12 @@
 """The extraction health gate: what is cleaned, what is withheld, what is refused.
 
-Every case states its geometry or its markup and then checks one thing. The
-synthetic sources are built here rather than shipped as fixtures so a reader can
-see the placement, the size, and the class that decides each verdict.
+Every case states its markup, its recorded Docling conversion, or its geometry,
+and then checks one thing. EPUB and MOBI cases state markup; a PDF case records
+the Docling payload the managed worker would return for it, because the bundled
+native reader is retired and no Docling model is fetched in a test. The
+conversion worker is otherwise stubbed by the suite fixture, and a case overrides
+it with its own recorded payload when it needs exact paragraph boundaries or
+worker diagnostics.
 """
 
 from __future__ import annotations
@@ -12,6 +16,7 @@ import json
 import sys
 from collections import Counter
 from pathlib import Path
+from typing import Any
 
 import pymupdf
 import pytest
@@ -19,6 +24,7 @@ from ebooklib import epub
 
 import research_rag.corpus.extraction as extraction_module
 from research_rag.core.service import ResearchService
+from research_rag.corpus import docling_env as docling_env_module
 from research_rag.corpus.extraction import (
     REMOVAL_FIELDS,
     ExtractionError,
@@ -86,13 +92,6 @@ ENTRY_ONE = (
     "Smith, J. (2019). A survey of the field. Journal of Studies, 12(3), pp. 14-29."
 )
 ENTRY_TWO = "Jones, A. (2020). Another account. Review, 4(2), pp. 5-11."
-# A running head that repeats on every page of a book, which is what the repeated
-# margin rule is for.
-RUNNING_HEAD = (
-    "The Harvest Accounts of the Lower Town, volume four, edited from the "
-    "council minute books and the customs returns of the assay office, printed "
-    "for the historical society and sold at the shop beside the quay."
-)
 # Legitimate prose outside the Latin script, with the vowel points and matras each
 # of these scripts writes with.
 HEBREW = "הַאַרְכִיב יִסְדֹּ אֶת הַקִּיאָה וְהַדֶּרֶךְ הֵחִילָה לְפִי הַמַּחְקֵר אֶת שְׁנוֹת הַמִּלְחִימָה וְאֶת צִמְחֵי הָעִיר בְּעִיר."
@@ -164,7 +163,12 @@ def _epub(path: Path, sections: dict[str, str]) -> None:
 
 def _extracted(project: Path) -> tuple[list[dict], list[dict]]:
     config = resolve_config(project, vanilla_executable=sys.executable)
-    return extract_sources(scan_sources(config).selected)
+    # Resolve through the module, not a bound import, so the autouse synthetic
+    # Docling stub is the environment this direct path extracts with.
+    return extract_sources(
+        scan_sources(config).selected,
+        docling_env=docling_env_module.resolve_docling_env(config),
+    )
 
 
 def _combined(units: list[dict]) -> str:
@@ -199,6 +203,107 @@ def _unit(index: int, text: str, *, content_kind: str = "prose") -> dict:
         "content_kind": content_kind,
         "locator": {"type": "pdf_page", "page": index, "page_label": str(index)},
     }
+
+
+def _docling_payload(
+    pages: dict[int, list[str]],
+    *,
+    page_count: int,
+    title: str = "Gate PDF",
+    author: str = "Gate Author",
+    excluded_furniture: int = 0,
+    image_only_pages: int = 0,
+) -> dict[str, Any]:
+    """A recorded Docling worker result with one raw unit per paragraph.
+
+    A real conversion is not available offline, so a case records what the worker
+    would return: each paragraph is one item in physical page order, with the
+    worker's own diagnostics. This drives the same extract -> gate path a real
+    conversion reaches without importing Docling or fetching a model.
+    """
+
+    raw_pages: dict[str, list[dict[str, Any]]] = {}
+    retained = 0
+    for page_number in sorted(pages):
+        units: list[dict[str, Any]] = []
+        for paragraph in pages[page_number]:
+            units.append(
+                {
+                    "contents": paragraph,
+                    "content_kind": "prose",
+                    "docling_label": (
+                        "section_header"
+                        if paragraph in {REFERENCES_HEADING, "Notes", "Appendix"}
+                        else "text"
+                    ),
+                    "docling_content_layer": "body",
+                    "docling_ref": f"#/texts/{retained + len(units)}",
+                    "provenance": [
+                        {
+                            "page_no": page_number,
+                            "charspan": [0, len(paragraph)],
+                            "bbox": {"l": 0.0, "t": 0.0, "r": 1.0, "b": 1.0},
+                        }
+                    ],
+                }
+            )
+        raw_pages[str(page_number)] = units
+        retained += len(units)
+    return {
+        "version": "2.135.0",
+        "options": {
+            "ocr": False,
+            "vlm": False,
+            "table_structure": False,
+            "enrichments": False,
+        },
+        "boundary": {"memory.max": str(2 * 1024**3)},
+        "pages": raw_pages,
+        "diagnostics": {
+            "retained_item_count": retained,
+            "excluded_furniture_item_count": excluded_furniture,
+            "excluded_picture_child_item_count": 0,
+        },
+        "pdf_metadata": {"title": title, "author": author},
+        "page_labels": {str(page): str(page) for page in range(1, page_count + 1)},
+        "image_only_pages": image_only_pages,
+    }
+
+
+def _record_docling_pages(
+    monkeypatch: pytest.MonkeyPatch,
+    path: Path,
+    pages: dict[int, list[str]],
+    *,
+    page_count: int | None = None,
+    **payload_options: Any,
+) -> None:
+    """Write a placeholder PDF and record the Docling result the worker returns.
+
+    The PDF exists so the page count and digest are real; its own text is never
+    read, because the recorded payload is what the extraction consumes. The
+    worker is answered per requested batch range, as the managed worker is.
+    """
+
+    total = page_count if page_count is not None else (max(pages) if pages else 1)
+    document = pymupdf.open()
+    document.set_metadata({"title": "Gate PDF", "author": "Gate Author"})
+    for _ in range(total):
+        document.new_page()
+    document.save(path)
+    document.close()
+
+    payload = _docling_payload(pages, page_count=total, **payload_options)
+
+    def run(*, start: int, end: int, **_kwargs: Any) -> dict[str, Any]:
+        selected = {
+            key: value
+            for key, value in payload["pages"].items()
+            if start <= int(key) <= end
+        }
+        return {**payload, "pages": selected}
+
+    monkeypatch.setattr(extraction_module, "run_docling_batch", run)
 
 
 # ---------------------------------------------------------------------------
@@ -253,19 +358,6 @@ def test_a_word_that_names_a_section_is_not_a_section_heading() -> None:
         "References to the earlier work show a consistent gap in the record.",
         "The gap is the subject of this chapter.",
         "The next paragraph makes the case in full and must survive intact.",
-    )
-
-    assert _removed(text) == (text, ())
-
-
-def test_a_reference_heading_above_ordinary_prose_is_not_a_reference_list() -> None:
-    text = _paragraphs(
-        REFERENCES_HEADING,
-        (
-            "The chapter collects what the archive holds and does not pretend the "
-            "collection is complete."
-        ),
-        "Each account is dated so that a later reader can order them.",
     )
 
     assert _removed(text) == (text, ())
@@ -505,6 +597,77 @@ def test_formulas_and_numbered_argument_are_not_a_note_apparatus() -> None:
     # No heading opens this block, so the marker-led paragraphs stay: a numbered
     # argument is body text, and only a heading makes a marked run an apparatus.
     assert _removed(text) == (text, ())
+
+
+@pytest.mark.parametrize(
+    "label", ["caption", "formula", "table", "code", "footnote", "unknown"]
+)
+def test_docling_content_labels_end_an_apparatus_without_removing_content(
+    label: str,
+) -> None:
+    units = [
+        {**_unit(1, REFERENCES_HEADING), "docling_label": "section_header"},
+        {**_unit(2, ENTRY_ONE), "docling_label": "reference"},
+        {**_unit(3, ENTRY_TWO), "docling_label": label},
+        {**_unit(4, ENTRY_ONE), "docling_label": "text"},
+    ]
+
+    kept, counts = strip_non_argument_units(units)
+
+    assert [unit["contents"] for unit in kept] == [ENTRY_TWO, ENTRY_ONE]
+    assert kept[0]["docling_label"] == label
+    assert kept[0]["locator"] == units[2]["locator"]
+    assert counts["removed_reference_segments"] == 2
+
+
+@pytest.mark.parametrize("label", ["text", "unknown"])
+def test_docling_requires_a_declared_heading_before_removing_a_reference_section(
+    label: str,
+) -> None:
+    paragraphs = [REFERENCES_HEADING, ENTRY_ONE]
+
+    assert non_argument_removal_flags(paragraphs, labels=[label, "text"]) == [
+        None,
+        None,
+    ]
+
+
+def test_docling_reference_label_still_requires_a_bibliographic_entry() -> None:
+    paragraphs = [ENTRY_ONE, "Jones, A. (2020) argues that the road came first."]
+
+    assert non_argument_removal_flags(
+        paragraphs, labels=["reference", "reference"]
+    ) == ["bibliography", None]
+
+
+def test_docling_notes_keep_explanations_and_end_at_a_content_heading() -> None:
+    paragraphs = [
+        "Notes",
+        f"1 {ENTRY_ONE}",
+        "2 The estimator is valid only when the variance is finite.",
+        f"3 {ENTRY_TWO}",
+        REFERENCES_HEADING,
+        ENTRY_ONE,
+        ENTRY_TWO,
+    ]
+
+    assert non_argument_removal_flags(
+        paragraphs,
+        labels=[
+            "section_header",
+            "text",
+            "text",
+            "text",
+            "section_header",
+            "text",
+            "section_header",
+        ],
+    ) == ["footnotes", "footnotes", None, None, "bibliography", "bibliography", None]
+
+
+def test_structural_labels_must_cover_the_whole_paragraph_sequence() -> None:
+    with pytest.raises(ValueError, match="Structural labels"):
+        non_argument_removal_flags([ENTRY_ONE], labels=[])
 
 
 def test_a_quotation_within_body_text_is_not_read_as_an_apparatus() -> None:
@@ -1159,75 +1322,34 @@ def test_the_gate_records_the_removal_counts_the_extractor_reported() -> None:
 
 
 # ---------------------------------------------------------------------------
-# Geometry: sidebars and footnotes, and the furniture they must not be confused with
+# Furniture: excluded by the worker, and the content it must not be confused with
 # ---------------------------------------------------------------------------
 
 
-def test_a_sidebar_beside_the_body_column_is_not_indexed(project: Path) -> None:
-    _pdf(
-        project / "sources" / "sidebar.pdf",
-        [
-            [
-                ((72, 100, 540, 300), BODY_PROSE, 10.0),
-                ((24, 100, 58, 300), "A marginal note about the margin rule.", 8.0),
-            ]
-        ],
+def test_excluded_furniture_is_counted_and_the_argument_is_indexed(
+    project: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A running head or marginal note the worker excluded is not indexed.
+
+    The managed worker removes declared page furniture before it emits units and
+    reports how many items it dropped; the extraction records that count. Geometry
+    no longer decides furniture, so one case covers a head, a footer, and a
+    margin. The native sidebar and small-font footnote geometry rules are retired;
+    the furniture-layer exclusion in `test_docling_adapter.py` is their supported
+    replacement.
+    """
+
+    _record_docling_pages(
+        monkeypatch,
+        project / "sources" / "furniture.pdf",
+        {1: [BODY_PROSE]},
+        excluded_furniture=1,
     )
 
     documents, units = _extracted(project)
 
-    assert "A marginal note about the margin rule." not in _combined(units)
     assert "layout decision before it is a reading one" in _combined(units)
-    assert documents[0]["removed_sidebar_blocks"] == 1
-
-
-def test_a_sidebar_to_the_right_of_the_body_column_is_not_indexed(
-    project: Path,
-) -> None:
-    _pdf(
-        project / "sources" / "sidebar-right.pdf",
-        [
-            [
-                ((72, 100, 480, 300), BODY_PROSE, 10.0),
-                (
-                    (494, 100, 528, 300),
-                    "A marginal note to the right of the body.",
-                    8.0,
-                ),
-            ]
-        ],
-    )
-
-    documents, units = _extracted(project)
-
-    assert "A marginal note to the right" not in _combined(units)
-    assert documents[0]["removed_sidebar_blocks"] == 1
-
-
-def test_a_footnote_set_in_the_foot_of_the_page_below_the_body_is_not_indexed(
-    project: Path,
-) -> None:
-    """A note takes all four conditions: smaller, low, separated, and marked."""
-
-    _pdf(
-        project / "sources" / "footnote.pdf",
-        [
-            [
-                ((72, 100, 540, 320), BODY_PROSE, 10.0),
-                (
-                    (72, 700, 540, 760),
-                    "1 The note explains the definition used in the table above.",
-                    7.0,
-                ),
-            ]
-        ],
-    )
-
-    documents, units = _extracted(project)
-
-    assert "The note explains the definition" not in _combined(units)
-    assert documents[0]["removed_footnote_blocks"] == 1
-    assert documents[0]["removed_non_argument_characters"] > 0
+    assert documents[0]["removed_repeated_margin_blocks"] == 1
 
 
 def test_an_unmarked_note_in_the_foot_of_the_page_is_kept(project: Path) -> None:
@@ -1543,7 +1665,7 @@ def test_an_ambiguous_references_heading_above_prose_is_kept(project: Path) -> N
 
 
 def test_a_pdf_reference_list_running_over_several_pages_is_removed(
-    project: Path,
+    project: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """The heading closes the last page of text, the entries follow it.
 
@@ -1552,27 +1674,18 @@ def test_a_pdf_reference_list_running_over_several_pages_is_removed(
     carries argument text, so nothing closes the section early.
     """
 
-    _pdf(
+    _record_docling_pages(
+        monkeypatch,
         project / "sources" / "book.pdf",
-        [
-            [
-                ((72, 100, 540, 300), BODY_PROSE, 10.0),
-                ((72, 340, 540, 380), REFERENCES_HEADING, 11.0),
+        {
+            1: [BODY_PROSE, REFERENCES_HEADING],
+            2: [ENTRY_ONE, ENTRY_TWO],
+            3: [
+                BODY_PROSE.replace("layout", "history"),
+                "Appendix",
+                "The appendix sets out the coding scheme the chapter used.",
             ],
-            [
-                ((72, 100, 540, 200), ENTRY_ONE, 10.0),
-                ((72, 330, 540, 400), ENTRY_TWO, 10.0),
-            ],
-            [
-                ((72, 100, 540, 300), BODY_PROSE.replace("layout", "history"), 10.0),
-                ((72, 340, 540, 440), "Appendix", 11.0),
-                (
-                    (72, 470, 540, 570),
-                    "The appendix sets out the coding scheme the chapter used.",
-                    10.0,
-                ),
-            ],
-        ],
+        },
     )
 
     documents, units = _extracted(project)
@@ -1588,49 +1701,35 @@ def test_a_pdf_reference_list_running_over_several_pages_is_removed(
     assert documents[0]["removed_reference_segments"] == 3
 
 
-def test_a_pdf_note_apparatus_running_onto_the_next_page_is_removed(
-    project: Path,
+def test_explanatory_pdf_notes_running_onto_the_next_page_are_kept(
+    project: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    _pdf(
+    _record_docling_pages(
+        monkeypatch,
         project / "sources" / "notes.pdf",
-        [
-            [
-                ((72, 100, 540, 300), BODY_PROSE, 10.0),
-                ((72, 340, 540, 380), "Notes", 11.0),
+        {
+            1: [BODY_PROSE, "Notes"],
+            2: [
+                "* The first note names the archive box the copy came from.",
+                "* The second note records the access date of the same copy.",
             ],
-            [
+            3: [
                 (
-                    (72, 100, 540, 200),
-                    "* The first note names the archive box the copy came from.",
-                    10.0,
-                ),
-                (
-                    (72, 230, 540, 330),
-                    "* The second note records the access date of the same copy.",
-                    10.0,
-                ),
-            ],
-            [
-                (
-                    (72, 100, 540, 300),
-                    (
-                        "The next chapter opens a new argument entirely and must "
-                        "be kept in full, notes or no notes."
-                    ),
-                    10.0,
+                    "The next chapter opens a new argument entirely and must "
+                    "be kept in full, notes or no notes."
                 )
             ],
-        ],
+        },
     )
 
     documents, units = _extracted(project)
 
     combined = _combined(units)
-    assert "The first note names the archive box" not in combined
-    assert "The second note records the access date" not in combined
+    assert "The first note names the archive box" in combined
+    assert "The second note records the access date" in combined
     assert "The next chapter opens a new argument" in combined
-    # The heading and both notes.
-    assert documents[0]["removed_note_segments"] == 3
+    # A marker alone never makes an explanatory PDF note bibliographic apparatus.
+    assert documents[0]["removed_note_segments"] == 0
 
 
 def test_a_heading_followed_by_argument_closes_the_section_before_the_list(
@@ -1667,16 +1766,16 @@ def test_a_heading_followed_by_argument_closes_the_section_before_the_list(
     assert documents[0]["removed_reference_segments"] == 0
 
 
-def test_a_pdf_page_of_only_entries_contributes_no_unit(project: Path) -> None:
-    _pdf(
+def test_a_pdf_page_of_only_entries_contributes_no_unit(
+    project: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _record_docling_pages(
+        monkeypatch,
         project / "sources" / "entries-only.pdf",
-        [
-            [
-                ((72, 100, 540, 200), BODY_PROSE, 10.0),
-                ((72, 340, 540, 380), REFERENCES_HEADING, 11.0),
-            ],
-            [((72, 100, 540, 300), _paragraphs(ENTRY_ONE, ENTRY_TWO), 10.0)],
-        ],
+        {
+            1: [BODY_PROSE, REFERENCES_HEADING],
+            2: [ENTRY_ONE, ENTRY_TWO],
+        },
     )
 
     documents, units = _extracted(project)
@@ -1777,23 +1876,13 @@ def test_a_two_column_page_keeps_both_columns(project: Path) -> None:
     assert documents[0]["removed_sidebar_blocks"] == 0
 
 
-def test_a_pdf_reference_page_loses_its_entries_before_chunking(project: Path) -> None:
-    _pdf(
+def test_a_pdf_reference_page_loses_its_entries_before_chunking(
+    project: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _record_docling_pages(
+        monkeypatch,
         project / "sources" / "references.pdf",
-        [
-            [
-                ((72, 90, 540, 200), BODY_PROSE, 10.0),
-                (
-                    (72, 230, 540, 330),
-                    _paragraphs(
-                        REFERENCES_HEADING,
-                        ENTRY_ONE,
-                        ENTRY_TWO,
-                    ),
-                    10.0,
-                ),
-            ]
-        ],
+        {1: [BODY_PROSE, REFERENCES_HEADING, ENTRY_ONE, ENTRY_TWO]},
     )
 
     documents, units = _extracted(project)
@@ -1872,7 +1961,7 @@ def test_a_pdf_records_zero_removals_rather_than_an_empty_mapping(
 
 
 def test_every_removal_category_the_record_carries_is_registered(
-    project: Path,
+    project: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """A counter nothing reads is not a counter.
 
@@ -1882,17 +1971,11 @@ def test_every_removal_category_the_record_carries_is_registered(
     as zero and the refusal that should have seen it never does.
     """
 
-    _pdf(
+    _record_docling_pages(
+        monkeypatch,
         project / "sources" / "counted.pdf",
-        [
-            [
-                ((72, 20, 540, 92), RUNNING_HEAD, 8.0),
-                ((72, 100, 540, 320), BODY_PROSE, 10.0),
-                ((24, 100, 58, 320), "A marginal note about the margin rule.", 8.0),
-                ((72, 700, 540, 760), "1 The note explains the definition used.", 7.0),
-            ]
-        ]
-        * 3,
+        {1: [BODY_PROSE], 2: [BODY_PROSE], 3: [BODY_PROSE]},
+        excluded_furniture=3,
     )
 
     documents, _units = _extracted(project)
@@ -1904,35 +1987,29 @@ def test_every_removal_category_the_record_carries_is_registered(
         key: 1 for key in recorded
     }
     assert documents[0]["removed_repeated_margin_blocks"] == 3
-    assert documents[0]["removed_sidebar_blocks"] == 3
-    assert documents[0]["removed_footnote_blocks"] == 3
 
 
 def test_removed_furniture_is_counted_without_refusing_the_source(
-    project: Path,
+    project: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """The characters a geometry rule removed are reported, and do not veto.
+    """The furniture the worker dropped is reported, and does not veto.
 
-    A file whose text layer is mostly a running head loses that furniture, and the
-    readable paragraphs beside it survive. The removal count is recorded so a
-    reader can see what was dropped, but no share of removed text refuses a source.
+    A file whose text layer carries page furniture and a readable paragraph beside
+    it loses that furniture, and the paragraph survives. The removal count is
+    recorded so a reader can see what was dropped, but no share of removed text
+    refuses a source.
     """
 
-    _pdf(
+    _record_docling_pages(
+        monkeypatch,
         project / "sources" / "head-heavy.pdf",
-        [
-            [
-                ((72, 20, 540, 92), RUNNING_HEAD, 8.0),
-                ((72, 300, 540, 340), "The council met again about the harvest.", 10.0),
-            ]
-        ]
-        * 4,
+        {page: ["The council met again about the harvest."] for page in range(1, 5)},
+        excluded_furniture=4,
     )
 
     documents, units = _extracted(project)
 
     assert documents[0]["removed_repeated_margin_blocks"] > 0
-    assert documents[0]["removed_non_argument_characters"] > 0
     assert any(
         "The council met again about the harvest." in str(u["contents"]) for u in units
     )
@@ -2065,8 +2142,24 @@ def test_a_fully_scanned_pdf_is_refused_and_says_ocr_is_not_performed(
     assert "research-rag exclude scanned.pdf" in message
 
 
-def test_a_mostly_scanned_pdf_with_one_readable_page_is_kept(project: Path) -> None:
-    _scan_pdf(project / "sources" / "mixed-scan.pdf", pages=5, text_pages=1)
+def test_a_mostly_scanned_pdf_with_one_readable_page_is_kept(
+    project: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _record_docling_pages(
+        monkeypatch,
+        project / "sources" / "mixed-scan.pdf",
+        {
+            1: [
+                (
+                    "The page that opens the scan carries a real text layer, so "
+                    "the file is a mixed one rather than a scan of the whole "
+                    "document."
+                )
+            ]
+        },
+        page_count=5,
+        image_only_pages=4,
+    )
 
     documents, units = _extracted(project)
 
@@ -2286,7 +2379,7 @@ def test_a_refused_source_leaves_no_activation_behind(project: Path) -> None:
 
 
 def test_the_staged_path_applies_the_same_gate_as_a_direct_build(
-    project: Path,
+    project: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """Both paths must reach the same units, in the same order, with the same ids.
 
@@ -2294,22 +2387,17 @@ def test_the_staged_path_applies_the_same_gate_as_a_direct_build(
     shared gate is the only place they can be held to one answer.
     """
 
-    _pdf(
+    _record_docling_pages(
+        monkeypatch,
         project / "sources" / "mixed.pdf",
-        [
-            [
-                ((72, 100, 540, 300), BODY_PROSE, 10.0),
-                ((24, 100, 58, 300), "A marginal note beside the body.", 8.0),
+        {
+            1: [BODY_PROSE],
+            2: [
+                SYMBOLS_ONLY,
+                "A second readable page that carries the argument onward.",
             ],
-            [
-                ((72, 90, 540, 200), SYMBOLS_ONLY, 10.0),
-                (
-                    (72, 230, 540, 330),
-                    "A second readable page that carries the argument onward.",
-                    10.0,
-                ),
-            ],
-        ],
+        },
+        excluded_furniture=1,
     )
     service = _service(project)
     direct_documents, direct_units = _extracted(project)
@@ -2333,10 +2421,11 @@ def test_the_staged_path_applies_the_same_gate_as_a_direct_build(
     assert [unit["locator"] for unit in staged_units] == [
         unit["locator"] for unit in direct_units
     ]
-    # The sidebar the direct path removed is absent from the staged build too, and
-    # the symbol-only page was withheld by both.
-    assert "A marginal note beside the body." not in _combined(staged_units)
+    # The symbol-only passage was withheld by both, and the readable pages survive.
     assert SYMBOLS_ONLY not in _combined(staged_units)
+    assert "A second readable page that carries the argument onward." in _combined(
+        staged_units
+    )
     assert (
         result["excluded_corrupt_unit_count"]
         == (direct_documents[0]["excluded_corrupt_unit_count"])
@@ -2392,17 +2481,15 @@ def test_the_staged_path_removes_a_reference_list_the_direct_path_removes(
 
 
 def test_the_staged_path_removes_a_pdf_reference_list_the_direct_path_removes(
-    project: Path,
+    project: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    _pdf(
+    _record_docling_pages(
+        monkeypatch,
         project / "sources" / "book.pdf",
-        [
-            [
-                ((72, 100, 540, 300), BODY_PROSE, 10.0),
-                ((72, 340, 540, 380), REFERENCES_HEADING, 11.0),
-            ],
-            [((72, 100, 540, 300), _paragraphs(ENTRY_ONE, ENTRY_TWO), 10.0)],
-        ],
+        {
+            1: [BODY_PROSE, REFERENCES_HEADING],
+            2: [ENTRY_ONE, ENTRY_TWO],
+        },
     )
     service = _service(project)
     direct_documents, direct_units = _extracted(project)

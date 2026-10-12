@@ -8,12 +8,10 @@ from __future__ import annotations
 import os
 import shlex
 import shutil
-import threading
 from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from importlib.metadata import PackageNotFoundError, version
-from pathlib import Path
 from typing import Any
 
 from ..corpus.docling_env import resolve_docling_env
@@ -37,13 +35,6 @@ UNKNOWN = "unknown"
 # needs about as much free space as the generations already occupy. A build blocks
 # below that, and the report calls the headroom thin below twice it.
 CAPACITY_APPROACHING_FACTOR = 2
-
-_VANILLA_CACHE_LOCK = threading.Lock()
-# The managed runtime is validated by hashing its whole tree, which reads every
-# byte of it. One process keeps the answer and re-reads only when the marker
-# identifying the installed snapshot changes, so a repeated status costs one
-# marker stat.
-_VANILLA_CACHE: dict[tuple[Any, ...], Check] = {}
 
 
 @dataclass(frozen=True, slots=True)
@@ -130,21 +121,6 @@ def _command(config: ResearchConfig, *arguments: str) -> str:
     return project_command(config.project_root, *arguments)
 
 
-def _marker_key(runtime: Any, root: Path, offline: bool) -> tuple[Any, ...]:
-    """The cache key for one managed runtime: path, mode, and the marker's
-    `(mtime, size)`.
-
-    An absent snapshot blocks offline and only warns online, so a cached answer
-    for one mode is not an answer for the other.
-    """
-    name = getattr(runtime, "MARKER_FILENAME", ".vanilla-ultra-rag-runtime.json")
-    try:
-        observed = (root / name).stat()
-    except OSError:
-        return (str(root), offline, None, None)
-    return (str(root), offline, observed.st_mtime_ns, observed.st_size)
-
-
 def _model_check(
     config: ResearchConfig,
     name: str,
@@ -195,16 +171,16 @@ def _model_check(
 
 
 def _docling_backend_check(config: ResearchConfig) -> Check | None:
-    """Readiness of the selected optional PDF backend, without importing Docling.
+    """Readiness of the operational PDF reader, without importing Docling.
 
-    This reports readiness for the *next* PDF build, not whether the selected
-    generation can be served: searching an existing generation never needs
-    Docling. A missing backend or cache warns and is remedied before the next
-    ingest, and never blocks or marks the corpus unserviceable.
+    Docling is the only PDF extractor, so this reports readiness for the *next*
+    PDF build on every project. It never decides whether the selected generation
+    can be served: searching an existing generation, including one built by the
+    retired bundled reader, never needs Docling. A missing environment or cache
+    only warns and is remedied before the next ingest; it never blocks and never
+    marks the corpus unserviceable or stale.
     """
 
-    if config.settings.pdf_backend != "docling":
-        return None
     cache = docling_cache_root(config.model_cache_root)
     env = resolve_docling_env(config)
     prefetch = doctor_command(config, "--prefetch-models")
@@ -213,32 +189,31 @@ def _docling_backend_check(config: ResearchConfig) -> Check | None:
         # online run builds it; an offline run cannot, so it needs provisioning.
         if config.offline:
             reason = (
-                "ingestion.pdf_backend=docling is selected but its managed "
-                "environment is not built, and runtime.offline forbids building "
-                "it. Existing generations still serve; provision it before the "
-                "next PDF ingest."
+                "PDF extraction uses Docling, whose managed environment is not "
+                "built, and runtime.offline forbids building it. Existing "
+                "generations still serve; provision it before the next PDF "
+                "ingest."
             )
         else:
             reason = (
-                "ingestion.pdf_backend=docling is selected; its managed "
-                "environment is not built yet. The first PDF ingest builds it "
-                "lazily; run the remedy to provision it ahead of that build."
+                "PDF extraction uses Docling; its managed environment is not "
+                "built yet. The first PDF ingest builds it lazily; run the "
+                "remedy to provision it ahead of that build."
             )
         return Check("docling_backend", WARN, reason, prefetch)
     if not docling_cache_has_models(config.model_cache_root):
         if config.offline:
             reason = (
-                "ingestion.pdf_backend=docling is selected and its environment "
-                f"is built, but no models are cached at {cache}. Offline "
-                "extraction cannot fetch them, so provision them before the next "
-                "PDF ingest."
+                "PDF extraction uses Docling and its environment is built, but "
+                f"no models are cached at {cache}. Offline extraction cannot "
+                "fetch them, so provision them before the next PDF ingest."
             )
         else:
             reason = (
-                "ingestion.pdf_backend=docling is selected and its environment "
-                f"is built, but no models are cached at {cache}. The first PDF "
-                "ingest fetches them lazily; provision them first to keep that "
-                "build offline or to avoid paying the fetch during it."
+                "PDF extraction uses Docling and its environment is built, but "
+                f"no models are cached at {cache}. The first PDF ingest fetches "
+                "them lazily; provision them first to keep that build offline or "
+                "to avoid paying the fetch during it."
             )
         return Check("docling_backend", WARN, reason, prefetch)
     return Check(
@@ -248,91 +223,8 @@ def _docling_backend_check(config: ResearchConfig) -> Check | None:
     )
 
 
-def _validate_managed_runtime(
-    config: ResearchConfig, root: Path, runtime: Any
-) -> Check:
-    validator = getattr(runtime, "validate_managed_runtime", None)
-    install = "research-rag-runtime"
-    if validator is None:
-        return Check(
-            "vanilla_runtime",
-            UNKNOWN,
-            "The installed vanilla release does not expose runtime validation.",
-        )
-    if not root.is_dir():
-        if config.offline:
-            return Check(
-                "vanilla_runtime",
-                BLOCKED,
-                f"The managed UltraRAG runtime is not installed at {root}, and "
-                "offline mode forbids downloading it.",
-                install,
-            )
-        return Check(
-            "vanilla_runtime",
-            WARN,
-            f"The managed UltraRAG runtime is not installed at {root}; the first "
-            "call that needs it downloads it.",
-            install,
-        )
-    try:
-        validator(root)
-    except Exception as exc:  # noqa: BLE001 - any failure is a blocked runtime.
-        # Every failure blocks, including an exception type the release did not
-        # predict.
-        reason = str(exc)
-        if getattr(exc, "difference", None) is None:
-            reason += (
-                " This vanilla release does not name the differing file; run "
-                f"'{install} --offline' to see the full message."
-            )
-        return Check(
-            "vanilla_runtime",
-            BLOCKED,
-            reason,
-            doctor_command(config, "--repair-runtime"),
-        )
-    return Check(
-        "vanilla_runtime",
-        OK,
-        f"The managed UltraRAG runtime at {root} matches the pinned snapshot.",
-    )
-
-
-def _vanilla_runtime_check(config: ResearchConfig) -> Check:
-    try:
-        from ..gateway import runtime as vanilla
-
-        locator = getattr(vanilla, "managed_runtime_path", None)
-    except Exception as exc:  # noqa: BLE001 - a broken install fails to import.
-        # A broken install fails on import in more than one way, and the report
-        # names that rather than raising it.
-        return Check(
-            "vanilla_runtime",
-            UNKNOWN,
-            f"The pinned vanilla runtime package cannot be used: {exc}",
-        )
-    if locator is None:
-        return Check(
-            "vanilla_runtime",
-            UNKNOWN,
-            "The installed vanilla release exposes no managed runtime path, so "
-            "this installation cannot be checked.",
-        )
-    root = locator(config.runtime_cache_root)
-    key = _marker_key(vanilla, root, config.offline)
-    with _VANILLA_CACHE_LOCK:
-        cached = _VANILLA_CACHE.get(key)
-    if cached is not None:
-        return cached
-    check = _validate_managed_runtime(config, root, vanilla)
-    with _VANILLA_CACHE_LOCK:
-        _VANILLA_CACHE[key] = check
-    return check
-
-
 def _direct_retrieval_check(config: ResearchConfig) -> Check:
-    """Read package metadata; normal retrieval needs no managed gateway tree."""
+    """Read package metadata; normal retrieval uses these direct libraries."""
     required = {"chonkie": "1.7.0", "tiktoken": "0.14.0"}
     problems = []
     for package in ("chonkie", "tiktoken", "bm25s", "numba", "scipy", "PyStemmer"):
@@ -357,7 +249,7 @@ def _direct_retrieval_check(config: ResearchConfig) -> Check:
         "direct_retrieval",
         OK,
         "Compatible Chonkie and BM25 dependencies are installed; normal retrieval "
-        "does not require the optional UltraRAG gateway runtime.",
+        "uses these direct libraries.",
     )
 
 
@@ -410,18 +302,42 @@ def _lock_check(config: ResearchConfig) -> Check:
 
 
 def _generation_check(config: ResearchConfig, status: Mapping[str, Any]) -> Check:
+    """Weigh the selected generation as serviceable, or name why it is not.
+
+    `upgrade_reasons` carries only serving incompatibility. A generation built
+    for another project is not served here, but a rebuild is the last resort: the
+    finding blocks and names selecting a matching retained generation, and only
+    suggests building when none exists. An embedding-identity mismatch makes
+    dense and hybrid scoring compare one model's vectors against another's, so it
+    warns and names the choice: restore the recorded model, or explicitly build
+    matching vectors. Policy differences that leave the generation serviceable
+    are recorded in `generation_diagnostics`, which is not a health finding: the
+    corpus answers under its recorded policy, so the check is `ok`.
+    """
+
+    reasons = list(status.get("upgrade_reasons") or [])
+    if "project_identity" in reasons:
+        return Check(
+            "generation",
+            BLOCKED,
+            "The selected generation belongs to a different project and cannot be "
+            "served here. Select a retained generation that belongs to this "
+            "project; build one only if none is retained.",
+            _command(config, "generations"),
+        )
     ingest = _command(config, "ingest")
     if not status.get("ready"):
         message = str(status.get("message") or "No knowledge-base generation exists.")
         return Check("generation", BLOCKED, message, ingest)
-    reasons = list(status.get("upgrade_reasons") or [])
     if reasons:
         return Check(
             "generation",
             WARN,
-            "The selected generation was built by an older policy ("
-            + ", ".join(reasons)
-            + "); ingest rebuilds it.",
+            "The selected generation's dense index was built with a different "
+            "embedding model, so dense and hybrid scoring would compare one model's "
+            "vectors against another's; BM25 still serves. Restore the recorded "
+            "embedding model, or ingest to rebuild the dense index with the current "
+            "one.",
             ingest,
         )
     if status.get("stale"):

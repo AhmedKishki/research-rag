@@ -3,7 +3,7 @@
 An MCP client that speaks only stdio cannot open a socket, so this is the command
 that connects one: it makes sure the app is up, then proxies stdio to the app's
 agent endpoint on the app's own port. The proxy adds nothing — the tools, the
-answer projection, the project, and the UltraRAG gateway are the app's, so a
+answer projection, the project, and the retrieval backend are the app's, so a
 stdio client and a browser cannot see two different states.
 
 The bridge decides nothing at launch. Whether the app is up, and whether the

@@ -674,8 +674,8 @@ def create_ui_app(
     """Create the shared workspace over the app's one service.
 
     The adapter is handed the service rather than a factory, because the app
-    process owns the gateway and there is exactly one of it. The client registry
-    is passed in for the same reason, and is absent when no process serves the
+    process owns the retrieval backend and there is exactly one of it. The client
+    registry is passed in for the same reason, and is absent when no process serves the
     workspace. `app_state` is absent the same way, and the workspace's status
     carries it beside the service's.
     """
