@@ -1,0 +1,15 @@
+{
+  "name": "research-rag-marketplace",
+  "metadata": {
+    "description": "Research RAG plugin distribution for project-local research evidence retrieval"
+  },
+  "owner": {
+    "name": "AhmedKishki"
+  },
+  "plugins": [
+    {
+      "name": "research-rag",
+      "source": "./"
+    }
+  ]
+}
