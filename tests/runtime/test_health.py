@@ -211,8 +211,13 @@ def test_missing_tokenizer_does_not_block_existing_indexes_offline(
 
 
 def test_a_missing_embedding_model_blocks_and_a_missing_reranker_degrades(
-    config: ResearchConfig,
+    config: ResearchConfig, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    import research_rag.retrieval.direct as direct_module
+
+    # The tokenizer check also reads the machine-wide legacy cache in the temporary
+    # directory, so it is pinned here rather than left to whatever the machine holds.
+    monkeypatch.setattr(direct_module, "tokenizer_cache_status", lambda _root: True)
     report = _report(
         _isolated(config.project_root, config.model_cache_root, offline=True)
     )
