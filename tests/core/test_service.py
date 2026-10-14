@@ -3397,6 +3397,43 @@ def test_failed_dense_build_does_not_replace_current(project: Path) -> None:
     asyncio.run(_assert_failed_dense_build_does_not_replace_current(project))
 
 
+def test_a_drifted_mtime_is_hashed_once_per_file_identity(
+    project: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Every agent search reads `status`, and an unchanged ingest keeps the old mtime.
+
+    A source whose mtime moved while its size did not is compared by digest. The
+    digest is kept for the file's identity, so repeated reads hash it once, and a
+    write, which moves the change time, is hashed again.
+    """
+
+    async def exercise() -> None:
+        source = project / "sources" / "article.pdf"
+        write_pdf(source, ["Stable research evidence."])
+        config = resolve_config(project, vanilla_executable=sys.executable)
+        service = ResearchService(  # type: ignore[arg-type]
+            config, FakeUltraRAG(), dense=FakeDenseBackend()
+        )
+        await service.ingest(chunk_size=50, chunk_overlap=10)
+        before = source.stat()
+        os.utime(source, ns=(before.st_atime_ns, before.st_mtime_ns + 10**9))
+        hashed: list[Path] = []
+        real = status_module.sha256_file
+        monkeypatch.setattr(
+            status_module, "sha256_file", lambda path: hashed.append(path) or real(path)
+        )
+
+        for _ in range(3):
+            assert (await service.status())["stale"] is False
+        assert hashed == [source.resolve()]
+
+        source.write_bytes(source.read_bytes())
+        assert (await service.status())["stale"] is False
+        assert hashed == [source.resolve(), source.resolve()]
+
+    asyncio.run(exercise())
+
+
 def test_checkpoint_progress_is_reconciled_from_per_source_state(
     project: Path,
 ) -> None:

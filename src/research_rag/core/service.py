@@ -227,6 +227,9 @@ class ResearchService(
         self._document_frequencies: (
             tuple[str, frozenset[str], dict[str, int]] | None
         ) = None
+        # Digests of sources whose mtime drifted, keyed by path and file identity,
+        # so `status` hashes a drifted source once rather than on every search.
+        self._drift_digests: dict[Path, tuple[tuple[int, int, int, int], str]] = {}
 
     @property
     def ultrarag(self) -> LexicalBackend | None:
