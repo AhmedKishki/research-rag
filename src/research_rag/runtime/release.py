@@ -40,7 +40,7 @@ import tomllib
 import urllib.error
 import urllib.request
 from collections.abc import Callable, Sequence
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from datetime import datetime
 from pathlib import Path
 
@@ -98,11 +98,7 @@ class Release:
     commit: str | None = None
 
     def as_dict(self) -> dict[str, object]:
-        return {
-            "version": self.version,
-            "tag": self.tag,
-            "commit": self.commit,
-        }
+        return asdict(self)
 
 
 @dataclass(frozen=True, slots=True)

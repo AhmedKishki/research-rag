@@ -36,10 +36,11 @@ from ..corpus.text_quality import (
     text_health_reasons,
     text_script_notes,
 )
-from ..retrieval.artifact_lookup import LOOKUP_HEALTH_FLAGS_KEY
+from ..retrieval.artifact_lookup import LOOKUP_HEALTH_FLAGS_KEY, chunk_text
 from ..retrieval.dense import DenseTokenAuditUnavailable
 from ..retrieval.embeddings import EmbeddingModel
 from ..retrieval.rerankers import resolve_reranker_model
+from ..storage.durable_io import file_identity
 from .policy import (
     DEFAULT_PDF_BACKEND_FINGERPRINT,
     ResearchError,
@@ -156,21 +157,10 @@ def _pdf_batch_count(page_count: int, batch_size: int) -> int:
     return (page_count + batch_size - 1) // batch_size
 
 
-def _source_stat_identity(path: Path) -> dict[str, int]:
-    stat = path.stat()
-    return {
-        "size": stat.st_size,
-        "mtime_ns": stat.st_mtime_ns,
-        "ctime_ns": stat.st_ctime_ns,
-        "device": stat.st_dev,
-        "inode": stat.st_ino,
-    }
-
-
 def _hash_with_stable_stat(path: Path) -> tuple[str, dict[str, int]]:
-    before = _source_stat_identity(path)
+    before = file_identity(path)
     digest = sha256_file(path)
-    after = _source_stat_identity(path)
+    after = file_identity(path)
     if before != after:
         raise OSError("Source changed while it was being hashed")
     return digest, after
@@ -665,14 +655,6 @@ def _document_for_chunk(
     return document
 
 
-def _chunk_text(chunk: dict[str, Any]) -> str:
-    """Read canonical passage text with compatibility for older generations."""
-
-    return str(
-        chunk.get("contents") or chunk.get("text") or chunk.get("embedding_text") or ""
-    )
-
-
 # The chunker counts a chunk in GPT-2 tokens and the generation records that
 # name, so a length rule stated as a fraction of the chunk size and a token count
 # are one unit. The counter is imported and loaded on first use, so a query
@@ -709,7 +691,7 @@ def _embedding_text(chunk: dict[str, Any]) -> str:
     headers has no separate embedding text.
     """
 
-    return str(chunk.get("embedding_text") or _chunk_text(chunk))
+    return str(chunk.get("embedding_text") or chunk_text(chunk))
 
 
 def _chunk_header(document: dict[str, Any], locator: dict[str, Any]) -> str:
@@ -747,9 +729,9 @@ def _public_passage(
         "project": public_document["project"],
         "locator": locator,
         "citation": normalize_inline_text(_citation(public_document, locator)),
-        "text": normalize_reading_text(_chunk_text(chunk)),
+        "text": normalize_reading_text(chunk_text(chunk)),
         "text_fidelity": "cleaned_semantic_text",
-        "text_notes": text_script_notes(_chunk_text(chunk)),
+        "text_notes": text_script_notes(chunk_text(chunk)),
         "embedding_token_count": chunk.get("embedding_token_count"),
         "dense_truncated": chunk.get("dense_truncated"),
         "content_kind": str(chunk.get("content_kind") or "prose"),
@@ -846,7 +828,7 @@ def _candidate_flags(chunk: dict[str, Any]) -> int:
     if isinstance(stored, int):
         return stored
     return chunk_health_flags(
-        _chunk_text(chunk),
+        chunk_text(chunk),
         quality_flags=chunk.get("quality_flags"),
     )
 

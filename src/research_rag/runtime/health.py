@@ -96,14 +96,6 @@ class HealthReport:
     def has_blocker(self) -> bool:
         return any(check.blocked for check in self.checks)
 
-    def as_dict(self) -> dict[str, Any]:
-        return {
-            "checks": [check.as_dict() for check in self.checks],
-            "blocked_by": self.blocked_by,
-            "degraded": self.degraded,
-            "not_checked": self.not_checked,
-        }
-
     def as_status_fields(self) -> dict[str, Any]:
         return {
             "checks": [check.as_dict() for check in self.checks],

@@ -17,8 +17,9 @@ from contextlib import closing, contextmanager
 from pathlib import Path
 from typing import Any
 
+from ..corpus.sources import sha256_file
 from ..corpus.text_quality import chunk_health_flags
-from ..storage.durable_io import fsync_file, replace_durably
+from ..storage.durable_io import file_identity, fsync_file, replace_durably
 
 # Key under which a loaded chunk record carries its stored rejection verdict.
 LOOKUP_HEALTH_FLAGS_KEY = "_lookup_health_flags"
@@ -31,24 +32,15 @@ class ArtifactLookupError(RuntimeError):
     pass
 
 
-def _chunk_text(record: Mapping[str, Any]) -> str:
+def chunk_text(record: Mapping[str, Any]) -> str:
+    """A passage's canonical text, read from any field a generation has stored it in."""
+
     return str(
         record.get("contents")
         or record.get("text")
         or record.get("embedding_text")
         or ""
     )
-
-
-def _file_identity(path: Path) -> dict[str, int]:
-    stat = path.stat()
-    return {
-        "size": stat.st_size,
-        "mtime_ns": stat.st_mtime_ns,
-        "ctime_ns": stat.st_ctime_ns,
-        "device": stat.st_dev,
-        "inode": stat.st_ino,
-    }
 
 
 def _metadata_key(kind: str, field: str) -> str:
@@ -112,7 +104,7 @@ def _index_chunks(
     connection: sqlite3.Connection,
     path: Path,
 ) -> tuple[int, str, dict[str, int]]:
-    before = _file_identity(path)
+    before = file_identity(path)
     digest = hashlib.sha256()
     count = 0
     with path.open("rb") as handle:
@@ -125,7 +117,7 @@ def _index_chunks(
             chunk_id = record.get("chunk_id")
             document_id = record.get("document_id")
             document_chunk_index = record.get("document_chunk_index")
-            contents = _chunk_text(record)
+            contents = chunk_text(record)
             if (
                 not isinstance(chunk_id, str)
                 or not chunk_id
@@ -168,7 +160,7 @@ def _index_chunks(
                     f"{path}: {chunk_id}"
                 ) from exc
             count += 1
-    after = _file_identity(path)
+    after = file_identity(path)
     if before != after:
         raise ArtifactLookupError(f"Artifact changed while it was indexed: {path}")
     return count, digest.hexdigest(), after
@@ -178,7 +170,7 @@ def _index_units(
     connection: sqlite3.Connection,
     path: Path,
 ) -> tuple[int, str, dict[str, int]]:
-    before = _file_identity(path)
+    before = file_identity(path)
     digest = hashlib.sha256()
     count = 0
     with path.open("rb") as handle:
@@ -221,7 +213,7 @@ def _index_units(
                     f"Duplicate extraction-unit identifier in {path}: {unit_id}"
                 ) from exc
             count += 1
-    after = _file_identity(path)
+    after = file_identity(path)
     if before != after:
         raise ArtifactLookupError(f"Artifact changed while it was indexed: {path}")
     return count, digest.hexdigest(), after
@@ -324,14 +316,6 @@ def _stored_health_flags(row: sqlite3.Row) -> int | None:
     return None if value is None else int(value)
 
 
-def _sha256_file(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as handle:
-        while block := handle.read(1024 * 1024):
-            digest.update(block)
-    return digest.hexdigest()
-
-
 def _lookup_is_current(
     chunks_path: Path,
     units_path: Path,
@@ -351,7 +335,7 @@ def _lookup_is_current(
                 return False
             metadata = _read_metadata(connection)
             for kind, path in (("chunks", chunks_path), ("units", units_path)):
-                identity = _file_identity(path)
+                identity = file_identity(path)
                 if any(
                     metadata.get(_metadata_key(kind, key)) != str(value)
                     for key, value in identity.items()
@@ -506,7 +490,7 @@ class ArtifactLookup:
         requested = set(contents)
         result: defaultdict[str, list[dict[str, Any]]] = defaultdict(list)
         for _row, record in self._chunk_rows_by_contents(contents):
-            text = _chunk_text(record)
+            text = chunk_text(record)
             if text in requested:
                 result[text].append(record)
         return dict(result)
@@ -543,7 +527,7 @@ class ArtifactLookup:
         requested = set(contents)
         result: dict[str, int] = {}
         for row, record in self._chunk_rows_by_contents(contents):
-            text = _chunk_text(record)
+            text = chunk_text(record)
             if text in requested:
                 result.setdefault(text, int(row["ordinal"]))
         return result
@@ -716,7 +700,7 @@ class VectorByContentsMapping(Mapping[str, Any]):
                 "SELECT * FROM chunks ORDER BY ordinal"
             ).fetchall()
         for _row, record in self.lookup._load_rows(self.lookup.chunks_path, rows):
-            yield _chunk_text(record)
+            yield chunk_text(record)
 
     def __len__(self) -> int:
         return self.lookup.chunk_count()
@@ -753,7 +737,7 @@ def _chunk_row_matches(row: sqlite3.Row, record: dict[str, Any]) -> bool:
         record.get("chunk_id") == row["chunk_id"]
         and record.get("document_id") == row["document_id"]
         and record.get("document_chunk_index") == row["document_chunk_index"]
-        and hashlib.sha256(_chunk_text(record).encode("utf-8")).digest()
+        and hashlib.sha256(chunk_text(record).encode("utf-8")).digest()
         == row["content_sha256"]
     )
 
@@ -785,9 +769,8 @@ def validate_artifact_lookup(
                 int(metadata[_metadata_key("chunks", "count")]) != expected_chunk_count
                 or int(metadata[_metadata_key("units", "count")]) != expected_unit_count
                 or metadata[_metadata_key("chunks", "sha256")]
-                != _sha256_file(chunks_path)
-                or metadata[_metadata_key("units", "sha256")]
-                != _sha256_file(units_path)
+                != sha256_file(chunks_path)
+                or metadata[_metadata_key("units", "sha256")] != sha256_file(units_path)
             ):
                 return False
             return _rows_match(

@@ -18,7 +18,6 @@ from ..project.policy import DEFAULT_RETRIEVAL_METHOD, RETRIEVAL_METHODS, Resear
 from ..project.support import (
     _atomic_to_thread,
     _candidate_flags,
-    _chunk_text,
     _content_tokens,
     _document_for_chunk,
     _document_matches_metadata,
@@ -36,7 +35,7 @@ from ..project.support import (
     passage_token_count,
 )
 from ..storage.durable_io import iter_jsonl
-from .artifact_lookup import ArtifactLookup, VectorByContentsMapping
+from .artifact_lookup import ArtifactLookup, VectorByContentsMapping, chunk_text
 from .dense import DenseSearchHit, RerankerUnavailable
 
 #: The most candidate identifiers one stage of an evaluation trace may carry. The
@@ -155,7 +154,7 @@ def _collapse_repetitions(
     kept_vectors: list[np.ndarray[Any, np.dtype[np.float32]]] = []
     collapsed: list[dict[str, Any]] = []
     for chunk_id in ordered_ids:
-        text = _chunk_text(chunks_by_id[chunk_id])
+        text = chunk_text(chunks_by_id[chunk_id])
         words = _passage_equality_key(text)
         # A passage with no words is not a repetition of another with no words:
         # an empty key would make every such passage match every other, and there
@@ -225,7 +224,7 @@ class SearchWorkflow:
             matrix = np.load(vectors_path, allow_pickle=False, mmap_mode="r")
             if matrix.ndim != 2 or not matrix.shape[0]:
                 return {}
-            texts = [_chunk_text(chunks_by_id[item]) for item in ordered_ids]
+            texts = [chunk_text(chunks_by_id[item]) for item in ordered_ids]
             return VectorByContentsMapping(lookup, matrix).get_many(texts)
 
         vectors = await asyncio.to_thread(resolve)
@@ -332,7 +331,7 @@ class SearchWorkflow:
     ) -> bool:
         """True when a candidate is too short to be cited as evidence."""
 
-        text = _chunk_text(chunk)
+        text = chunk_text(chunk)
         minimum = self.config.settings.minimum_passage_words
         if minimum > 0 and len(text.split()) < minimum:
             return True
@@ -556,13 +555,13 @@ class SearchWorkflow:
                     _record_withheld(
                         withheld,
                         chunk,
-                        text_corruption_reasons(_chunk_text(chunk)),
+                        text_corruption_reasons(chunk_text(chunk)),
                         limit=self.config.settings.maximum_withheld_examples,
                     )
                     continue
                 tokens = tokens_cache.get(chunk_id)
                 if tokens is None:
-                    tokens = frozenset(_content_tokens(_chunk_text(chunk), stopwords))
+                    tokens = frozenset(_content_tokens(chunk_text(chunk), stopwords))
                     tokens_cache[chunk_id] = tokens
                 if not query_tokens.intersection(tokens):
                     rejected["no_query_token_overlap"] += 1
@@ -652,7 +651,7 @@ class SearchWorkflow:
             return cached[2]
         frequencies = await _atomic_to_thread(
             document_frequencies,
-            (_chunk_text(record) for record in iter_jsonl(chunks_path)),
+            (chunk_text(record) for record in iter_jsonl(chunks_path)),
             stopwords,
         )
         self._document_frequencies = (generation_id, stopwords, frequencies)
@@ -1033,7 +1032,7 @@ class SearchWorkflow:
                 prf_terms = _pseudo_relevance_terms(
                     query=query,
                     texts=[
-                        _chunk_text(chunks_by_id[chunk_id])
+                        chunk_text(chunks_by_id[chunk_id])
                         for chunk_id in bm25_ranking[
                             : self.config.settings.prf_documents
                         ]
@@ -1115,7 +1114,7 @@ class SearchWorkflow:
                     _record_withheld(
                         withheld,
                         chunk,
-                        text_corruption_reasons(_chunk_text(chunk)),
+                        text_corruption_reasons(chunk_text(chunk)),
                         limit=self.config.settings.maximum_withheld_examples,
                     )
                     continue
@@ -1256,7 +1255,7 @@ class SearchWorkflow:
                     scores = await asyncio.to_thread(
                         self.dense.rerank,
                         query,
-                        [_chunk_text(chunks_by_id[item]) for item in rerank_ids],
+                        [chunk_text(chunks_by_id[item]) for item in rerank_ids],
                         **rerank_kwargs,
                     )
                 except RerankerUnavailable as exc:

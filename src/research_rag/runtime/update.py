@@ -54,7 +54,7 @@ from __future__ import annotations
 
 import os
 from collections.abc import Sequence
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
 
@@ -797,7 +797,7 @@ class Approval:
         return self.method in {OFFERED, PROMPT}
 
     def as_dict(self) -> dict[str, Any]:
-        return {"method": self.method, "granted": self.granted}
+        return asdict(self)
 
 
 def approval_for(

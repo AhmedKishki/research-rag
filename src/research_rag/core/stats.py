@@ -26,10 +26,10 @@ from ..generations.generation_inventory import generation_inventory
 from ..project.policy import ResearchError
 from ..project.state_files import SEARCH_STATS_FILE
 from ..project.support import (
-    _chunk_text,
     _effective_documents,
     _public_document,
 )
+from ..retrieval.artifact_lookup import chunk_text
 from ..storage.search_stats import (
     TRACKED_RANKS,
     SearchStatsError,
@@ -385,7 +385,7 @@ class StatsWorkflow:
         entries = []
         for position, chunk in enumerate(chunks):
             chunk_id = str(chunk["chunk_id"])
-            text = _chunk_text(chunk)
+            text = chunk_text(chunk)
             counted = appearances.get(chunk_id, (0, 0))
             entries.append(
                 {
