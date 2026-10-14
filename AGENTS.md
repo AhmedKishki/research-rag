@@ -217,7 +217,9 @@ Terminal ── control ───┘      ├── the workspace and its adapte
 ### Layer ownership
 
 - Each source folder owns one concern. Its boundaries are in its README, and its tests are in the matching test folder.
-- Import within the module's folder or from the folder above, not sideways between sibling folders.
+- Folders are layered, lowest first: `storage`, `project`, `corpus`, `retrieval`, `generations`, `core`, `runtime`, `surfaces`. A module imports from its own folder and the folders below it.
+  - `runtime/app.py` composes the surfaces it serves, and `runtime/control.py` reads the workspace's write guard. These are the only upward imports.
+  - `tests/gates/test_architecture.py` enforces the order.
 - Update test paths when renaming folders.
 - Import shared concerns instead of copying them, including state names in `project/state_files.py` and shared surface contracts.
 - Error types, schema versions, and boundary names must be importable without fastembed.
