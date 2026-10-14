@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import time
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import replace
@@ -22,11 +23,13 @@ from ..project.config import (
     ResearchConfig,
     resolve_source_reference,
 )
+from ..project.policy import ResearchError
 from ..project.registry import account_projects
 from ..runtime.app import CLIENT_NAME_ENV, ClientError, ClientRegistry
 from ..runtime.doctor import mcp_entry_block
 from ..runtime.version import version_label
 
+LOGGER = logging.getLogger(__name__)
 UI_NAME = "research-rag-ui"
 MAX_ERROR_LENGTH = 1200
 # The passed passages a browser request may ask for, and the neighbours it may
@@ -311,9 +314,18 @@ class ResearchUIAdapter:
                 return await self._run(operation, accepted)
         except UIRequestError:
             raise
-        except Exception as exc:
+        except (
+            ResearchError,
+            ClientError,
+            ConfigurationError,
+            SourcePolicyError,
+        ) as exc:
             message = str(exc).strip() or exc.__class__.__name__
             raise UIRequestError(message[:MAX_ERROR_LENGTH]) from exc
+        except Exception as exc:
+            LOGGER.exception("research-rag workspace operation %s failed", operation)
+            message = f"Unexpected app failure: {exc}. The serving terminal shows why."
+            raise UIRequestError(message[:MAX_ERROR_LENGTH], status_code=500) from exc
 
     async def _check_updates(self) -> Mapping[str, Any]:
         """Cache a read-only release preview; installation remains a CLI transaction."""
