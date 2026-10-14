@@ -584,3 +584,23 @@ async def test_the_full_detail_option_keeps_the_whole_payload(project: Path) -> 
     assert full.data["hits"][0]["text_fidelity"] == "cleaned_semantic_text"
     assert "rerank_score" not in json.dumps(lean)
     assert len(json.dumps(lean)) * 2 < len(json.dumps(full.data))
+
+
+async def test_an_unexpected_failure_is_logged_with_its_traceback(
+    project: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    """FastMCP logs a `ToolError` without a traceback, so the surface logs it."""
+
+    class Failing(_Service):
+        async def get_passage(self, chunk_id: str) -> dict[str, Any]:
+            raise KeyError("document_id")
+
+    async with _client(project, Failing()) as client:
+        answer = await client.call_tool(
+            "get_passage", {"chunk_id": "chk_one"}, raise_on_error=False
+        )
+
+    assert answer.is_error
+    assert "serving terminal" in answer.content[0].text
+    (record,) = [item for item in caplog.records if item.exc_info]
+    assert isinstance(record.exc_info[1], KeyError)

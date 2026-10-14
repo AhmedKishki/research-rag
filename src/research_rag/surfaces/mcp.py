@@ -11,6 +11,7 @@ starts a process, resolves a project, or parses a command line.
 from __future__ import annotations
 
 import json
+import logging
 from collections.abc import Awaitable, Callable, Mapping
 from typing import TYPE_CHECKING, Annotated, Any, TypeAlias, TypeVar
 
@@ -31,6 +32,7 @@ from ..runtime.version import APP_VERSION
 if TYPE_CHECKING:  # pragma: no cover - typing only
     from ..core.service import ResearchService
 
+LOGGER = logging.getLogger(__name__)
 SERVER_NAME = "research-rag"
 # The path the app mounts this surface at, on the same loopback port as the
 # browser workspace. It is a module constant because `app.py`, the stdio bridge,
@@ -270,7 +272,11 @@ async def _tool_call(operation: Callable[[], Awaitable[T]]) -> T:
     except ResearchError as exc:
         raise ToolError(str(exc)) from exc
     except Exception as exc:
-        raise ToolError(f"Research workflow failed: {exc}") from exc
+        # FastMCP logs a ToolError without its traceback, so it is logged here.
+        LOGGER.exception("research-rag tool call failed")
+        raise ToolError(
+            f"Research workflow failed: {exc}. The serving terminal shows why."
+        ) from exc
 
 
 def _agent_app_state(state: Mapping[str, Any]) -> dict[str, Any]:

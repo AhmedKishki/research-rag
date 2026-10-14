@@ -617,7 +617,11 @@ def test_the_workspace_rejects_unsafe_writes_and_source_paths(project: Path) -> 
     assert unknown.status_code == 400
 
 
-def test_a_service_failure_becomes_a_safe_message(project: Path) -> None:
+def test_a_service_failure_becomes_a_safe_message(
+    project: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    """An unexpected failure is the app's, so it is a 500 and its traceback is logged."""
+
     class Failing(FakeResearchService):
         async def status(self) -> dict[str, Any]:
             raise RuntimeError("the corpus is on a slow disk")
@@ -630,8 +634,10 @@ def test_a_service_failure_becomes_a_safe_message(project: Path) -> None:
     ) as client:  # type: ignore[arg-type]
         response = client.get("/api/status")
 
-    assert response.status_code == 400
+    assert response.status_code == 500
     assert "the corpus is on a slow disk" in response.json()["error"]
+    (record,) = [item for item in caplog.records if item.exc_info]
+    assert "slow disk" in str(record.exc_info[1])
 
 
 def _registry(*, attached: bool = True) -> ClientRegistry:
