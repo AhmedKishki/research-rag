@@ -70,7 +70,7 @@ where = ["src"]
 
 [tool.setuptools.package-data]
 # The default settings ship with the package: the code has no copy of them.
-research_rag = ["default.toml"]
+"research_rag.project" = ["default.toml"]
 # The workspace's assets ship with the code that serves them, so a wheel holds
 # one copy of each.
 "research_rag.surfaces.workspace" = ["static/*.css", "static/*.html", "static/*.js"]

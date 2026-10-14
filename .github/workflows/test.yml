@@ -29,6 +29,7 @@ jobs:
       # precedence over the interpreter setup-python installed, and outranks
       # `--python` on `uv sync`, so the later `uv run` steps would put 3.12 back
       # and 3.11 would only report green. The variable reaches every uv step.
+      - run: uv lock --check
       - run: uv sync --frozen
       - name: Report the interpreter the matrix leg actually resolved
         run: uv run python -VV

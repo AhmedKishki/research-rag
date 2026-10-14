@@ -275,8 +275,8 @@ SETTINGS: tuple[Setting, ...] = (
         kind=bool,
         layer="runtime",
         doc=(
-            "Require an installed vanilla runtime and already-cached models "
-            "instead of downloading anything."
+            "Use only already-cached models, tokenizers, and the Docling "
+            "environment instead of downloading anything."
         ),
         env="RESEARCH_RAG_OFFLINE",
     ),
