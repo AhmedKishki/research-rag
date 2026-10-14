@@ -25,6 +25,8 @@ An item is done when the harness has produced its measurement and the validation
 - [ ] **Decide whether `search --method` and `--no-rerank` stay.** Decision. They reproduce a `MEASUREMENTS.md` row on demand, and no reader-facing surface offers either. Removing them is a deliberate simplification.
   - The running app's control route ignores both flags and returns hybrid, reranked results. Forward the diagnostic choices if retained, or reject unsupported flags explicitly. Test local and running-app behavior.
 - [ ] **Share workflow decisions without coupling the surfaces.** Refactor. Audit duplicated argument validation and workflow decisions in the CLI, control API, and workspace adapter. Move shared rules below the surfaces; keep terminal formatting and browser interaction separate. Preserve the no-cross-surface-import gate and test equivalent calls against the same service.
+- [ ] **Stop an app started without `--project-root`.** Bug. `runtime/ownership.py` proves ownership only from a literal `--project-root PATH` argument. `stop`, `stop --servers`, and `update` refuse an app started with `--project NAME`, by a bare call, or with a relative or trailing-slash path.
+- [ ] **Split `surfaces/cli.py`.** Refactor. One 3,352-line module holds the help text, the parser, the local and remote operations, attached serving, and `update`. Give each its own module behind the same `main`.
 
 ## agents
 
@@ -60,6 +62,9 @@ An item is done when the harness has produced its measurement and the validation
   - Keep loopback the default. Extend the explicit host, peer, and browser-origin policies rather than disabling them.
 - [ ] **A connection an unnamed client opened cannot be dropped.** Limit. A client that declared nothing is one client per MCP session, so a hand-written HTTP client has only its sessions refused. `RESEARCH_RAG_CLIENT_NAME` fixes it, and the stdio bridge always sets it.
 - [ ] **Diagnose intermittent MCP initialization HTTP 500.** Test. Reproduce `/mcp` termination before `http.response.start` with synthetic projects and a minimized execution-order or load trigger. Capture session, lifespan, and cancellation events; compare the trigger against `c95e435` with identical dependencies. Correct the demonstrated cause with a deterministic regression test, not retries, skips, longer timeouts, or weaker security. Validate app/LAN tests and a serialized non-integration suite.
+  - Test `BaseHTTPMiddleware` first. `runtime/app.py` wraps the streaming MCP app in it, and Starlette's base middleware raises `No response returned` when the wrapped app ends before `http.response.start`. Pure ASGI middleware avoids it.
+- [ ] **Bound each client's session list.** Bug. The stdio bridge opens an upstream session per call, so an active client's `session_ids` grows for the life of the app and `clients` reports every one.
+- [ ] **Reuse the bridge's upstream session.** Feature. Each bridged tool call costs a health request, a control request, and a new MCP handshake.
 
 ## reporting
 
@@ -67,6 +72,8 @@ An item is done when the harness has produced its measurement and the validation
 - [ ] **Give `stale` one meaning.** Feature. With no generation it doubles as "ready to build", so a caller cannot tell a changed corpus from a never-built one.
 - [ ] **Report activation failures as structured values.** Feature. A failed activation does not say which step failed or what it left on disk.
 - [ ] **Decide how the source inventory exposes the keyword vocabulary.** Feature. The keyword layer is all-of, and the vocabulary exists only across sources, so a reader cannot discover which keywords exist. Report counts in `status` or reduce the list to handles.
+- [ ] **Hash a drifted source once.** Bug. `_status` hashes every source whose mtime changed while its size did not, and every agent search runs `_status`. An unchanged ingest never rewrites the recorded mtime, so the hashing repeats on every search until a real build.
+- [ ] **Log unexpected errors with their traceback.** Bug. `surfaces/mcp.py::_tool_call` and `ResearchUIAdapter.call` turn every exception into a caller error, and FastMCP logs a `ToolError` without its traceback, so an unexpected failure leaves nothing in the log.
 
 ## ingestion
 
@@ -75,10 +82,20 @@ An item is done when the harness has produced its measurement and the validation
 - [ ] **Refuse to start a build that cannot fit.** Feature. `status` and `doctor` report free space against existing generation sizes, but `ingest` ignores the verdict. A build that runs out of room leaves a staging directory and no generation.
 - [ ] **Add an `ingest` dry run.** Feature. Report what would change and what would be reused, and write nothing.
 - [ ] **Split the resumable ingestion loop into per-phase handlers, then enable `C901`.** Feature. `generations/ingestion.py::_advance_ingestion` holds the whole loop. Three phase blocks call closures defined inside it, and eight read loop-local state, so the split needs an ingestion state object that handlers take and return. Acceptance: a green suite, a re-ingest that reuses every chunk and vector, and `C901` enabled at the level the rest of the package meets.
+- [ ] **Assemble vectors from the batches on disk.** Bug. `vector_assembly` derives batch offsets from the current `ingestion.embedding_batch_size`. A settings write between two ingest calls makes it miss a batch file, and the build is discarded.
+- [ ] **Keep a checkpoint after a transient failure.** Bug. `ingest` discards the checkpoint on any exception, so a full disk, a failed model download, or a worker crash loses every finished phase. Discard only state proven corrupt.
+- [ ] **Reconcile MOBI progress.** Bug. `_reconcile_checkpoint_progress` has no `mobi` branch and abandons the whole reconciliation, so a build holding one MOBI reports unreconciled counters and no per-source progress.
+- [ ] **Keep the event loop free during a build.** Bug. Checkpoint writes with two fsyncs after every batch, whole-corpus assembly, the finalize scan, staging cleanup, and source scans run on the loop the workspace, MCP, and control API share. `AGENTS.md` requires them off it.
+- [ ] **Load the reuse snapshot once per phase.** Feature. The extraction, chunking, and embedding phases reload the snapshot on every iteration while their axis is not reusable. Under an older artifact policy each reload rescans the previous generation's JSONL.
+- [ ] **Open an EPUB once per build call.** Feature. `extract_epub_spine_item` re-reads the whole book for every spine item.
+- [ ] **Validate an unchanged generation without holding it in memory.** Feature. A no-op ingest parses every artifact and hashes both JSONL files, and `validate_artifact_lookup` loads every chunk record at once.
+- [ ] **Survive a touched source mid-build.** Feature. The checkpoint identity and the final inventory check include `mtime_ns`, so touching a file between ingest calls discards a build whose bytes did not change.
 
 ## text extraction
 
 - [ ] **Refuse a garbage passage, not only a garbage unit.** Feature. `corpus/text_quality.py` judges a unit and extraction withholds one whose text carries a reason. Extend the verdicts to what a reader retrieves — running heads, page numbers, a table of contents, an index, a reference list, boilerplate — and refuse the passage at build time. Measure what it removes, and what it takes with it, against the judged set.
+- [ ] **Measure the EPUB note-reference rule.** Test. `extraction._is_epub_noteref` treats a linked number as a note reference when the link carries an `id`, so a cross-reference number with an `id` loses its text. Count what the rule removes on the judged corpus.
+- [ ] **Track open EPUB blocks without descendant sets.** Feature. `_epub_text_segments` builds a set of every descendant for each content element it enters.
 
 ## chunking
 
@@ -101,7 +118,9 @@ An item is done when the harness has produced its measurement and the validation
 
 ## indexing
 
-- [ ] **Measure the operating envelope.** Test. No figure covers search latency, index size, resident memory, or build time at the corpus size this app claims to serve. `retrieval.exact_backend_chunk_limit = 200000` is where `auto` selects the ANN backend, but nothing states where the exact scan stops being usable. Record the envelope in `MEASUREMENTS.md`, and let it bound the source and passage counts the app supports.
+- [ ] **Build the exact index whenever `dense.backend` is `auto`.** Bug. Above `dense.exact_backend_chunk_limit` `auto` selects Qdrant local mode, which loads every point on each client open and scores by brute force. `qdrant.py` opens a client per search and per 64-chunk upload, so a build is quadratic. Existing Qdrant generations stay readable.
+- [ ] **Bound the exact backend's index cache.** Bug. `LocalVectorDenseBackend._loaded` never evicts. Each build leaves a staging-path entry, and a removed generation's vectors stay mapped, so `remove_generation` frees no disk space until the app restarts.
+- [ ] **Measure the operating envelope.** Test. No figure covers search latency, index size, resident memory, or build time at the corpus size this app claims to serve. Nothing states where the exact scan stops being usable. Record the envelope in `MEASUREMENTS.md`, and let it bound the source and passage counts the app supports.
 - [ ] **Choose whether canonical retrieval text moves into SQLite.** Decision. `retrieval/artifact_lookup.py` keeps a SQLite sidecar of identifiers, ordinals, digests, and byte offsets, while passage and extraction text stay in JSONL and are read on demand; a large corpus pays a file read per hit. Options: keep the split and measure it against the recorded envelope, or make the sidecar the canonical store for retrieval text. `sources/` remains the authority for a quotation, and the artifacts stay portable, either way.
 
 ## retrieval
@@ -113,6 +132,7 @@ An item is done when the harness has produced its measurement and the validation
   - Cover one essay alone and inside a book, a byte-identical source under two names, and repeated passages without merging provenance or inferring independent evidence.
   - Keep suppression at search time, never at chunk- or record-time, so a duplicate keeps the rank the next query could use.
 - [ ] **Return scored lexical identities and filter before top-k.** Refactor. `DirectRetrieval.search_bm25` still returns strings and discards scores. Choose a typed row/chunk-ID boundary before implementation. Preserve occurrence identity for identical text at different locators. Apply reviewed metadata, document selection, and source/passage exclusions to eligible rows before top-k while retaining corpus-wide BM25 statistics. Remove content remapping and filter-window widening only after compatibility tests cover ties, selective filters, old indexes, concurrent reads/builds, and offline restart.
+- [ ] **Read a passage's neighbours without scanning its document.** Bug. `get_passage` loads every chunk of the document and runs the corruption scan on each, on the event loop, to return two neighbours.
 - [ ] **Split the search pipeline into explicit stages.** Refactor. `retrieval/search.py::SearchWorkflow.search` owns admission, filtering, fusion, relevance gates, reranking, repetition handling, selection, and disclosure. Give stages explicit input/output state and preserve ordered hit IDs and diagnostic counts in differential tests before removing its complexity exemption.
 - [ ] **Improve paraphrase matching, and price each lever.** Feature. Measure the levers the app already reaches — the pseudo-relevance expansion, the CPU reranker, and a larger embedding model from the pinned registry — against the pooled judgments once they exist. Keep only a lever whose pooled result improves and whose cost is stated.
 - [ ] **Merge the stopword lists of a mixed corpus.** Feature. `language.corpus` can name several languages while BM25 filters the one list in `language.bm25_stopwords`. bm25s accepts a list. Check that the pinned runtime passes a list through `bm25.lang`, then measure the union against one list.
@@ -122,6 +142,23 @@ An item is done when the harness has produced its measurement and the validation
 
 - [ ] **Narrow the two broad `except Exception` handlers.** Feature. Both sit at durability boundaries, so a storage fault is swallowed, not raised.
 - [ ] **Measure retained-generation growth before changing storage.** Decision. Compare the current self-contained generations, explicit retention controls, filesystem-assisted sharing, and content-addressed blobs. A passage occurrence ID is not a text-only blob key. Any shared store needs durable references, crash-safe garbage collection, safe interrupted-build cleanup, portability, and preservation of current, leased, and pending-activation generations. Get a choice before changing layouts or deleting retained evidence.
+- [ ] **Bound search-history retention.** Decision. `search-stats.sqlite3` gains one search row and up to five rank rows per search with no retention limit, and history is on by default.
+- [ ] **Close artifact-lookup connections explicitly.** Bug. `retrieval/artifact_lookup.py` opens SQLite with `with sqlite3.connect(...)`, which commits but does not close.
+
+## security
+
+- [ ] **Gate LAN routes with an allowlist.** Feature. `runtime/network.py::LOCAL_ONLY_PATHS` is a denylist, so a new route is reachable from the LAN until someone lists it.
+- [ ] **Decide which writes a LAN peer may make.** Decision. A LAN peer can remove and select generations, write settings, start ingest, and read or clear search history.
+- [ ] **Authenticate local callers.** Decision. `/control` and `/mcp` accept any local process, so another user on the machine can enable LAN access, write settings, or remove a generation. A per-run token in a 0600 runtime file is one option; it adds a runtime file.
+- [ ] **Validate `Origin` on `/mcp`.** Feature. The MCP transport requires the check. The Host check already blocks DNS rebinding.
+- [ ] **Bound EPUB parsing.** Feature. EPUB is parsed in the serving process without limits, while MOBI and Docling run in bounded children. A zip bomb or an oversized XHTML item can exhaust the app.
+- [ ] **Lock the Docling environment's transitive dependencies.** Feature. `corpus/docling_env.py` pins three packages. torch and the Docling components resolve at install time without hashes, so two machines can extract the same PDF differently.
+
+## release
+
+- [ ] **Install the release `update` approved.** Bug. The distribution path asks the package index for a package published only on GitHub, and `uv tool upgrade` re-resolves the git specifier to the default branch head rather than the tag whose changelog was shown. README installs from the branch head as well.
+- [ ] **Run `uv lock --check` in CI.** Bug. `AGENTS.md` requires it before a commit, and `.github/workflows/test.yml` omits it.
+- [ ] **Point the `default.toml` package data at its file.** Bug. `pyproject.toml` names `research_rag/default.toml`; the file is `research_rag/project/default.toml` and ships only through setuptools' default discovery.
 
 ## evaluation
 
@@ -135,3 +172,7 @@ An item is done when the harness has produced its measurement and the validation
 - [ ] **Split the remaining concerns in `project/support.py`.** Metadata overlays, chunk records, IR statistics, citations, source identity, and tokenizer caching need separate owners. `project/policy.py` owns lightweight errors and policy primitives. Acceptance: shared definitions have one owner, and `tests/gates/test_lightweight_imports.py` keeps diagnostic commands from loading retrieval dependencies.
 - [ ] **Remove private-helper compatibility re-exports.** Refactor. Update tests and harnesses to import private helpers from their owning modules rather than `core/service.py`. Remove unused re-exports without changing supported service operations, and keep architecture and lightweight-import gates green.
 - [ ] **Assess settings layers before removing supported overrides.** Decision. Compare retaining the current stack with a smaller stack and an explicit deprecation path. Measure actual use and ambiguity; retain validation, effective-value provenance, rebuild-cost calculation, and protection against ineffective writes. A single user can still need several projects and machine-specific overrides.
+- [ ] **Type-check in CI.** Refactor. `ResearchService` combines six workflow mixins that share undeclared attributes, and no checker reads the type hints. Declare the shared state as a `Protocol` and add pyright or mypy to CI.
+- [ ] **Remove internal compatibility names and dead code.** Refactor. `ResearchService(ultrarag=...)`, `ResearchService.ultrarag`, `App.gateway`, the module-level `runtime/app.py::_security_headers`, `runtime/write_guard.py`, and `retrieval/direct.py::_sync_directory` serve tests only. The search payload's `conserved` check cannot fail, and `direct.py` overwrites the numpy fallback with `backend = "numba"`.
+- [ ] **Remove workspace routes this app never enables.** Decision. The memory, SQL, and bundle routes and their `LOCAL_ONLY_PATHS` entries serve no capability here. The workspace copy shared with memory-rag is deliberate, so removal is a choice.
+- [ ] **Correct the `runtime.offline` comment.** Bug. `default.toml` still says offline mode requires an installed vanilla runtime.
