@@ -796,8 +796,8 @@ SETTINGS: tuple[Setting, ...] = (
         kind=int,
         layer="engine",
         doc=(
-            "Corpus size above which 'auto' selects the embedded ANN index "
-            "instead of the exact scan; recorded in each generation."
+            "Retired: 'auto' builds the exact scan at every size. Accepted so an "
+            "existing config keeps resolving; it has no effect."
         ),
         minimum=1,
         maximum=100_000_000,

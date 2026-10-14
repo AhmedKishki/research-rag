@@ -42,7 +42,7 @@
 | Milvus | Needs a running Milvus service or Milvus Lite. That conflicts with project-local derived state and the no-external-service rule. `search()` returns strings only. Upstream warns against non-demo use, and its demo mode forces OpenAI embeddings. | Nothing. At this app's sizes the exact scan answers from vectors the generation already stores. |
 | Reranking components | The `sentence_transformers` backend pulls in PyTorch. `infinity` is a model-serving engine. `openai` needs a credential and sends queries to a third party. Shipped parameters target `device: cuda`. The result is `rerank_psg`, reordered strings with scores discarded. | A FastEmbed cross-encoder on the pinned ONNX dependency and shared model cache. |
 
-- The exact scan is the default. Above 200,000 chunks the embedded Qdrant backend is selected per generation and recorded in its manifest. It returns scored hits under a payload filter, which upstream FAISS cannot.
+- The exact scan is built at every size unless `dense.backend = "qdrant"` names the embedded Qdrant backend. The manifest records which backend built a generation. Qdrant returns scored hits under a payload filter, which upstream FAISS cannot.
 - The reranker orders at most 50 candidates by score, then appends the unreranked tail, so a source whose best passage fell outside the window can still be reached. A string-only reranker cannot express that.
 - Existing generations retain their original manifest provenance. Compatible old chunks, vectors, and BM25 indexes remain readable and reusable without migration. New manifests name the direct implementation; changing the backend alone does not change defaults or require ingestion.
 - The retired `research-rag-gateway` command provides migration guidance to the project MCP bridge. `research-rag-runtime` and `doctor --repair-runtime` report that no external runtime is required. These compatibility shims expose no upstream tools and never start a server, download, validate, move, or delete caches.
@@ -91,7 +91,7 @@
 | Dense semantic search | FastEmbed `bge-small-en-v1.5`, 384 dimensions, CPU, revision-pinned. Finds passages phrased differently from the question. |
 | Hybrid search | Weighted reciprocal-rank fusion of the two rankings, with an opt-out to inspect either alone. |
 | Incompatible embedding identity | A model, repository, revision, or dimension mismatch disables dense search and vector reuse. Default search serves BM25 and names the incompatibility. Restore the recorded model to use existing vectors, or explicitly ingest to build matching vectors while reusing compatible text. |
-| Exact dense scan | Scans the generation's portable float32 vectors directly. Above a documented corpus size an embedded index is used, and the manifest records which backend built the generation. |
+| Exact dense scan | Scans the generation's portable float32 vectors directly at every corpus size. The manifest records which backend built the generation, so an existing Qdrant generation stays readable. |
 | Reranking, always on | A CPU cross-encoder reorders up to 50 fused candidates. When the pinned model cannot load, search returns the unranked order and reports `rerank_fallback`. |
 | Metadata filters | Narrow by project, category, keyword, or document. `status` shows the project and category inventories. |
 | Author and title filters | `authors_any` and `titles_any` match case-insensitive substrings of the reviewed value. `applied_filters` reports a filter that matched nothing. |

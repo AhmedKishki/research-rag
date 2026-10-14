@@ -215,20 +215,17 @@ class IngestionWorkflow:
             self.config.settings.maximum_unclean_percent,
         )
 
-    def _select_build_dense_backend(self, chunk_count: int) -> str:
+    def _select_build_dense_backend(self) -> str:
         """Choose the dense backend for a new generation.
 
-        `auto` uses the exact scan while a linear scan is cheaper than
-        maintaining an ANN index, and falls back above the documented threshold.
+        `auto` builds the exact scan at every size. Qdrant local mode loads every
+        point each time a client opens and scores by brute force, so it is never
+        the faster choice; it is built only when `dense.backend` names it.
         """
 
-        if self.config.dense_backend == "exact":
-            return EXACT_BACKEND_NAME
         if self.config.dense_backend == "qdrant":
             return QDRANT_BACKEND_NAME
-        if chunk_count <= self.config.settings.exact_backend_chunk_limit:
-            return EXACT_BACKEND_NAME
-        return QDRANT_BACKEND_NAME
+        return EXACT_BACKEND_NAME
 
     def _load_ingestion_checkpoint(
         self,
@@ -2348,7 +2345,7 @@ class IngestionWorkflow:
                 if backend_name not in DENSE_INDEX_PATHS:
                     # A checkpoint resumed from before the backend was recorded
                     # restarts this phase cleanly with the selected backend.
-                    backend_name = self._select_build_dense_backend(total)
+                    backend_name = self._select_build_dense_backend()
                     checkpoint["dense_backend"] = backend_name
                     checkpoint["dense_index_relative"] = DENSE_INDEX_PATHS[backend_name]
                     checkpoint["dense_indexed_count"] = 0

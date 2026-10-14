@@ -1960,20 +1960,20 @@ def test_status_payload_is_one_vocabulary_with_or_without_a_generation(
     asyncio.run(exercise())
 
 
-def test_dense_backend_selection_honors_the_threshold_and_config(
+def test_dense_backend_selection_builds_exact_unless_qdrant_is_named(
     project: Path,
 ) -> None:
+    """Qdrant local mode reloads every point per open, so `auto` never picks it."""
+
     config = resolve_config(project, vanilla_executable=sys.executable)
     service = ResearchService(  # type: ignore[arg-type]
         config,
         FakeUltraRAG(),
         dense=FakeDenseBackend(),
     )
-    limit = config.settings.exact_backend_chunk_limit
 
-    assert service._select_build_dense_backend(0) == "portable-exact-vectors"
-    assert service._select_build_dense_backend(limit) == "portable-exact-vectors"
-    assert service._select_build_dense_backend(limit + 1) == "embedded-qdrant"
+    assert config.dense_backend == "auto"
+    assert service._select_build_dense_backend() == "portable-exact-vectors"
 
     forced_qdrant = ResearchService(  # type: ignore[arg-type]
         replace(
@@ -1983,7 +1983,7 @@ def test_dense_backend_selection_honors_the_threshold_and_config(
         FakeUltraRAG(),
         dense=FakeDenseBackend(),
     )
-    assert forced_qdrant._select_build_dense_backend(1) == "embedded-qdrant"
+    assert forced_qdrant._select_build_dense_backend() == "embedded-qdrant"
 
     forced_exact = ResearchService(  # type: ignore[arg-type]
         replace(
@@ -1993,9 +1993,7 @@ def test_dense_backend_selection_honors_the_threshold_and_config(
         FakeUltraRAG(),
         dense=FakeDenseBackend(),
     )
-    assert forced_exact._select_build_dense_backend(limit + 1) == (
-        "portable-exact-vectors"
-    )
+    assert forced_exact._select_build_dense_backend() == "portable-exact-vectors"
 
     with pytest.raises(ConfigurationError, match="dense.backend"):
         resolve_config(

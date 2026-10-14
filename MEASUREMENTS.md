@@ -20,7 +20,8 @@ uv run python scripts/evaluate_retrieval.py --project /path/to/project --offline
 - An embedded index is dominated by per-point device cost, and every query reopens it.
 - The upstream API returns neither chunk identity nor scores, which the research contract needs.
 - The exact scan reads the portable float32 vectors the generation already stores. It needs no separate index and ranks like a brute-force scan of those vectors.
-- Above `dense.exact_backend_chunk_limit` the embedded backend is chosen. The manifest records the choice, so a generation is never rebuilt with the other backend.
+- `dense.backend = "auto"` builds the exact scan at every size. Qdrant local mode loads every point when a client opens and scores by brute force, so it is built only when `dense.backend` names it.
+- The manifest records the backend, so a generation is never rebuilt with the other one, and an existing Qdrant generation stays readable.
 
 ## Build mechanisms
 
