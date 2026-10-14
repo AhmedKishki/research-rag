@@ -2,8 +2,8 @@
 
 The Qdrant client is reached only here: its filter types, its payload shape, and
 its own verification are not part of any other backend's problem. The model
-loaders and the embedding, token-count, and rerank operations moved to
-`model_runtime.py`, and the portable-vector file check moved to
+loaders and the embedding, token-count, and rerank operations are in
+`model_runtime.py`, and the portable-vector file check is in
 `portable_vectors.py`; this module may never re-implement either, because two
 copies of a check are two places for it to be wrong.
 """

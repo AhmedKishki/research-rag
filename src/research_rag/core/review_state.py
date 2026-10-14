@@ -8,10 +8,8 @@ question, because a decision is a fact about the review rather than about the
 corpus it applies to. A decision about a passage is enforced by the retrieval
 filter and never by a rebuild, which is why no message here recommends one.
 
-What moved here from `review.py`: `set_source_inclusion`, `set_chunk_inclusion`,
-`list_chunk_exclusions`, `set_source_metadata`, and `_chunk_placements`. The
-workflow methods that remain are the ones that hold the lock, resolve the source
-selector, and read the review files, and they call the functions here.
+`review.py`'s workflow methods hold the lock, resolve the source selector, and
+read the review files, and they call the functions here.
 """
 
 from __future__ import annotations

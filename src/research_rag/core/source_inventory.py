@@ -5,13 +5,8 @@ generation, and the review files, and returns the records a caller selects a
 source from. It may never open a generation, answer a search, or decide whether
 a project can be served, and it never imports a surface. It writes exactly one
 file, `source-catalog.json`, because an issued source ID outlives the file it
-named and a reader must still be able to address it.
-
-What moved here from `review.py`: `_sync_source_catalog`, `_known_sources`,
-`_resolve_source_selector`, and `_exclusion_records`, together with the record
-builder that four sites duplicated and the `source_directory` fallback that two
-sites duplicated. What moved here from `status.py`: nothing, and `status.py`
-reads `exclusion_records` from here rather than reaching into `ReviewWorkflow`.
+named and a reader must still be able to address it. `status.py` reads
+`exclusion_records` from here rather than reaching into `ReviewWorkflow`.
 """
 
 from __future__ import annotations

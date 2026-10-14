@@ -40,19 +40,14 @@ question read-only: it fetches nothing, writes nothing, stops nothing, and retur
 plain JSON, so a browser can ask what is published and show the changelog without
 installing anything itself.
 
-What left this module, and why. `tool_ownership.py` took the `uv` and `pipx`
-vocabulary: the detection that asks each tool whether it claims this
-distribution, the commands each takes to report and to perform an upgrade, the
-install commands a refusal names, and that refusal's prose. `state_files.py` took
-the on-disk names, `ProjectState`, and `resident_build`, so the two questions
-this module asked about a project it has not resolved are answered beside the
-paths they walk. What remains is the decision, the two states it is made from,
-and the approval that stands between the decision and the install.
+This module holds the decision, the two states it is made from, and the approval
+between the decision and the install. `tool_ownership.py` owns the `uv` and
+`pipx` vocabulary, and `state_files.py` owns the on-disk names, `ProjectState`,
+and `resident_build`.
 
 It imports no retrieval module, and must not begin to: `research-rag update` is
 one of the commands that has to answer on a machine where the retrieval stack is
-not importable. `ResearchError` still has no leaf home, so the failure path below
-pays for the import that one exception needs and the reporting path does not.
+not importable.
 """
 
 from __future__ import annotations
@@ -64,6 +59,7 @@ from pathlib import Path
 from typing import Any
 
 from ..project.config import CLI_COMMAND, project_command
+from ..project.policy import ResearchError
 from ..project.state_files import (
     LOCK_FILE,
     PORTABLE_DIRECTORY,
@@ -234,19 +230,6 @@ def _first_line(text: str) -> str:
         if line.strip():
             return line.strip()
     return ""
-
-
-def _failure(message: str) -> Exception:
-    """The one error this command raises, reached without a module-level import.
-
-    `support` imports the retrieval stack, and this command has to answer on a
-    machine where that stack is absent. Until `ResearchError` has a leaf home the
-    failure path pays for the import and every other path does not.
-    """
-
-    from ..project.policy import ResearchError
-
-    return ResearchError(message)
 
 
 def _text(argv: Sequence[str], run: Runner) -> str | None:
@@ -962,7 +945,7 @@ def apply_plan(
             }
         )
         if not result.ok:
-            raise _failure(
+            raise ResearchError(
                 f"`{label}` failed: "
                 f"{_first_line(result.stderr or result.stdout) or 'no output'}. "
                 "Nothing after it was attempted, and the working tree is where "

@@ -10,10 +10,8 @@ a file without that marker is reported and left alone. A person may put their ow
 script on the `PATH` under this name, and an uninstall that removed it would take
 a working command away from them.
 
-`wrapper_document`, `install_console_entry`, `uninstall_console_entry`,
-`console_script_path`, `account_command_path`, `account_bin_directory`, the
-marker, and the report and file helpers both halves share moved here from
-`installation.py`, which keeps the desktop entry and imports them.
+`installation.py` keeps the desktop entry and imports the wrapper, the marker,
+and the report and file helpers both halves share from here.
 """
 
 from __future__ import annotations
