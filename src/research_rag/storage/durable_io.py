@@ -8,13 +8,8 @@ files as one commit passes ``fsync_parent=False`` and calls
 durability operations rather than the size of a payload.
 
 This module knows nothing about the app: no record schema, no project layout, no
-settings. The schemas that used to sit beside these primitives live in
-`storage.py`, and the rule every stored path must satisfy is in
-`normalized_paths.py`.
-
-`storage.py` re-exports every name here for now. That re-export is transitional
-and is removed once the modules that import storage for a primitive alone import
-`durable_io` instead.
+settings. The record schemas are in `records.py`, which re-exports these names,
+and the rule every stored path must satisfy is in `normalized_paths.py`.
 """
 
 from __future__ import annotations

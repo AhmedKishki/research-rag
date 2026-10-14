@@ -282,15 +282,15 @@ def test_prefetch_reports_what_it_cached(
         direct_module, "prefetch_gpt2_tokenizer", lambda **_kwargs: None
     )
 
-    import research_rag.retrieval.dense as dense_module
+    import research_rag.retrieval.model_runtime as model_runtime_module
 
     monkeypatch.setattr(
-        dense_module,
+        model_runtime_module,
         "_load_embedder",
         lambda _root, offline, model: loaded.append(model),
     )
     monkeypatch.setattr(
-        dense_module,
+        model_runtime_module,
         "_load_cross_encoder",
         lambda _root, offline, model: loaded.append(model),
     )
@@ -321,11 +321,13 @@ def test_prefetch_provisions_the_selected_docling_backend(
     )
 
     import research_rag.corpus.pdf_backend as pdf_backend_module
-    import research_rag.retrieval.dense as dense_module
+    import research_rag.retrieval.model_runtime as model_runtime_module
 
-    monkeypatch.setattr(dense_module, "_load_embedder", lambda *_args, **_kwargs: None)
     monkeypatch.setattr(
-        dense_module, "_load_cross_encoder", lambda *_args, **_kwargs: None
+        model_runtime_module, "_load_embedder", lambda *_args, **_kwargs: None
+    )
+    monkeypatch.setattr(
+        model_runtime_module, "_load_cross_encoder", lambda *_args, **_kwargs: None
     )
     calls: list[object] = []
     monkeypatch.setattr(
@@ -354,11 +356,13 @@ def test_prefetch_reports_a_failed_docling_environment_actionably(
 
     import research_rag.corpus.docling_env as docling_env_module
     import research_rag.corpus.pdf_backend as pdf_backend_module
-    import research_rag.retrieval.dense as dense_module
+    import research_rag.retrieval.model_runtime as model_runtime_module
 
-    monkeypatch.setattr(dense_module, "_load_embedder", lambda *_args, **_kwargs: None)
     monkeypatch.setattr(
-        dense_module, "_load_cross_encoder", lambda *_args, **_kwargs: None
+        model_runtime_module, "_load_embedder", lambda *_args, **_kwargs: None
+    )
+    monkeypatch.setattr(
+        model_runtime_module, "_load_cross_encoder", lambda *_args, **_kwargs: None
     )
 
     def fail(_config):
@@ -797,10 +801,12 @@ def test_run_doctor_prefetch_includes_docling_provisioning(
     from dataclasses import replace
 
     import research_rag.corpus.pdf_backend as pdf_backend_module
-    import research_rag.retrieval.dense as dense_module
+    import research_rag.retrieval.model_runtime as model_runtime_module
 
-    monkeypatch.setattr(dense_module, "_load_embedder", lambda *_a, **_k: None)
-    monkeypatch.setattr(dense_module, "_load_cross_encoder", lambda *_a, **_k: None)
+    monkeypatch.setattr(model_runtime_module, "_load_embedder", lambda *_a, **_k: None)
+    monkeypatch.setattr(
+        model_runtime_module, "_load_cross_encoder", lambda *_a, **_k: None
+    )
     monkeypatch.setattr(
         pdf_backend_module,
         "prefetch_docling_models",

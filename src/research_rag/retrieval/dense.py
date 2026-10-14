@@ -30,7 +30,6 @@ from .dense_backends import (
     LocalVectorDenseBackend,
     RerankerUnavailable,
 )
-from .model_runtime import _load_cross_encoder, _load_embedder  # noqa: F401
 
 if TYPE_CHECKING:
     import numpy as np
