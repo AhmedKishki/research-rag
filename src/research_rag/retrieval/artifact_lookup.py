@@ -13,7 +13,8 @@ import os
 import sqlite3
 import uuid
 from collections import defaultdict
-from collections.abc import Iterator, Mapping, Sequence
+from collections.abc import Callable, Iterator, Mapping, Sequence
+from contextlib import closing, contextmanager
 from pathlib import Path
 from typing import Any
 
@@ -347,7 +348,7 @@ def _lookup_is_current(
     ):
         return False
     try:
-        with sqlite3.connect(lookup_path) as connection:
+        with closing(sqlite3.connect(lookup_path)) as connection:
             version = int(connection.execute("PRAGMA user_version").fetchone()[0])
             if version != LOOKUP_SCHEMA_VERSION:
                 return False
@@ -387,16 +388,26 @@ class ArtifactLookup:
         self.units_path = units_path
         self.lookup_path = lookup_path
 
-    def _connect(self) -> sqlite3.Connection:
+    @contextmanager
+    def _connect(self) -> Iterator[sqlite3.Connection]:
+        """A read-only connection, closed when the block ends.
+
+        A connection's own context manager only ends a transaction; it does not
+        close the connection.
+        """
+
         try:
             connection = sqlite3.connect(
                 f"{self.lookup_path.resolve().as_uri()}?mode=ro",
                 uri=True,
             )
-            connection.row_factory = sqlite3.Row
-            return connection
         except sqlite3.DatabaseError as exc:
             raise ArtifactLookupError(f"Could not open artifact lookup: {exc}") from exc
+        connection.row_factory = sqlite3.Row
+        try:
+            yield connection
+        finally:
+            connection.close()
 
     @staticmethod
     def _load_rows(
@@ -714,6 +725,49 @@ class VectorByContentsMapping(Mapping[str, Any]):
         return self.lookup.chunk_count()
 
 
+def _rows_match(
+    connection: sqlite3.Connection,
+    table: str,
+    path: Path,
+    expected_count: int,
+    matches: Callable[[sqlite3.Row, dict[str, Any]], bool],
+) -> bool:
+    """Whether every indexed row reads back the record it names, in file order.
+
+    Rows are read one at a time, so validation holds one record rather than the
+    whole artifact.
+    """
+
+    count = 0
+    with path.open("rb") as handle:
+        for row in connection.execute(f"SELECT * FROM {table} ORDER BY ordinal"):
+            handle.seek(int(row["byte_offset"]))
+            record = _read_json_line(
+                path, handle.read(int(row["byte_length"])), count + 1
+            )
+            if row["ordinal"] != count or not matches(row, record):
+                return False
+            count += 1
+    return count == expected_count
+
+
+def _chunk_row_matches(row: sqlite3.Row, record: dict[str, Any]) -> bool:
+    return bool(
+        record.get("chunk_id") == row["chunk_id"]
+        and record.get("document_id") == row["document_id"]
+        and record.get("document_chunk_index") == row["document_chunk_index"]
+        and hashlib.sha256(_chunk_text(record).encode("utf-8")).digest()
+        == row["content_sha256"]
+    )
+
+
+def _unit_row_matches(row: sqlite3.Row, record: dict[str, Any]) -> bool:
+    return bool(
+        record.get("id") == row["unit_id"]
+        and record.get("document_id") == row["document_id"]
+    )
+
+
 def validate_artifact_lookup(
     chunks_path: Path,
     units_path: Path,
@@ -733,48 +787,25 @@ def validate_artifact_lookup(
             if (
                 int(metadata[_metadata_key("chunks", "count")]) != expected_chunk_count
                 or int(metadata[_metadata_key("units", "count")]) != expected_unit_count
+                or metadata[_metadata_key("chunks", "sha256")]
+                != _sha256_file(chunks_path)
+                or metadata[_metadata_key("units", "sha256")]
+                != _sha256_file(units_path)
             ):
                 return False
-            chunk_rows = connection.execute(
-                "SELECT * FROM chunks ORDER BY ordinal"
-            ).fetchall()
-            unit_rows = connection.execute(
-                "SELECT * FROM units ORDER BY ordinal"
-            ).fetchall()
-        if (
-            len(chunk_rows) != expected_chunk_count
-            or len(unit_rows) != expected_unit_count
-        ):
-            return False
-        chunk_digest = _sha256_file(chunks_path)
-        unit_digest = _sha256_file(units_path)
-        if (
-            metadata[_metadata_key("chunks", "sha256")] != chunk_digest
-            or metadata[_metadata_key("units", "sha256")] != unit_digest
-        ):
-            return False
-        for ordinal, (row, record) in enumerate(
-            lookup._load_rows(chunks_path, chunk_rows)
-        ):
-            if (
-                row["ordinal"] != ordinal
-                or record.get("chunk_id") != row["chunk_id"]
-                or record.get("document_id") != row["document_id"]
-                or record.get("document_chunk_index") != row["document_chunk_index"]
-                or hashlib.sha256(_chunk_text(record).encode("utf-8")).digest()
-                != row["content_sha256"]
-            ):
-                return False
-        for ordinal, (row, record) in enumerate(
-            lookup._load_rows(units_path, unit_rows)
-        ):
-            if (
-                row["ordinal"] != ordinal
-                or record.get("id") != row["unit_id"]
-                or record.get("document_id") != row["document_id"]
-            ):
-                return False
-        return True
+            return _rows_match(
+                connection,
+                "chunks",
+                chunks_path,
+                expected_chunk_count,
+                _chunk_row_matches,
+            ) and _rows_match(
+                connection,
+                "units",
+                units_path,
+                expected_unit_count,
+                _unit_row_matches,
+            )
     except (
         ArtifactLookupError,
         KeyError,
