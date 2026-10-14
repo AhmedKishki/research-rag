@@ -33,7 +33,12 @@ from research_rag.project.config import (
     project_command,
     resolve_config,
 )
+from research_rag.project.embeddings import (
+    DEFAULT_EMBEDDING_MODEL,
+    resolve_embedding_model,
+)
 from research_rag.project.policy import DEFAULT_RETRIEVAL_METHOD, value_fingerprint
+from research_rag.project.rerankers import DEFAULT_RERANKER_MODEL, RERANKER_MODELS
 from research_rag.project.settings import resolve_gate_stopwords
 from research_rag.retrieval.dense import (
     DenseSearchHit,
@@ -45,11 +50,6 @@ from research_rag.retrieval.documents import (
     _effective_document_metadata,
     _public_document,
 )
-from research_rag.retrieval.embeddings import (
-    DEFAULT_EMBEDDING_MODEL,
-    resolve_embedding_model,
-)
-from research_rag.retrieval.rerankers import DEFAULT_RERANKER_MODEL, RERANKER_MODELS
 from research_rag.storage.durable_io import (
     atomic_write_json,
     read_json,

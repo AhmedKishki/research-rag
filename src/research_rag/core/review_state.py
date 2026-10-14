@@ -28,7 +28,7 @@ from ..retrieval.documents import (
     _public_document,
 )
 from ..storage.durable_io import StorageError
-from ..storage.records import (
+from .records import (
     load_metadata_overrides,
     write_chunk_exclusions,
     write_metadata_overrides,

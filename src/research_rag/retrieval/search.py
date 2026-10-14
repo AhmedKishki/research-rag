@@ -17,6 +17,7 @@ from ..corpus.text_quality import (
     text_corruption_reasons,
 )
 from ..project.policy import DEFAULT_RETRIEVAL_METHOD, RETRIEVAL_METHODS, ResearchError
+from ..project.rerankers import _reranker_revision
 from ..storage.durable_io import _atomic_to_thread, iter_jsonl
 from .artifact_lookup import (
     LOOKUP_HEALTH_FLAGS_KEY,
@@ -41,7 +42,6 @@ from .ranking import (
     document_frequencies,
     passage_token_count,
 )
-from .rerankers import _reranker_revision
 
 #: The most candidate identifiers one stage of an evaluation trace may carry. The
 #: trace is a bounded read of a pipeline, not the pipeline's own state, so a stage

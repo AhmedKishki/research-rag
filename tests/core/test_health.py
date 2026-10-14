@@ -15,19 +15,19 @@ from typing import Any
 
 import pytest
 
-import research_rag.runtime.health as health_module
-import research_rag.runtime.version as version_module
+import research_rag.core.health as health_module
+import research_rag.core.version as version_module
+from research_rag.core.health import Check, HealthReport, health_report
 from research_rag.project.config import ResearchConfig, resolve_config
-from research_rag.retrieval.embeddings import (
+from research_rag.project.embeddings import (
     EMBEDDING_MODELS,
     EmbeddingModel,
     resolve_embedding_model,
 )
-from research_rag.retrieval.rerankers import (
+from research_rag.project.rerankers import (
     RERANKER_REQUIRED_FILES,
     resolve_reranker_model,
 )
-from research_rag.runtime.health import Check, HealthReport, health_report
 
 # A check that disappears is as much a break as one that changes state.
 EXPECTED_CHECKS = (

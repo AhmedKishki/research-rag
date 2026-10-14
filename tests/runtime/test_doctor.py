@@ -49,8 +49,8 @@ def config(project: Path, tmp_path: Path) -> ResearchConfig:
 def healthy(config: ResearchConfig, monkeypatch: pytest.MonkeyPatch) -> ResearchConfig:
     """A project whose dependencies are all in place."""
 
-    from research_rag.retrieval.embeddings import resolve_embedding_model
-    from research_rag.retrieval.rerankers import (
+    from research_rag.project.embeddings import resolve_embedding_model
+    from research_rag.project.rerankers import (
         RERANKER_REQUIRED_FILES,
         resolve_reranker_model,
     )
@@ -79,7 +79,7 @@ def healthy(config: ResearchConfig, monkeypatch: pytest.MonkeyPatch) -> Research
     monkeypatch.setattr(direct_module, "tokenizer_cache_status", lambda _root: True)
     # Docling is the only PDF extractor, so a healthy installation has its managed
     # environment ready; the check would otherwise warn.
-    import research_rag.runtime.health as health_module
+    import research_rag.core.health as health_module
 
     env = SimpleNamespace(
         root=Path("/nonexistent/docling-env"),
@@ -387,8 +387,8 @@ def test_prefetch_clears_the_model_cache_warnings(
     monkeypatch.setattr(
         direct_module, "prefetch_gpt2_tokenizer", lambda **_kwargs: None
     )
-    from research_rag.retrieval.model_cache import snapshot_path
-    from research_rag.runtime.health import health_report
+    from research_rag.core.health import health_report
+    from research_rag.project.model_cache import snapshot_path
 
     calls: list[dict[str, Any]] = []
 

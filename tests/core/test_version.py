@@ -3,9 +3,9 @@ from __future__ import annotations
 import tomllib
 from pathlib import Path
 
+import research_rag.core.version as version_module
 import research_rag.runtime.release as release_module
-import research_rag.runtime.version as version_module
-from research_rag.runtime.version import (
+from research_rag.core.version import (
     APP_VERSION,
     installed_version,
     restart_required,

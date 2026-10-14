@@ -18,12 +18,10 @@ from ...project.config import (
     resolve_config,
 )
 from ...project.policy import ResearchError
-from ...project.registry import (
-    account_projects,
-    registry_path,
-)
 from ...project.registry import register as register_project
+from ...project.registry import registry_path
 from ...project.registry import resolve as resolve_registered
+from ...runtime.account import account_projects
 
 # The variable a client entry that cannot pass an argument sets instead. It is
 # the counterpart of `RESEARCH_RAG_PROJECT_ROOT`, and it exists for the same

@@ -13,9 +13,9 @@ from fastembed.text.onnx_embedding import OnnxTextEmbedding
 from huggingface_hub.errors import LocalEntryNotFoundError
 
 import research_rag.retrieval.model_runtime as runtime
-from research_rag.retrieval.embeddings import EMBEDDING_MODELS, EmbeddingModel
-from research_rag.retrieval.model_cache import snapshot_path
-from research_rag.retrieval.rerankers import RERANKER_MODELS, RERANKER_REQUIRED_FILES
+from research_rag.project.embeddings import EMBEDDING_MODELS, EmbeddingModel
+from research_rag.project.model_cache import snapshot_path
+from research_rag.project.rerankers import RERANKER_MODELS, RERANKER_REQUIRED_FILES
 
 
 def _cache(snapshot: Path, filenames: tuple[str, ...]) -> Path:

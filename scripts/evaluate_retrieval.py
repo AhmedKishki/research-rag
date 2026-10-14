@@ -65,11 +65,11 @@ from research_rag.project.config import (
     resolve_config,
 )
 from research_rag.project.policy import retrieval_policy_fingerprint
-from research_rag.retrieval.direct import DirectRetrieval
-from research_rag.retrieval.rerankers import (
+from research_rag.project.rerankers import (
     DEFAULT_RERANKER_MODEL,
     RERANKER_MODEL_CHOICES,
 )
+from research_rag.retrieval.direct import DirectRetrieval
 
 DEFAULT_JUDGMENTS = Path("evaluation/ai-and-fetishism-queries.json")
 # The reranked mode is one row per selected reranker: the model is an engine

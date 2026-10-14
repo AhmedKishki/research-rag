@@ -26,11 +26,8 @@ from typing import Any
 import numpy as np
 import pytest
 
+from research_rag.core.records import write_chunk_exclusions, write_source_exclusions
 from research_rag.project.config import resolve_config
-from research_rag.storage.records import (
-    write_chunk_exclusions,
-    write_source_exclusions,
-)
 
 #: The script is read by path, the way a person runs it, so these tests hold the
 #: command's own behaviour rather than a package import of a module.

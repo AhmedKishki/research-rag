@@ -7,14 +7,14 @@ import numpy as np
 import pytest
 
 import research_rag.retrieval.model_runtime as model_runtime_module
+from research_rag.project.embeddings import (
+    DEFAULT_EMBEDDING_MODEL,
+    resolve_embedding_model,
+)
 from research_rag.retrieval.dense import (
     DenseTokenAuditUnavailable,
     LocalQdrantDenseBackend,
     LocalVectorDenseBackend,
-)
-from research_rag.retrieval.embeddings import (
-    DEFAULT_EMBEDDING_MODEL,
-    resolve_embedding_model,
 )
 from research_rag.retrieval.model_runtime import DEFAULT_RERANKER_MODEL
 

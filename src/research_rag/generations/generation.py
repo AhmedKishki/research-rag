@@ -8,6 +8,7 @@ from typing import Any
 
 import numpy as np
 
+from ..project.embeddings import EmbeddingModel
 from ..project.normalized_paths import normalized_relative_path
 from ..retrieval.artifact_lookup import (
     LOOKUP_RELATIVE_PATH,
@@ -17,7 +18,6 @@ from ..retrieval.artifact_lookup import (
     ensure_artifact_lookup,
     validate_artifact_lookup,
 )
-from ..retrieval.embeddings import EmbeddingModel
 from ..storage.durable_io import StorageError, iter_jsonl
 
 LOGGER = logging.getLogger(__name__)

@@ -17,6 +17,7 @@ if TYPE_CHECKING:  # pragma: no cover - typing only
 from ..core.admission import as_caller
 from ..core.operations import OPERATIONS, run
 from ..core.service import ResearchService
+from ..core.version import version_label
 from ..corpus.sources import SourcePolicyError, scan_sources
 from ..project.config import (
     ConfigurationError,
@@ -24,10 +25,9 @@ from ..project.config import (
     resolve_source_reference,
 )
 from ..project.policy import ResearchError
-from ..project.registry import account_projects
+from ..runtime.account import account_projects
 from ..runtime.app import ClientError, ClientRegistry
 from ..runtime.doctor import mcp_entry_block
-from ..runtime.version import version_label
 
 LOGGER = logging.getLogger(__name__)
 MAX_ERROR_LENGTH = 1200

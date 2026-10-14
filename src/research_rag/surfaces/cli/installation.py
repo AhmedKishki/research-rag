@@ -128,9 +128,9 @@ async def _update(args: argparse.Namespace) -> dict[str, Any]:
     each one again.
     """
 
+    from ...core.version import version_block
     from ...project.registry import load as load_registered
     from ...runtime import update as update_module
-    from ...runtime.version import version_block
 
     offline = bool(args.offline)
     runner = process_module.subprocess_runner

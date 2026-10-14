@@ -19,6 +19,7 @@ from ..corpus.text_quality import (
     has_searchable_alphanumeric_content,
     text_corruption_reasons,
 )
+from ..project.embeddings import EmbeddingModel
 from ..project.policy import (
     ARTIFACT_POLICY_VERSION,
     CLEANING_POLICY_VERSION,
@@ -32,7 +33,6 @@ from ..project.policy import (
 )
 from ..retrieval.artifact_lookup import chunk_text
 from ..retrieval.dense import DenseTokenAuditUnavailable
-from ..retrieval.embeddings import EmbeddingModel
 from ..storage.durable_io import file_identity
 
 

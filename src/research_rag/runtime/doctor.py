@@ -18,15 +18,16 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from ..core.health import WARN, Check, HealthReport, health_report
 from ..project.config import (
     CLI_COMMAND,
     DEFAULT_UI_PORT,
     ResearchConfig,
     project_command,
 )
-from ..retrieval.embeddings import resolve_embedding_model
-from ..retrieval.rerankers import resolve_reranker_model
-from .health import WARN, Check, HealthReport, health_report
+from ..project.embeddings import resolve_embedding_model
+from ..project.rerankers import resolve_reranker_model
+from .network import MCP_PATH
 from .ownership import option_value
 
 
@@ -196,7 +197,7 @@ def mcp_url_block(config: ResearchConfig) -> str:
                 "mcp": {
                     SERVER_COMMAND: {
                         "type": "local",
-                        "url": f"http://127.0.0.1:{port or DEFAULT_UI_PORT}/mcp",
+                        "url": f"http://127.0.0.1:{port or DEFAULT_UI_PORT}{MCP_PATH}",
                         "enabled": True,
                     }
                 }
@@ -351,8 +352,6 @@ def _loopback_url(url: str) -> bool:
 
 def _check_url_entry(name: str, url: str) -> list[Check]:
     """One loopback URL entry, which reaches the app rather than a proxy."""
-
-    from ..surfaces.mcp import MCP_PATH
 
     findings: list[Check] = []
     if not url.startswith(("http://", "https://")):

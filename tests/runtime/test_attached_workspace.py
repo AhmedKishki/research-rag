@@ -18,12 +18,12 @@ from typing import Any
 
 import pytest
 
-import research_rag.runtime.app as app_module
 import research_rag.runtime.update as update_module
 from research_rag.project import registry, state_files
 from research_rag.project.config import CLI_COMMAND, ConfigurationError, resolve_config
 from research_rag.project.policy import ResearchError
 from research_rag.project.state_files import recorded_pid
+from research_rag.runtime import account
 from research_rag.runtime.app import (
     PID_FILE,
     PORT_FILE,
@@ -218,7 +218,7 @@ async def test_a_project_state_names_the_terminal_its_app_is_attached_to(
 
 
 def _attached_state(config: Any) -> str | None:
-    return registry.project_app_state(config.project_root)["app"]["attached_to"]
+    return account.project_app_state(config.project_root)["app"]["attached_to"]
 
 
 # --- the bare call -------------------------------------------------------------
@@ -538,26 +538,26 @@ def test_an_app_with_no_terminal_is_reported_detached(
     project: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     config = _initialised(project, "Orphan")
-    monkeypatch.setattr(app_module, "recorded_pid", lambda _config: 4242)
-    monkeypatch.setattr(app_module, "has_terminal", lambda pid: False)
+    monkeypatch.setattr(account, "recorded_pid", lambda _config: 4242)
+    monkeypatch.setattr(account, "has_terminal", lambda pid: False)
 
-    assert registry.detached_from_terminal(config, running=True) is True
+    assert account.detached_from_terminal(config, running=True) is True
 
 
 def test_an_app_with_a_terminal_is_not_reported_detached(
     project: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     config = _initialised(project, "Held")
-    monkeypatch.setattr(app_module, "recorded_pid", lambda _config: 4242)
-    monkeypatch.setattr(app_module, "has_terminal", lambda pid: True)
+    monkeypatch.setattr(account, "recorded_pid", lambda _config: 4242)
+    monkeypatch.setattr(account, "has_terminal", lambda pid: True)
 
-    assert registry.detached_from_terminal(config, running=True) is False
+    assert account.detached_from_terminal(config, running=True) is False
 
 
 def test_no_app_at_all_is_not_detached(project: Path) -> None:
     config = _initialised(project, "Down")
 
-    assert registry.detached_from_terminal(config, running=False) is False
+    assert account.detached_from_terminal(config, running=False) is False
 
 
 def _served(config: Any, monkeypatch: pytest.MonkeyPatch, detached: bool) -> None:

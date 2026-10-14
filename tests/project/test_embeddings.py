@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pytest
 
-from research_rag.retrieval.embeddings import (
+from research_rag.project.embeddings import (
     DEFAULT_EMBEDDING_MODEL,
     EMBEDDING_MODEL_CHOICES,
     EMBEDDING_MODELS,

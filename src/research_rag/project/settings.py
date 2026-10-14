@@ -18,13 +18,13 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
-from ..retrieval.embeddings import (
+from .embeddings import (
     EMBEDDING_MODEL_CHOICES,
     EmbeddingModel,
     models_covering,
     resolve_embedding_model,
 )
-from ..retrieval.rerankers import RERANKER_MODELS
+from .rerankers import RERANKER_MODELS
 from .settings_layers import (
     LAYER_DEFAULT,
     Setting,

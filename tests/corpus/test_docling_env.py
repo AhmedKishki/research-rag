@@ -332,7 +332,7 @@ def test_identity_is_stable_across_first_use_and_reuse(
 ) -> None:
     from research_rag.corpus import pdf_backend
     from research_rag.generations.staging import _checkpoint_identity
-    from research_rag.retrieval.embeddings import resolve_embedding_model
+    from research_rag.project.embeddings import resolve_embedding_model
 
     calls: list[str] = []
     _arm(monkeypatch, calls)

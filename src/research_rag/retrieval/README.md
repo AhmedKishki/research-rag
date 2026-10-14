@@ -10,8 +10,6 @@ Answering a query against a built generation.
 | `dense.py` | The `DenseBackend` protocol and the façade both backends are reached through |
 | `dense_backends/` | `LocalQdrantDenseBackend`, `LocalVectorDenseBackend`, and the one portable-vector validation both call |
 | `model_runtime.py` | The embedder, the cross-encoder, and the audit tokenizer, loaded once per process |
-| `embeddings.py` | The model catalogue and the dimensions each entry declares |
-| `rerankers.py` | The reranker catalogue |
 | `artifact_lookup.py` | Reading a chunk or a document out of a generation without loading its vectors |
 | `direct.py` | Compatible direct Chonkie token chunking and bm25s indexing/search, with lazy dependency loading |
 | `lexical.py` | The lightweight contract for chunking, BM25 indexing, and lexical search |

@@ -15,8 +15,8 @@ from __future__ import annotations
 import json
 import re
 
+from ..core.version import DISTRIBUTION_NAME
 from .process import CommandResult, Runner
-from .version import DISTRIBUTION_NAME
 
 UV = "uv"
 PIPX = "pipx"

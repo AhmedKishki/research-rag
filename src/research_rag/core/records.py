@@ -25,7 +25,7 @@ from ..corpus.sources import (
     stable_source_id,
 )
 from ..project.normalized_paths import normalized_relative_path
-from .durable_io import StorageError, atomic_write_json, read_json
+from ..storage.durable_io import StorageError, atomic_write_json, read_json
 
 __all__ = [
     "load_chunk_exclusions",

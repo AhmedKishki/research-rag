@@ -58,6 +58,12 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
 
+from ..core.version import (
+    DISTRIBUTION_NAME,
+    installed_version,
+    nearest_checkout,
+    version_block,
+)
 from ..project.config import CLI_COMMAND, project_command
 from ..project.policy import ResearchError
 from ..project.state_files import (
@@ -93,12 +99,6 @@ from .tool_ownership import (
     owning_tool,
     unowned_refusal,
     upgrade_arguments,
-)
-from .version import (
-    DISTRIBUTION_NAME,
-    installed_version,
-    nearest_checkout,
-    version_block,
 )
 
 CHECKOUT = "checkout"

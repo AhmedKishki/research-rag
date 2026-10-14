@@ -27,6 +27,7 @@ import research_rag.runtime.ownership as ownership_module
 import research_rag.runtime.process as process_module
 import research_rag.runtime.update as update_module
 import research_rag.surfaces.cli as cli_module
+from research_rag.core.version import version_block
 from research_rag.project import registry
 from research_rag.project.policy import ResearchError
 from research_rag.runtime.release import (
@@ -37,7 +38,6 @@ from research_rag.runtime.release import (
     Release,
     ReleaseSet,
 )
-from research_rag.runtime.version import version_block
 from research_rag.surfaces.cli import installation as cli_installation
 from research_rag.surfaces.cli.parser import _parser
 

@@ -28,12 +28,9 @@ from ...project.config import (
     resolve_config,
 )
 from ...project.policy import ResearchError
-from ...project.registry import (
-    detached_from_terminal,
-    project_app_state,
-)
 from ...project.state_files import process_alive as alive
 from ...runtime import ownership
+from ...runtime.account import detached_from_terminal, project_app_state
 from ...runtime.app import (
     UI_HOST,
     App,

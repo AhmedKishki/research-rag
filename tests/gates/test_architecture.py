@@ -229,7 +229,7 @@ def test_the_answer_projection_is_shared_by_the_two_bounded_readers() -> None:
         if "lean_status" in path.read_text(encoding="utf-8")
         and path.name != "tool_views.py"
     )
-    assert lean_callers == ["project/registry.py", "surfaces/cli/corpus.py"], (
+    assert lean_callers == ["runtime/account.py", "surfaces/cli/corpus.py"], (
         lean_callers
     )
     # The workspace, with the whole payload on screen, still must not reach for

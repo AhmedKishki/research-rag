@@ -38,7 +38,7 @@ from ..project.state_files import PID_FILE, PORT_FILE, TTY_FILE
 from ..project.state_files import process_alive as alive
 from ..project.state_files import recorded_pid as _recorded_pid
 from ..project.state_files import recorded_port as _recorded_port
-from .network import NetworkAccess, discover_lan_addresses
+from .network import CONTROL_PREFIX, MCP_PATH, NetworkAccess, discover_lan_addresses
 
 if TYPE_CHECKING:
     # The engine is reached when the app serves, not when it is imported: a command
@@ -49,7 +49,6 @@ if TYPE_CHECKING:
 LOGGER = logging.getLogger(__name__)
 
 UI_HOST = "127.0.0.1"
-CONTROL_PREFIX = "/control"
 # Matches uvicorn's own default accept backlog, so a claimed socket is in the
 # state uvicorn would have created for itself.
 _CLAIM_BACKLOG = 2048
@@ -758,8 +757,6 @@ class App:
 
     @property
     def mcp_url(self) -> str:
-        from ..surfaces.mcp import MCP_PATH
-
         return f"{self.url}{MCP_PATH}"
 
     @property
@@ -800,7 +797,7 @@ class App:
         from starlette.middleware import Middleware
         from starlette.middleware.base import BaseHTTPMiddleware
 
-        from ..surfaces.mcp import MCP_PATH, create_mcp
+        from ..surfaces.mcp import create_mcp
         from ..surfaces.ui import create_ui_app
         from .control import control_routes
 
@@ -856,7 +853,7 @@ class App:
         if (
             refusal is None
             and request.method not in {"GET", "HEAD", "OPTIONS"}
-            and not request.url.path.startswith(("/control", "/mcp"))
+            and not request.url.path.startswith((CONTROL_PREFIX, MCP_PATH))
         ):
             refusal = self.network_access.write_refusal(request)
         if refusal is not None:
@@ -999,7 +996,6 @@ def running_url(config: ResearchConfig) -> str | None:
 
 
 __all__ = [
-    "CONTROL_PREFIX",
     "PID_FILE",
     "PORT_FILE",
     "TTY_FILE",
