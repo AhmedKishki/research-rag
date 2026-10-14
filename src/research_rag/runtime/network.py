@@ -13,9 +13,14 @@ _PRIVATE = tuple(
     ipaddress.IPv4Network(net)
     for net in ("10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16")
 )
+# The paths the app mounts its control API and its agent surface at, on the one
+# loopback port the browser workspace is served from. The app, the command line,
+# the stdio bridge, and a client entry all have to name the same ones.
+CONTROL_PREFIX = "/control"
+MCP_PATH = "/mcp"
 LOCAL_ONLY_PATHS = (
-    "/control",
-    "/mcp",
+    CONTROL_PREFIX,
+    MCP_PATH,
     "/api/projects",
     "/api/clients",
     "/api/agent-entry",

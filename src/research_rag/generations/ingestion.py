@@ -66,6 +66,7 @@ from ..project.policy import (
     reflowable_document_is_current,
     value_fingerprint,
 )
+from ..project.rerankers import _reranker_revision
 from ..project.settings import SETTINGS_BY_KEY
 from ..retrieval.artifact_lookup import (
     LOOKUP_RELATIVE_PATH,
@@ -75,7 +76,6 @@ from ..retrieval.artifact_lookup import (
     ensure_artifact_lookup,
 )
 from ..retrieval.dense import DENSE_INDEX_PATHS, EXACT_BACKEND_NAME, QDRANT_BACKEND_NAME
-from ..retrieval.rerankers import _reranker_revision
 from ..storage.durable_io import (
     StorageError,
     _atomic_to_thread,

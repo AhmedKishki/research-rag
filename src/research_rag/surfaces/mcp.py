@@ -24,21 +24,17 @@ from ..core.blocked_answers import not_served_status, uninitialised_status
 from ..core.operations import MAXIMUM_TOP_K, run
 from ..core.review import DEFAULT_FIND_SOURCE_LIMIT
 from ..core.tool_views import present_tool_response
+from ..core.version import APP_VERSION
 from ..project.config import ResearchConfig
 from ..project.instructions import AGENT_INSTRUCTIONS
 from ..project.policy import ResearchError
 from ..project.settings import LEAN_TOOL_DETAIL
-from ..runtime.version import APP_VERSION
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
     from ..core.service import ResearchService
 
 LOGGER = logging.getLogger(__name__)
 SERVER_NAME = "research-rag"
-# The path the app mounts this surface at, on the same loopback port as the
-# browser workspace. It is a module constant because `app.py`, the stdio bridge,
-# and a client configuration all have to name the same one.
-MCP_PATH = "/mcp"
 # The name the stdio bridge proxies this surface under, so a client that reads
 # the server's own name sees the app rather than a transport in front of it.
 AGENT_BRIDGE_NAME = "research-rag"

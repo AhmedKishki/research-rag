@@ -15,7 +15,6 @@ from research_rag.storage.durable_io import (
     read_json,
     read_jsonl,
 )
-from research_rag.storage.records import load_source_catalog, write_source_catalog
 
 
 def test_iter_jsonl_validates_lazily_without_materializing_file(tmp_path: Path) -> None:
@@ -52,33 +51,6 @@ def test_iter_jsonl_reports_non_utf8_state_as_invalid(tmp_path: Path) -> None:
 
     with pytest.raises(StorageError, match="Invalid UTF-8 in JSONL state file"):
         list(iter_jsonl(path))
-
-
-def test_source_catalog_round_trip_and_validation(tmp_path: Path) -> None:
-    path = tmp_path / "source-catalog.json"
-    project_id = "11111111-2222-3333-4444-555555555555"
-    from research_rag.corpus.sources import stable_source_id
-
-    catalog = {
-        stable_source_id(project_id, "nested/article.pdf"): "nested/article.pdf",
-        stable_source_id(project_id, "book.epub"): "book.epub",
-    }
-
-    write_source_catalog(path, catalog, project_id=project_id)
-
-    assert load_source_catalog(path, project_id=project_id) == dict(
-        sorted(catalog.items())
-    )
-
-    path.write_text(
-        '{"schema_version": 1, "project_id": '
-        f'"{project_id}", "sources": {{'
-        f'"{next(iter(catalog))}": '
-        '{"source_relative_path": "../escape.pdf"}}}',
-        encoding="utf-8",
-    )
-    with pytest.raises(StorageError, match="normalized"):
-        load_source_catalog(path, project_id=project_id)
 
 
 @pytest.mark.parametrize("writer", [atomic_write_json, atomic_write_jsonl])

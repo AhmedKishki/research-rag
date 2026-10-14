@@ -11,7 +11,7 @@ from ...project.config import (
     DEFAULT_UI_PORT,
 )
 from ...project.policy import RETRIEVAL_METHODS
-from ...retrieval.rerankers import RERANKER_MODEL_CHOICES
+from ...project.rerankers import RERANKER_MODEL_CHOICES
 from .help import _HELP_SUMMARIES, HELP_EXAMPLES, HELP_GROUPS, HELP_TOPICS
 from .projects import PROJECT_NAME_ENV
 

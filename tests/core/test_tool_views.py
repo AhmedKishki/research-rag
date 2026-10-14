@@ -9,11 +9,11 @@ import pytest
 from research_rag.core.service import ResearchError
 from research_rag.core.tool_views import lean_ingest, present_tool_response
 from research_rag.project.config import ConfigurationError, resolve_config
-from research_rag.project.settings import FULL_TOOL_DETAIL, LEAN_TOOL_DETAIL
-from research_rag.retrieval.embeddings import (
+from research_rag.project.embeddings import (
     DEFAULT_EMBEDDING_MODEL,
     resolve_embedding_model,
 )
+from research_rag.project.settings import FULL_TOOL_DETAIL, LEAN_TOOL_DETAIL
 
 # Keys the service builds for ranking, extraction, and storage diagnostics. Two are
 # absent because a lean answer now carries them as conditions rather than

@@ -9,9 +9,9 @@ from pathlib import Path
 
 import pytest
 
+from research_rag.core.records import load_metadata_overrides
 from research_rag.core.service import ResearchError, ResearchService
 from research_rag.project.config import resolve_config
-from research_rag.storage.records import load_metadata_overrides
 from tests.conftest import write_pdf, write_reviewed_metadata
 from tests.core.test_service import FakeDenseBackend, FakeUltraRAG
 

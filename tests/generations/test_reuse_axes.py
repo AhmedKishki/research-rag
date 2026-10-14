@@ -20,7 +20,7 @@ import pytest
 
 from research_rag.core.service import ResearchService
 from research_rag.project.config import resolve_config
-from research_rag.retrieval.embeddings import resolve_embedding_model
+from research_rag.project.embeddings import resolve_embedding_model
 from tests.conftest import write_pdf
 from tests.core.test_service import FakeDenseBackend, FakeUltraRAG
 

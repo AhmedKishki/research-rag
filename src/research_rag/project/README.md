@@ -9,6 +9,9 @@ What one project is, how it is configured, and the names its state is found by.
 | `settings_document.py` | The settings a reader is shown, with their layers and costs |
 | `settings_layers/` | The merge that wins per key, the coercion every layer shares, and the path helpers |
 | `registry.py` | The account's record of which projects exist |
+| `embeddings.py` | The embedding model catalogue: each model's pinned revision, dimension, token limit, and languages |
+| `rerankers.py` | The reranker catalogue and each model's pinned revision |
+| `model_cache.py` | Where a pinned model snapshot lives in the cache, and whether it is complete |
 | `state_files.py` | The on-disk names every module agrees on, and the readers for a pid and a running build |
 | `normalized_paths.py` | The one rule a path stored in a file must satisfy |
 | `instructions.py` | What an agent is told before it calls a tool |

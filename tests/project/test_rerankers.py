@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pytest
 
-from research_rag.retrieval.rerankers import (
+from research_rag.project.rerankers import (
     DEFAULT_RERANKER_MODEL,
     RERANKER_MODEL_CHOICES,
     RERANKER_MODELS,

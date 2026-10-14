@@ -46,6 +46,7 @@ from fastmcp.server.middleware import Middleware
 from fastmcp.server.providers.proxy import FastMCPProxy, ProxyClient
 from mcp.shared.exceptions import McpError
 
+from ..core.version import APP_VERSION
 from ..project import registry
 from ..project.config import (
     ConfigurationError,
@@ -61,7 +62,6 @@ from ..runtime.app import (
     CLIENT_NAME_HEADER,
 )
 from ..runtime.control import connect, is_serving, not_running_reason
-from ..runtime.version import APP_VERSION
 from .mcp import AGENT_BRIDGE_NAME, create_blocked_mcp, create_unserved_mcp
 
 DEFAULT_CLIENT_NAME = "stdio-bridge"

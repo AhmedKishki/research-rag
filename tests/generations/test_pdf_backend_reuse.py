@@ -22,6 +22,7 @@ from research_rag.generations.generation import (
 )
 from research_rag.generations.staging import _checkpoint_identity
 from research_rag.project.config import resolve_config
+from research_rag.project.embeddings import resolve_embedding_model
 from research_rag.project.policy import (
     ARTIFACT_POLICY_VERSION,
     CLEANING_POLICY_VERSION,
@@ -29,7 +30,6 @@ from research_rag.project.policy import (
     REFLOWABLE_EXTRACTION_POLICY_VERSION,
     SCHEMA_VERSION,
 )
-from research_rag.retrieval.embeddings import resolve_embedding_model
 
 _MODEL = resolve_embedding_model("BAAI/bge-small-en-v1.5")
 _PROJECT_ID = "proj_test"

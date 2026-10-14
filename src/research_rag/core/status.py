@@ -55,9 +55,9 @@ from ..retrieval.documents import (
     _metadata_snapshot_changed,
     _normalized_filter,
 )
-from ..runtime.health import health_report
-from ..runtime.version import version_block
+from .health import health_report
 from .source_inventory import exclusion_records
+from .version import version_block
 
 LOGGER = logging.getLogger(__name__)
 

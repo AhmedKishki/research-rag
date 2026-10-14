@@ -24,6 +24,7 @@ from research_rag.core.operations import run
 from research_rag.project import registry
 from research_rag.project.config import GATEWAY_EXECUTABLE, ConfigurationError
 from research_rag.project.policy import ResearchError
+from research_rag.runtime import account
 from research_rag.surfaces.cli import _run
 from research_rag.surfaces.cli import corpus as cli_corpus
 from research_rag.surfaces.cli import serving as cli_serving
@@ -911,7 +912,7 @@ def test_start_leaves_an_app_another_terminal_owns_alone(
     monkeypatch.setattr(cli_serving, "_serve_attached", _serving)
     # The serving process is declared attached, because this test is about an app
     # another terminal owns and not about the case that one owns no terminal.
-    monkeypatch.setattr(app_module, "has_terminal", lambda _pid: True)
+    monkeypatch.setattr(account, "has_terminal", lambda _pid: True)
     args = _args("--project-root", str(project), "start")
     config = _resolve(args)
     # Both files are what the app writes, and a recorded port whose process is gone

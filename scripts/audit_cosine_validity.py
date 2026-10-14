@@ -32,6 +32,11 @@ from typing import Any
 import numpy as np
 from platformdirs import user_cache_path
 
+from research_rag.core.records import (
+    load_chunk_exclusions,
+    load_current_generation,
+    load_source_exclusions,
+)
 from research_rag.project.config import (
     GATEWAY_EXECUTABLE,
     ResearchConfig,
@@ -40,6 +45,7 @@ from research_rag.project.config import (
     configured_source_directory,
     recorded_runtime_root,
 )
+from research_rag.project.rerankers import resolve_reranker_model
 from research_rag.project.settings import (
     SETTINGS,
     USER_CONFIG_DIRECTORY,
@@ -50,14 +56,8 @@ from research_rag.project.settings_layers import resolve_settings
 from research_rag.project.state_files import PORTABLE_DIRECTORY, RUNTIME_DIRECTORY
 from research_rag.retrieval.model_runtime import ModelRuntime
 from research_rag.retrieval.ranking import _passage_equality_key
-from research_rag.retrieval.rerankers import resolve_reranker_model
 from research_rag.retrieval.search import _collapse_repetitions
 from research_rag.storage.durable_io import iter_jsonl
-from research_rag.storage.records import (
-    load_chunk_exclusions,
-    load_current_generation,
-    load_source_exclusions,
-)
 
 REPOSITORY = Path(__file__).resolve().parents[1]
 REPORT_SCRATCH = Path("/tmp/kilo").resolve()

@@ -25,7 +25,7 @@ from ..corpus.sources import (
 from ..project.config import ResearchConfig, resolve_source_reference
 from ..project.policy import ResearchError
 from ..retrieval.documents import _document_matches_metadata
-from ..storage.records import write_source_catalog
+from .records import write_source_catalog
 
 
 def source_directory(config: ResearchConfig, manifest: dict[str, Any]) -> Path:

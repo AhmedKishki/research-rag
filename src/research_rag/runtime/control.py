@@ -24,7 +24,8 @@ from ..core.operations import run
 from ..project.config import ResearchConfig
 from ..project.policy import ResearchError
 from ..surfaces.workspace import write_guard
-from .app import CONTROL_PREFIX, ClientError, running_url
+from .app import ClientError, running_url
+from .network import CONTROL_PREFIX
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
     from typing import Self

@@ -19,9 +19,13 @@ from fastembed.rerank.cross_encoder import TextCrossEncoder
 from huggingface_hub import snapshot_download
 from tokenizers import Tokenizer
 
-from .embeddings import DEFAULT_EMBEDDING_MODEL, EmbeddingModel, resolve_embedding_model
-from .model_cache import snapshot_is_complete, snapshot_path
-from .rerankers import (
+from ..project.embeddings import (
+    DEFAULT_EMBEDDING_MODEL,
+    EmbeddingModel,
+    resolve_embedding_model,
+)
+from ..project.model_cache import snapshot_is_complete, snapshot_path
+from ..project.rerankers import (
     DEFAULT_RERANKER_MODEL,
     RERANKER_REQUIRED_FILES,
     resolve_reranker_model,

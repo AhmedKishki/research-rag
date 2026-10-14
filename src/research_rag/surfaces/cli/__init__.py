@@ -184,7 +184,7 @@ def main(argv: Sequence[str] | None = None) -> None:
         # Before the project is resolved, like `help`: a reader asking what is
         # installed has no project yet, and the answer must not fail on a
         # directory that happens to hold one.
-        from ...runtime.version import version_lines
+        from ...core.version import version_lines
 
         sys.stdout.write("\n".join(version_lines()) + "\n")
         return

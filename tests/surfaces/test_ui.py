@@ -905,7 +905,7 @@ def test_the_workspace_serves_the_account_record_not_the_served_project(
     project: Path,
 ) -> None:
     from research_rag.project import registry
-    from research_rag.project.registry import account_projects
+    from research_rag.runtime.account import account_projects
     from research_rag.surfaces.ui import ResearchUIAdapter
 
     other = project.parent / "other-project"

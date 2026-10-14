@@ -27,14 +27,14 @@ from ..retrieval.documents import _canonical_metadata_override
 from ..retrieval.lexical import LexicalBackend
 from ..retrieval.search import SearchWorkflow
 from ..storage.durable_io import StorageError, read_json
-from ..storage.records import (
+from .admission import Admission, AdmissionTimeout
+from .records import (
     load_chunk_exclusions,
     load_current_generation,
     load_metadata_overrides,
     load_source_catalog,
     load_source_exclusions,
 )
-from .admission import Admission, AdmissionTimeout
 from .review import ReviewWorkflow
 from .stats import StatsWorkflow
 from .status import StatusWorkflow

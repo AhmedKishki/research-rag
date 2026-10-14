@@ -14,11 +14,11 @@ from pathlib import Path
 
 import pytest
 
+from research_rag.core.records import load_chunk_exclusions, write_chunk_exclusions
 from research_rag.core.service import ResearchError, ResearchService
 from research_rag.core.tool_views import lean_passage_context
 from research_rag.project.config import resolve_config
 from research_rag.storage.durable_io import StorageError
-from research_rag.storage.records import load_chunk_exclusions, write_chunk_exclusions
 from tests.conftest import write_pdf
 from tests.core.test_service import FakeDenseBackend, FakeUltraRAG
 

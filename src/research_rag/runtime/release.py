@@ -44,8 +44,8 @@ from dataclasses import asdict, dataclass
 from datetime import datetime
 from pathlib import Path
 
+from ..core.version import DISTRIBUTION_NAME
 from .process import Runner
-from .version import DISTRIBUTION_NAME
 
 # The four answers a release question can have. `unreadable` is the one a reader
 # must act on, and it names the condition rather than picking a side. `skipped`
