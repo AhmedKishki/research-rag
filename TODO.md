@@ -111,7 +111,6 @@ An item is done when the harness has produced its measurement and the validation
 ## indexing
 
 - [ ] **Hold one Qdrant client per index path.** Feature. `qdrant.py` opens a local-mode client per search and per 64-chunk upload, and each open loads every point, so a named Qdrant build is quadratic and each search reloads the collection.
-- [ ] **Bound the exact backend's index cache.** Bug. `LocalVectorDenseBackend._loaded` never evicts. Each build leaves a staging-path entry, and a removed generation's vectors stay mapped, so `remove_generation` frees no disk space until the app restarts.
 - [ ] **Measure the operating envelope.** Test. No figure covers search latency, index size, resident memory, or build time at the corpus size this app claims to serve. Nothing states where the exact scan stops being usable. Record the envelope in `MEASUREMENTS.md`, and let it bound the source and passage counts the app supports.
 - [ ] **Choose whether canonical retrieval text moves into SQLite.** Decision. `retrieval/artifact_lookup.py` keeps a SQLite sidecar of identifiers, ordinals, digests, and byte offsets, while passage and extraction text stay in JSONL and are read on demand; a large corpus pays a file read per hit. Options: keep the split and measure it against the recorded envelope, or make the sidecar the canonical store for retrieval text. `sources/` remains the authority for a quotation, and the artifacts stay portable, either way.
 

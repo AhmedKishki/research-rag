@@ -249,6 +249,35 @@ def test_exact_batches_resume_in_another_process(tmp_path: Path) -> None:
     ]
 
 
+def test_the_exact_backend_keeps_only_the_index_searches_read(tmp_path: Path) -> None:
+    """A build or a validation remembers nothing, and a search keeps one index.
+
+    The identity file is read once while the index stays current, and searching
+    another generation releases the first one's mapped vectors.
+    """
+
+    first_root, first_path, chunks = _exact_generation(tmp_path / "one")
+    second_root, second_path, _chunks = _exact_generation(tmp_path / "two")
+    backend = LocalVectorDenseBackend(tmp_path / "models", offline=True)
+    for root, path in ((first_root, first_path), (second_root, second_path)):
+        backend.build_from_vectors(chunks, path, root / "portable" / "embeddings.npy")
+    assert backend._loaded is None
+
+    backend.runtime._embedder = lambda: _StubQueryEmbedder(_unit(0))
+    reads: list[Path] = []
+    real = backend._read_index
+    backend._read_index = lambda documents, vectors: (  # type: ignore[method-assign]
+        reads.append(documents) or real(documents, vectors)
+    )
+    for _ in range(3):
+        backend.search(first_path, "q", 2)
+    assert reads == [first_path / "documents.json"]
+
+    backend.search(second_path, "q", 2)
+    assert backend._loaded is not None
+    assert backend._loaded[0] == second_path.resolve()
+
+
 def test_exact_backend_applies_document_filters_and_top_k(tmp_path: Path) -> None:
     _root, index_path, chunks = _exact_generation(tmp_path)
     backend = LocalVectorDenseBackend(tmp_path / "models", offline=True)
