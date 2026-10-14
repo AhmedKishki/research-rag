@@ -28,10 +28,9 @@ What is on disk, how it is read, and what a file's text says about itself.
   `EXTRACTION_ARTIFACT_TOKEN` is its name and lives in `text_quality.py`.
 - `extraction.screen_source_units` is the one gate. It strips non-argument
   sections, screens text, and refuses the source if
-  none survive, in that order and over the whole source's units. `extract_sources`
-  calls it, and a staged build calls the same function at finalize, because a
-  staged build writes a page batch to disk before it knows the whole file. A
-  staged build cannot reach a generation a direct build would have refused.
+  none survive, in that order and over the whole source's units. A build calls
+  it at finalize, because it writes a page batch to disk before it knows the
+  whole file.
 - Because the gate is the only caller of the stripping, `text_quality` decides
   which paragraphs belong to a non-argument section and `extraction` removes
   them. Neither module may decide this alone.

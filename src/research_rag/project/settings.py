@@ -66,7 +66,6 @@ DENSE_BACKENDS = ("auto", "exact", "qdrant")
 # The names live here so the registry and the backend module agree on one source.
 PDF_BACKEND_CHOICES = ("docling",)
 PDF_BACKEND_READ_ALIASES = (("custom", "docling"),)
-DEFAULT_LANGUAGE = "en"
 LANGUAGE_PATTERN = r"^[a-z]{2,3}$"
 # The longest one ingest call may be told to run. A caller driving a build in one
 # call sets the budget below its own client's request timeout; a caller that wraps
@@ -811,10 +810,6 @@ for _setting in SETTINGS:
     if _setting.key in SETTINGS_BY_KEY:
         raise SettingsError(f"Duplicate setting key: {_setting.key}")
     SETTINGS_BY_KEY[_setting.key] = _setting
-SETTINGS_BY_FIELD = {setting.field: setting for setting in SETTINGS}
-SETTINGS_SECTIONS = tuple(
-    dict.fromkeys(setting.key.split(".")[0] for setting in SETTINGS)
-)
 
 
 @lru_cache(maxsize=1)

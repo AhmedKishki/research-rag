@@ -14,7 +14,6 @@ from research_rag.corpus.docling_env import DoclingEnv
 from research_rag.corpus.extraction import (
     ExtractionError,
     _quality_flags,
-    extract_sources,
 )
 from research_rag.corpus.sources import (
     SourcePolicyError,
@@ -38,6 +37,7 @@ from research_rag.project.config import (
     resolve_config,
 )
 from tests.conftest import write_epub, write_pdf
+from tests.extraction_helpers import extract_sources
 
 # The managed Docling environment is resolved by the caller; the shared test stub
 # replaces the worker, so this stands in for the environment identity only.

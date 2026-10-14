@@ -30,7 +30,6 @@ from ..runtime.doctor import mcp_entry_block
 from ..runtime.version import version_label
 
 LOGGER = logging.getLogger(__name__)
-UI_NAME = "research-rag-ui"
 MAX_ERROR_LENGTH = 1200
 # The passed passages a browser request may ask for, and the neighbours it may
 # read around a hit. The bounds are the search workflow's own: a browser is not

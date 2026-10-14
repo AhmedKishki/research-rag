@@ -660,23 +660,6 @@ class Control:
     def settings(self) -> dict[str, Any]:
         return self._call("GET", "/settings")
 
-    def write_settings(
-        self,
-        values: dict[str, Any],
-        *,
-        expected_revision: str,
-        confirm: bool = False,
-    ) -> dict[str, Any]:
-        return self._call(
-            "POST",
-            "/settings",
-            json={
-                "values": values,
-                "expected_revision": expected_revision,
-                "confirm": confirm,
-            },
-        )
-
     def projects(self) -> dict[str, Any]:
         return self._call("GET", "/projects")
 

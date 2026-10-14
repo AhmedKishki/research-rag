@@ -69,7 +69,6 @@ DOCLING_VERSION_SPECS: dict[str, str] = {
     "rapidocr": "==3.9.1",
     "pymupdf": ">=1.26,<2",
 }
-DOCLING_COMPONENT_PACKAGES = DOCLING_REQUIRED_PACKAGES
 
 # Bump when the pins, the interpreter ABI policy, or the worker bootstrap change.
 BACKEND_SPEC_VERSION = 1
@@ -317,10 +316,6 @@ def resolve_docling_env(config: ResearchConfig) -> DoclingEnv | None:
     )
 
 
-def docling_environment_ready(config: ResearchConfig) -> bool:
-    return resolve_docling_env(config) is not None
-
-
 def ensure_docling_env(
     config: ResearchConfig,
     *,
@@ -545,7 +540,7 @@ def _run_bounded(
 
 _VERSION_SCRIPT = (
     "import importlib.metadata as m, json\n"
-    f"names = {list(DOCLING_COMPONENT_PACKAGES)!r}\n"
+    f"names = {list(DOCLING_REQUIRED_PACKAGES)!r}\n"
     "out = {}\n"
     "for name in names:\n"
     "    try:\n"
@@ -597,15 +592,6 @@ def _validate_versions(versions: dict[str, Any]) -> dict[str, str | None]:
     return {
         str(key): (str(value) if value else None) for key, value in versions.items()
     }
-
-
-def _fsync_file(path: Path) -> None:
-    with contextlib.suppress(OSError):
-        descriptor = os.open(path, os.O_RDONLY)
-        try:
-            os.fsync(descriptor)
-        finally:
-            os.close(descriptor)
 
 
 def _fsync_directory(path: Path) -> None:

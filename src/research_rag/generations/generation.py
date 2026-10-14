@@ -152,42 +152,6 @@ def vectors_are_reusable(
     return bool(isinstance(dense, dict) and embedding.matches_dense_metadata(dense))
 
 
-def generation_is_reusable(
-    manifest: dict[str, Any],
-    *,
-    schema_version: int,
-    extraction_policy_version: int,
-    cleaning_policy_version: int,
-    artifact_policy_version: int,
-    project_id: str,
-    chunk_size: int,
-    chunk_overlap: int,
-    chunk_headers: bool,
-    embedding: EmbeddingModel,
-    maximum_unclean_percent: float = 1.0,
-) -> bool:
-    """Whether every reuse axis is compatible: units, chunks, and vectors."""
-
-    return (
-        units_are_reusable(
-            manifest,
-            schema_version=schema_version,
-            extraction_policy_version=extraction_policy_version,
-            cleaning_policy_version=cleaning_policy_version,
-            artifact_policy_version=artifact_policy_version,
-            project_id=project_id,
-            maximum_unclean_percent=maximum_unclean_percent,
-        )
-        and chunks_are_reusable(
-            manifest,
-            chunk_size=chunk_size,
-            chunk_overlap=chunk_overlap,
-            chunk_headers=chunk_headers,
-        )
-        and vectors_are_reusable(manifest, embedding=embedding)
-    )
-
-
 def _artifact_files(manifest: dict[str, Any]) -> dict[str, PurePosixPath] | None:
     """The artifact paths a reader needs, or None when the manifest omits them.
 

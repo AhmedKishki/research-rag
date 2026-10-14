@@ -19,6 +19,27 @@ TEXT = (
 )
 
 
+def read_mobi(path: Path) -> tuple[dict, str]:
+    """Read one MOBI file through the bounded worker ingestion uses.
+
+    Returns the document record and the text of every unit, joined, so a test
+    asserts on what a reader retrieves rather than on the parser's own parts.
+    """
+
+    from research_rag.corpus.mobi_reader import extract_mobi_payload
+
+    source = {
+        "source_id": "src_mobi_fixture",
+        "source_relative_path": path.name,
+        "project_relative_path": f"sources/{path.name}",
+        "extension": ".mobi",
+        "size": 0,
+        "mtime_ns": 0,
+    }
+    document, units = extract_mobi_payload(path, {"source": source, "digest": "0"})
+    return document, "\n".join(unit["contents"] for unit in units)
+
+
 def mobi_bytes(html: str = TEXT, *, compression: int = 1, drm: int = 0) -> bytes:
     raw = html.encode("utf-8")
     title = b"Synthetic Evidence"
