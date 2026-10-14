@@ -35,7 +35,7 @@ from ..project.support import (
     document_frequencies,
     passage_token_count,
 )
-from ..storage.records import iter_jsonl
+from ..storage.durable_io import iter_jsonl
 from .artifact_lookup import ArtifactLookup, VectorByContentsMapping
 from .dense import DenseSearchHit, RerankerUnavailable
 

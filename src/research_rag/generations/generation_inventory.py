@@ -12,7 +12,7 @@ from __future__ import annotations
 from typing import Any
 
 from ..project.config import ResearchConfig
-from ..storage.records import StorageError, directory_statistics, read_json
+from ..storage.durable_io import StorageError, directory_statistics, read_json
 
 
 def skipped_source_count(manifest: dict[str, Any]) -> int:

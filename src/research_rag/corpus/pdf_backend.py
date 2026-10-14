@@ -29,7 +29,6 @@ models ahead of an offline run.
 
 from __future__ import annotations
 
-import contextlib
 import hashlib
 import json
 import os
@@ -43,6 +42,7 @@ from typing import Any
 from ..project.config import ResearchConfig, child_process_environment
 from ..project.policy import DEFAULT_PDF_BACKEND_FINGERPRINT, ResearchError
 from ..project.settings import PDF_BACKEND_CHOICES
+from . import scoped_child
 from .docling_env import (
     DoclingEnv,
     ensure_docling_env,
@@ -73,8 +73,6 @@ DOCLING_PACKAGE_REMEDY = (
     "environment is built on first use and pins docling and rapidocr together"
 )
 
-MEMORY_MAX_BYTES = 2 * 1024**3
-CPU_QUOTA_PERCENT = 200
 WALL_TIMEOUT_SECONDS = 180
 
 # The fingerprint a generation with no recorded backend carries. It is the
@@ -306,32 +304,6 @@ def _worker_environment(
     return environment
 
 
-def _terminate_scope(unit: str, process: subprocess.Popen[Any]) -> None:
-    """Kill the whole transient scope, then the process group, with no orphan."""
-
-    systemctl = shutil.which("systemctl")
-    if systemctl is not None:
-        with contextlib.suppress(OSError, subprocess.SubprocessError):
-            subprocess.run(
-                [
-                    systemctl,
-                    "--user",
-                    "kill",
-                    "--signal=SIGKILL",
-                    "--kill-whom=all",
-                    unit,
-                ],
-                capture_output=True,
-                env=child_process_environment(purpose="systemctl"),
-                timeout=15,
-                check=False,
-            )
-    with contextlib.suppress(ProcessLookupError, PermissionError, OSError):
-        os.killpg(os.getpgid(process.pid), 9)
-    with contextlib.suppress(subprocess.TimeoutExpired):  # pragma: no cover
-        process.wait(timeout=15)
-
-
 def _launch_worker(
     job: dict[str, Any],
     *,
@@ -352,67 +324,44 @@ def _launch_worker(
 
     systemd_run = _require_systemd_run()
     unit = f"research-rag-docling-{os.getpid()}-{uuid.uuid4().hex[:8]}"
-    command = [
-        systemd_run,
-        "--user",
-        "--scope",
-        "--quiet",
-        "--collect",
-        f"--unit={unit}",
-        f"--property=MemoryMax={MEMORY_MAX_BYTES}",
-        "--property=MemorySwapMax=0",
-        f"--property=CPUQuota={CPU_QUOTA_PERCENT}%",
-        f"--property=RuntimeMaxSec={timeout:g}",
-        "--",
-        *worker_command(docling_env),
-    ]
     environment = _worker_environment(mode, offline, model_cache_root)
     if not _WORKER_LOCK.acquire(timeout=max(1.0, timeout)):
         raise DoclingUnavailableError(
             "Another Docling conversion is already running in this process."
         )
     try:
-        process = subprocess.Popen(
-            command,
-            stdin=subprocess.PIPE,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
+        returncode, stdout, stderr = scoped_child.run_in_scope(
+            systemd_run,
+            worker_command(docling_env),
+            unit=unit,
+            timeout=timeout,
             env=environment,
-            start_new_session=True,
+            stdin=json.dumps(job).encode("utf-8"),
         )
-        try:
-            stdout, stderr = process.communicate(
-                json.dumps(job).encode("utf-8"), timeout=timeout
-            )
-        except subprocess.TimeoutExpired as exc:
-            raise DoclingResourceError(
-                f"{description} exceeded the {timeout:g}s wall limit; the worker "
-                "scope was killed. Lower ingestion.pdf_page_batch_size, then retry "
-                "the ingest."
-            ) from exc
-        finally:
-            # Retire the named scope even on interruption or a successful worker
-            # exit: a library-created descendant must not outlive its batch.
-            _terminate_scope(unit, process)
+    except subprocess.TimeoutExpired as exc:
+        raise DoclingResourceError(
+            f"{description} exceeded the {timeout:g}s wall limit; the worker "
+            "scope was killed. Lower ingestion.pdf_page_batch_size, then retry "
+            "the ingest."
+        ) from exc
     finally:
         _WORKER_LOCK.release()
 
-    text = (stderr or b"").decode("utf-8", "replace").strip()
-    if process.returncode == 5:
+    text = stderr.decode("utf-8", "replace").strip()
+    if returncode == 5:
         raise DoclingResourceError(
             f"Docling worker refused the resource boundary: {text}"
         )
-    if process.returncode == 6:
+    if returncode == 6:
         raise DoclingUnavailableError(text or "Docling is not installed")
-    if process.returncode == 3:
+    if returncode == 3:
         raise DoclingConversionError(text or "Docling conversion failed")
-    if process.returncode != 0:
+    if returncode != 0:
         raise PdfBackendError(
-            f"Docling worker failed (exit {process.returncode}): "
-            f"{text or 'no diagnostics'}"
+            f"Docling worker failed (exit {returncode}): {text or 'no diagnostics'}"
         )
     try:
-        result = json.loads((stdout or b"").decode("utf-8"))
+        result = json.loads(stdout.decode("utf-8"))
     except json.JSONDecodeError as exc:
         raise PdfBackendError(
             f"Docling worker returned unparseable output: {exc}"

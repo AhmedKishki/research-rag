@@ -26,7 +26,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from ..storage.records import read_json
+from ..storage.durable_io import read_json
 from .config import recorded_runtime_root
 
 # Where every project-owned artifact lives beneath its project root.

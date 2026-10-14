@@ -21,7 +21,7 @@ from research_rag.corpus import extraction
 from research_rag.corpus.pdf_backend import DoclingConversionError
 from research_rag.project.config import resolve_config
 from research_rag.project.policy import ResearchError
-from research_rag.storage.records import read_json, read_jsonl
+from research_rag.storage.durable_io import read_json, read_jsonl
 from tests.conftest import write_pdf
 from tests.core.test_service import FakeDenseBackend, FakeUltraRAG
 

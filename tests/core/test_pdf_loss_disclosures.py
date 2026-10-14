@@ -13,7 +13,7 @@ from research_rag.core.tool_views import lean_ingest
 from research_rag.generations.ingestion import _document_loss_totals
 from research_rag.project.config import resolve_config
 from research_rag.project.settings import SETTINGS_BY_KEY, default_config_file
-from research_rag.storage.records import read_json
+from research_rag.storage.durable_io import read_json
 from tests.conftest import write_pdf
 from tests.core.test_service import FakeDenseBackend, FakeUltraRAG
 

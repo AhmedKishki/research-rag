@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import hashlib
 import json
-import os
 import sqlite3
 import uuid
 from collections import defaultdict
@@ -19,7 +18,7 @@ from pathlib import Path
 from typing import Any
 
 from ..corpus.text_quality import chunk_health_flags
-from ..storage.records import fsync_directory
+from ..storage.durable_io import fsync_file, replace_durably
 
 # Key under which a loaded chunk record carries its stored rejection verdict.
 LOOKUP_HEALTH_FLAGS_KEY = "_lookup_health_flags"
@@ -295,10 +294,8 @@ def build_artifact_lookup(
         connection.commit()
         connection.close()
         connection = None
-        with temporary.open("rb") as handle:
-            os.fsync(handle.fileno())
-        os.replace(temporary, lookup_path)
-        fsync_directory(lookup_path.parent)
+        fsync_file(temporary)
+        replace_durably(temporary, lookup_path)
     except (OSError, sqlite3.DatabaseError) as exc:
         raise ArtifactLookupError(f"Could not build artifact lookup: {exc}") from exc
     finally:

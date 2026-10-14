@@ -47,7 +47,7 @@ from research_rag.retrieval.embeddings import (
     resolve_embedding_model,
 )
 from research_rag.retrieval.rerankers import DEFAULT_RERANKER_MODEL, RERANKER_MODELS
-from research_rag.storage.records import (
+from research_rag.storage.durable_io import (
     atomic_write_json,
     read_json,
     read_jsonl,
@@ -3917,10 +3917,10 @@ def test_vector_outputs_are_fsynced_before_atomic_replace(
         real_fsync(descriptor)
 
     monkeypatch.setattr(os, "fsync", tracking_fsync)
+    from research_rag.storage import durable_io
+
     monkeypatch.setattr(
-        ingestion_module,
-        "fsync_directory",
-        lambda path: directory_syncs.append(path),
+        durable_io, "fsync_directory", lambda path: directory_syncs.append(path)
     )
     vectors = np.ones(
         (2, DEFAULT_EMBEDDING_FACTS.dimension),

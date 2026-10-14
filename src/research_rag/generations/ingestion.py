@@ -87,16 +87,19 @@ from ..retrieval.artifact_lookup import (
     ensure_artifact_lookup,
 )
 from ..retrieval.dense import DENSE_INDEX_PATHS, EXACT_BACKEND_NAME, QDRANT_BACKEND_NAME
-from ..storage.records import (
+from ..storage.durable_io import (
     StorageError,
+    atomic_file,
     atomic_write_json,
     atomic_write_jsonl,
     directory_statistics,
     fsync_directories,
     fsync_directory,
+    fsync_file,
     iter_jsonl,
     read_json,
     read_jsonl,
+    replace_durably,
     write_handoff_jsonl,
 )
 from .generation import (
@@ -1073,17 +1076,8 @@ class IngestionWorkflow:
         path: Path,
         vectors: np.ndarray[Any, np.dtype[np.float32]],
     ) -> None:
-        path.parent.mkdir(parents=True, exist_ok=True)
-        temporary = path.with_name(f".{path.name}.{uuid.uuid4().hex}.tmp")
-        try:
-            with temporary.open("wb") as handle:
-                np.save(handle, vectors, allow_pickle=False)
-                handle.flush()
-                os.fsync(handle.fileno())
-            os.replace(temporary, path)
-            fsync_directory(path.parent)
-        finally:
-            temporary.unlink(missing_ok=True)
+        with atomic_file(path, "wb") as handle:
+            np.save(handle, vectors, allow_pickle=False)
 
     @staticmethod
     def _assemble_vector_batches(
@@ -1124,10 +1118,8 @@ class IngestionWorkflow:
             vectors.flush()
             del vectors
             vectors = None
-            with temporary.open("rb") as handle:
-                os.fsync(handle.fileno())
-            os.replace(temporary, path)
-            fsync_directory(path.parent)
+            fsync_file(temporary)
+            replace_durably(temporary, path)
         finally:
             if vectors is not None:
                 del vectors

@@ -27,8 +27,8 @@ from ..project.support import (
     _locator_place,
     _public_document,
 )
+from ..storage.durable_io import StorageError
 from ..storage.records import (
-    StorageError,
     load_metadata_overrides,
     write_chunk_exclusions,
     write_metadata_overrides,

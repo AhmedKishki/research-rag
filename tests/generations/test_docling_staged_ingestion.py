@@ -28,7 +28,7 @@ from research_rag.corpus.pdf_backend import (
 from research_rag.project.config import resolve_config
 from research_rag.project.policy import ResearchError
 from research_rag.project.support import REFLOWABLE_EXTRACTION_POLICY_VERSION
-from research_rag.storage.records import read_json, read_jsonl
+from research_rag.storage.durable_io import read_json, read_jsonl
 from tests.conftest import write_epub, write_pdf
 from tests.core.test_service import FakeDenseBackend, FakeUltraRAG
 

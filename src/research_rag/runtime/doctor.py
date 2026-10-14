@@ -85,7 +85,7 @@ def prefetch_models(config: ResearchConfig) -> tuple[str, ...]:
     )
     from ..retrieval.direct import prefetch_gpt2_tokenizer
     from ..retrieval.model_runtime import _load_cross_encoder, _load_embedder
-    from ..storage.records import directory_statistics
+    from ..storage.durable_io import directory_statistics
 
     _count, before = directory_statistics(config.model_cache_root)
     embedding = resolve_embedding_model(config.settings.embedding_model)

@@ -11,6 +11,7 @@ What is on disk, how it is read, and what a file's text says about itself.
 | `text_quality.py` | Whether a string is usable: corruption, scripts, the flags a chunk carries, which paragraphs belong to a non-argument section, and whether a whole source is readable |
 | `pdf_backend.py` | The sole operational Docling PDF backend, its resource boundary, readiness, and active versus historical provenance |
 | `docling_env.py` | The managed, versioned Docling environment: lazy first-use install under a bounded lock and cgroup, spec/ABI completion manifest, atomic publish, and the isolated worker bootstrap |
+| `scoped_child.py` | One child confined to a transient systemd scope: its memory, swap, CPU, and wall limits, and the kill that retires the scope |
 | `docling_worker.py` | The bounded subprocess entry point; verifies its cgroup before importing Docling and never runs in the parent |
 | `docling_adapter.py` | Pure conversion of a Docling export into units: physical page provenance, retained structural labels, figure captions and specialised children, and furniture/index exclusion |
 
