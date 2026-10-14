@@ -15,10 +15,13 @@ The model loaders and the embedding, token-count, and rerank operations moved to
 of a check are two places for it to be wrong. It may also never hold one build's
 rows on the instance, because the service keeps one instance per backend name for
 the life of the process and a second build would interleave rows into the first.
+Each uploaded batch's row identity is written beside the index under its offset,
+so a build resumed by another process, or retried after a failure, finds them.
 """
 
 from __future__ import annotations
 
+import shutil
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -38,18 +41,8 @@ from . import (
 from .portable_vectors import load_portable_vectors
 
 _EXACT_VECTORS_RELATIVE = Path("portable") / "embeddings.npy"
-
-
-@dataclass(slots=True)
-class ExactIndexBuild:
-    """The per-row identity one exact-index build has recorded so far.
-
-    The build object travels from `initialize_index` to `finalize_index`, so the
-    rows belong to the build rather than to the backend that wrote them.
-    """
-
-    chunk_ids: list[str]
-    document_ids: list[str]
+# Where a build in progress keeps each batch's row identity, named by its offset.
+_ROWS_DIRECTORY = ".rows"
 
 
 @dataclass(frozen=True, slots=True)
@@ -100,7 +93,6 @@ class LocalVectorDenseBackend:
         # model facts, so an injected runtime is the only statement of them.
         self.embedding_facts: EmbeddingModel = self.runtime.embedding_facts
         self._loaded: dict[Path, tuple[int, _ExactIndex]] = {}
-        self._pending: dict[Path, ExactIndexBuild] = {}
 
     def embedding_token_counts(self, texts: list[str]) -> list[int]:
         return self.runtime.embedding_token_counts(texts)
@@ -120,27 +112,6 @@ class LocalVectorDenseBackend:
     ) -> list[float]:
         return self.runtime.rerank(query, documents, model=model)
 
-    def _pending_build(
-        self,
-        index_path: Path,
-        build: ExactIndexBuild | None,
-    ) -> ExactIndexBuild:
-        """The build a caller named, or this instance's own build for that path.
-
-        A caller that owns the whole build passes one object through all three calls.
-        A caller that cannot — the ingestion workflow resumes from a checkpoint
-        between them — gets a build held against the index path being written, and
-        two builds in one process therefore cannot append to each other's rows.
-        """
-
-        if build is not None:
-            return build
-        pending = self._pending.get(index_path)
-        if pending is None:
-            pending = ExactIndexBuild([], [])
-            self._pending[index_path] = pending
-        return pending
-
     @staticmethod
     def _generation_root(index_path: Path) -> Path:
         root = index_path.parent.parent
@@ -151,13 +122,7 @@ class LocalVectorDenseBackend:
             )
         return root
 
-    def initialize_index(
-        self,
-        index_path: Path,
-        dimension: int,
-        *,
-        build: ExactIndexBuild | None = None,
-    ) -> None:
+    def initialize_index(self, index_path: Path, dimension: int) -> None:
         if dimension != self.embedding_facts.dimension:
             raise ValueError(
                 f"An exact dense index requires {self.embedding_facts.dimension} dimensions, "
@@ -165,10 +130,7 @@ class LocalVectorDenseBackend:
             )
         if index_path.exists():
             raise ValueError(f"Exact dense index path already exists: {index_path}")
-        index_path.mkdir(parents=True)
-        pending = self._pending_build(index_path, build)
-        pending.chunk_ids.clear()
-        pending.document_ids.clear()
+        (index_path / _ROWS_DIRECTORY).mkdir(parents=True)
 
     def upload_index_batch(
         self,
@@ -177,15 +139,16 @@ class LocalVectorDenseBackend:
         vectors: np.ndarray[Any, np.dtype[np.float32]],
         *,
         offset: int,
-        build: ExactIndexBuild | None = None,
     ) -> None:
-        """Record per-row identity; the vectors are already the portable file."""
+        """Record one batch's row identity; the vectors are already the portable file.
+
+        A batch is written under its offset, so uploading the same batch again
+        replaces it rather than appending a second copy.
+        """
 
         if vectors.shape != (len(chunks), self.embedding_facts.dimension):
             raise ValueError("Exact dense index batch has an invalid vector shape")
-        pending = self._pending_build(index_path, build)
-        if offset != len(pending.chunk_ids):
-            raise ValueError("Exact dense index batches must be uploaded in order")
+        rows: dict[str, list[str]] = {"chunk_ids": [], "document_ids": []}
         for chunk in chunks:
             chunk_id = str(chunk.get("chunk_id") or "")
             document_id = str(chunk.get("document_id") or "")
@@ -193,8 +156,25 @@ class LocalVectorDenseBackend:
                 raise ValueError(
                     "Exact dense index chunks need a chunk_id and a document_id"
                 )
-            pending.chunk_ids.append(chunk_id)
-            pending.document_ids.append(document_id)
+            rows["chunk_ids"].append(chunk_id)
+            rows["document_ids"].append(document_id)
+        atomic_write_json(index_path / _ROWS_DIRECTORY / f"{offset:012d}.json", rows)
+
+    def _recorded_rows(self, index_path: Path) -> tuple[list[str], list[str]]:
+        """Every uploaded batch's rows, in offset order, refusing a gap."""
+
+        chunk_ids: list[str] = []
+        document_ids: list[str] = []
+        for batch in sorted((index_path / _ROWS_DIRECTORY).glob("*.json")):
+            if int(batch.stem) != len(chunk_ids):
+                raise ValueError(
+                    f"Exact dense index batch {batch.name} does not start at row "
+                    f"{len(chunk_ids)}"
+                )
+            rows = _read_index_object(batch, "exact dense index batch")
+            chunk_ids.extend(str(item) for item in rows["chunk_ids"])
+            document_ids.extend(str(item) for item in rows["document_ids"])
+        return chunk_ids, document_ids
 
     def finalize_index(
         self,
@@ -202,36 +182,35 @@ class LocalVectorDenseBackend:
         *,
         expected_count: int,
         dimension: int,
-        build: ExactIndexBuild | None = None,
     ) -> dict[str, Any]:
-        pending = self._pending_build(index_path, build)
-        if len(pending.chunk_ids) != expected_count:
-            raise ValueError(
-                f"Exact dense index expected {expected_count} chunks but "
-                f"received {len(pending.chunk_ids)}"
+        # A finalize that stopped after writing the identity resumes from it.
+        if not (index_path / EXACT_DOCUMENTS_FILENAME).is_file():
+            chunk_ids, document_ids = self._recorded_rows(index_path)
+            if len(chunk_ids) != expected_count:
+                raise ValueError(
+                    f"Exact dense index expected {expected_count} chunks but "
+                    f"received {len(chunk_ids)}"
+                )
+            atomic_write_json(
+                index_path / EXACT_DOCUMENTS_FILENAME,
+                {
+                    "schema_version": 1,
+                    "chunk_ids": chunk_ids,
+                    "document_ids": document_ids,
+                },
             )
-        atomic_write_json(
-            index_path / EXACT_DOCUMENTS_FILENAME,
-            {
-                "schema_version": 1,
-                "chunk_ids": pending.chunk_ids,
-                "document_ids": pending.document_ids,
-            },
-        )
-        atomic_write_json(
-            index_path / EXACT_INDEX_FILENAME,
-            {
-                "schema_version": 1,
-                "backend": EXACT_BACKEND_NAME,
-                "dimension": dimension,
-                "count": expected_count,
-                "vectors": _EXACT_VECTORS_RELATIVE.as_posix(),
-                "documents": EXACT_DOCUMENTS_FILENAME,
-            },
-        )
-        pending.chunk_ids.clear()
-        pending.document_ids.clear()
-        self._pending.pop(index_path, None)
+            atomic_write_json(
+                index_path / EXACT_INDEX_FILENAME,
+                {
+                    "schema_version": 1,
+                    "backend": EXACT_BACKEND_NAME,
+                    "dimension": dimension,
+                    "count": expected_count,
+                    "vectors": _EXACT_VECTORS_RELATIVE.as_posix(),
+                    "documents": EXACT_DOCUMENTS_FILENAME,
+                },
+            )
+        shutil.rmtree(index_path / _ROWS_DIRECTORY, ignore_errors=True)
         self._loaded.pop(index_path.resolve(), None)
         self.validate_index(
             index_path,
@@ -271,18 +250,12 @@ class LocalVectorDenseBackend:
             raise ValueError(
                 "Portable embedding dimensions do not match the chunk collection"
             )
-        build = ExactIndexBuild([], [])
-        self.initialize_index(
-            index_path,
-            self.embedding_facts.dimension,
-            build=build,
-        )
-        self.upload_index_batch(chunks, index_path, vectors, offset=0, build=build)
+        self.initialize_index(index_path, self.embedding_facts.dimension)
+        self.upload_index_batch(chunks, index_path, vectors, offset=0)
         return self.finalize_index(
             index_path,
             expected_count=len(chunks),
             dimension=self.embedding_facts.dimension,
-            build=build,
         )
 
     def _load_index(
