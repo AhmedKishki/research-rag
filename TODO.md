@@ -147,7 +147,7 @@ An item is done when the harness has produced its measurement and the validation
 
 ## release
 
-- [ ] **Install the release `update` approved.** Bug. The distribution path asks the package index for a package published only on GitHub, and `uv tool upgrade` re-resolves the git specifier to the default branch head rather than the tag whose changelog was shown. README installs from the branch head as well.
+- [ ] **Install from a release tag in README.** Feature. README installs from the default branch head, so a first install can carry unreleased commits until `update` moves it to a release.
 - [ ] **Run `uv lock --check` in CI.** Bug. `AGENTS.md` requires it before a commit, and `.github/workflows/test.yml` omits it.
 - [ ] **Point the `default.toml` package data at its file.** Bug. `pyproject.toml` names `research_rag/default.toml`; the file is `research_rag/project/default.toml` and ships only through setuptools' default discovery.
 

@@ -353,15 +353,21 @@ def releases_from_tags(pairs: Sequence[tuple[str, str | None]]) -> ReleaseSet:
     )
 
 
-def remote_release(root: Path, run: Runner) -> ReleaseSet:
-    """Ask a remote's tags directly, without a token or an API key."""
+def remote_release(
+    root: Path | None, run: Runner, *, remote: str = "origin"
+) -> ReleaseSet:
+    """Ask a remote's tags directly, without a token or an API key.
 
-    listed = run(["git", "-C", str(root), "ls-remote", "--tags", "origin"])
+    `remote` is a checkout's remote name, or, with no `root`, a repository URL.
+    """
+
+    checkout = ["-C", str(root)] if root is not None else []
+    listed = run(["git", *checkout, "ls-remote", "--tags", remote])
     if not listed.ok:
         first = next(iter(listed.stderr.splitlines()), "") or listed.stdout.strip()
         return ReleaseSet(
             UNREADABLE,
-            detail=f"`git ls-remote --tags origin` failed: {first}",
+            detail=f"`git ls-remote --tags {remote}` failed: {first}",
         )
     return releases_from_tags(tag_pairs(listed.stdout))
 

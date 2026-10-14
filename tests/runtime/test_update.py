@@ -45,6 +45,7 @@ DISTRIBUTION = update_module.DISTRIBUTION
 COMMIT = "a" * 40
 REMOTE_HEAD = "b" * 40
 RELEASE_COMMIT = "c" * 40
+REPOSITORY = "https://github.com/AhmedKishki/research-rag.git"
 # The published release the stubbed fetch returns, in the shape the API answers in.
 PUBLISHED = {
     "tag_name": "v0.2.0",
@@ -185,7 +186,7 @@ def _local(checkout: Path | None, **overrides: Any) -> update_module.LocalState:
         "upstream": "origin/main" if checkout is not None else None,
         "commit": COMMIT if checkout is not None else None,
         "tool": None if checkout is not None else "uv",
-        "tool_specifier": None if checkout is not None else "git+https://example",
+        "tool_specifier": None if checkout is not None else f"git+{REPOSITORY}",
         "declared": "0.1.0" if checkout is not None else None,
     }
     values.update(overrides)
@@ -199,6 +200,8 @@ def _run(*arguments: str) -> Any:
 @pytest.fixture
 def as_an_installed_distribution(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(update_module, "nearest_checkout", lambda: None)
+    # The version the tool listings below name, not the one this run installed.
+    monkeypatch.setattr(update_module, "installed_version", lambda: "0.1.0")
 
 
 def _a_dead_pid() -> int:
@@ -522,16 +525,21 @@ def test_a_checkout_with_no_upstream_says_so_instead_of_guessing(
 def test_a_distribution_is_updated_by_the_tool_that_installed_it(
     as_an_installed_distribution: None,
 ) -> None:
-    """The tool is asked which one it is, and it is the one that does the work."""
+    """The tool that claims the install installs the release tag the preview named.
+
+    The release is read from the repository's tags, because no package index
+    publishes this app, and the install names the tag, because an upgrade from
+    the bare git URL would install the branch head instead of the release.
+    """
 
     run = Recorder(
         {
             "uv tool list --show-version-specifiers": (
-                "research-rag v0.1.0 (from git+https://example/research-rag.git)\n"
+                f"research-rag v0.1.0 [required: git+{REPOSITORY}@main]\n"
                 "other-tool v2.0.0\n"
             ),
-            "uv tool list --outdated": (
-                "research-rag v0.1.0\n`-- upgrade available to: v0.2.0\n"
+            f"git ls-remote --tags {REPOSITORY}": _tag_listing(
+                ("v0.1.0", COMMIT), ("v0.2.0", RELEASE_COMMIT)
             ),
         }
     )
@@ -541,9 +549,10 @@ def test_a_distribution_is_updated_by_the_tool_that_installed_it(
 
     assert local.shape == DISTRIBUTION
     assert local.tool == "uv"
-    assert local.tool_specifier == "git+https://example/research-rag.git"
+    assert local.tool_specifier == f"git+{REPOSITORY}@main"
     assert plan.available is True
-    assert plan.labels() == ("uv tool upgrade research-rag",)
+    assert plan.release_tag == "v0.2.0"
+    assert plan.labels() == (f"uv tool install --force git+{REPOSITORY}@v0.2.0",)
 
 
 def test_pipx_is_used_when_it_is_the_tool_that_claims_the_install(
@@ -559,6 +568,7 @@ def test_pipx_is_used_when_it_is_the_tool_that_claims_the_install(
                             "metadata": {
                                 "main_package": {
                                     "package": "research-rag",
+                                    "package_or_url": f"git+{REPOSITORY}",
                                     "package_version": "0.1.0",
                                 }
                             }
@@ -566,14 +576,9 @@ def test_pipx_is_used_when_it_is_the_tool_that_claims_the_install(
                     }
                 }
             ),
-            (
-                "pipx",
-                "runpip",
-                "research-rag",
-                "index",
-                "versions",
-                "research-rag",
-            ): "research-rag (0.1.0)\nAvailable versions: 0.3.0, 0.2.0, 0.1.0",
+            f"git ls-remote --tags {REPOSITORY}": _tag_listing(
+                ("v0.3.0", RELEASE_COMMIT)
+            ),
         }
     )
 
@@ -581,9 +586,40 @@ def test_pipx_is_used_when_it_is_the_tool_that_claims_the_install(
     plan = update_module.plan_update(local, update_module.probe_remote(local, run))
 
     assert local.tool == "pipx"
-    assert local.tool_specifier == ""
+    assert local.tool_specifier == f"git+{REPOSITORY}"
     assert plan.available is True
-    assert plan.labels() == ("pipx upgrade research-rag",)
+    assert plan.labels() == (f"pipx install --force git+{REPOSITORY}@v0.3.0",)
+
+
+@pytest.mark.parametrize(
+    ("specifier", "repository"),
+    [
+        (f"git+{REPOSITORY}", REPOSITORY),
+        (f"git+{REPOSITORY}@v1.2.0", REPOSITORY),
+        ("git+ssh://git@github.com/a/b.git@main", "ssh://git@github.com/a/b.git"),
+        ("git+ssh://git@github.com/a/b.git", "ssh://git@github.com/a/b.git"),
+        ("research-rag==1.0.0", None),
+        ("", None),
+    ],
+)
+def test_a_git_install_names_its_repository_without_its_ref(
+    specifier: str, repository: str | None
+) -> None:
+    from research_rag.runtime.tool_ownership import git_source
+
+    assert git_source(specifier) == repository
+
+
+def test_a_distribution_ahead_of_the_release_is_not_moved_back() -> None:
+    """An install from the branch head can carry a version no tag has published yet."""
+
+    plan = update_module.plan_update(
+        _local(None, version="0.3.0"),
+        update_module.RemoteState(reachable=True, available_version="0.2.0"),
+    )
+
+    assert plan.available is False
+    assert plan.commands == ()
 
 
 def test_an_install_no_tool_claims_is_refused_with_both_commands(
