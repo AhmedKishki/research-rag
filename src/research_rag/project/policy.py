@@ -4,23 +4,17 @@ A reader who asks what is installed, what a project holds, or what a setting cos
 must be answered on a machine where the retrieval stack, the models, and the
 managed runtime are all absent. `AGENTS.md` states that as a rule, and this module
 is what makes it hold: the user-facing failure type, the identity of the ranking
-policy, the canonical digest both are written with, and the UTC stamp every record
-carries. Nothing here reads a file, resolves a setting, or imports another folder,
-so importing this module cannot pull in fastembed, qdrant_client, pymupdf,
-tokenizers, or numpy.
-
-`support.py` imports the failure type and the digest from here rather than defining
-them, because it is above this module and a second definition is a second answer.
-
-A decision that no longer binds is deleted rather than filed: `TODO.md` records the
-rest of `support.py`'s split, and this module is the part a lightweight command
-needs from it.
+policy, the canonical digest both are written with, the UTC stamp every record
+carries, and the schema and policy versions a generation is identified by. Nothing
+here reads a file, resolves a setting, or imports another folder, so importing this
+module cannot pull in fastembed, qdrant_client, pymupdf, tokenizers, or numpy.
 """
 
 from __future__ import annotations
 
 import hashlib
 import json
+from collections.abc import Mapping
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any
 
@@ -38,6 +32,67 @@ RETRIEVAL_METHODS = frozenset({"bm25", "dense", "hybrid"})
 #: existing corpus. It lives here, in a module that pulls no retrieval stack, so
 #: lightweight commands can compare it without importing one.
 DEFAULT_PDF_BACKEND_FINGERPRINT = "pdf-backend:custom:v1"
+
+
+SCHEMA_VERSION = 5
+
+
+# Extraction decides which blocks and units exist; semantic cleaning decides the
+# text of a unit that survived. Bumping extraction alone would report a generation
+# as needing only `layout_extraction` when its unit text also changed, so both move.
+# Version 11 recovers documented symbol-font glyphs and stops a formatting glyph
+# or a punctuation-only fragment from withholding or corrupting a passage.
+# Version 12 bounds native recovery resources and rejects incomplete predictor
+# rows, so extraction generated before those safeguards is not reused.
+# Version 13 records a PDF's lost substantive text against the substantive
+# characters it retained, so a generation that carries no per-document loss
+# denominator is not reused.
+EXTRACTION_POLICY_VERSION = 14
+
+
+# EPUB and MOBI share one set of HTML reading rules. Their version is recorded on
+# each EPUB or MOBI document rather than on the generation, so a change to those
+# rules re-reads those sources on an ordinary ingest and passes every unchanged PDF
+# through untouched. A document without the field was read under version 1.
+# Version 2 reads `role="paragraph"` blocks and drops note references.
+REFLOWABLE_EXTRACTION_POLICY_VERSION = 2
+
+
+REFLOWABLE_FORMATS = frozenset({"epub", "mobi"})
+
+
+def reflowable_document_is_current(document: Mapping[str, Any]) -> bool:
+    """Whether a document was read under the current EPUB/MOBI rules; a PDF is."""
+
+    if document.get("format") not in REFLOWABLE_FORMATS:
+        return True
+    recorded = document.get("reflowable_extraction_policy_version", 1)
+    return recorded == REFLOWABLE_EXTRACTION_POLICY_VERSION
+
+
+# Version 9 records partially cleaned passages, corrupt span counts, and lost
+# characters separately from whole omissions, so a generation built under the
+# earlier cleaning counters is not reused.
+CLEANING_POLICY_VERSION = 10
+
+
+ARTIFACT_POLICY_VERSION = 3
+
+
+# The ranking policy is not part of this identity: it never affected artifacts,
+# and fingerprinting it made a ranking edit discard a build in progress.
+INGESTION_IDENTITY_POLICY_VERSION = 3
+
+
+METADATA_STORAGE_POLICY = "automatic_only_runtime_overlay_v1"
+
+
+# The shape the builder writes for a build identifier, and the shape nothing
+# else may supply. A generation directory is named by a caller in `generations`,
+# `use_generation`, and `remove_generation`, so those three check the name against
+# this rather than joining it to a path: a name that does not look like a build
+# identifier never reaches the filesystem as one.
+GENERATION_ID_PATTERN = r"\d{8}T\d{6}Z-[0-9a-f]{8}"
 
 
 class ResearchError(RuntimeError):
@@ -105,9 +160,20 @@ def retrieval_policy_fingerprint(settings: EffectiveSettings) -> str:
 
 
 __all__ = [
+    "ARTIFACT_POLICY_VERSION",
+    "CLEANING_POLICY_VERSION",
+    "DEFAULT_PDF_BACKEND_FINGERPRINT",
     "DEFAULT_RETRIEVAL_METHOD",
+    "EXTRACTION_POLICY_VERSION",
+    "GENERATION_ID_PATTERN",
+    "INGESTION_IDENTITY_POLICY_VERSION",
+    "METADATA_STORAGE_POLICY",
+    "REFLOWABLE_EXTRACTION_POLICY_VERSION",
+    "REFLOWABLE_FORMATS",
     "RETRIEVAL_METHODS",
+    "SCHEMA_VERSION",
     "ResearchError",
+    "reflowable_document_is_current",
     "retrieval_policy_fingerprint",
     "value_fingerprint",
 ]

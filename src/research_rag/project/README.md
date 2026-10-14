@@ -12,8 +12,7 @@ What one project is, how it is configured, and the names its state is found by.
 | `state_files.py` | The on-disk names every module agrees on, and the readers for a pid and a running build |
 | `normalized_paths.py` | The one rule a path stored in a file must satisfy |
 | `instructions.py` | What an agent is told before it calls a tool |
-| `policy.py` | Error type, retrieval-method names, policy fingerprints, and UTC time helpers without retrieval imports |
-| `support.py` | Shared corpus and generation helpers; still coupled to the retrieval stack |
+| `policy.py` | Error type, retrieval-method names, schema and policy versions, policy fingerprints, and UTC time helpers without retrieval imports |
 
 ## Rules
 
@@ -23,6 +22,5 @@ What one project is, how it is configured, and the names its state is found by.
   default file, and no directory name of its own. `tests/project/` fails a change
   that moves either.
 - `normalized_paths.py` owns stored-path validation; import it rather than copy it.
-- Import `ResearchError` and policy primitives from `policy.py`, not `support.py`.
-  - `support.py` still imports retrieval dependencies; `TODO.md` tracks its remaining split.
-  - `tests/gates/test_lightweight_imports.py` guards commands that must run without the stack.
+- `policy.py` imports no other folder, so a command that runs without the retrieval stack can reach the failure type and the policy versions.
+  `tests/gates/test_lightweight_imports.py` guards those commands.

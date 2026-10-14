@@ -40,3 +40,7 @@ def resolve_reranker_model(model: str) -> tuple[str, str]:
             f"Unsupported reranker model: {model!r}; expected one of: "
             + ", ".join(RERANKER_MODEL_CHOICES)
         ) from None
+
+
+def _reranker_revision(model: str) -> str:
+    return resolve_reranker_model(model)[1]

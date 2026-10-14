@@ -13,31 +13,35 @@ import numpy as np
 from ..corpus.text_quality import (
     CHUNK_FLAG_CORRUPT_TEXT,
     CHUNK_FLAG_EXTRACTION_ARTIFACT,
+    chunk_health_flags,
     text_corruption_reasons,
 )
 from ..project.policy import DEFAULT_RETRIEVAL_METHOD, RETRIEVAL_METHODS, ResearchError
-from ..project.support import (
-    _atomic_to_thread,
-    _candidate_flags,
-    _content_tokens,
+from ..storage.durable_io import _atomic_to_thread, iter_jsonl
+from .artifact_lookup import (
+    LOOKUP_HEALTH_FLAGS_KEY,
+    ArtifactLookup,
+    VectorByContentsMapping,
+    chunk_text,
+)
+from .dense import DenseSearchHit, RerankerUnavailable
+from .documents import (
     _document_for_chunk,
     _document_matches_metadata,
     _effective_documents,
     _normalized_filter,
-    _passage_equality_key,
-    _pseudo_relevance_terms,
     _public_document,
     _public_passage,
-    _record_withheld,
-    _requested_ids,
-    _reranker_revision,
+)
+from .ranking import (
+    _content_tokens,
+    _passage_equality_key,
+    _pseudo_relevance_terms,
     _source_diverse_selection,
     document_frequencies,
     passage_token_count,
 )
-from ..storage.durable_io import iter_jsonl
-from .artifact_lookup import ArtifactLookup, VectorByContentsMapping, chunk_text
-from .dense import DenseSearchHit, RerankerUnavailable
+from .rerankers import _reranker_revision
 
 #: The most candidate identifiers one stage of an evaluation trace may carry. The
 #: trace is a bounded read of a pipeline, not the pipeline's own state, so a stage
@@ -201,6 +205,48 @@ _LEXICAL_REJECTIONS = (
     "corrupt_text",
     "too_short",
 )
+
+
+def _requested_ids(values: list[str] | None) -> list[str]:
+    result: list[str] = []
+    seen: set[str] = set()
+    for value in values or []:
+        item = str(value).strip()
+        if item and item not in seen:
+            result.append(item)
+            seen.add(item)
+    return result
+
+
+def _candidate_flags(chunk: dict[str, Any]) -> int:
+    """Return the stored retrieval-rejection verdict for one candidate.
+
+    The artifact lookup computes this when it is built, so a query does not rescan
+    chunk text. A lookup predating it falls back to computing the same flags here.
+    """
+
+    stored = chunk.get(LOOKUP_HEALTH_FLAGS_KEY)
+    if isinstance(stored, int):
+        return stored
+    return chunk_health_flags(
+        chunk_text(chunk),
+        quality_flags=chunk.get("quality_flags"),
+    )
+
+
+def _record_withheld(
+    withheld: dict[str, dict[str, Any]],
+    chunk: dict[str, Any],
+    reasons: Sequence[str],
+    *,
+    limit: int,
+) -> None:
+    for reason in reasons:
+        entry = withheld.setdefault(reason, {"count": 0, "example_chunk_ids": []})
+        entry["count"] = int(entry["count"]) + 1
+        examples = entry["example_chunk_ids"]
+        if len(examples) < limit:
+            examples.append(str(chunk["chunk_id"]))
 
 
 @dataclass

@@ -16,7 +16,7 @@ from research_rag.generations.generation import (
 )
 from research_rag.generations.generation_inventory import generation_inventory
 from research_rag.project.config import resolve_config
-from research_rag.project.support import (
+from research_rag.project.policy import (
     ARTIFACT_POLICY_VERSION,
     CLEANING_POLICY_VERSION,
     EXTRACTION_POLICY_VERSION,

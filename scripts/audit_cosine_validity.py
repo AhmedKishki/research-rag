@@ -48,8 +48,8 @@ from research_rag.project.settings import (
 )
 from research_rag.project.settings_layers import resolve_settings
 from research_rag.project.state_files import PORTABLE_DIRECTORY, RUNTIME_DIRECTORY
-from research_rag.project.support import _passage_equality_key
 from research_rag.retrieval.model_runtime import ModelRuntime
+from research_rag.retrieval.ranking import _passage_equality_key
 from research_rag.retrieval.rerankers import resolve_reranker_model
 from research_rag.retrieval.search import _collapse_repetitions
 from research_rag.storage.durable_io import iter_jsonl

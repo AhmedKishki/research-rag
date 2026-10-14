@@ -78,7 +78,7 @@ WALL_TIMEOUT_SECONDS = 180
 
 # The fingerprint a generation with no recorded backend carries. It is the
 # legacy default, so recording it does not invalidate an existing corpus. The
-# string is owned by `project.support`, shared with the checkpoint identity.
+# string is owned by `project.policy`, shared with the checkpoint identity.
 CUSTOM_BACKEND_FINGERPRINT = DEFAULT_PDF_BACKEND_FINGERPRINT
 
 _DOCLING_OPTIONS = {

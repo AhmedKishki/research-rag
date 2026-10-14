@@ -20,14 +20,14 @@ from research_rag.generations.generation import (
     units_are_reusable,
     vectors_are_reusable,
 )
+from research_rag.generations.staging import _checkpoint_identity
 from research_rag.project.config import resolve_config
-from research_rag.project.support import (
+from research_rag.project.policy import (
     ARTIFACT_POLICY_VERSION,
     CLEANING_POLICY_VERSION,
     EXTRACTION_POLICY_VERSION,
     REFLOWABLE_EXTRACTION_POLICY_VERSION,
     SCHEMA_VERSION,
-    _checkpoint_identity,
 )
 from research_rag.retrieval.embeddings import resolve_embedding_model
 

@@ -29,7 +29,7 @@ import pytest
 
 from research_rag.core.service import ResearchService
 from research_rag.project.config import resolve_config
-from research_rag.project.support import _passage_equality_key
+from research_rag.retrieval.ranking import _passage_equality_key
 from research_rag.retrieval.search import _collapse_repetitions
 from tests.conftest import write_pdf
 from tests.core.test_service import FakeDenseBackend, FakeUltraRAG

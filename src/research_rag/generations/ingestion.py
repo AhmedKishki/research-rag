@@ -51,35 +51,22 @@ from ..corpus.sources import (
 from ..corpus.text_quality import text_corruption_reasons
 from ..project.config import project_command
 from ..project.policy import (
-    DEFAULT_RETRIEVAL_METHOD,
-    RETRIEVAL_METHODS,
-    ResearchError,
-    _utc_now,
-    value_fingerprint,
-)
-from ..project.settings import SETTINGS_BY_KEY
-from ..project.support import (
     ARTIFACT_POLICY_VERSION,
     CLEANING_POLICY_VERSION,
+    DEFAULT_RETRIEVAL_METHOD,
     EXTRACTION_POLICY_VERSION,
     GENERATION_ID_PATTERN,
     INGESTION_IDENTITY_POLICY_VERSION,
     METADATA_STORAGE_POLICY,
     REFLOWABLE_EXTRACTION_POLICY_VERSION,
+    RETRIEVAL_METHODS,
     SCHEMA_VERSION,
-    _atomic_to_thread,
-    _checkpoint_identity,
-    _embedding_text,
-    _enrich_chunks,
-    _generation_id,
-    _hash_with_stable_stat,
-    _pdf_batch_count,
-    _record_embedding_token_counts,
-    _reranker_revision,
-    _source_inventory,
-    _source_work_key,
+    ResearchError,
+    _utc_now,
     reflowable_document_is_current,
+    value_fingerprint,
 )
+from ..project.settings import SETTINGS_BY_KEY
 from ..retrieval.artifact_lookup import (
     LOOKUP_RELATIVE_PATH,
     ArtifactLookup,
@@ -88,8 +75,10 @@ from ..retrieval.artifact_lookup import (
     ensure_artifact_lookup,
 )
 from ..retrieval.dense import DENSE_INDEX_PATHS, EXACT_BACKEND_NAME, QDRANT_BACKEND_NAME
+from ..retrieval.rerankers import _reranker_revision
 from ..storage.durable_io import (
     StorageError,
+    _atomic_to_thread,
     atomic_file,
     atomic_write_json,
     atomic_write_jsonl,
@@ -109,6 +98,17 @@ from .generation import (
     generation_artifacts_are_valid,
     load_reuse_snapshot,
     source_set_matches,
+)
+from .staging import (
+    _checkpoint_identity,
+    _embedding_text,
+    _enrich_chunks,
+    _generation_id,
+    _hash_with_stable_stat,
+    _pdf_batch_count,
+    _record_embedding_token_counts,
+    _source_inventory,
+    _source_work_key,
 )
 
 INGESTION_CHECKPOINT_VERSION = 1

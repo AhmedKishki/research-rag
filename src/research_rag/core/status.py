@@ -33,26 +33,27 @@ from ..corpus.sources import (
     scan_sources,
     sha256_file,
 )
+from ..corpus.text_normalization import normalize_inline_text
 from ..generations.generation_inventory import (
     generation_inventory,
     skipped_source_count,
 )
 from ..project.config import ResearchConfig
 from ..project.policy import (
-    DEFAULT_RETRIEVAL_METHOD,
-    ResearchError,
-    value_fingerprint,
-)
-from ..project.support import (
     ARTIFACT_POLICY_VERSION,
     CLEANING_POLICY_VERSION,
+    DEFAULT_RETRIEVAL_METHOD,
     EXTRACTION_POLICY_VERSION,
     METADATA_STORAGE_POLICY,
     SCHEMA_VERSION,
-    _effective_documents,
-    _metadata_inventory,
-    _metadata_snapshot_changed,
+    ResearchError,
     reflowable_document_is_current,
+    value_fingerprint,
+)
+from ..retrieval.documents import (
+    _effective_documents,
+    _metadata_snapshot_changed,
+    _normalized_filter,
 )
 from ..runtime.health import health_report
 from ..runtime.version import version_block
@@ -328,6 +329,40 @@ def _review_state_payload(
         "metadata_pending_source_paths": pending_source_paths,
         "generation_metadata_snapshot_outdated": snapshot_outdated,
     }
+
+
+def _metadata_inventory(
+    documents: dict[str, dict[str, Any]],
+    excluded_document_ids: set[str],
+    *,
+    field: str,
+    label: str,
+) -> list[dict[str, Any]]:
+    """Count searchable sources per reviewed value of one list-valued field.
+
+    Reviewed values are free strings, so this is the inventory an agent uses before
+    searching. A source counts once per value it carries, and reviewed exclusions
+    are not counted.
+    """
+
+    display: dict[str, str] = {}
+    counts: dict[str, int] = {}
+    for document_id, document in documents.items():
+        if document_id in excluded_document_ids:
+            continue
+        normalized = _normalized_filter(document.get(field))
+        if not normalized:
+            continue
+        for raw in document.get(field) or []:
+            value = normalize_inline_text(str(raw))
+            if value and value.casefold() in normalized:
+                display.setdefault(value.casefold(), value)
+        for name in normalized:
+            counts[name] = counts.get(name, 0) + 1
+    return [
+        {label: display.get(name, name), "searchable_source_count": counts[name]}
+        for name in sorted(counts)
+    ]
 
 
 class StatusWorkflow:

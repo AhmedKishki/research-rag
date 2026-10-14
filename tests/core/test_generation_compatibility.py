@@ -14,7 +14,7 @@ from research_rag.core.status import (
     generation_upgrade_reasons,
 )
 from research_rag.project.config import resolve_config
-from research_rag.project.support import (
+from research_rag.project.policy import (
     ARTIFACT_POLICY_VERSION,
     CLEANING_POLICY_VERSION,
     EXTRACTION_POLICY_VERSION,

@@ -4,7 +4,7 @@ from types import SimpleNamespace
 import pytest
 
 from research_rag.generations.ingestion import IngestionWorkflow
-from research_rag.project.support import _source_work_key
+from research_rag.generations.staging import _source_work_key
 from research_rag.storage.durable_io import atomic_write_json
 
 
