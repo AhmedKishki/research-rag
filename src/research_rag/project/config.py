@@ -43,6 +43,9 @@ class ConfigurationError(ValueError):
 # a port was free.
 DEFAULT_UI_PORT = 5051
 _RUNTIME_MARKER = ".research-rag-runtime.json"
+# Every child this app starts carries this marker. The Docling worker refuses to
+# run without it, so it cannot run outside the boundary its parent sets.
+MANAGED_CHILD_ENV = "RESEARCH_RAG_MANAGED_CHILD"
 # Where this project recorded that its derived state was relocated to. Machine-local,
 # and absent for a project that keeps its state inside its own root.
 RUNTIME_ROOT_RECORD = "runtime-root"
@@ -125,7 +128,7 @@ def child_process_environment(*, purpose: ChildProcessPurpose) -> dict[str, str]
         allowed |= _DESKTOP_CHILD_ENV
     if purpose in {"docling", "provisioner"}:
         allowed |= _NETWORK_CHILD_ENV
-    return {
+    environment = {
         name: value
         for name, value in os.environ.items()
         if name in allowed
@@ -146,6 +149,8 @@ def child_process_environment(*, purpose: ChildProcessPurpose) -> dict[str, str]
             "LC_IDENTIFICATION",
         }
     }
+    environment[MANAGED_CHILD_ENV] = "1"
+    return environment
 
 
 def apply_process_priority(nice: int) -> int | None:

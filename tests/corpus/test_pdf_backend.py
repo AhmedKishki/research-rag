@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import subprocess
 from pathlib import Path
 from types import SimpleNamespace
@@ -379,26 +380,29 @@ def test_remedy_points_at_provisioning_not_a_manual_install() -> None:
 
 
 def test_worker_environment_mode_is_enforced(
-    monkeypatch: pytest.MonkeyPatch,
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    monkeypatch.setenv("RESEARCH_RAG_MANAGED_CHILD", "1")
-    monkeypatch.delenv("HF_HUB_OFFLINE", raising=False)
-    monkeypatch.delenv("TRANSFORMERS_OFFLINE", raising=False)
+    def verify(mode: str, offline: bool, environment: dict[str, str]) -> None:
+        monkeypatch.setattr(os, "environ", environment)
+        docling_worker._verify_environment(mode, offline=offline)
 
-    # Offline extraction needs the no-download markers; an online extraction and
-    # provisioning must not carry them.
-    with pytest.raises(docling_worker.ResourceBoundaryError):
-        docling_worker._verify_environment("extract", offline=True)
-    docling_worker._verify_environment("extract", offline=False)
-    docling_worker._verify_environment("prefetch", offline=False)
+    # The worker accepts exactly the environment its parent builds for each mode.
+    for mode, offline in (("extract", True), ("extract", False), ("prefetch", False)):
+        verify(mode, offline, pdf_backend._worker_environment(mode, offline, tmp_path))
 
-    monkeypatch.setenv("HF_HUB_OFFLINE", "1")
-    monkeypatch.setenv("TRANSFORMERS_OFFLINE", "1")
-    docling_worker._verify_environment("extract", offline=True)
-    with pytest.raises(docling_worker.ResourceBoundaryError):
-        docling_worker._verify_environment("extract", offline=False)
-    with pytest.raises(docling_worker.ResourceBoundaryError):
-        docling_worker._verify_environment("prefetch", offline=False)
+    # Offline extraction needs the no-download markers, an online extraction and
+    # provisioning must not carry them, and a worker the app did not start refuses.
+    offline = pdf_backend._worker_environment("extract", True, tmp_path)
+    online = pdf_backend._worker_environment("extract", False, tmp_path)
+    unmanaged = {k: v for k, v in offline.items() if k != "RESEARCH_RAG_MANAGED_CHILD"}
+    for mode, flag, environment in (
+        ("extract", True, online),
+        ("extract", False, offline),
+        ("prefetch", False, offline),
+        ("extract", True, unmanaged),
+    ):
+        with pytest.raises(docling_worker.ResourceBoundaryError):
+            verify(mode, flag, environment)
 
 
 def test_cache_readiness_is_read_only(tmp_path: Path) -> None:
