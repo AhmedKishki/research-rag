@@ -154,6 +154,7 @@
 - Use `child_process_environment()`, never `dict(os.environ)`, for subprocesses.
 - Never point the app at a second copy of itself.
 - Signal only proven project-owned processes. Require the app entrypoint and a matching `--project-root` in stop sweeps.
+  - A recorded app is proven instead by the app entrypoint and the listening socket on its recorded port, so an app started by `--project` or a bare call can be stopped.
   - Never signal the sweep itself.
 - Serve from the starting terminal. Report a detached serving process instead of adopting it.
   - Refuse to serve from a process with no controlling terminal.

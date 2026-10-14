@@ -80,6 +80,7 @@ from ..runtime.app import (
     _own_tty,
     has_terminal,
     recorded_pid,
+    recorded_port,
     running_url,
 )
 from ..runtime.control import Control, ControlError, connect
@@ -1649,7 +1650,9 @@ def _stop(args: argparse.Namespace, config: ResearchConfig) -> dict[str, Any]:
     report["stopped"] = False
     report["stop_refusal"] = None
     if pid is not None:
-        outcome = ownership.ask_to_stop(pid, config.project_root)
+        outcome = ownership.ask_to_stop(
+            pid, config.project_root, port=recorded_port(config)
+        )
         report["stopped"] = outcome.asked
         report["stop_refusal"] = None if outcome.asked else outcome.reason
         report["pid"] = pid

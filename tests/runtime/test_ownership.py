@@ -13,6 +13,7 @@ import subprocess
 import sys
 import textwrap
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -216,12 +217,14 @@ def test_a_pid_record_that_changes_while_it_is_checked_is_left_running(
     real = ownership.judge
     seen: list[int] = []
 
-    def _reuse(pid: int, root: Path, root_proc: Path = proc_root) -> ownership.Verdict:
+    def _reuse(
+        pid: int, root: Path, root_proc: Path = proc_root, **kwargs: Any
+    ) -> ownership.Verdict:
         seen.append(pid)
         if len(seen) == 2:
             (entry / "cmdline").write_bytes(b"/usr/bin/vim\0")
             return ownership.Verdict(False, "pid 4244 does not run this app: vim")
-        return real(pid, root, root_proc)
+        return real(pid, root, root_proc, **kwargs)
 
     monkeypatch.setattr(ownership, "judge", _reuse)
 
@@ -267,3 +270,69 @@ def test_a_process_without_this_program_name_is_never_owned(
     assert not ownership.judge(disposable.pid, tmp_path / "thesis").owned
     assert not ownership.ask_to_stop(disposable.pid, tmp_path / "thesis").asked
     assert disposable.poll() is None
+
+
+#: A program named like this app that listens on a loopback port, prints it, and
+#: idles, so the port proof is read from the real kernel's tables.
+LISTENER = textwrap.dedent(
+    """
+    import signal, socket, sys, time
+
+    signal.signal(signal.SIGTERM, lambda *_: sys.exit(0))
+    server = socket.socket()
+    server.bind(("127.0.0.1", 0))
+    server.listen()
+    print(server.getsockname()[1], flush=True)
+    time.sleep(300)
+    """
+)
+
+
+def test_an_app_that_holds_the_recorded_port_is_owned_without_naming_the_project(
+    tmp_path: Path,
+) -> None:
+    """A bare call or `--project` names no root, so the recorded port proves it.
+
+    Only the process that claimed the port holds its listening socket, so a
+    reused pid or a different port is refused.
+    """
+
+    script = tmp_path / "research-rag"
+    script.write_text(LISTENER, encoding="utf-8")
+    child = subprocess.Popen(
+        [sys.executable, str(script)], stdout=subprocess.PIPE, text=True
+    )
+    try:
+        assert child.stdout is not None
+        port = int(child.stdout.readline())
+        project = tmp_path / "thesis"
+
+        assert ownership.judge(child.pid, project, port=port).owned
+        assert not ownership.judge(child.pid, project).owned
+        assert not ownership.judge(child.pid, project, port=port + 1).owned
+    finally:
+        child.kill()
+        child.wait(timeout=30)
+
+
+def test_the_port_proof_counts_a_listening_socket_and_not_a_connection(
+    tmp_path: Path, proc_root: Path
+) -> None:
+    """A LAN app listens on every interface; a connection on the port is not it."""
+
+    project = tmp_path / "thesis"
+    _fake_process(proc_root, 4245, ["research-rag"])
+    (proc_root / "4245" / "fd").mkdir()
+    os.symlink("socket:[777]", proc_root / "4245" / "fd" / "3")
+    header = "  sl  local_address rem_address   st tx_queue rx_queue tr tm->when retrnsmt   uid  timeout inode\n"
+    (proc_root / "net").mkdir()
+    # 0x13BB is 5051. The established row on the same port is not a listener.
+    (proc_root / "net" / "tcp").write_text(
+        header
+        + "   0: 00000000:13BB 00000000:0000 0A 00000000:00000000 00:00000000 00000000  1000        0 777\n"
+        + "   1: 0100007F:13BB 0100007F:D431 01 00000000:00000000 00:00000000 00000000  1000        0 778\n",
+        encoding="utf-8",
+    )
+
+    assert ownership.judge(4245, project, proc_root, port=5051).owned
+    assert not ownership.judge(4245, project, proc_root, port=5052).owned

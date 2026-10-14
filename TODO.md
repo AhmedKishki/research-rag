@@ -25,7 +25,6 @@ An item is done when the harness has produced its measurement and the validation
 - [ ] **Decide whether `search --method` and `--no-rerank` stay.** Decision. They reproduce a `MEASUREMENTS.md` row on demand, and no reader-facing surface offers either. Removing them is a deliberate simplification.
   - The running app's control route ignores both flags and returns hybrid, reranked results. Forward the diagnostic choices if retained, or reject unsupported flags explicitly. Test local and running-app behavior.
 - [ ] **Share workflow decisions without coupling the surfaces.** Refactor. Audit duplicated argument validation and workflow decisions in the CLI, control API, and workspace adapter. Move shared rules below the surfaces; keep terminal formatting and browser interaction separate. Preserve the no-cross-surface-import gate and test equivalent calls against the same service.
-- [ ] **Stop an app started without `--project-root`.** Bug. `runtime/ownership.py` proves ownership only from a literal `--project-root PATH` argument. `stop`, `stop --servers`, and `update` refuse an app started with `--project NAME`, by a bare call, or with a relative or trailing-slash path.
 - [ ] **Split `surfaces/cli.py`.** Refactor. One 3,352-line module holds the help text, the parser, the local and remote operations, attached serving, and `update`. Give each its own module behind the same `main`.
 
 ## agents

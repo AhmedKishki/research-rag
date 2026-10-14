@@ -682,12 +682,13 @@ def test_stopping_an_app_asks_the_process_behind_the_pid_the_app_recorded(
     (project.state_root / "research-rag-ui.pid").write_text(
         str(os.getpid()), encoding="utf-8"
     )
-    asked: list[tuple[int, Path]] = []
+    (project.state_root / "research-rag-ui.port").write_text("5051", encoding="utf-8")
+    asked: list[tuple[int, Path, int | None]] = []
     monkeypatch.setattr(
         update_module.ownership,
         "ask_to_stop",
-        lambda pid, root, *args, **kwargs: (
-            asked.append((pid, root))
+        lambda pid, root, *args, port=None, **kwargs: (
+            asked.append((pid, root, port))
             or ownership_module.Outcome(True, f"pid {pid} was asked to stop")
         ),
     )
@@ -696,7 +697,8 @@ def test_stopping_an_app_asks_the_process_behind_the_pid_the_app_recorded(
     stopped = update_module.stop_app(project, run)
 
     assert run.calls == []
-    assert asked == [(os.getpid(), project.project_root)]
+    # The recorded port proves an app whose command line names no project.
+    assert asked == [(os.getpid(), project.project_root, 5051)]
     assert stopped.stopped is True
     assert str(os.getpid()) in stopped.detail
 

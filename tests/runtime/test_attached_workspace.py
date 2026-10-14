@@ -681,6 +681,44 @@ def test_stop_will_not_signal_an_unrelated_live_process(
         reader.wait(timeout=30)
 
 
+def test_stop_ends_an_app_a_bare_call_started(
+    project: Path, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """A bare call's command line names no project; the recorded port proves it."""
+
+    config = _initialised(project, "Bare")
+    config.state_root.mkdir(parents=True, exist_ok=True)
+    program = tmp_path / "research-rag"
+    program.write_text(
+        "import signal, socket, sys, time\n"
+        "signal.signal(signal.SIGTERM, lambda *_: sys.exit(0))\n"
+        "server = socket.socket()\n"
+        "server.bind(('127.0.0.1', 0))\n"
+        "server.listen()\n"
+        "print(server.getsockname()[1], flush=True)\n"
+        "time.sleep(300)\n",
+        encoding="utf-8",
+    )
+    app = subprocess.Popen(
+        [sys.executable, str(program)], stdout=subprocess.PIPE, text=True
+    )
+    try:
+        assert app.stdout is not None
+        port = int(app.stdout.readline())
+        (config.state_root / PID_FILE).write_text(f"{app.pid}\n", encoding="utf-8")
+        (config.state_root / PORT_FILE).write_text(f"{port}\n", encoding="utf-8")
+        monkeypatch.setattr(cli, "project_app_state", lambda _root: {"app": {}})
+
+        report = cli._stop(_no_arguments("--project", "Bare", "stop"), config)
+
+        assert report["stopped"] is True, report["stop_refusal"]
+        assert app.wait(timeout=30) == 0
+    finally:
+        if app.poll() is None:
+            app.kill()
+            app.wait(timeout=30)
+
+
 def test_an_update_never_signals_a_record_that_names_a_group(
     project: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

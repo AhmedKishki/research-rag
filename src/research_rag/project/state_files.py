@@ -104,6 +104,17 @@ def recorded_pid(state_root: Path, portable_root: Path | None = None) -> int | N
     return pid if process_alive(pid) else None
 
 
+def recorded_port(state_root: Path, portable_root: Path | None = None) -> int | None:
+    """The port a project's app recorded, when the pid recorded beside it is alive."""
+
+    root = _state_root(state_root, portable_root)
+    try:
+        port = int((root / PORT_FILE).read_text(encoding="utf-8").strip())
+    except (OSError, ValueError):
+        return None
+    return port if recorded_pid(root) is not None else None
+
+
 @dataclass(frozen=True, slots=True)
 class ProjectState:
     """One project as a path, before any of it is resolved or served."""
@@ -176,5 +187,6 @@ __all__ = [
     "ProjectState",
     "process_alive",
     "recorded_pid",
+    "recorded_port",
     "resident_build",
 ]
