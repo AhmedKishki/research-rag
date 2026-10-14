@@ -30,7 +30,6 @@ import time
 import unicodedata
 from collections.abc import AsyncIterator, Iterator, Sequence
 from contextlib import (
-    AbstractContextManager,
     asynccontextmanager,
     contextmanager,
     nullcontext,
@@ -2594,7 +2593,7 @@ def _open_browser(url: str) -> None:
 
 def _clients(config: ResearchConfig) -> dict[str, Any]:
 
-    with _control(config) as control:
+    with nullcontext(connect(config)) as control:
         if control is None:
             return {
                 "running": False,
@@ -2612,7 +2611,7 @@ def _clients(config: ResearchConfig) -> dict[str, Any]:
 
 def _disconnect(args: argparse.Namespace, config: ResearchConfig) -> dict[str, Any]:
 
-    with _control(config) as control:
+    with nullcontext(connect(config)) as control:
         if control is None:
             raise ResearchError(
                 f"No app is running for {config.project_root}, so no client is "
@@ -2946,11 +2945,6 @@ async def _operations(config: ResearchConfig) -> AsyncIterator[Local | Remote]:
         yield local
 
 
-def _control(config: ResearchConfig) -> AbstractContextManager[Control | None]:
-
-    return nullcontext(connect(config))
-
-
 def _help_menu() -> str:
     """The whole menu: the order of the work, then the fact a first call needs.
 
@@ -3101,7 +3095,7 @@ async def _run(args: argparse.Namespace) -> CommandResult:
     if args.command == "clients":
         return CommandResult(payload=_clients(config))
     if args.command == "lan":
-        with _control(config) as control:
+        with nullcontext(connect(config)) as control:
             if control is None:
                 raise ResearchError("No app is running; run research-rag start.")
             return CommandResult(payload=control.set_lan(args.action == "enable"))

@@ -138,13 +138,6 @@ def client_identity(
     }
 
 
-def _headers(name: str, identity: Mapping[str, Any]) -> dict[str, str]:
-    return {
-        CLIENT_NAME_HEADER: name,
-        CLIENT_IDENTITY_HEADER: json.dumps(identity, separators=(",", ":")),
-    }
-
-
 class Backends:
     """Where each call goes: the app when it answers, a stand-in when it does not.
 
@@ -221,7 +214,15 @@ class Backends:
         """A session on the app's agent endpoint, named and located for its client list."""
 
         return ProxyClient(
-            StreamableHttpTransport(url, headers=_headers(self.name, self.identity)),
+            StreamableHttpTransport(
+                url,
+                headers={
+                    CLIENT_NAME_HEADER: self.name,
+                    CLIENT_IDENTITY_HEADER: json.dumps(
+                        self.identity, separators=(",", ":")
+                    ),
+                },
+            ),
             timeout=config.settings.work_budget_seconds + CALL_TIMEOUT_MARGIN_SECONDS,
             init_timeout=INIT_TIMEOUT_SECONDS,
         )
