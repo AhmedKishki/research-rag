@@ -27,6 +27,7 @@ from research_rag.corpus.pdf_backend import (
 )
 from research_rag.project.config import resolve_config
 from research_rag.project.policy import ResearchError
+from research_rag.project.support import REFLOWABLE_EXTRACTION_POLICY_VERSION
 from research_rag.storage.records import read_json, read_jsonl
 from tests.conftest import write_epub, write_pdf
 from tests.core.test_service import FakeDenseBackend, FakeUltraRAG
@@ -343,6 +344,63 @@ def test_incremental_build_passes_unchanged_legacy_pdf_through(
     # rather than claimed as Docling output.
     assert by_path["doc.pdf"]["extraction_backend"]["backend"] == "custom"
     assert "extraction_backend" not in by_path["book.epub"]
+
+
+def test_older_epub_rules_reread_the_epub_and_pass_the_pdf_through(
+    project: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An EPUB read under earlier HTML rules is read again; an unchanged PDF is not.
+
+    No source changes, so without the per-document version the ingest would be a
+    no-op and the EPUB would keep the text the earlier rules produced.
+    """
+
+    write_pdf(project / "sources" / "doc.pdf", ["Amber PDF evidence."], title="P")
+    write_epub(project / "sources" / "book.epub", "Cobalt EPUB evidence.", title="B")
+    config = _config(project)
+    _install_fake_worker(monkeypatch)
+
+    def ingest() -> dict[str, Any]:
+        return asyncio.run(
+            ResearchService(
+                config,
+                FakeUltraRAG(),
+                dense=FakeDenseBackend(),  # type: ignore[arg-type]
+            ).ingest(chunk_size=50, chunk_overlap=10)
+        )
+
+    first = ingest()
+    assert first["status"] == "ready"
+    manifest_path = Path(first["generation_root"]) / "manifest.json"
+    manifest = read_json(manifest_path)
+    for document in manifest["documents"]:
+        assert ("reflowable_extraction_policy_version" in document) is (
+            document["format"] == "epub"
+        )
+        document.pop("reflowable_extraction_policy_version", None)
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+
+    def unexpected_worker(**_kwargs: Any) -> dict[str, Any]:
+        raise AssertionError("the unchanged PDF must not be converted")
+
+    monkeypatch.setattr(extraction, "run_docling_batch", unexpected_worker)
+    second = ingest()
+
+    assert second["status"] == "ready"
+    assert second["reused_document_count"] == 1
+    assert second["rebuilt_document_count"] == 1
+    by_path = {
+        document["source_relative_path"]: document
+        for document in read_json(Path(second["generation_root"]) / "manifest.json")[
+            "documents"
+        ]
+    }
+    assert (
+        by_path["book.epub"]["reflowable_extraction_policy_version"]
+        == REFLOWABLE_EXTRACTION_POLICY_VERSION
+    )
+    assert "reflowable_extraction_policy_version" not in by_path["doc.pdf"]
+    assert ingest()["status"] == "unchanged"
 
 
 def test_a_changed_pdf_is_reextracted_with_docling(

@@ -21,6 +21,7 @@ from research_rag.project.support import (
     ARTIFACT_POLICY_VERSION,
     CLEANING_POLICY_VERSION,
     EXTRACTION_POLICY_VERSION,
+    REFLOWABLE_EXTRACTION_POLICY_VERSION,
     SCHEMA_VERSION,
     _checkpoint_identity,
 )
@@ -132,3 +133,26 @@ def test_backend_drift_is_diagnostic_and_pdf_scoped(
     )
     differences = status_module.generation_policy_differences(config, manifest, "test")
     assert ("extraction_backend" in differences) is (extension == ".pdf")
+
+
+def test_older_epub_rules_are_a_diagnostic_difference(tmp_path, monkeypatch) -> None:
+    config = resolve_config(tmp_path)
+    manifest = _manifest()
+    manifest["documents"] = [{"format": "pdf"}, {"format": "epub"}]
+    monkeypatch.setattr(
+        status_module, "pdf_backend_available", lambda backend, config: False
+    )
+
+    # The selected generation stays servable; ingest reads the EPUB again.
+    assert "reflowable_extraction" not in status_module.generation_upgrade_reasons(
+        config, manifest, "test"
+    )
+    assert "reflowable_extraction" in status_module.generation_policy_differences(
+        config, manifest, "test"
+    )
+    manifest["documents"][1]["reflowable_extraction_policy_version"] = (
+        REFLOWABLE_EXTRACTION_POLICY_VERSION
+    )
+    assert "reflowable_extraction" not in status_module.generation_policy_differences(
+        config, manifest, "test"
+    )

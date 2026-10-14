@@ -52,6 +52,13 @@ What is on disk, how it is read, and what a file's text says about itself.
 - An EPUB has no page geometry, so `extraction._is_epub_furniture` names it
   instead of measuring it, from the element's own `role`, `class`, and `id`. Only
   the markup is read, so a paragraph that mentions footnotes is untouched.
+- An element with `role="paragraph"` is read as a paragraph, because some journal
+  EPUBs print no `<p>` at all.
+- A note reference that follows text in its block is removed with the empty
+  anchor printed before it, so the sentence around it stays one unit and no
+  marker leaks into the text. A marker that opens its block is a note's own number
+  and stays. `extraction._is_epub_noteref` decides, from markup only, and the
+  removal counts on `removed_epub_furniture_elements`.
 - A reference list or note apparatus can span pages or EPUB elements.
   `extraction.strip_non_argument_units` reads the whole source in reading order.
   `text_quality.non_argument_removal_flags` decides each paragraph inside that

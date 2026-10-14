@@ -63,6 +63,7 @@ from ..project.support import (
     GENERATION_ID_PATTERN,
     INGESTION_IDENTITY_POLICY_VERSION,
     METADATA_STORAGE_POLICY,
+    REFLOWABLE_EXTRACTION_POLICY_VERSION,
     SCHEMA_VERSION,
     _atomic_to_thread,
     _checkpoint_identity,
@@ -77,6 +78,7 @@ from ..project.support import (
     _source_inventory,
     _source_stat_identity,
     _source_work_key,
+    reflowable_document_is_current,
 )
 from ..retrieval.artifact_lookup import (
     LOOKUP_RELATIVE_PATH,
@@ -1229,19 +1231,29 @@ class IngestionWorkflow:
                 # byte-identical, because the new generation must store something
                 # the old one does not. Ranking policy is deliberately absent: it
                 # is a runtime decision and never rewrites a generation.
+                reflowable_current = bool(
+                    snapshot is not None
+                    and all(
+                        reflowable_document_is_current(document)
+                        for document in snapshot.documents.values()
+                    )
+                )
                 reuse_axes_match = bool(
                     snapshot is not None
                     and snapshot.units_reusable
                     and snapshot.chunks_reusable
                     and snapshot.vectors_reusable
+                    and reflowable_current
                 )
                 if snapshot is not None and not reuse_axes_match:
                     LOGGER.debug(
                         "ingest: building because a reuse axis moved "
-                        "(units_reusable=%s chunks_reusable=%s vectors_reusable=%s)",
+                        "(units_reusable=%s chunks_reusable=%s vectors_reusable=%s "
+                        "reflowable_current=%s)",
                         snapshot.units_reusable,
                         snapshot.chunks_reusable,
                         snapshot.vectors_reusable,
+                        reflowable_current,
                     )
                 if (
                     reuse_axes_match
@@ -1375,6 +1387,9 @@ class IngestionWorkflow:
                         and snapshot.manifest.get("metadata_storage_policy")
                         == METADATA_STORAGE_POLICY
                         and document_id in snapshot.units_by_document
+                        # An EPUB or MOBI read under earlier HTML rules is read
+                        # again; a PDF is unaffected by those rules.
+                        and reflowable_document_is_current(previous_document)
                     )
                     # Units and chunks reuse independently. A header or chunk-size
                     # change keeps the units but forces the chunks to be derived
@@ -1455,6 +1470,9 @@ class IngestionWorkflow:
                                 return self._in_progress_result(checkpoint)
                             continue
                         document, units = prepared
+                        document["reflowable_extraction_policy_version"] = (
+                            REFLOWABLE_EXTRACTION_POLICY_VERSION
+                        )
                         atomic_write_json(artifact_root / "document.json", document)
                         atomic_write_jsonl(
                             artifact_root / "unit-batches" / "00000000.jsonl", units
@@ -1490,6 +1508,9 @@ class IngestionWorkflow:
                                 return self._in_progress_result(checkpoint)
                             continue
                         document, total = prepared
+                        document["reflowable_extraction_policy_version"] = (
+                            REFLOWABLE_EXTRACTION_POLICY_VERSION
+                        )
                         atomic_write_json(artifact_root / "document.json", document)
                         state = {
                             "reused": False,

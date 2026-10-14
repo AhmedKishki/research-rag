@@ -118,6 +118,11 @@ _AUTHOR_MARKER = re.compile(r"(?:\d+(?:\s*,\s*\d+)*|[*∗†‡§])+$")
 _EPUB_HEADING_ELEMENTS = frozenset({"h1", "h2", "h3", "h4", "h5", "h6"})
 _EPUB_CONTENT_ELEMENTS = frozenset({"p", "li", "blockquote", "table"})
 _EPUB_SEMANTIC_ELEMENTS = _EPUB_HEADING_ELEMENTS | _EPUB_CONTENT_ELEMENTS
+# A note reference prints a number or a note symbol, sometimes bracketed, and
+# links to its note. The inline elements a publisher wraps it in print nothing
+# else, so they go with it.
+_EPUB_NOTE_MARKER_TEXT = re.compile(r"[\[(]?(?:\d{1,4}|[*∗†‡§¶]{1,3})[\])]?")
+_EPUB_MARKER_WRAPPERS = frozenset({"sup", "span", "small"})
 
 
 @dataclass(frozen=True, slots=True)
@@ -969,6 +974,113 @@ def _epub_element_path(tag: Tag) -> str:
     return "/" + "/".join(reversed(parts))
 
 
+def _epub_block_name(tag: Tag) -> str:
+    """The element a tag stands for when the reader divides text into blocks.
+
+    Some journal EPUBs print every paragraph as `<div role="paragraph">` and
+    contain no `<p>` at all, so an element with that role is read as the
+    paragraph it declares itself to be.
+    """
+
+    name = str(tag.name).casefold()
+    if str(tag.get("role") or "").casefold() == "paragraph":
+        return "p"
+    return name
+
+
+def _epub_previous_sibling(tag: Tag) -> Tag | None:
+    """The element printed just before a tag, ignoring whitespace and comments."""
+
+    sibling = tag.previous_sibling
+    while isinstance(sibling, NavigableString) and (
+        isinstance(sibling, Comment) or not sibling.strip()
+    ):
+        sibling = sibling.previous_sibling
+    return sibling if isinstance(sibling, Tag) else None
+
+
+def _is_empty_epub_anchor(tag: Tag | None) -> bool:
+    return (
+        tag is not None
+        and _epub_fragment(tag) is not None
+        and tag.find(True) is None
+        and not tag.get_text(strip=True)
+    )
+
+
+def _epub_marker_extent(link: Tag, block: Tag) -> Tag:
+    """The link, or the inline wrappers around it that print nothing else."""
+
+    extent = link
+    marker = normalize_inline_text(link.get_text())
+    while (
+        isinstance(extent.parent, Tag)
+        and extent.parent is not block
+        and str(extent.parent.name).casefold() in _EPUB_MARKER_WRAPPERS
+        and normalize_inline_text(extent.parent.get_text()) == marker
+    ):
+        extent = extent.parent
+    return extent
+
+
+def _is_epub_noteref(link: Tag, block: Tag) -> bool:
+    """Whether a link is a note reference rather than linked prose.
+
+    The link points at a fragment and prints only a marker, and its markup says it
+    is a reference: the publisher's `noteref` type, a superscript, or an anchor the
+    note links back to, on the link or printed just before it. A cross-reference
+    such as "chapter 3" prints the same digit but carries none of those, so it
+    keeps its text.
+    """
+
+    if "#" not in str(link.get("href") or ""):
+        return False
+    if not _EPUB_NOTE_MARKER_TEXT.fullmatch(normalize_inline_text(link.get_text())):
+        return False
+    if "noteref" in str(link.get("epub:type") or "").casefold().split():
+        return True
+    if link.find("sup") is not None or link.find_parent("sup") is not None:
+        return True
+    if _epub_fragment(link) is not None:
+        return True
+    return _is_empty_epub_anchor(
+        _epub_previous_sibling(_epub_marker_extent(link, block))
+    )
+
+
+def _drop_epub_noterefs(block: Tag) -> int:
+    """Remove the note references that follow text in a block; return the count.
+
+    A reference is a pointer to a note, not evidence. Its anchor is where the note
+    links back to, so leaving it would split the sentence around it into two units
+    and print the marker at the start of the second. The empty anchor printed just
+    before a reference is that same way back, and it goes with the reference. A
+    marker that opens its block is a note's own number in the notes section, and
+    it stays.
+    """
+
+    references: list[Tag] = []
+    seen_text = False
+    for node in block.descendants:
+        if isinstance(node, Comment):
+            continue
+        if isinstance(node, NavigableString):
+            seen_text = seen_text or bool(node.strip())
+        elif (
+            seen_text
+            and str(node.name).casefold() == "a"
+            and _is_epub_noteref(node, block)
+        ):
+            references.append(node)
+    for link in references:
+        extent = _epub_marker_extent(link, block)
+        previous = _epub_previous_sibling(extent)
+        if previous is not None and _is_empty_epub_anchor(previous):
+            previous.decompose()
+        extent.decompose()
+    return len(references)
+
+
 def _epub_semantic_blocks(
     soup: BeautifulSoup,
 ) -> list[tuple[Tag, tuple[str, str] | None]]:
@@ -979,10 +1091,10 @@ def _epub_semantic_blocks(
     blocks = [
         tag
         for tag in tags
-        if str(tag.name).casefold() in _EPUB_SEMANTIC_ELEMENTS
+        if _epub_block_name(tag) in _EPUB_SEMANTIC_ELEMENTS
         and not any(
             isinstance(parent, Tag)
-            and str(parent.name).casefold() in _EPUB_SEMANTIC_ELEMENTS
+            and _epub_block_name(parent) in _EPUB_SEMANTIC_ELEMENTS
             for parent in tag.parents
         )
     ]
@@ -1028,7 +1140,13 @@ def _epub_text_segments(
         if text:
             segments.append((text, active_anchor))
 
+    # A nested block ends a paragraph where it closes as well as where it opens,
+    # so text after a quotation inside a paragraph is not run into its last word.
+    open_blocks: list[set[int]] = []
     for node in element.descendants:
+        while open_blocks and id(node) not in open_blocks[-1]:
+            open_blocks.pop()
+            parts.append("\n\n")
         if isinstance(node, Comment):
             continue
         if isinstance(node, Tag):
@@ -1036,11 +1154,12 @@ def _epub_text_segments(
             if anchor is not None:
                 flush()
                 active_anchor = (anchor[0], "nested", anchor[1])
-            name = str(node.name).casefold()
+            name = _epub_block_name(node)
             if name == "br":
                 parts.append("\n")
             elif name in _EPUB_CONTENT_ELEMENTS:
                 parts.append("\n\n")
+                open_blocks.append({id(inner) for inner in node.descendants})
             continue
         if isinstance(node, NavigableString):
             parts.append(str(node))
@@ -1250,7 +1369,9 @@ def _extract_html_item(
         )
 
     for element, preceding_fragment in _epub_semantic_blocks(soup):
-        element_name = str(element.name).casefold()
+        element_name = _epub_block_name(element)
+        if element_name != "table":
+            removals["removed_epub_furniture_elements"] += _drop_epub_noterefs(element)
         element_fragment = _epub_fragment(element)
         initial_anchor = (
             (element_fragment[0], "element", element_fragment[1])
