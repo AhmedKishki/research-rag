@@ -287,3 +287,48 @@ def test_lookup_rejects_duplicate_document_positions_and_unsafe_artifacts(
     chunks_path.symlink_to(units_path)
     with pytest.raises(ArtifactLookupError, match="missing or unsafe"):
         build_artifact_lookup(chunks_path, units_path, lookup_path)
+
+
+def test_a_passage_window_skips_unretrievable_neighbours(tmp_path: Path) -> None:
+    """`get_passage` reads its neighbours from the index, not the whole document.
+
+    A neighbour whose stored verdict carries a flag is passed over, so the window
+    still reaches the nearest retrievable passage on each side.
+    """
+
+    texts = [
+        "Opening evidence.",
+        "First argument.",
+        ". . . . . .",
+        "The target passage.",
+        "Closing argument.",
+        "Late evidence.",
+    ]
+    chunks_path = tmp_path / "chunks.jsonl"
+    units_path = tmp_path / "units.jsonl"
+    write_jsonl(
+        chunks_path,
+        [
+            {
+                "chunk_id": f"c{index}",
+                "document_id": "document-a",
+                "document_chunk_index": index,
+                "contents": text,
+            }
+            for index, text in enumerate(texts)
+        ],
+    )
+    write_jsonl(units_path, [{"id": "unit-a", "document_id": "document-a"}])
+    lookup = ensure_artifact_lookup(
+        chunks_path, units_path, tmp_path / "artifact-lookup.sqlite3"
+    )
+
+    window = lookup.passage_window("document-a", 3, radius=1)
+    assert [item["chunk_id"] for item in window] == ["c1", "c3", "c4"]
+    assert [
+        item["chunk_id"] for item in lookup.passage_window("document-a", 0, radius=2)
+    ] == [
+        "c0",
+        "c1",
+        "c3",
+    ]

@@ -131,6 +131,33 @@ def _document_loss_totals(documents: Iterable[dict[str, Any]]) -> dict[str, int]
     }
 
 
+def _staged_chunk_census(chunks_path: Path) -> dict[str, Any]:
+    """Count a build's chunks by kind, withheld reason, and dense-token audit."""
+
+    kinds: Counter[str] = Counter()
+    reasons: Counter[str] = Counter()
+    withheld = audited = truncated = maximum = 0
+    for item in iter_jsonl(chunks_path):
+        kinds[str(item.get("content_kind") or "prose")] += 1
+        found = text_corruption_reasons(str(item.get("contents") or ""))
+        if found:
+            withheld += 1
+            reasons.update(found)
+        token_count = item.get("embedding_token_count")
+        if isinstance(token_count, int) and not isinstance(token_count, bool):
+            audited += 1
+            maximum = max(maximum, token_count)
+            truncated += bool(item.get("dense_truncated"))
+    return {
+        "content_kind_counts": dict(sorted(kinds.items())),
+        "withheld_chunk_count": withheld,
+        "withheld_chunk_reasons": dict(sorted(reasons.items())),
+        "audited_chunk_count": audited,
+        "dense_truncated_chunk_count": truncated,
+        "maximum_embedding_token_count": maximum,
+    }
+
+
 class _SourceChangedDuringIngest(RuntimeError):
     pass
 
@@ -1135,6 +1162,94 @@ class IngestionWorkflow:
         timings = checkpoint.setdefault("phase_timings_seconds", {})
         timings[phase] = float(timings.get(phase) or 0.0) + elapsed
 
+    def _assemble_staged_corpus(
+        self, staging_root: Path, checkpoint: dict[str, Any]
+    ) -> None:
+        """Write the build's corpus, chunks, and embedding batches from staged sources.
+
+        One pass over every staged source, so it runs off the event loop. The
+        counts it derives are recorded on the checkpoint the caller commits.
+        """
+
+        skipped = {
+            item["source_relative_path"]
+            for item in checkpoint.get("skipped_sources", [])
+        }
+        sources = [
+            self._source_artifact_root(staging_root, relative)
+            for relative in checkpoint["selected_source_paths"]
+            if relative not in skipped
+        ]
+        documents: list[dict[str, Any]] = []
+        discarded: Counter[str] = Counter()
+        for artifact_root in sources:
+            document = read_json(artifact_root / "document.json")
+            state = read_json(artifact_root / "state.json")
+            if not isinstance(document, dict) or not isinstance(state, dict):
+                raise _BuildCannotResume("Invalid staged source artifacts")
+            documents.append(document)
+            for key in (
+                "discarded_empty_chunks",
+                "discarded_symbol_only_chunks",
+                "discarded_corrupt_chunks",
+            ):
+                discarded[key] += int(state.get(key) or 0)
+        if not documents:
+            raise _BuildCannotResume(
+                "No clean sources remain; the current generation is unchanged. "
+                + " ".join(
+                    item["reason"] for item in checkpoint.get("skipped_sources", [])
+                )
+            )
+        counts = {"units": 0, "chunks": 0}
+
+        def staged_records(filename: str, kind: str) -> Iterator[dict[str, Any]]:
+            for artifact_root in sources:
+                for record in iter_jsonl(artifact_root / filename):
+                    counts[kind] += 1
+                    yield record
+
+        chunks_path = staging_root / "chunks" / "chunks.jsonl"
+        atomic_write_jsonl(
+            staging_root / "corpus" / "extracted-units.jsonl",
+            staged_records("units.jsonl", "units"),
+        )
+        atomic_write_jsonl(chunks_path, staged_records("chunks.jsonl", "chunks"))
+        batches_root = staging_root / "work" / "chunk-batches"
+        batch_size = self.config.settings.embedding_batch_size
+        offset = 0
+        batch: list[dict[str, Any]] = []
+        for chunk in iter_jsonl(chunks_path):
+            batch.append(chunk)
+            if len(batch) == batch_size:
+                atomic_write_jsonl(
+                    batches_root / f"{offset:012d}.jsonl", batch, fsync_parent=False
+                )
+                offset += len(batch)
+                batch = []
+        if batch:
+            atomic_write_jsonl(
+                batches_root / f"{offset:012d}.jsonl", batch, fsync_parent=False
+            )
+        if batches_root.is_dir():
+            # One directory fsync covers every batch before embedding resumes
+            # from any of them.
+            fsync_directories([batches_root])
+        checkpoint["document_count"] = len(documents)
+        checkpoint["extraction_unit_count"] = counts["units"]
+        checkpoint["chunk_count"] = counts["chunks"]
+        checkpoint["discarded_empty_chunk_count"] = discarded["discarded_empty_chunks"]
+        checkpoint["discarded_symbol_only_chunk_count"] = discarded[
+            "discarded_symbol_only_chunks"
+        ]
+        checkpoint["discarded_corrupt_chunk_count"] = discarded[
+            "discarded_corrupt_chunks"
+        ]
+        checkpoint["excluded_corrupt_unit_count"] = sum(
+            int(document.get("excluded_corrupt_unit_count") or 0)
+            for document in documents
+        )
+
     async def _advance_ingestion(  # noqa: C901 — split is tracked in TODO.md
         self,
         *,
@@ -1153,9 +1268,18 @@ class IngestionWorkflow:
             source.source_relative_path: source for source in scan.selected
         }
         selected_paths = [str(item) for item in checkpoint["selected_source_paths"]]
+
+        async def io(function: Any, /, *args: Any, **kwargs: Any) -> Any:
+            # Staged reads, writes, and fsyncs leave the event loop the
+            # workspace, MCP, and control API share.
+            return await _atomic_to_thread(function, *args, **kwargs)
+
         snapshot = None
+        # The reuse axes this call has loaded into the snapshot.
+        loaded_axes: set[str] = set()
         if not force_recompute:
-            snapshot = load_reuse_snapshot(
+            snapshot = await io(
+                load_reuse_snapshot,
                 current,
                 schema_version=SCHEMA_VERSION,
                 extraction_policy_version=EXTRACTION_POLICY_VERSION,
@@ -1179,7 +1303,7 @@ class IngestionWorkflow:
         def budget_expired() -> bool:
             return time.perf_counter() >= deadline
 
-        def record_skip(record: dict[str, str]) -> None:
+        async def record_skip(record: dict[str, str]) -> None:
             relative = record["source_relative_path"]
             skipped = checkpoint.setdefault("skipped_sources", [])
             if not any(item["source_relative_path"] == relative for item in skipped):
@@ -1187,7 +1311,7 @@ class IngestionWorkflow:
             for key in ("extracted_source_paths", "chunked_source_paths"):
                 if relative not in checkpoint[key]:
                     checkpoint[key].append(relative)
-            self._write_checkpoint(staging_root, checkpoint)
+            await io(self._write_checkpoint, staging_root, checkpoint)
 
         async def extract_source(operation: Any, *args: Any, **kwargs: Any) -> Any:
             # Only typed failures from the source-local extractor are omissions.
@@ -1209,11 +1333,11 @@ class IngestionWorkflow:
                 }
                 # Commit the source decision first so a lost checkpoint write
                 # can recover it without repeating partially extracted work.
-                atomic_write_json(state_path, skipped_state)
+                await io(atomic_write_json, state_path, skipped_state)
                 self._add_phase_time(
                     checkpoint, "extraction", time.perf_counter() - started
                 )
-                record_skip(record)
+                await record_skip(record)
                 return None
 
         def source_records() -> list[dict[str, Any]]:
@@ -1282,7 +1406,7 @@ class IngestionWorkflow:
                         time.perf_counter() - started,
                     )
                     digests[source.source_relative_path] = digest
-                    self._write_checkpoint(staging_root, checkpoint)
+                    await io(self._write_checkpoint, staging_root, checkpoint)
                     if budget_expired():
                         return self._in_progress_result(checkpoint)
                     continue
@@ -1356,7 +1480,7 @@ class IngestionWorkflow:
                         )
                     else:
                         self._loaded_generation = str(manifest["generation_id"])
-                        shutil.rmtree(staging_root, ignore_errors=True)
+                        await io(shutil.rmtree, staging_root, ignore_errors=True)
                         LOGGER.debug(
                             "ingest: build %s no-op; selected generation unchanged",
                             checkpoint.get("build_id"),
@@ -1389,12 +1513,13 @@ class IngestionWorkflow:
                             ),
                         }
                 checkpoint["phase"] = "extraction"
-                self._write_checkpoint(staging_root, checkpoint)
+                await io(self._write_checkpoint, staging_root, checkpoint)
                 continue
 
             if phase == "extraction":
-                if snapshot is not None and not snapshot.units_by_document:
-                    snapshot = load_reuse_snapshot(
+                if snapshot is not None and "units" not in loaded_axes:
+                    snapshot = await io(
+                        load_reuse_snapshot,
                         current,
                         schema_version=SCHEMA_VERSION,
                         extraction_policy_version=EXTRACTION_POLICY_VERSION,
@@ -1410,6 +1535,7 @@ class IngestionWorkflow:
                         load_vectors=False,
                         embedding=self.config.settings.embedding_facts,
                     )
+                    loaded_axes.update({"units", "chunks"})
                 completed = set(checkpoint["extracted_source_paths"])
                 relative = next(
                     (path for path in selected_paths if path not in completed),
@@ -1417,7 +1543,7 @@ class IngestionWorkflow:
                 )
                 if relative is None:
                     checkpoint["phase"] = "chunking"
-                    self._write_checkpoint(staging_root, checkpoint)
+                    await io(self._write_checkpoint, staging_root, checkpoint)
                     continue
                 source = sources_by_path[relative]
                 source_digest = str(checkpoint["source_digests"][relative])
@@ -1425,7 +1551,7 @@ class IngestionWorkflow:
                 artifact_root.mkdir(parents=True, exist_ok=True)
                 started = time.perf_counter()
                 state_path = artifact_root / "state.json"
-                state = read_json(state_path) if state_path.exists() else None
+                state = await io(read_json, state_path) if state_path.exists() else None
                 if state is None:
                     previous_source = (
                         snapshot.source_files.get(relative)
@@ -1477,12 +1603,16 @@ class IngestionWorkflow:
                         # so an unchanged legacy PDF is passed through as legacy
                         # rather than re-extracted or relabelled as Docling.
                         document = self._document_with_provenance(document, source)
-                        units = [
-                            dict(item)
-                            for item in snapshot.units_by_document[document_id]
-                        ]
-                        atomic_write_json(artifact_root / "document.json", document)
-                        atomic_write_jsonl(artifact_root / "units.jsonl", units)
+                        # Each lookup reads fresh records, so they need no copy.
+                        units = await io(
+                            snapshot.units_by_document.__getitem__, document_id
+                        )
+                        await io(
+                            atomic_write_json, artifact_root / "document.json", document
+                        )
+                        await io(
+                            atomic_write_jsonl, artifact_root / "units.jsonl", units
+                        )
                         state = {
                             "reused": True,
                             "reuse_chunks": reusable_chunks,
@@ -1491,7 +1621,7 @@ class IngestionWorkflow:
                             "discarded_symbol_only_chunks": 0,
                             "discarded_corrupt_chunks": 0,
                         }
-                        atomic_write_json(state_path, state)
+                        await io(atomic_write_json, state_path, state)
                         checkpoint["extracted_source_paths"].append(relative)
                         checkpoint["reused_document_count"] = (
                             int(checkpoint.get("reused_document_count") or 0) + 1
@@ -1523,7 +1653,7 @@ class IngestionWorkflow:
                             )
                             + 2
                         )
-                        atomic_write_json(state_path, state)
+                        await io(atomic_write_json, state_path, state)
                     elif source.extension == ".mobi":
                         prepared = await extract_source(
                             extract_mobi, source, checkpoint["source_digests"][relative]
@@ -1536,9 +1666,13 @@ class IngestionWorkflow:
                         document["reflowable_extraction_policy_version"] = (
                             REFLOWABLE_EXTRACTION_POLICY_VERSION
                         )
-                        atomic_write_json(artifact_root / "document.json", document)
-                        atomic_write_jsonl(
-                            artifact_root / "unit-batches" / "00000000.jsonl", units
+                        await io(
+                            atomic_write_json, artifact_root / "document.json", document
+                        )
+                        await io(
+                            atomic_write_jsonl,
+                            artifact_root / "unit-batches" / "00000000.jsonl",
+                            units,
                         )
                         state = {
                             "reused": False,
@@ -1559,7 +1693,7 @@ class IngestionWorkflow:
                         checkpoint["extraction_work_completed"] = (
                             int(checkpoint.get("extraction_work_completed") or 0) + 1
                         )
-                        atomic_write_json(state_path, state)
+                        await io(atomic_write_json, state_path, state)
                     else:
                         prepared = await extract_source(
                             prepare_epub_extraction,
@@ -1574,7 +1708,9 @@ class IngestionWorkflow:
                         document["reflowable_extraction_policy_version"] = (
                             REFLOWABLE_EXTRACTION_POLICY_VERSION
                         )
-                        atomic_write_json(artifact_root / "document.json", document)
+                        await io(
+                            atomic_write_json, artifact_root / "document.json", document
+                        )
                         state = {
                             "reused": False,
                             "extraction_stage": "epub_items",
@@ -1594,26 +1730,26 @@ class IngestionWorkflow:
                         checkpoint["extraction_work_completed"] = (
                             int(checkpoint.get("extraction_work_completed") or 0) + 1
                         )
-                        atomic_write_json(state_path, state)
+                        await io(atomic_write_json, state_path, state)
                     self._add_phase_time(
                         checkpoint,
                         "extraction",
                         time.perf_counter() - started,
                     )
-                    self._write_checkpoint(staging_root, checkpoint)
+                    await io(self._write_checkpoint, staging_root, checkpoint)
                     if budget_expired():
                         return self._in_progress_result(checkpoint)
                     continue
 
                 extraction_stage = str(state["extraction_stage"])
                 if extraction_stage == "skipped":
-                    record_skip(state["skipped_source"])
+                    await record_skip(state["skipped_source"])
                     if budget_expired():
                         return self._in_progress_result(checkpoint)
                     continue
                 if extraction_stage == "complete":
-                    document = read_json(artifact_root / "document.json")
-                    units = read_jsonl(artifact_root / "units.jsonl")
+                    document = await io(read_json, artifact_root / "document.json")
+                    units = await io(read_jsonl, artifact_root / "units.jsonl")
                     if (
                         not isinstance(document, dict)
                         or not units
@@ -1642,7 +1778,9 @@ class IngestionWorkflow:
                     page_batch_size = int(state.get("page_batch_size") or 1)
                     document_path = artifact_root / "document.json"
                     existing_document = (
-                        read_json(document_path) if document_path.exists() else None
+                        await io(read_json, document_path)
+                        if document_path.exists()
+                        else None
                     )
                     docling_env = await self._ensure_docling_environment()
                     current_backend = docling_backend_record_from_env(docling_env)
@@ -1658,8 +1796,12 @@ class IngestionWorkflow:
                             # append this environment's output onto them: discard
                             # only this source's unfinished work and convert it
                             # again from the first page.
-                            self._rescope_pdf_pages_for_environment(
-                                artifact_root, state, state_path, checkpoint
+                            await io(
+                                self._rescope_pdf_pages_for_environment,
+                                artifact_root,
+                                state,
+                                state_path,
+                                checkpoint,
                             )
                             existing_document = None
                     index = int(state["next_index"])
@@ -1684,7 +1826,7 @@ class IngestionWorkflow:
                         prepared_batch
                     )
                     if not document_path.exists():
-                        atomic_write_json(document_path, document)
+                        await io(atomic_write_json, document_path, document)
                     accumulated_diagnostics = {
                         str(key): int(value)
                         for key, value in (
@@ -1700,12 +1842,13 @@ class IngestionWorkflow:
                     # so finalize reads a complete sequence whatever the worker
                     # emitted for a blank page.
                     for page_index in range(index, end_index):
-                        atomic_write_jsonl(
+                        await io(
+                            atomic_write_jsonl,
                             artifact_root / "unit-batches" / f"{page_index:08d}.jsonl",
                             pages.get(page_index, []),
                             fsync_parent=False,
                         )
-                    fsync_directories([artifact_root / "unit-batches"])
+                    await io(fsync_directories, [artifact_root / "unit-batches"])
                     state["removals"] = merge_removal_counts(
                         state.get("removals"), batch_removals
                     )
@@ -1719,15 +1862,15 @@ class IngestionWorkflow:
                     if end_index >= total:
                         state["extraction_stage"] = "finalize"
                         state["next_index"] = 0
-                    atomic_write_json(state_path, state)
+                    await io(atomic_write_json, state_path, state)
                 elif extraction_stage == "epub_items":
                     index = int(state["next_index"])
                     total = int(state["total"])
                     if index >= total:
                         state["extraction_stage"] = "finalize"
-                        atomic_write_json(state_path, state)
+                        await io(atomic_write_json, state_path, state)
                         continue
-                    document = read_json(artifact_root / "document.json")
+                    document = await io(read_json, artifact_root / "document.json")
                     extracted = await extract_source(
                         extract_epub_spine_item,
                         source,
@@ -1745,7 +1888,8 @@ class IngestionWorkflow:
                             state.get("removals"),
                             removed,
                         )
-                        atomic_write_jsonl(
+                        await io(
+                            atomic_write_jsonl,
                             artifact_root / "unit-batches" / f"{page_index:08d}.jsonl",
                             batch,
                             fsync_parent=False,
@@ -1757,17 +1901,21 @@ class IngestionWorkflow:
                     checkpoint["extraction_work_completed"] = (
                         int(checkpoint.get("extraction_work_completed") or 0) + 1
                     )
-                    atomic_write_json(state_path, state, fsync_parent=False)
-                    fsync_directories([artifact_root / "unit-batches", artifact_root])
+                    await io(atomic_write_json, state_path, state, fsync_parent=False)
+                    await io(
+                        fsync_directories,
+                        [artifact_root / "unit-batches", artifact_root],
+                    )
                 elif extraction_stage == "finalize":
                     units = []
                     for index in range(int(state["total"])):
                         units.extend(
-                            read_jsonl(
-                                artifact_root / "unit-batches" / f"{index:08d}.jsonl"
+                            await io(
+                                read_jsonl,
+                                artifact_root / "unit-batches" / f"{index:08d}.jsonl",
                             )
                         )
-                    document = read_json(artifact_root / "document.json")
+                    document = await io(read_json, artifact_root / "document.json")
                     document["empty_units"] = int(state.get("empty_units") or 0)
                     if state.get("docling_diagnostics"):
                         document["docling_diagnostics"] = {
@@ -1791,11 +1939,15 @@ class IngestionWorkflow:
                         if budget_expired():
                             return self._in_progress_result(checkpoint)
                         continue
-                    atomic_write_json(artifact_root / "document.json", document)
-                    atomic_write_jsonl(artifact_root / "units.jsonl", retained)
+                    await io(
+                        atomic_write_json, artifact_root / "document.json", document
+                    )
+                    await io(
+                        atomic_write_jsonl, artifact_root / "units.jsonl", retained
+                    )
                     units = retained
                     state["extraction_stage"] = "complete"
-                    atomic_write_json(state_path, state)
+                    await io(atomic_write_json, state_path, state)
                     checkpoint["extracted_source_paths"].append(relative)
                     checkpoint["rebuilt_document_count"] = (
                         int(checkpoint.get("rebuilt_document_count") or 0) + 1
@@ -1812,14 +1964,15 @@ class IngestionWorkflow:
                     "extraction",
                     time.perf_counter() - started,
                 )
-                self._write_checkpoint(staging_root, checkpoint)
+                await io(self._write_checkpoint, staging_root, checkpoint)
                 if budget_expired():
                     return self._in_progress_result(checkpoint)
                 continue
 
             if phase == "chunking":
-                if snapshot is not None and not snapshot.chunks_by_document:
-                    snapshot = load_reuse_snapshot(
+                if snapshot is not None and "chunks" not in loaded_axes:
+                    snapshot = await io(
+                        load_reuse_snapshot,
                         current,
                         schema_version=SCHEMA_VERSION,
                         extraction_policy_version=EXTRACTION_POLICY_VERSION,
@@ -1835,6 +1988,7 @@ class IngestionWorkflow:
                         load_vectors=False,
                         embedding=self.config.settings.embedding_facts,
                     )
+                    loaded_axes.update({"units", "chunks"})
                 completed = set(checkpoint["chunked_source_paths"])
                 relative = next(
                     (path for path in selected_paths if path not in completed),
@@ -1842,14 +1996,14 @@ class IngestionWorkflow:
                 )
                 if relative is None:
                     checkpoint["phase"] = "assembly"
-                    self._write_checkpoint(staging_root, checkpoint)
+                    await io(self._write_checkpoint, staging_root, checkpoint)
                     continue
                 artifact_root = self._source_artifact_root(staging_root, relative)
-                state = read_json(artifact_root / "state.json")
-                document = read_json(artifact_root / "document.json")
+                state = await io(read_json, artifact_root / "state.json")
+                document = await io(read_json, artifact_root / "document.json")
                 units = units_cache.get(relative)
                 if units is None:
-                    units = read_jsonl(artifact_root / "units.jsonl")
+                    units = await io(read_jsonl, artifact_root / "units.jsonl")
                     units_cache[relative] = units
                 started = time.perf_counter()
                 if (
@@ -1859,12 +2013,10 @@ class IngestionWorkflow:
                     and state.get("reuse_chunks", True)
                     and snapshot is not None
                 ):
-                    chunks = [
-                        dict(item)
-                        for item in snapshot.chunks_by_document[
-                            str(document["document_id"])
-                        ]
-                    ]
+                    chunks = await io(
+                        snapshot.chunks_by_document.__getitem__,
+                        str(document["document_id"]),
+                    )
                     if not snapshot.vectors_reusable:
                         # Reused chunks keep their text, but the token count and
                         # truncation flag are specific to the model they were
@@ -1896,8 +2048,8 @@ class IngestionWorkflow:
                         checkpoint["chunking_work_total"] = int(
                             checkpoint.get("chunking_work_total") or 0
                         ) + len(units)
-                        atomic_write_json(artifact_root / "state.json", state)
-                        self._write_checkpoint(staging_root, checkpoint)
+                        await io(atomic_write_json, artifact_root / "state.json", state)
+                        await io(self._write_checkpoint, staging_root, checkpoint)
                         if budget_expired():
                             return self._in_progress_result(checkpoint)
                         continue
@@ -1913,7 +2065,7 @@ class IngestionWorkflow:
                         # A handoff file is rewritten before every call and
                         # deleted afterwards, so it needs visibility, not
                         # durability.
-                        write_handoff_jsonl(input_path, batch_units)
+                        await io(write_handoff_jsonl, input_path, batch_units)
                         working_path.unlink(missing_ok=True)
                         await self.lexical.chunk(
                             input_path,
@@ -1924,7 +2076,7 @@ class IngestionWorkflow:
                         raw_by_unit: defaultdict[str, list[dict[str, Any]]] = (
                             defaultdict(list)
                         )
-                        for raw in read_jsonl(working_path):
+                        for raw in await io(read_jsonl, working_path):
                             raw_by_unit[str(raw.get("doc_id") or "")].append(raw)
                         working_path.unlink(missing_ok=True)
                         input_path.unlink(missing_ok=True)
@@ -1943,7 +2095,8 @@ class IngestionWorkflow:
                         # in `_enrich_chunks` and the resume boundary per unit are
                         # the same as when each unit had its own call.
                         for position, unit in enumerate(batch_units):
-                            atomic_write_jsonl(
+                            await io(
+                                atomic_write_jsonl,
                                 chunking_root / f"{chunked_count + position:08d}.jsonl",
                                 raw_by_unit.get(str(unit["id"]), []),
                                 fsync_parent=False,
@@ -1952,28 +2105,30 @@ class IngestionWorkflow:
                         checkpoint["chunking_work_completed"] = int(
                             checkpoint.get("chunking_work_completed") or 0
                         ) + len(batch_units)
-                        atomic_write_json(
+                        await io(
+                            atomic_write_json,
                             artifact_root / "state.json",
                             state,
                             fsync_parent=False,
                         )
                         # The whole batch is on disk before the checkpoint that
                         # claims it is complete.
-                        fsync_directories([chunking_root, artifact_root])
+                        await io(fsync_directories, [chunking_root, artifact_root])
                         self._add_phase_time(
                             checkpoint,
                             "chunking",
                             time.perf_counter() - started,
                         )
-                        self._write_checkpoint(staging_root, checkpoint)
+                        await io(self._write_checkpoint, staging_root, checkpoint)
                         if budget_expired():
                             return self._in_progress_result(checkpoint)
                         continue
                     raw_chunks: list[dict[str, Any]] = []
                     for index in range(len(units)):
                         raw_chunks.extend(
-                            read_jsonl(
-                                artifact_root / "chunking" / f"{index:08d}.jsonl"
+                            await io(
+                                read_jsonl,
+                                artifact_root / "chunking" / f"{index:08d}.jsonl",
                             )
                         )
                     (
@@ -1981,7 +2136,8 @@ class IngestionWorkflow:
                         discarded_empty,
                         discarded_symbol_only,
                         discarded_corrupt,
-                    ) = _enrich_chunks(
+                    ) = await io(
+                        _enrich_chunks,
                         raw_chunks,
                         units,
                         [document],
@@ -2000,142 +2156,41 @@ class IngestionWorkflow:
                         checkpoint.get("rebuilt_chunk_count") or 0
                     ) + len(chunks)
                     state["chunking_stage"] = "complete"
-                atomic_write_jsonl(artifact_root / "chunks.jsonl", chunks)
+                await io(atomic_write_jsonl, artifact_root / "chunks.jsonl", chunks)
                 state["discarded_empty_chunks"] = discarded_empty
                 state["discarded_symbol_only_chunks"] = discarded_symbol_only
                 state["discarded_corrupt_chunks"] = discarded_corrupt
-                atomic_write_json(artifact_root / "state.json", state)
+                await io(atomic_write_json, artifact_root / "state.json", state)
                 self._add_phase_time(
                     checkpoint,
                     "chunking",
                     time.perf_counter() - started,
                 )
                 checkpoint["chunked_source_paths"].append(relative)
-                self._write_checkpoint(staging_root, checkpoint)
+                units_cache.pop(relative, None)
+                await io(self._write_checkpoint, staging_root, checkpoint)
                 if budget_expired():
                     return self._in_progress_result(checkpoint)
                 continue
 
             if phase == "assembly":
                 started = time.perf_counter()
-                documents: list[dict[str, Any]] = []
-                discarded_empty_chunks = 0
-                discarded_symbol_only_chunks = 0
-                discarded_corrupt_chunks = 0
-                for relative in selected_paths:
-                    if relative in {
-                        item["source_relative_path"]
-                        for item in checkpoint.get("skipped_sources", [])
-                    }:
-                        continue
-                    artifact_root = self._source_artifact_root(staging_root, relative)
-                    document = read_json(artifact_root / "document.json")
-                    state = read_json(artifact_root / "state.json")
-                    if not isinstance(document, dict) or not isinstance(state, dict):
-                        raise _BuildCannotResume("Invalid staged source artifacts")
-                    documents.append(document)
-                    discarded_empty_chunks += int(
-                        state.get("discarded_empty_chunks") or 0
-                    )
-                    discarded_symbol_only_chunks += int(
-                        state.get("discarded_symbol_only_chunks") or 0
-                    )
-                    discarded_corrupt_chunks += int(
-                        state.get("discarded_corrupt_chunks") or 0
-                    )
-                extracted_path = staging_root / "corpus" / "extracted-units.jsonl"
-                if not documents:
-                    raise _BuildCannotResume(
-                        "No clean sources remain; the current generation is unchanged. "
-                        + " ".join(
-                            item["reason"]
-                            for item in checkpoint.get("skipped_sources", [])
-                        )
-                    )
-                chunks_path = staging_root / "chunks" / "chunks.jsonl"
-
-                record_counts = {"units": 0, "chunks": 0}
-
-                def staged_records(
-                    filename: str,
-                    count_key: str,
-                    counts: dict[str, int],
-                ) -> Iterator[dict[str, Any]]:
-                    for source_relative_path in selected_paths:
-                        if source_relative_path in {
-                            item["source_relative_path"]
-                            for item in checkpoint.get("skipped_sources", [])
-                        }:
-                            continue
-                        path = (
-                            self._source_artifact_root(
-                                staging_root,
-                                source_relative_path,
-                            )
-                            / filename
-                        )
-                        for record in iter_jsonl(path):
-                            counts[count_key] += 1
-                            yield record
-
-                atomic_write_jsonl(
-                    extracted_path,
-                    staged_records("units.jsonl", "units", record_counts),
-                )
-                atomic_write_jsonl(
-                    chunks_path,
-                    staged_records("chunks.jsonl", "chunks", record_counts),
-                )
-                batches_root = staging_root / "work" / "chunk-batches"
-                offset = 0
-                batch: list[dict[str, Any]] = []
-                for chunk in iter_jsonl(chunks_path):
-                    batch.append(chunk)
-                    if len(batch) < self.config.settings.embedding_batch_size:
-                        continue
-                    atomic_write_jsonl(
-                        batches_root / f"{offset:012d}.jsonl",
-                        batch,
-                        fsync_parent=False,
-                    )
-                    offset += len(batch)
-                    batch = []
-                if batch:
-                    atomic_write_jsonl(
-                        batches_root / f"{offset:012d}.jsonl",
-                        batch,
-                        fsync_parent=False,
-                    )
-                if batches_root.is_dir():
-                    # One directory fsync covers every batch before embedding
-                    # resumes from any of them.
-                    fsync_directories([batches_root])
-                checkpoint["document_count"] = len(documents)
-                checkpoint["extraction_unit_count"] = record_counts["units"]
-                checkpoint["chunk_count"] = record_counts["chunks"]
-                checkpoint["discarded_empty_chunk_count"] = discarded_empty_chunks
-                checkpoint["discarded_symbol_only_chunk_count"] = (
-                    discarded_symbol_only_chunks
-                )
-                checkpoint["discarded_corrupt_chunk_count"] = discarded_corrupt_chunks
-                checkpoint["excluded_corrupt_unit_count"] = sum(
-                    int(document.get("excluded_corrupt_unit_count") or 0)
-                    for document in documents
-                )
+                await io(self._assemble_staged_corpus, staging_root, checkpoint)
                 self._add_phase_time(
                     checkpoint,
                     "assembly",
                     time.perf_counter() - started,
                 )
                 checkpoint["phase"] = "embedding"
-                self._write_checkpoint(staging_root, checkpoint)
+                await io(self._write_checkpoint, staging_root, checkpoint)
                 if budget_expired():
                     return self._in_progress_result(checkpoint)
                 continue
 
             if phase == "embedding":
-                if snapshot is not None and not snapshot.vectors_by_text:
-                    snapshot = load_reuse_snapshot(
+                if snapshot is not None and "vectors" not in loaded_axes:
+                    snapshot = await io(
+                        load_reuse_snapshot,
                         current,
                         schema_version=SCHEMA_VERSION,
                         extraction_policy_version=EXTRACTION_POLICY_VERSION,
@@ -2151,14 +2206,16 @@ class IngestionWorkflow:
                         load_vectors=True,
                         embedding=self.config.settings.embedding_facts,
                     )
+                    loaded_axes.update({"chunks", "vectors"})
                 offset = int(checkpoint.get("embedded_chunk_count") or 0)
                 total = int(checkpoint["chunk_count"])
                 if offset >= total:
                     checkpoint["phase"] = "vector_assembly"
-                    self._write_checkpoint(staging_root, checkpoint)
+                    await io(self._write_checkpoint, staging_root, checkpoint)
                     continue
-                batch = read_jsonl(
-                    staging_root / "work" / "chunk-batches" / f"{offset:012d}.jsonl"
+                batch = await io(
+                    read_jsonl,
+                    staging_root / "work" / "chunk-batches" / f"{offset:012d}.jsonl",
                 )
                 vectors = np.empty(
                     (len(batch), self.config.settings.embedding_dimension),
@@ -2214,7 +2271,7 @@ class IngestionWorkflow:
                 batch_path = (
                     staging_root / "work" / "vector-batches" / f"{offset:012d}.npy"
                 )
-                self._save_vector_batch(batch_path, vectors)
+                await io(self._save_vector_batch, batch_path, vectors)
                 self._add_phase_time(
                     checkpoint,
                     "embedding",
@@ -2227,7 +2284,7 @@ class IngestionWorkflow:
                 checkpoint["created_vector_count"] = int(
                     checkpoint.get("created_vector_count") or 0
                 ) + len(missing_positions)
-                self._write_checkpoint(staging_root, checkpoint)
+                await io(self._write_checkpoint, staging_root, checkpoint)
                 if budget_expired():
                     return self._in_progress_result(checkpoint)
                 continue
@@ -2249,14 +2306,14 @@ class IngestionWorkflow:
                     time.perf_counter() - started,
                 )
                 checkpoint["phase"] = "bm25_indexing"
-                self._write_checkpoint(staging_root, checkpoint)
+                await io(self._write_checkpoint, staging_root, checkpoint)
                 if budget_expired():
                     return self._in_progress_result(checkpoint)
                 continue
 
             if phase == "bm25_indexing":
                 bm25_index_path = staging_root / "indexes" / "bm25"
-                shutil.rmtree(bm25_index_path, ignore_errors=True)
+                await io(shutil.rmtree, bm25_index_path, ignore_errors=True)
                 started = time.perf_counter()
                 # The build points the lexical backend's one retriever at the
                 # staging index, so a search beside it waits and reloads its own.
@@ -2274,7 +2331,7 @@ class IngestionWorkflow:
                 )
                 checkpoint["phase"] = "dense_indexing"
                 checkpoint["dense_indexed_count"] = 0
-                self._write_checkpoint(staging_root, checkpoint)
+                await io(self._write_checkpoint, staging_root, checkpoint)
                 if budget_expired():
                     return self._in_progress_result(checkpoint)
                 continue
@@ -2295,20 +2352,24 @@ class IngestionWorkflow:
                     checkpoint["dense_backend"] = backend_name
                     checkpoint["dense_index_relative"] = DENSE_INDEX_PATHS[backend_name]
                     checkpoint["dense_indexed_count"] = 0
-                    self._write_checkpoint(staging_root, checkpoint)
+                    await io(self._write_checkpoint, staging_root, checkpoint)
                 backend = self._dense_backends[backend_name]
                 dense_index_path = staging_root / DENSE_INDEX_PATHS[backend_name]
                 offset = int(checkpoint.get("dense_indexed_count") or 0)
                 if offset == 0:
-                    shutil.rmtree(dense_index_path, ignore_errors=True)
+                    await io(shutil.rmtree, dense_index_path, ignore_errors=True)
                     await _atomic_to_thread(
                         backend.initialize_index,
                         dense_index_path,
                         self.config.settings.embedding_dimension,
                     )
                 if offset < total:
-                    batch = read_jsonl(
-                        staging_root / "work" / "chunk-batches" / f"{offset:012d}.jsonl"
+                    batch = await io(
+                        read_jsonl,
+                        staging_root
+                        / "work"
+                        / "chunk-batches"
+                        / f"{offset:012d}.jsonl",
                     )
                     started = time.perf_counter()
                     await _atomic_to_thread(
@@ -2324,7 +2385,7 @@ class IngestionWorkflow:
                         time.perf_counter() - started,
                     )
                     checkpoint["dense_indexed_count"] = offset + len(batch)
-                    self._write_checkpoint(staging_root, checkpoint)
+                    await io(self._write_checkpoint, staging_root, checkpoint)
                     if budget_expired():
                         return self._in_progress_result(checkpoint)
                     continue
@@ -2336,7 +2397,7 @@ class IngestionWorkflow:
                 )
                 checkpoint["dense_metadata"] = dense_metadata
                 checkpoint["phase"] = "source_revalidation"
-                self._write_checkpoint(staging_root, checkpoint)
+                await io(self._write_checkpoint, staging_root, checkpoint)
                 continue
 
             if phase == "source_revalidation":
@@ -2368,7 +2429,7 @@ class IngestionWorkflow:
                         "source_revalidation",
                         time.perf_counter() - started,
                     )
-                    self._write_checkpoint(staging_root, checkpoint)
+                    await io(self._write_checkpoint, staging_root, checkpoint)
                     if budget_expired():
                         return self._in_progress_result(checkpoint)
                     continue
@@ -2377,7 +2438,7 @@ class IngestionWorkflow:
                         "Source bytes changed while ingestion was in progress"
                     )
                 try:
-                    final_scan = scan_sources(self.config)
+                    final_scan = await io(scan_sources, self.config)
                 except SourcePolicyError as exc:
                     raise _SourceChangedDuringIngest(str(exc)) from exc
                 if _source_inventory(final_scan) != checkpoint["source_inventory"]:
@@ -2401,7 +2462,7 @@ class IngestionWorkflow:
                         "The selected generation changed while ingestion was in progress"
                     )
                 checkpoint["phase"] = "finalizing"
-                self._write_checkpoint(staging_root, checkpoint)
+                await io(self._write_checkpoint, staging_root, checkpoint)
                 continue
 
             if phase == "finalizing":
@@ -2409,41 +2470,25 @@ class IngestionWorkflow:
                     raise _SourceChangedDuringIngest(
                         "A source changed after its final ingestion hash"
                     )
-                documents = [
-                    read_json(
-                        self._source_artifact_root(staging_root, relative)
-                        / "document.json"
-                    )
+                skipped_paths = {
+                    item["source_relative_path"]
+                    for item in checkpoint.get("skipped_sources", [])
+                }
+                document_paths = [
+                    self._source_artifact_root(staging_root, relative) / "document.json"
                     for relative in selected_paths
-                    if relative
-                    not in {
-                        item["source_relative_path"]
-                        for item in checkpoint.get("skipped_sources", [])
-                    }
+                    if relative not in skipped_paths
                 ]
-                content_kinds: Counter[str] = Counter()
-                withheld_chunk_count = 0
-                withheld_chunk_reasons: Counter[str] = Counter()
-                audited_chunk_count = 0
-                dense_truncated_chunk_count = 0
-                maximum_embedding_token_count = 0
-                for item in iter_jsonl(staging_root / "chunks" / "chunks.jsonl"):
-                    content_kinds[str(item.get("content_kind") or "prose")] += 1
-                    reasons = text_corruption_reasons(str(item.get("contents") or ""))
-                    if reasons:
-                        withheld_chunk_count += 1
-                        withheld_chunk_reasons.update(reasons)
-                    token_count = item.get("embedding_token_count")
-                    if isinstance(token_count, int) and not isinstance(
-                        token_count, bool
-                    ):
-                        audited_chunk_count += 1
-                        maximum_embedding_token_count = max(
-                            maximum_embedding_token_count, token_count
-                        )
-                        if item.get("dense_truncated"):
-                            dense_truncated_chunk_count += 1
-                content_kind_counts = dict(sorted(content_kinds.items()))
+                documents = await io(list, map(read_json, document_paths))
+                census = await io(
+                    _staged_chunk_census, staging_root / "chunks" / "chunks.jsonl"
+                )
+                content_kind_counts = census["content_kind_counts"]
+                withheld_chunk_count = census["withheld_chunk_count"]
+                withheld_chunk_reasons = census["withheld_chunk_reasons"]
+                audited_chunk_count = census["audited_chunk_count"]
+                dense_truncated_chunk_count = census["dense_truncated_chunk_count"]
+                maximum_embedding_token_count = census["maximum_embedding_token_count"]
                 extraction_unit_count = int(checkpoint["extraction_unit_count"])
                 chunk_count = int(checkpoint["chunk_count"])
                 phase_timings = {
@@ -2506,9 +2551,7 @@ class IngestionWorkflow:
                         checkpoint.get("discarded_corrupt_chunk_count") or 0
                     ),
                     "withheld_chunk_count": withheld_chunk_count,
-                    "withheld_chunk_reasons": dict(
-                        sorted(withheld_chunk_reasons.items())
-                    ),
+                    "withheld_chunk_reasons": withheld_chunk_reasons,
                     "dense_token_audit": (
                         "counted"
                         if audited_chunk_count == chunk_count
@@ -2651,7 +2694,7 @@ class IngestionWorkflow:
                     raise _SourceChangedDuringIngest(
                         "A source changed while final artifacts were assembled"
                     )
-                atomic_write_json(staging_root / "manifest.json", manifest)
+                await io(atomic_write_json, staging_root / "manifest.json", manifest)
                 try:
                     await self._validate_generation_for_activation(
                         staging_root,
@@ -2664,7 +2707,8 @@ class IngestionWorkflow:
                         "A source changed while final indexes were validated"
                     )
                 select_generation = not build_metrics.get("skipped_sources")
-                atomic_write_json(
+                await io(
+                    atomic_write_json,
                     self._pending_activation_path,
                     {
                         "schema_version": PENDING_ACTIVATION_VERSION,
@@ -2684,12 +2728,13 @@ class IngestionWorkflow:
                         "created_at": _utc_now(),
                     },
                 )
-                shutil.rmtree(staging_root / "work", ignore_errors=True)
-                os.replace(staging_root, generation_root)
-                fsync_directory(self.config.generations_root)
-                fsync_directory(self.config.staging_root)
+                await io(shutil.rmtree, staging_root / "work", ignore_errors=True)
+                await io(os.replace, staging_root, generation_root)
+                await io(fsync_directory, self.config.generations_root)
+                await io(fsync_directory, self.config.staging_root)
                 if select_generation:
-                    atomic_write_json(
+                    await io(
+                        atomic_write_json,
                         self.config.current_path,
                         {
                             "schema_version": 1,
@@ -2697,9 +2742,9 @@ class IngestionWorkflow:
                         },
                     )
                 (generation_root / "checkpoint.json").unlink()
-                fsync_directory(generation_root)
+                await io(fsync_directory, generation_root)
                 self._pending_activation_path.unlink(missing_ok=True)
-                fsync_directory(self._pending_activation_path.parent)
+                await io(fsync_directory, self._pending_activation_path.parent)
                 self._loaded_generation = None
                 LOGGER.debug(
                     "ingest: build %s complete status=%s selected=%s "
@@ -2987,9 +3032,9 @@ class IngestionWorkflow:
 
         async with self._operation():
             deadline = time.perf_counter() + work_budget_seconds
-            self._cleanup_invalid_staging_roots()
+            await _atomic_to_thread(self._cleanup_invalid_staging_roots)
             try:
-                scan = scan_sources(self.config)
+                scan = await _atomic_to_thread(scan_sources, self.config)
             except SourcePolicyError as exc:
                 raise ResearchError(str(exc)) from exc
             if not scan.selected:
@@ -3008,10 +3053,8 @@ class IngestionWorkflow:
                     "least one source before ingesting"
                 )
             current = self._load_current_optional()
-            self._sync_source_catalog(
-                scan,
-                current,
-                exclusions=exclusions,
+            await _atomic_to_thread(
+                self._sync_source_catalog, scan, current, exclusions=exclusions
             )
             baseline_generation_id = (
                 str(current[1]["generation_id"]) if current is not None else None
@@ -3044,7 +3087,7 @@ class IngestionWorkflow:
             )
             if recovered is not None:
                 return recovered
-            existing = self._load_ingestion_checkpoint()
+            existing = await _atomic_to_thread(self._load_ingestion_checkpoint)
             superseded_build: dict[str, Any] | None = None
             if existing is not None and existing[1].get("identity") != identity:
                 superseded_checkpoint = dict(existing[1])
@@ -3057,14 +3100,16 @@ class IngestionWorkflow:
                         "discarded."
                     ),
                 }
-                self._discard_checkpoint(
+                await _atomic_to_thread(
+                    self._discard_checkpoint,
                     existing[0],
                     superseded_checkpoint,
                     reason=str(superseded_build["reason"]),
                 )
                 existing = None
             if existing is None:
-                staging_root, checkpoint = self._create_checkpoint(
+                staging_root, checkpoint = await _atomic_to_thread(
+                    self._create_checkpoint,
                     scan=scan,
                     exclusions=exclusions,
                     exclusion_revision=exclusion_revision,
@@ -3075,11 +3120,13 @@ class IngestionWorkflow:
                 )
             else:
                 staging_root, checkpoint = existing
-                self._remove_uncommitted_files(staging_root)
+                await _atomic_to_thread(self._remove_uncommitted_files, staging_root)
                 checkpoint["resume_count"] = (
                     int(checkpoint.get("resume_count") or 0) + 1
                 )
-                self._write_checkpoint(staging_root, checkpoint)
+                await _atomic_to_thread(
+                    self._write_checkpoint, staging_root, checkpoint
+                )
 
             LOGGER.debug(
                 "ingest: build %s starting phase=%s resume=%s force=%s",
@@ -3098,12 +3145,10 @@ class IngestionWorkflow:
                     deadline=deadline,
                 )
             except _SourceChangedDuringIngest as exc:
-                self._discard_checkpoint(
-                    staging_root,
-                    checkpoint,
-                    reason=str(exc),
+                await _atomic_to_thread(
+                    self._discard_checkpoint, staging_root, checkpoint, reason=str(exc)
                 )
-                fresh_scan = scan_sources(self.config)
+                fresh_scan = await _atomic_to_thread(scan_sources, self.config)
                 fresh_exclusions = self._source_exclusions()
                 if not fresh_scan.selected:
                     raise ResearchError(

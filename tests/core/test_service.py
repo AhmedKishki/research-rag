@@ -3397,6 +3397,46 @@ def test_failed_dense_build_does_not_replace_current(project: Path) -> None:
     asyncio.run(_assert_failed_dense_build_does_not_replace_current(project))
 
 
+def test_a_build_writes_its_staged_state_off_the_event_loop(
+    project: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The workspace, MCP, and control API share the loop a build runs on.
+
+    Every staged write and fsync therefore runs on a worker thread, so a search or
+    a status read beside a build is not held behind a disk.
+    """
+
+    import threading
+
+    on_loop: list[str] = []
+
+    def watched(function: Any) -> Any:
+        def call(path: Path, *args: Any, **kwargs: Any) -> Any:
+            if threading.current_thread() is threading.main_thread():
+                on_loop.append(f"{function.__name__} {path.name}")
+            return function(path, *args, **kwargs)
+
+        return call
+
+    for name in ("atomic_write_json", "atomic_write_jsonl", "read_jsonl"):
+        monkeypatch.setattr(
+            ingestion_module, name, watched(getattr(ingestion_module, name))
+        )
+
+    async def exercise() -> None:
+        write_pdf(project / "sources" / "article.pdf", ["Stable research evidence."])
+        write_epub(project / "sources" / "book.epub", "Readable book evidence.")
+        config = resolve_config(project, vanilla_executable=sys.executable)
+        service = ResearchService(  # type: ignore[arg-type]
+            config, FakeUltraRAG(), dense=FakeDenseBackend()
+        )
+        result = await service.ingest(chunk_size=50, chunk_overlap=10)
+        assert result["status"] == "ready"
+
+    asyncio.run(exercise())
+    assert on_loop == []
+
+
 def test_a_drifted_mtime_is_hashed_once_per_file_identity(
     project: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
