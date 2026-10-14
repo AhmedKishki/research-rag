@@ -681,16 +681,6 @@ class App:
         self._socket: socket.socket | None = None
         self._network_lock = asyncio.Lock()
 
-    @property
-    def gateway(self) -> Any:
-        """The retired name for the lexical backend, kept for existing callers."""
-
-        return self.lexical
-
-    @gateway.setter
-    def gateway(self, backend: Any) -> None:
-        self.lexical = backend
-
     async def set_lan(self, enabled: bool) -> dict[str, Any]:
         """Replace accepting sockets, not the app, backend, lifespan, or port.
 
@@ -966,25 +956,6 @@ async def running(config: ResearchConfig, port: int) -> AsyncIterator[App]:
         yield app
     finally:
         await app.stop()
-
-
-async def _security_headers(request: Any, call_next: Any) -> Any:
-    """Apply one set of browser-facing headers to every route the app serves.
-
-    The shared workspace sets these for its own routes, so setting them here covers
-    the control API and the agent surface.
-    """
-
-    from .write_guard import served_authority
-
-    if served_authority(request) is None:
-        return JSONResponse(
-            {"error": "Requests require a loopback Host"}, status_code=403
-        )
-    response = await call_next(request)
-    response.headers["X-Content-Type-Options"] = "nosniff"
-    response.headers["Referrer-Policy"] = "no-referrer"
-    return response
 
 
 async def _unexpected_error(_: Any, exc: Exception) -> JSONResponse:

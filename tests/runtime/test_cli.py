@@ -690,26 +690,9 @@ def test_normal_service_scope_uses_direct_backend(project: Path) -> None:
     async def scenario() -> None:
         async with _service(config) as service:
             assert isinstance(service.lexical, DirectRetrieval)
-            assert service.ultrarag is service.lexical
             assert (await service.status())["ready"] is False
 
     asyncio.run(scenario())
-
-
-def test_the_legacy_service_backend_name_remains_a_passive_alias(project: Path) -> None:
-    from research_rag.core.service import ResearchService
-    from research_rag.retrieval.direct import DirectRetrieval
-
-    config = _resolve(_args("--project-root", str(project), "status"))
-    original, replacement = DirectRetrieval(config), DirectRetrieval(config)
-    service = ResearchService(config, ultrarag=original)
-
-    assert service.lexical is original
-    service.ultrarag = replacement
-    assert service.lexical is replacement
-    assert service.ultrarag is replacement
-    with pytest.raises(TypeError, match="one lexical backend"):
-        ResearchService(config, original, ultrarag=replacement)
 
 
 def test_the_doctor_reports_without_starting_a_child_process(
