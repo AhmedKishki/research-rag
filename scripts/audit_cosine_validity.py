@@ -52,8 +52,8 @@ from research_rag.project.support import _passage_equality_key
 from research_rag.retrieval.model_runtime import ModelRuntime
 from research_rag.retrieval.rerankers import resolve_reranker_model
 from research_rag.retrieval.search import _collapse_repetitions
+from research_rag.storage.durable_io import iter_jsonl
 from research_rag.storage.records import (
-    iter_jsonl,
     load_chunk_exclusions,
     load_current_generation,
     load_source_exclusions,

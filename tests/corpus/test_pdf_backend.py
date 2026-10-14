@@ -9,7 +9,7 @@ from typing import Any
 
 import pytest
 
-from research_rag.corpus import docling_worker, pdf_backend
+from research_rag.corpus import docling_worker, pdf_backend, scoped_child
 from research_rag.corpus.docling_env import DoclingEnv
 from research_rag.corpus.pdf_backend import (
     CUSTOM_BACKEND_FINGERPRINT,
@@ -238,7 +238,7 @@ def _arm_runner(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(pdf_backend.shutil, "which", lambda name: f"/usr/bin/{name}")
     # The launcher retires the scope in a finally; tests that fake Popen must not
     # let the real systemctl path run.
-    monkeypatch.setattr(pdf_backend, "_terminate_scope", lambda unit, process: None)
+    monkeypatch.setattr(scoped_child, "terminate_scope", lambda unit, process: None)
 
 
 @pytest.mark.parametrize(
@@ -282,7 +282,7 @@ def test_timeout_kills_the_scope_and_raises(
         lambda *args, **kwargs: _FakeProcess(timeout=True),
     )
     monkeypatch.setattr(
-        pdf_backend, "_terminate_scope", lambda unit, process: terminated.append(unit)
+        scoped_child, "terminate_scope", lambda unit, process: terminated.append(unit)
     )
 
     with pytest.raises(DoclingResourceError):

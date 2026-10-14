@@ -7,15 +7,15 @@ from pathlib import Path
 import pytest
 
 import research_rag.storage.durable_io as durable_io_module
-from research_rag.storage.durable_io import atomic_write_json, atomic_write_jsonl
-from research_rag.storage.records import (
+from research_rag.storage.durable_io import (
     StorageError,
+    atomic_write_json,
+    atomic_write_jsonl,
     iter_jsonl,
-    load_source_catalog,
     read_json,
     read_jsonl,
-    write_source_catalog,
 )
+from research_rag.storage.records import load_source_catalog, write_source_catalog
 
 
 def test_iter_jsonl_validates_lazily_without_materializing_file(tmp_path: Path) -> None:

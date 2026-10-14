@@ -24,7 +24,7 @@ from ..project.support import (
     _normalized_filter,
     _public_document,
 )
-from ..storage.records import StorageError
+from ..storage.durable_io import StorageError
 from .review_state import (
     chunk_placements,
     list_chunk_exclusions,

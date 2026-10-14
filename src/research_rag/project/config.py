@@ -14,6 +14,7 @@ from typing import Literal
 
 from platformdirs import user_cache_path
 
+from ..storage.durable_io import atomic_write_json
 from .settings import SETTINGS, EffectiveSettings, sources_for
 from .settings_layers import SettingsError, resolve_settings
 
@@ -405,25 +406,15 @@ def _write_project_descriptor(
     source_directory: str,
 ) -> None:
     """Replace the descriptor atomically, so a reader never sees a partial one."""
-    temporary = descriptor_path.with_name(
-        f".{descriptor_path.name}.{uuid.uuid4().hex}.tmp"
+    atomic_write_json(
+        descriptor_path,
+        {
+            "schema_version": 1,
+            "project_id": project_id,
+            "name": name,
+            "source_directory": source_directory,
+        },
     )
-    temporary.write_text(
-        json.dumps(
-            {
-                "schema_version": 1,
-                "project_id": project_id,
-                "name": name,
-                "source_directory": source_directory,
-            },
-            ensure_ascii=False,
-            indent=2,
-            sort_keys=True,
-        )
-        + "\n",
-        encoding="utf-8",
-    )
-    os.replace(temporary, descriptor_path)
 
 
 def _normalize_project_name(name: str) -> str:
@@ -594,22 +585,14 @@ def _prepare_runtime_root(
     marker_path = candidate / _RUNTIME_MARKER
     candidate.mkdir(parents=True, exist_ok=True)
     if not marker_path.is_file():
-        temporary = marker_path.with_name(f".{marker_path.name}.{uuid.uuid4().hex}.tmp")
-        temporary.write_text(
-            json.dumps(
-                {
-                    "schema_version": 1,
-                    "project_id": project_id,
-                    "project_root": str(project),
-                },
-                ensure_ascii=False,
-                indent=2,
-                sort_keys=True,
-            )
-            + "\n",
-            encoding="utf-8",
+        atomic_write_json(
+            marker_path,
+            {
+                "schema_version": 1,
+                "project_id": project_id,
+                "project_root": str(project),
+            },
         )
-        os.replace(temporary, marker_path)
     return candidate
 
 

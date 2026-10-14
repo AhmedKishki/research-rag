@@ -46,6 +46,9 @@ from filelock import Timeout as FileLockTimeout
 
 from ..project.config import ResearchConfig, child_process_environment
 from ..project.policy import ResearchError
+from ..storage.durable_io import atomic_file, replace_durably
+from . import scoped_child
+from .scoped_child import MEMORY_MAX_BYTES
 
 # The pinned releases. `docling` and `rapidocr` are the exact tested pair;
 # pymupdf is the worker's own PDF reader, allowed within a bounded range. The
@@ -79,8 +82,6 @@ INSTALL_TIMEOUT_SECONDS = 600
 INSTALL_LOCK_TIMEOUT_SECONDS = INSTALL_TIMEOUT_SECONDS + 60
 LOCKS_WAIT_SECONDS = 60
 
-MEMORY_MAX_BYTES = 2 * 1024**3
-CPU_QUOTA_PERCENT = 200
 CPU_MAX = ("200000", "100000")
 INSTALL_NICE = 10
 WORKER_NICE = 10
@@ -418,30 +419,6 @@ def _require_systemd_run() -> str:
     return executable
 
 
-def _terminate_scope(unit: str, process: subprocess.Popen[Any]) -> None:
-    systemctl = shutil.which("systemctl")
-    if systemctl is not None:
-        with contextlib.suppress(OSError, subprocess.SubprocessError):
-            subprocess.run(
-                [
-                    systemctl,
-                    "--user",
-                    "kill",
-                    "--signal=SIGKILL",
-                    "--kill-whom=all",
-                    unit,
-                ],
-                capture_output=True,
-                env=child_process_environment(purpose="systemctl"),
-                timeout=15,
-                check=False,
-            )
-    with contextlib.suppress(ProcessLookupError, PermissionError, OSError):
-        os.killpg(os.getpgid(process.pid), 9)
-    with contextlib.suppress(subprocess.TimeoutExpired):  # pragma: no cover
-        process.wait(timeout=15)
-
-
 # The controller runs inside the resource scope, before any trusted command. It
 # is stdlib-only, verifies the exact boundary it was promised, raises its own
 # niceness to at least 10, and only then execs the command. The parent never uses a
@@ -486,56 +463,32 @@ def _run_bounded(
 
     systemd_run = _require_systemd_run()
     unit = f"research-rag-docling-install-{os.getpid()}-{uuid.uuid4().hex[:8]}"
-    wrapped = [
-        systemd_run,
-        "--user",
-        "--scope",
-        "--quiet",
-        "--collect",
-        f"--unit={unit}",
-        f"--property=MemoryMax={MEMORY_MAX_BYTES}",
-        "--property=MemorySwapMax=0",
-        f"--property=CPUQuota={CPU_QUOTA_PERCENT}%",
-        f"--property=RuntimeMaxSec={timeout:g}",
-        "--",
-        sys.executable,
-        "-I",
-        "-c",
-        CONTROLLER_SOURCE,
-        *command,
-    ]
     if not _RUN_LOCK.acquire(timeout=max(1.0, timeout)):
         raise DoclingEnvironmentError(
             "Another Docling installer step is already running in this process."
         )
     try:
-        process = subprocess.Popen(
-            wrapped,
-            stdin=subprocess.DEVNULL,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
+        returncode, stdout, stderr = scoped_child.run_in_scope(
+            systemd_run,
+            [sys.executable, "-I", "-c", CONTROLLER_SOURCE, *command],
+            unit=unit,
+            timeout=timeout,
             env=env,
-            start_new_session=True,
         )
-        try:
-            stdout, stderr = process.communicate(timeout=timeout)
-        except subprocess.TimeoutExpired as exc:
-            raise DoclingEnvironmentError(
-                f"{description} exceeded the {timeout:g}s limit; the installer "
-                "scope was killed. Run `research-rag doctor --prefetch-models` "
-                "again after inspecting the installer diagnostics."
-            ) from exc
-        finally:
-            _terminate_scope(unit, process)
+    except subprocess.TimeoutExpired as exc:
+        raise DoclingEnvironmentError(
+            f"{description} exceeded the {timeout:g}s limit; the installer "
+            "scope was killed. Run `research-rag doctor --prefetch-models` "
+            "again after inspecting the installer diagnostics."
+        ) from exc
     finally:
         _RUN_LOCK.release()
-    if process.returncode != 0:
-        text = (stderr or b"").decode("utf-8", "replace").strip()
+    if returncode != 0:
+        text = stderr.decode("utf-8", "replace").strip()
         raise DoclingEnvironmentError(
-            f"{description} failed (exit {process.returncode}): "
-            f"{text or 'no diagnostics'}"
+            f"{description} failed (exit {returncode}): {text or 'no diagnostics'}"
         )
-    return stdout or b""
+    return stdout
 
 
 _VERSION_SCRIPT = (
@@ -594,15 +547,6 @@ def _validate_versions(versions: dict[str, Any]) -> dict[str, str | None]:
     }
 
 
-def _fsync_directory(path: Path) -> None:
-    with contextlib.suppress(OSError):
-        descriptor = os.open(path, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
-        try:
-            os.fsync(descriptor)
-        finally:
-            os.close(descriptor)
-
-
 def _write_ready(root: Path, versions: dict[str, str | None]) -> None:
     payload = {
         "ready": True,
@@ -611,13 +555,8 @@ def _write_ready(root: Path, versions: dict[str, str | None]) -> None:
         "versions": versions,
         "created_at": datetime.now(UTC).isoformat(),
     }
-    temporary = root / f"{_READY_FILE}.{uuid.uuid4().hex[:8]}"
-    with open(temporary, "w", encoding="utf-8") as handle:
+    with atomic_file(root / _READY_FILE) as handle:
         handle.write(json.dumps(payload, sort_keys=True))
-        handle.flush()
-        os.fsync(handle.fileno())
-    os.replace(temporary, root / _READY_FILE)
-    _fsync_directory(root)
 
 
 def _quarantine(root: Path) -> None:
@@ -691,8 +630,7 @@ def install_docling_env(
             # Only an invalid target reaches here; a valid one was returned above.
             _quarantine(final)
         _write_ready(staging, versions)
-        os.replace(staging, final)
-        _fsync_directory(root)
+        replace_durably(staging, final)
     except BaseException:
         shutil.rmtree(staging, ignore_errors=True)
         raise

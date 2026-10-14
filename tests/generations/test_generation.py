@@ -23,10 +23,7 @@ from research_rag.project.support import (
     SCHEMA_VERSION,
 )
 from research_rag.retrieval.embeddings import EmbeddingModel, resolve_embedding_model
-from research_rag.storage.records import (
-    atomic_write_json,
-    write_jsonl,
-)
+from research_rag.storage.durable_io import atomic_write_json, write_jsonl
 
 _EMBEDDING = resolve_embedding_model("BAAI/bge-small-en-v1.5")
 _OTHER_EMBEDDING = resolve_embedding_model("BAAI/bge-base-en-v1.5")

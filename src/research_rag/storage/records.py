@@ -9,9 +9,7 @@ atomically through `durable_io`.
 
 This module holds schemas and validation, not I/O. The durable-write primitives
 live in `durable_io`, and the rule every stored path must satisfy lives in
-`normalized_paths`. The primitives are re-exported here for now: a module that
-imports `storage` for one of them works, and that re-export is transitional rather
-than a second home.
+`normalized_paths`.
 
 Nothing here writes outside the path it is given, and nothing here reads a setting.
 """
@@ -27,38 +25,15 @@ from ..corpus.sources import (
     stable_source_id,
 )
 from ..project.normalized_paths import normalized_relative_path
-from .durable_io import (
-    StorageError,
-    atomic_write_json,
-    atomic_write_jsonl,
-    directory_statistics,
-    fsync_directories,
-    fsync_directory,
-    iter_jsonl,
-    read_json,
-    read_jsonl,
-    write_handoff_jsonl,
-    write_jsonl,
-)
+from .durable_io import StorageError, atomic_write_json, read_json
 
 __all__ = [
-    "StorageError",
-    "atomic_write_json",
-    "atomic_write_jsonl",
-    "directory_statistics",
-    "fsync_directories",
-    "fsync_directory",
-    "iter_jsonl",
     "load_chunk_exclusions",
     "load_current_generation",
     "load_metadata_overrides",
     "load_source_catalog",
     "load_source_exclusions",
-    "read_json",
-    "read_jsonl",
     "write_chunk_exclusions",
-    "write_handoff_jsonl",
-    "write_jsonl",
     "write_metadata_overrides",
     "write_source_catalog",
     "write_source_exclusions",

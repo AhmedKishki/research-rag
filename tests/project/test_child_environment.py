@@ -125,13 +125,11 @@ def test_docling_and_installer_environments_reject_secrets(monkeypatch, tmp_path
     assert online["HTTPS_PROXY"] == installer["HTTPS_PROXY"] == "http://proxy:8080"
 
 
-@pytest.mark.parametrize("module_name", ["docling_env", "pdf_backend"])
-def test_scope_cleanup_uses_filtered_session_environment(monkeypatch, module_name):
+def test_scope_cleanup_uses_filtered_session_environment(monkeypatch):
     from types import SimpleNamespace
 
-    from research_rag.corpus import docling_env, pdf_backend
+    from research_rag.corpus import scoped_child as module
 
-    module = {"docling_env": docling_env, "pdf_backend": pdf_backend}[module_name]
     monkeypatch.setenv("GITHUB_TOKEN", "secret")
     monkeypatch.setenv("XDG_RUNTIME_DIR", "/run/user/1000")
     monkeypatch.setattr(module.shutil, "which", lambda name: "/usr/bin/systemctl")
@@ -139,7 +137,7 @@ def test_scope_cleanup_uses_filtered_session_environment(monkeypatch, module_nam
     monkeypatch.setattr(module.subprocess, "run", lambda *a, **kw: observed.append(kw))
     monkeypatch.setattr(module.os, "getpgid", lambda pid: pid)
     monkeypatch.setattr(module.os, "killpg", lambda *args: None)
-    module._terminate_scope(
+    module.terminate_scope(
         "test.scope", SimpleNamespace(pid=123, wait=lambda **kw: None)
     )
     assert "GITHUB_TOKEN" not in observed[0]["env"]

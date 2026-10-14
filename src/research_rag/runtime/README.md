@@ -24,6 +24,8 @@ The running process, and the commands that manage it.
 - `app.py` and `control.py` import each other, and that cycle is load-bearing: the routes need an `App`, and the `App` needs its routes.
 - A command that answers must work on a machine where the retrieval stack is
   absent. `import research_rag.runtime.update` is the test of it.
-- `process.py` is the only place a child process is run. A second `subprocess`
-  call is a second way for a command to fail without saying why.
+- `process.py` runs the installation tools (`git`, `uv`, `pipx`). A second runner
+  for them is a second way for a command to fail without saying why. `viewer.py`
+  hands a file to the desktop, and the corpus readers run their own bounded
+  children.
 - `doctor --repair-runtime` is a side-effect-free compatibility no-op. Only `--prefetch-models` provisions required models and the isolated Docling environment.

@@ -11,6 +11,7 @@ from typing import Any
 import pytest
 
 import research_rag.corpus.docling_env as env_module
+from research_rag.corpus import scoped_child
 from research_rag.corpus.docling_env import (
     CONTROLLER_SOURCE,
     DoclingEnv,
@@ -294,7 +295,7 @@ def test_install_lock_does_not_deadlock_the_run_lock(
     monkeypatch.setattr(
         env_module.subprocess, "Popen", lambda *a, **k: _FakeProcess(returncode=0)
     )
-    monkeypatch.setattr(env_module, "_terminate_scope", lambda unit, process: None)
+    monkeypatch.setattr(scoped_child, "terminate_scope", lambda unit, process: None)
     config = _config(project)
     backend_root(config).mkdir(parents=True, exist_ok=True)
 

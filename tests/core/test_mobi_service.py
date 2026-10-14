@@ -8,7 +8,7 @@ import pytest
 
 from research_rag.core.service import ResearchService
 from research_rag.project.config import resolve_config
-from research_rag.storage.records import read_jsonl
+from research_rag.storage.durable_io import read_jsonl
 from tests.core.test_service import FakeDenseBackend, FakeUltraRAG
 from tests.mobi_fixtures import install_small_pipe_worker, write_mobi
 

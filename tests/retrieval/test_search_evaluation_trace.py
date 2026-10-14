@@ -20,7 +20,7 @@ from research_rag.core.tool_views import present_tool_response
 from research_rag.project.config import resolve_config
 from research_rag.project.settings import LEAN_TOOL_DETAIL
 from research_rag.retrieval.search import EVALUATION_TRACE_CANDIDATE_BUDGET
-from research_rag.storage.records import read_jsonl, write_jsonl
+from research_rag.storage.durable_io import read_jsonl, write_jsonl
 from tests.conftest import write_pdf
 from tests.core.test_service import (
     FakeDenseBackend,

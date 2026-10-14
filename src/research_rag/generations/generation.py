@@ -18,7 +18,7 @@ from ..retrieval.artifact_lookup import (
     validate_artifact_lookup,
 )
 from ..retrieval.embeddings import EmbeddingModel
-from ..storage.records import StorageError, iter_jsonl
+from ..storage.durable_io import StorageError, iter_jsonl
 
 LOGGER = logging.getLogger(__name__)
 

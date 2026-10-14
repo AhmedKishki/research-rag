@@ -6,7 +6,7 @@ from types import ModuleType, SimpleNamespace
 
 import pytest
 
-from research_rag.corpus import docling_worker, pdf_backend
+from research_rag.corpus import docling_worker, pdf_backend, scoped_child
 from research_rag.corpus.docling_env import DoclingEnv
 
 _FAKE_ENV = DoclingEnv(
@@ -36,7 +36,7 @@ def test_worker_scope_is_retired_on_success_or_interruption(monkeypatch, interru
     monkeypatch.setattr(pdf_backend, "_require_systemd_run", lambda: "/bin/systemd-run")
     monkeypatch.setattr(pdf_backend.subprocess, "Popen", launch)
     monkeypatch.setattr(
-        pdf_backend, "_terminate_scope", lambda unit, process: retired.append(unit)
+        scoped_child, "terminate_scope", lambda unit, process: retired.append(unit)
     )
     arguments = {
         "source_path": Path("/tmp/source.pdf"),

@@ -22,7 +22,7 @@ from urllib.request import urlopen
 
 from ..project.config import ResearchConfig
 from ..project.policy import ResearchError
-from ..storage.durable_io import fsync_directory
+from ..storage.durable_io import atomic_file, fsync_directory, fsync_file, write_jsonl
 
 GPT2_CACHE_INPUTS = (
     ("vocab.bpe", "1ce1664773c50f3e0cc8842619a93edc4624525b728b188a9e0be33b7726adc5"),
@@ -161,16 +161,8 @@ def _load_verified_gpt2_tokenizer(
                 path = (
                     primary / hashlib.sha1((GPT2_CACHE_URL + name).encode()).hexdigest()
                 )
-                fd, temporary = tempfile.mkstemp(dir=primary, prefix=".gpt2-")
-                try:
-                    with os.fdopen(fd, "wb") as target:
-                        target.write(data)
-                        target.flush()
-                        os.fsync(target.fileno())
-                    os.replace(temporary, path)
-                    fsync_directory(primary)
-                finally:
-                    Path(temporary).unlink(missing_ok=True)
+                with atomic_file(path, "wb", private=True) as target:
+                    target.write(data)
         inputs[name] = data
     return _encoding(inputs["encoder.json"])
 
@@ -289,12 +281,7 @@ class DirectRetrieval:
                             "contents": chunk.text.strip(),
                         }
                     )
-            output_path.parent.mkdir(parents=True, exist_ok=True)
-            with output_path.open("w", encoding="utf-8", newline="\n") as target:
-                for row in rows:
-                    target.write(json.dumps(row, ensure_ascii=False) + "\n")
-                target.flush()
-                os.fsync(target.fileno())
+            write_jsonl(output_path, rows, sort_keys=False)
             fsync_directory(output_path.parent)
 
         await self._run(execute)
@@ -359,8 +346,7 @@ class DirectRetrieval:
                     self._tokenizer.save_vocab(str(index_path))
                     for path in index_path.iterdir():
                         if path.is_file():
-                            with path.open("rb") as artifact:
-                                os.fsync(artifact.fileno())
+                            fsync_file(path)
                     fsync_directory(index_path)
                     fsync_directory(index_path.parent)
                 self._initialize(chunks_path, index_path, language)

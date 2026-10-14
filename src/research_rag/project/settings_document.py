@@ -27,15 +27,13 @@ one sentence per key rather than a description written twice.
 from __future__ import annotations
 
 import math
-import os
 import textwrap
-import uuid
 from collections.abc import Iterable, Mapping
 from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
-from ..storage.records import fsync_directory
+from ..storage.durable_io import atomic_file
 from .config import project_command
 from .policy import ResearchError, retrieval_policy_fingerprint, value_fingerprint
 from .settings import (
@@ -246,17 +244,8 @@ def write_project_document(path: Path, document: Mapping[str, Any]) -> None:
     if path.is_symlink():
         raise SettingsError(f"{LAYER_PROJECT} must not be a symlink: {path}")
     text = render_project_document(document)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    temporary = path.with_name(f".{path.name}.{uuid.uuid4().hex}.tmp")
-    try:
-        with temporary.open("w", encoding="utf-8", newline="\n") as handle:
-            handle.write(text)
-            handle.flush()
-            os.fsync(handle.fileno())
-        os.replace(temporary, path)
-        fsync_directory(path.parent)
-    finally:
-        temporary.unlink(missing_ok=True)
+    with atomic_file(path) as handle:
+        handle.write(text)
 
 
 def merged_document(

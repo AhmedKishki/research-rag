@@ -22,7 +22,7 @@ from research_rag.retrieval.artifact_lookup import (
     ensure_artifact_lookup,
     validate_artifact_lookup,
 )
-from research_rag.storage.records import write_jsonl
+from research_rag.storage.durable_io import write_jsonl
 
 
 def _artifacts(root: Path) -> tuple[Path, Path, Path]:

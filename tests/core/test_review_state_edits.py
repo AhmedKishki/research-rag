@@ -287,7 +287,7 @@ def test_metadata_written_by_a_later_version_is_refused_by_cause(project: Path) 
         encoding="utf-8",
     )
 
-    from research_rag.storage.records import StorageError
+    from research_rag.storage.durable_io import StorageError
 
     with pytest.raises(StorageError) as raised:
         load_metadata_overrides(path)

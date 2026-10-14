@@ -5,7 +5,7 @@ import pytest
 
 from research_rag.generations.ingestion import IngestionWorkflow
 from research_rag.project.support import _source_work_key
-from research_rag.storage.records import atomic_write_json
+from research_rag.storage.durable_io import atomic_write_json
 
 
 @pytest.fixture

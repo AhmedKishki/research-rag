@@ -1,15 +1,16 @@
 """Durable writes, and the reads that go with them.
 
-A write here is atomic and persisted: the file is written to a temporary name in
-the target directory, fsynced, renamed over the target, and the parent directory
-is fsynced so the rename itself survives a power cut. A caller that writes several
-files as one commit passes ``fsync_parent=False`` and calls
-:func:`fsync_directories` once at the end, because cost follows the number of
-durability operations rather than the size of a payload.
+A write here is atomic and persisted: `atomic_file` writes a temporary name in
+the target directory, fsyncs it, renames it over the target, and fsyncs the
+parent directory so the rename itself survives a power cut. No other module
+repeats it. A caller that writes several files as one commit passes
+``fsync_parent=False`` and calls :func:`fsync_directories` once at the end,
+because cost follows the number of durability operations rather than the size
+of a payload.
 
 This module knows nothing about the app: no record schema, no project layout, no
-settings. The record schemas are in `records.py`, which re-exports these names,
-and the rule every stored path must satisfy is in `normalized_paths.py`.
+settings. The record schemas are in `records.py`, and the rule every stored path
+must satisfy is in `normalized_paths.py`.
 """
 
 from __future__ import annotations
@@ -19,8 +20,9 @@ import json
 import os
 import uuid
 from collections.abc import Iterable, Iterator
+from contextlib import contextmanager
 from pathlib import Path
-from typing import Any
+from typing import IO, Any
 
 
 class StorageError(RuntimeError):
@@ -59,6 +61,50 @@ def fsync_directory(path: Path) -> None:
         os.close(descriptor)
 
 
+def fsync_file(path: Path) -> None:
+    """Persist the contents of a file another writer has already closed."""
+
+    with path.open("rb") as handle:
+        os.fsync(handle.fileno())
+
+
+def replace_durably(temporary: Path, path: Path, *, fsync_parent: bool = True) -> None:
+    """Rename a persisted file over `path`, and persist the rename itself."""
+
+    os.replace(temporary, path)
+    if fsync_parent:
+        fsync_directory(path.parent)
+
+
+@contextmanager
+def atomic_file(
+    path: Path,
+    mode: str = "w",
+    *,
+    fsync_parent: bool = True,
+    private: bool = False,
+) -> Iterator[IO[Any]]:
+    """Write a file beside `path`, then persist it and rename it over `path`.
+
+    A reader sees the old file or the new one, never half of either. Text is UTF-8
+    with `\n` line endings. A `private` file is created readable by its owner
+    alone. A write that raises leaves `path` untouched and no temporary behind.
+    """
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_name(f".{path.name}.{uuid.uuid4().hex}.tmp")
+    text = {} if "b" in mode else {"encoding": "utf-8", "newline": "\n"}
+    opener = (lambda name, flags: os.open(name, flags, 0o600)) if private else None
+    try:
+        with open(temporary, mode, opener=opener, **text) as handle:
+            yield handle
+            handle.flush()
+            os.fsync(handle.fileno())
+        replace_durably(temporary, path, fsync_parent=fsync_parent)
+    finally:
+        temporary.unlink(missing_ok=True)
+
+
 def atomic_write_json(path: Path, value: Any, *, fsync_parent: bool = True) -> None:
     """Write JSON atomically.
 
@@ -69,27 +115,24 @@ def atomic_write_json(path: Path, value: Any, *, fsync_parent: bool = True) -> N
     payload, so a group of related writes costs far less than one per file.
     """
 
-    path.parent.mkdir(parents=True, exist_ok=True)
-    temporary = path.with_name(f".{path.name}.{uuid.uuid4().hex}.tmp")
-    try:
-        with temporary.open("w", encoding="utf-8", newline="\n") as handle:
-            handle.write(
-                json.dumps(value, ensure_ascii=False, indent=2, sort_keys=True) + "\n"
-            )
-            handle.flush()
-            os.fsync(handle.fileno())
-        os.replace(temporary, path)
-        if fsync_parent:
-            fsync_directory(path.parent)
-    finally:
-        temporary.unlink(missing_ok=True)
+    with atomic_file(path, fsync_parent=fsync_parent) as handle:
+        handle.write(json.dumps(value, ensure_ascii=False, indent=2, sort_keys=True))
+        handle.write("\n")
 
 
-def write_jsonl(path: Path, records: Iterable[dict[str, Any]]) -> None:
+def _write_records(
+    handle: IO[str], records: Iterable[dict[str, Any]], sort_keys: bool
+) -> None:
+    for record in records:
+        handle.write(json.dumps(record, ensure_ascii=False, sort_keys=sort_keys) + "\n")
+
+
+def write_jsonl(
+    path: Path, records: Iterable[dict[str, Any]], *, sort_keys: bool = True
+) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("w", encoding="utf-8", newline="\n") as handle:
-        for record in records:
-            handle.write(json.dumps(record, ensure_ascii=False, sort_keys=True) + "\n")
+        _write_records(handle, records, sort_keys)
         handle.flush()
         os.fsync(handle.fileno())
 
@@ -104,8 +147,7 @@ def write_handoff_jsonl(path: Path, records: Iterable[dict[str, Any]]) -> None:
 
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("w", encoding="utf-8", newline="\n") as handle:
-        for record in records:
-            handle.write(json.dumps(record, ensure_ascii=False, sort_keys=True) + "\n")
+        _write_records(handle, records, sort_keys=True)
 
 
 def atomic_write_jsonl(
@@ -114,14 +156,8 @@ def atomic_write_jsonl(
     *,
     fsync_parent: bool = True,
 ) -> None:
-    temporary = path.with_name(f".{path.name}.{uuid.uuid4().hex}.tmp")
-    try:
-        write_jsonl(temporary, records)
-        os.replace(temporary, path)
-        if fsync_parent:
-            fsync_directory(path.parent)
-    finally:
-        temporary.unlink(missing_ok=True)
+    with atomic_file(path, fsync_parent=fsync_parent) as handle:
+        _write_records(handle, records, sort_keys=True)
 
 
 def fsync_directories(paths: Iterable[Path]) -> None:

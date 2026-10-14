@@ -20,8 +20,6 @@ the entry another command registered in the same moment.
 from __future__ import annotations
 
 import json
-import os
-import tempfile
 from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
@@ -32,6 +30,7 @@ from typing import Any
 from filelock import BaseFileLock, FileLock
 from filelock import Timeout as FileLockTimeout
 
+from ..storage.durable_io import atomic_file
 from .policy import ResearchError, _utc_now
 from .settings import USER_CONFIG_DIRECTORY
 from .state_files import PORTABLE_DIRECTORY
@@ -131,20 +130,9 @@ def _read(path: Path) -> dict[str, Any]:
 def _write(path: Path, document: dict[str, Any]) -> None:
     """Replace the record atomically, so a reader never sees half of one."""
 
-    path.parent.mkdir(parents=True, exist_ok=True)
-    handle, temporary = tempfile.mkstemp(
-        dir=path.parent, prefix=f".{path.name}.", suffix=".tmp"
-    )
-    try:
-        with os.fdopen(handle, "w", encoding="utf-8") as stream:
-            json.dump(document, stream, ensure_ascii=False, indent=2)
-            stream.write("\n")
-            stream.flush()
-            os.fsync(stream.fileno())
-        os.replace(temporary, path)
-    except BaseException:
-        Path(temporary).unlink(missing_ok=True)
-        raise
+    with atomic_file(path, private=True) as stream:
+        json.dump(document, stream, ensure_ascii=False, indent=2)
+        stream.write("\n")
 
 
 def load() -> list[RegisteredProject]:
