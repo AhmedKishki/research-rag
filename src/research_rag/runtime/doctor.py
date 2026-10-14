@@ -83,8 +83,8 @@ def prefetch_models(config: ResearchConfig) -> tuple[str, ...]:
         docling_cache_root,
         prefetch_docling_models,
     )
-    from ..retrieval.dense import _load_cross_encoder, _load_embedder
     from ..retrieval.direct import prefetch_gpt2_tokenizer
+    from ..retrieval.model_runtime import _load_cross_encoder, _load_embedder
     from ..storage.records import directory_statistics
 
     _count, before = directory_statistics(config.model_cache_root)
