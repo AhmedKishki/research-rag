@@ -4,6 +4,7 @@ import asyncio
 import time
 from collections import defaultdict
 from collections.abc import Mapping, Sequence
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
@@ -193,16 +194,185 @@ def _collapse_repetitions(
     return kept, collapsed
 
 
+#: What the lexical gates drop a candidate for, in the order the answer reports them.
+_LEXICAL_REJECTIONS = (
+    "no_query_token_overlap",
+    "extraction_artifact",
+    "corrupt_text",
+    "too_short",
+)
+
+
+@dataclass
+class _SearchContext:
+    """What every stage of one search reads, and the withheld candidates they add to.
+
+    ``filters`` holds `SearchWorkflow._matches_filters`'s keywords. The dense filter
+    is the document set the dense index is asked for, or None when nothing narrows
+    it.
+    """
+
+    generation_root: Path
+    manifest: dict[str, Any]
+    lookup: ArtifactLookup
+    total_chunk_count: int
+    documents_by_id: dict[str, dict[str, Any]]
+    method: str
+    filters: dict[str, set[str]]
+    dense_document_filter: set[str] | None
+    candidate_depth: int
+    stopwords: frozenset[str]
+    token_policy: dict[str, Any]
+    withheld: dict[str, dict[str, Any]] = field(default_factory=dict)
+
+    @property
+    def use_bm25(self) -> bool:
+        return self.method in {"bm25", "hybrid"}
+
+    @property
+    def use_dense(self) -> bool:
+        return self.method in {"dense", "hybrid"}
+
+
+@dataclass
+class _LexicalRanking:
+    """One BM25 ranking: what survived the gates, and what the gates dropped.
+
+    ``window`` is how deep the index was asked, and ``returned`` how many passages
+    it answered with: a window wider than the corpus is answered with everything
+    the corpus holds, so the two differ.
+    """
+
+    window: int = 0
+    returned: int = 0
+    ranking: list[str] = field(default_factory=list)
+    chunks: dict[str, dict[str, Any]] = field(default_factory=dict)
+    rejected: dict[str, int] = field(
+        default_factory=lambda: dict.fromkeys(_LEXICAL_REJECTIONS, 0)
+    )
+    examples: dict[str, list[dict[str, Any]]] = field(default_factory=dict)
+    prf_terms: list[str] = field(default_factory=list)
+
+
+@dataclass
+class _DenseGate:
+    """The cosine gate over what the dense index returned, and every count it reports."""
+
+    returned_ids: list[str] = field(default_factory=list)
+    eligible_ids: list[str] = field(default_factory=list)
+    admitted: list[DenseSearchHit] = field(default_factory=list)
+    best_score: float | None = None
+    admitted_below_floor: int = 0
+    rejected_below_floor: int = 0
+    extraction_artifact: int = 0
+    corrupt_text: int = 0
+    too_short: int = 0
+    filtered_out: int = 0
+    examples: dict[str, list[dict[str, Any]]] = field(default_factory=dict)
+
+    def counts(self) -> dict[str, Any]:
+        """The gate's arithmetic, as the answer and the evaluation trace report it.
+
+        Every eligible candidate was admitted above the floor, admitted below it by
+        the margin, or rejected below it, and nothing else happened to it. The three
+        counts are what makes the gate's share computable.
+        """
+
+        above_floor = len(self.admitted) - self.admitted_below_floor
+        return {
+            "eligible_total": len(self.eligible_ids),
+            "admitted_above_floor": above_floor,
+            "admitted_below_floor": self.admitted_below_floor,
+            "rejected_below_floor": self.rejected_below_floor,
+            "conserved": len(self.eligible_ids)
+            == above_floor + self.admitted_below_floor + self.rejected_below_floor,
+            "excluded_before_gate": {
+                "returned_by_index": len(self.returned_ids),
+                "extraction_artifact": self.extraction_artifact,
+                "corrupt_text": self.corrupt_text,
+                "too_short": self.too_short,
+                "filtered_out": self.filtered_out,
+            },
+        }
+
+
+@dataclass
+class _Rerank:
+    """The ranking after the cross-encoder read its window.
+
+    ``scored_ids`` names the window the model scored. A fallback leaves it empty
+    rather than naming candidates no model read, which is what tells a scored
+    window from one that was not.
+    """
+
+    ordered_ids: list[str]
+    window: int = 0
+    window_ids: list[str] = field(default_factory=list)
+    scored_ids: list[str] = field(default_factory=list)
+    scores: dict[str, float] = field(default_factory=dict)
+    fallback: dict[str, Any] | None = None
+
+
+def _served_method(
+    requested: str | None,
+    manifest: dict[str, Any],
+    upgrade_reasons: Sequence[str],
+) -> tuple[str, dict[str, Any] | None]:
+    """The method that answers this search, and the disclosure when it is not the one asked.
+
+    No surface offers an agent a retrieval mode, so a request that names none is
+    the one the app's own surfaces make, and it may be answered with another
+    method when the generation cannot serve the default.
+
+    The dense vectors carry the identity of the model that embedded them. A
+    generation built with a different model cannot be scored with the current one,
+    so its dense and hybrid methods are not served even where the manifest records
+    them. The reasons are computed from the manifest and the resolved settings
+    only, so a caller that skips the staleness walk cannot bypass this guard.
+    """
+
+    method = DEFAULT_RETRIEVAL_METHOD if requested is None else requested
+    embedding_incompatible = "embedding_model" in upgrade_reasons
+    available = (
+        {"bm25"}
+        if embedding_incompatible
+        else set(manifest.get("retrieval", {}).get("available_methods") or ["bm25"])
+    )
+    if method in available:
+        return method, None
+    if requested is None and not embedding_incompatible and "bm25" in available:
+        # A readable lexical generation must answer the normal agent search
+        # surface without requiring an optional dense build.
+        return "bm25", None
+    if requested is None and embedding_incompatible and method in {"dense", "hybrid"}:
+        # BM25 needs no query embeddings. A default request keeps answering and
+        # discloses why the dense half was skipped.
+        return "bm25", {
+            "reason": "embedding_model_mismatch",
+            "requested_method": method,
+            "served_method": "bm25",
+            "message": (
+                "The selected generation's dense index was built with "
+                "a different embedding model, so it cannot be scored "
+                "with the current one. BM25 results are returned. Restore "
+                "the recorded embedding model to use existing vectors, "
+                "or explicitly ingest to build matching vectors."
+            ),
+            "effect": "bm25_results_returned",
+        }
+    raise ResearchError(
+        f"Current generation does not support {method!r}; "
+        f"available methods: {', '.join(sorted(available))}. "
+        "Choose an available method; adding another method is optional."
+    )
+
+
 class SearchWorkflow:
     async def _collapse_repetitions(
         self,
         ordered_ids: list[str],
-        *,
-        generation_root: Path,
-        manifest: dict[str, Any],
-        lookup: ArtifactLookup,
+        context: _SearchContext,
         chunks_by_id: dict[str, dict[str, Any]],
-        documents_by_id: dict[str, dict[str, Any]],
     ) -> tuple[list[str], list[dict[str, Any]]]:
         """The ranked passages with near-repeats of them removed.
 
@@ -213,8 +383,8 @@ class SearchWorkflow:
 
         if len(ordered_ids) < 2:
             return ordered_ids, []
-        vectors_path = generation_root / str(
-            manifest.get("files", {}).get("portable_embeddings")
+        vectors_path = context.generation_root / str(
+            context.manifest.get("files", {}).get("portable_embeddings")
             or "portable/embeddings.npy"
         )
 
@@ -225,13 +395,13 @@ class SearchWorkflow:
             if matrix.ndim != 2 or not matrix.shape[0]:
                 return {}
             texts = [chunk_text(chunks_by_id[item]) for item in ordered_ids]
-            return VectorByContentsMapping(lookup, matrix).get_many(texts)
+            return VectorByContentsMapping(context.lookup, matrix).get_many(texts)
 
         vectors = await asyncio.to_thread(resolve)
         return _collapse_repetitions(
             ordered_ids,
             chunks_by_id=chunks_by_id,
-            documents_by_id=documents_by_id,
+            documents_by_id=context.documents_by_id,
             vectors=vectors,
             threshold=float(self.config.settings.duplicate_cosine),
         )
@@ -390,215 +560,164 @@ class SearchWorkflow:
         bucket.append(entry)
 
     async def _bm25_ranking(
-        self, *args: Any, generation: tuple[Path, dict[str, Any]], **kwargs: Any
-    ) -> tuple[
-        list[str],
-        dict[str, int],
-        dict[str, dict[str, Any]],
-        dict[str, list[dict[str, Any]]],
-        int,
-        int,
-    ]:
+        self, query: str, context: _SearchContext
+    ) -> _LexicalRanking:
         """Rank lexically with the lexical retriever held for this generation."""
 
-        async with self._retriever(*generation):
-            return await self._bm25_ranking_loaded(*args, **kwargs)
-
-    async def _bm25_ranking_loaded(
-        self,
-        query: str,
-        lookup: ArtifactLookup,
-        total_chunk_count: int,
-        documents_by_id: dict[str, dict[str, Any]],
-        limit: int,
-        *,
-        categories_any: set[str],
-        projects_any: set[str],
-        keywords: set[str],
-        languages_any: set[str],
-        authors_any: set[str],
-        titles_any: set[str],
-        document_filter: set[str],
-        excluded_document_ids: set[str],
-        excluded_chunk_ids: set[str],
-        withheld: dict[str, dict[str, Any]],
-        stopwords: frozenset[str],
-        token_policy: dict[str, Any] | None = None,
-    ) -> tuple[
-        list[str],
-        dict[str, int],
-        dict[str, dict[str, Any]],
-        dict[str, list[dict[str, Any]]],
-        int,
-        int,
-    ]:
-        if limit <= 0:
-            return (
-                [],
-                {
-                    "no_query_token_overlap": 0,
-                    "extraction_artifact": 0,
-                    "corrupt_text": 0,
-                    "too_short": 0,
-                },
-                {},
-                {},
-                0,
-                0,
-            )
-        # An exclusion is a candidate this window can no longer use, so the
-        # window widens past it instead of returning fewer passages than asked
-        # for. Without this clause a top_k of ten answers with nine the moment
-        # one chunk is excluded.
-        filtered = bool(
-            categories_any
-            or keywords
-            or projects_any
-            or languages_any
-            or authors_any
-            or titles_any
-            or document_filter
-            or excluded_document_ids
-            or excluded_chunk_ids
-        )
-        # The window widens past candidates the filters will drop, so an exclusion
-        # does not shrink top_k. It stops at the candidate ceiling the settings
-        # already declare, which is the same bound the dense depth takes: past it
-        # no ranking decision has been found, and reaching for it costs a
-        # second full scan of the corpus per doubling. Filters narrow what a
-        # ranking returns rather than what it ranks, so a narrow filter can still
-        # find nothing inside the ceiling; the response says so rather than
-        # reporting an empty window as an empty corpus.
-        ceiling = (
-            min(total_chunk_count, self.config.settings.maximum_candidates)
-            if filtered
-            else total_chunk_count
-        )
-        requested = min(
-            total_chunk_count,
-            max(limit * 4, self.config.settings.minimum_candidates),
-        )
-        query_tokens = _content_tokens(query, stopwords)
-        by_contents: dict[str, list[dict[str, Any]]] = {}
-        loaded_contents: set[str] = set()
-        # A candidate's verdict depends only on the chunk, so a repeat in a
-        # widening iteration reuses it instead of rescanning the text.
-        flags_cache: dict[str, int] = {}
-        tokens_cache: dict[str, frozenset[str]] = {}
-        while True:
-            passages = await self.lexical.search_bm25(query, requested)
-            missing_contents = [
-                passage for passage in passages if passage not in loaded_contents
-            ]
-            if missing_contents:
-                by_contents.update(
-                    await asyncio.to_thread(
-                        lookup.chunks_by_contents,
-                        missing_contents,
-                    )
-                )
-                loaded_contents.update(missing_contents)
-
-            ranking: list[str] = []
-            used: set[str] = set()
-            resolved: dict[str, dict[str, Any]] = {}
-            rejected = {
-                "no_query_token_overlap": 0,
-                "extraction_artifact": 0,
-                "corrupt_text": 0,
-                "too_short": 0,
-            }
-            rejected_examples: dict[str, list[dict[str, Any]]] = {}
-            for passage in passages:
-                candidates = by_contents.get(passage)
-                if not candidates:
-                    raise ResearchError(
-                        "Lexical backend returned a passage absent from the current chunk store"
-                    )
-                chunk = next(
-                    (
-                        item
-                        for item in candidates
-                        if str(item["chunk_id"]) not in used
-                        and self._matches_filters(
-                            item,
-                            documents_by_id,
-                            categories_any=categories_any,
-                            keywords=keywords,
-                            projects_any=projects_any,
-                            languages_any=languages_any,
-                            authors_any=authors_any,
-                            titles_any=titles_any,
-                            document_filter=document_filter,
-                            excluded_document_ids=excluded_document_ids,
-                            excluded_chunk_ids=excluded_chunk_ids,
+        async with self._retriever(context.generation_root, context.manifest):
+            limit = context.candidate_depth
+            if limit <= 0:
+                return _LexicalRanking()
+            settings = self.config.settings
+            total = context.total_chunk_count
+            # An exclusion is a candidate this window can no longer use, so the
+            # window widens past candidates the filters drop instead of returning
+            # fewer passages than asked for. It stops at the candidate ceiling the
+            # settings already declare, which is the same bound the dense depth
+            # takes: past it no ranking decision has been found, and reaching for
+            # it costs a second full scan of the corpus per doubling. Filters
+            # narrow what a ranking returns rather than what it ranks, so a narrow
+            # filter can still find nothing inside the ceiling; the response says
+            # so rather than reporting an empty window as an empty corpus.
+            filtered = any(context.filters.values())
+            ceiling = min(total, settings.maximum_candidates) if filtered else total
+            requested = min(total, max(limit * 4, settings.minimum_candidates))
+            query_tokens = _content_tokens(query, context.stopwords)
+            by_contents: dict[str, list[dict[str, Any]]] = {}
+            loaded_contents: set[str] = set()
+            # A candidate's verdict depends only on the chunk, so a repeat in a
+            # widening iteration reuses it instead of rescanning the text.
+            flags_cache: dict[str, int] = {}
+            tokens_cache: dict[str, frozenset[str]] = {}
+            while True:
+                passages = await self.lexical.search_bm25(query, requested)
+                missing_contents = [
+                    passage for passage in passages if passage not in loaded_contents
+                ]
+                if missing_contents:
+                    by_contents.update(
+                        await asyncio.to_thread(
+                            context.lookup.chunks_by_contents,
+                            missing_contents,
                         )
-                    ),
-                    None,
-                )
-                if chunk is None:
-                    continue
-                chunk_id = str(chunk["chunk_id"])
-                used.add(chunk_id)
-                resolved[chunk_id] = chunk
-                flags = flags_cache.get(chunk_id)
-                if flags is None:
-                    flags = _candidate_flags(chunk)
-                    flags_cache[chunk_id] = flags
-                if flags & CHUNK_FLAG_EXTRACTION_ARTIFACT:
-                    rejected["extraction_artifact"] += 1
-                    continue
-                if flags & CHUNK_FLAG_CORRUPT_TEXT:
-                    rejected["corrupt_text"] += 1
-                    # Reason codes are recomputed only here, because the
-                    # response discloses them and they are not stored.
-                    _record_withheld(
-                        withheld,
-                        chunk,
-                        text_corruption_reasons(chunk_text(chunk)),
-                        limit=self.config.settings.maximum_withheld_examples,
                     )
-                    continue
-                tokens = tokens_cache.get(chunk_id)
-                if tokens is None:
-                    tokens = frozenset(_content_tokens(chunk_text(chunk), stopwords))
-                    tokens_cache[chunk_id] = tokens
-                if not query_tokens.intersection(tokens):
-                    rejected["no_query_token_overlap"] += 1
-                    continue
-                if await self._passage_too_short_async(
-                    chunk, token_policy=token_policy
-                ):
-                    rejected["too_short"] += 1
-                    self._record_rejected_candidate(
-                        rejected_examples,
-                        reason="bm25_too_short",
-                        chunk=chunk,
-                        documents_by_id=documents_by_id,
-                    )
-                    continue
-                ranking.append(chunk_id)
-                if len(ranking) == limit:
-                    break
+                    loaded_contents.update(missing_contents)
 
-            if (
-                len(ranking) == limit
-                or not filtered
-                or requested >= ceiling
-                or len(passages) < requested
-            ):
-                return (
-                    ranking,
-                    rejected,
-                    resolved,
-                    rejected_examples,
-                    requested,
-                    # A window wider than the corpus is answered with everything
-                    # the corpus holds, so what the index returned is not the
-                    # window it was asked for.
-                    len(passages),
-                )
-            requested = min(ceiling, requested * 2)
+                result = _LexicalRanking(window=requested, returned=len(passages))
+                used: set[str] = set()
+                for passage in passages:
+                    candidates = by_contents.get(passage)
+                    if not candidates:
+                        raise ResearchError(
+                            "Lexical backend returned a passage absent from the current chunk store"
+                        )
+                    chunk = next(
+                        (
+                            item
+                            for item in candidates
+                            if str(item["chunk_id"]) not in used
+                            and self._matches_filters(
+                                item, context.documents_by_id, **context.filters
+                            )
+                        ),
+                        None,
+                    )
+                    if chunk is None:
+                        continue
+                    chunk_id = str(chunk["chunk_id"])
+                    used.add(chunk_id)
+                    result.chunks[chunk_id] = chunk
+                    flags = flags_cache.get(chunk_id)
+                    if flags is None:
+                        flags = flags_cache[chunk_id] = _candidate_flags(chunk)
+                    if flags & CHUNK_FLAG_EXTRACTION_ARTIFACT:
+                        result.rejected["extraction_artifact"] += 1
+                        continue
+                    if flags & CHUNK_FLAG_CORRUPT_TEXT:
+                        result.rejected["corrupt_text"] += 1
+                        # Reason codes are recomputed only here, because the
+                        # response discloses them and they are not stored.
+                        _record_withheld(
+                            context.withheld,
+                            chunk,
+                            text_corruption_reasons(chunk_text(chunk)),
+                            limit=settings.maximum_withheld_examples,
+                        )
+                        continue
+                    tokens = tokens_cache.get(chunk_id)
+                    if tokens is None:
+                        tokens = tokens_cache[chunk_id] = frozenset(
+                            _content_tokens(chunk_text(chunk), context.stopwords)
+                        )
+                    if not query_tokens.intersection(tokens):
+                        result.rejected["no_query_token_overlap"] += 1
+                        continue
+                    if await self._passage_too_short_async(
+                        chunk, token_policy=context.token_policy
+                    ):
+                        result.rejected["too_short"] += 1
+                        self._record_rejected_candidate(
+                            result.examples,
+                            reason="bm25_too_short",
+                            chunk=chunk,
+                            documents_by_id=context.documents_by_id,
+                        )
+                        continue
+                    result.ranking.append(chunk_id)
+                    if len(result.ranking) == limit:
+                        break
+
+                if (
+                    len(result.ranking) == limit
+                    or not filtered
+                    or requested >= ceiling
+                    or len(passages) < requested
+                ):
+                    return result
+                requested = min(ceiling, requested * 2)
+
+    async def _lexical_ranking(
+        self, query: str, context: _SearchContext
+    ) -> _LexicalRanking:
+        """BM25, then a second pass widened by pseudo-relevance feedback.
+
+        The lexical leaders of the first pass name the vocabulary the author
+        actually used, so a question asked in other words can still reach those
+        passages. Terms are mined from the first-pass ranking only, and the second
+        pass replaces the lexical ranking that the fusion and the answer see.
+        """
+
+        if not context.use_bm25:
+            return _LexicalRanking()
+        first = await self._bm25_ranking(query, context)
+        settings = self.config.settings
+        if not first.ranking or not settings.prf:
+            return first
+        frequencies = await self._generation_document_frequencies(
+            str(context.manifest["generation_id"]),
+            context.generation_root / str(context.manifest["files"]["chunks"]),
+            context.stopwords,
+        )
+        terms = _pseudo_relevance_terms(
+            query=query,
+            texts=[
+                chunk_text(first.chunks[chunk_id])
+                for chunk_id in first.ranking[: settings.prf_documents]
+            ],
+            maximum_terms=settings.prf_terms,
+            stopwords=context.stopwords,
+            document_frequencies=frequencies,
+            corpus_size=context.total_chunk_count,
+        )
+        if not terms:
+            return first
+        second = await self._bm25_ranking(f"{query} {' '.join(terms)}", context)
+        # The feedback pass searched a second window, so the answer reports the
+        # wider of the two rather than the first.
+        second.window = max(first.window, second.window)
+        second.chunks = {**first.chunks, **second.chunks}
+        second.prf_terms = terms
+        return second
 
     @staticmethod
     def _fuse_rankings(
@@ -657,7 +776,201 @@ class SearchWorkflow:
         self._document_frequencies = (generation_id, stopwords, frequencies)
         return frequencies
 
-    async def search(  # noqa: C901 — one function owns the whole retrieval branch; splitting it scatters the rules it keeps together
+    async def _candidate_depth(
+        self,
+        lookup: ArtifactLookup,
+        top_k: int,
+        active_document_ids: set[str],
+        *,
+        narrowed: bool,
+        excluded_chunk_ids: set[str],
+    ) -> int:
+        """How many candidates each half ranks: what the filters leave, within bounds."""
+
+        active = await asyncio.to_thread(
+            lookup.chunk_count, active_document_ids if narrowed else None
+        )
+        # The count above filters by document, so it still holds every excluded
+        # chunk inside the active documents. The dense backend filters by document
+        # too and cannot be asked for less, so the candidates it will drop are
+        # taken off the depth here instead: a post-query drop must not cost the
+        # reader a passage.
+        if excluded_chunk_ids:
+            excluded = await asyncio.to_thread(
+                lookup.chunks_by_ids, sorted(excluded_chunk_ids)
+            )
+            active = max(
+                0,
+                active
+                - sum(
+                    str(chunk["document_id"]) in active_document_ids
+                    for chunk in excluded.values()
+                ),
+            )
+        settings = self.config.settings
+        return min(
+            active,
+            settings.maximum_candidates,
+            max(settings.minimum_candidates, top_k * 4),
+        )
+
+    async def _dense_search(
+        self, query: str, context: _SearchContext
+    ) -> list[DenseSearchHit]:
+        """The dense index's nearest passages inside the documents the filters leave."""
+
+        if (
+            not context.use_dense
+            or context.candidate_depth == 0
+            or context.dense_document_filter == set()
+        ):
+            return []
+        return await asyncio.to_thread(
+            self._dense_for(context.manifest).search,
+            context.generation_root / context.manifest["files"]["dense_index"],
+            query,
+            context.candidate_depth,
+            # Keep Qdrant payloads lean. Translate current reviewed metadata
+            # filters to document IDs at query time so edits remain exact without
+            # rebuilding the dense index.
+            document_ids=sorted(context.dense_document_filter or []),
+            excluded_document_ids=sorted(context.filters["excluded_document_ids"]),
+        )
+
+    async def _dense_gate(
+        self,
+        hits: list[DenseSearchHit],
+        context: _SearchContext,
+        chunks_by_id: dict[str, dict[str, Any]],
+    ) -> _DenseGate:
+        """Admit dense candidates by score, after every filter that is not the score.
+
+        The floor is absolute, and a query whose best passage still scores below it
+        can have its whole candidate list packed into a band under it, so the floor
+        drops candidates that matched it about as closely. The margin admits that
+        band, but only once something has cleared the floor, so a query the corpus
+        cannot support still abstains rather than returning its least-bad passage.
+        """
+
+        gate = _DenseGate(returned_ids=[hit.chunk_id for hit in hits])
+        eligible: list[tuple[DenseSearchHit, dict[str, Any]]] = []
+        for hit in hits:
+            chunk = chunks_by_id.get(hit.chunk_id)
+            if chunk is None:
+                raise ResearchError(
+                    "The dense index returned a chunk absent from the current "
+                    f"chunk store: {hit.chunk_id}"
+                )
+            flags = _candidate_flags(chunk)
+            if flags & CHUNK_FLAG_EXTRACTION_ARTIFACT:
+                gate.extraction_artifact += 1
+            elif flags & CHUNK_FLAG_CORRUPT_TEXT:
+                gate.corrupt_text += 1
+                _record_withheld(
+                    context.withheld,
+                    chunk,
+                    text_corruption_reasons(chunk_text(chunk)),
+                    limit=self.config.settings.maximum_withheld_examples,
+                )
+            elif not self._matches_filters(
+                chunk, context.documents_by_id, **context.filters
+            ):
+                gate.filtered_out += 1
+            elif await self._passage_too_short_async(
+                chunk, token_policy=context.token_policy
+            ):
+                gate.too_short += 1
+                self._record_rejected_candidate(
+                    gate.examples,
+                    reason="dense_too_short",
+                    chunk=chunk,
+                    documents_by_id=context.documents_by_id,
+                )
+            else:
+                eligible.append((hit, chunk))
+        gate.eligible_ids = [hit.chunk_id for hit, _chunk in eligible]
+        gate.best_score = max((hit.score for hit, _chunk in eligible), default=None)
+        floor = self.config.settings.dense_minimum_cosine_similarity
+        margin = self.config.settings.dense_relative_similarity_margin
+        admission_floor = floor
+        if margin > 0.0 and gate.best_score is not None and gate.best_score >= floor:
+            admission_floor = min(floor, gate.best_score - margin)
+        for hit, chunk in eligible:
+            if hit.score >= admission_floor:
+                if hit.score < floor:
+                    gate.admitted_below_floor += 1
+                gate.admitted.append(hit)
+                continue
+            gate.rejected_below_floor += 1
+            self._record_rejected_candidate(
+                gate.examples,
+                reason="dense_below_threshold",
+                chunk=chunk,
+                documents_by_id=context.documents_by_id,
+                cosine_similarity=round(hit.score, 4),
+            )
+        return gate
+
+    async def _rerank(
+        self,
+        query: str,
+        ordered_ids: list[str],
+        base_ranks: dict[str, int],
+        *,
+        top_k: int,
+        model: str | None,
+        chunks_by_id: dict[str, dict[str, Any]],
+    ) -> _Rerank:
+        """The cross-encoder's order over the head of the ranking; the tail keeps its place.
+
+        Requested reranking cannot run without its model, so an unloadable one
+        leaves the candidate order unchanged and the answer says why instead of
+        failing the search.
+        """
+
+        if not ordered_ids:
+            return _Rerank(ordered_ids)
+        settings = self.config.settings
+        window = min(
+            len(ordered_ids),
+            settings.rerank_max_candidates,
+            max(top_k * settings.rerank_window_multiple, settings.rerank_window_floor),
+        )
+        head = ordered_ids[:window]
+        try:
+            # A backend that answers tool calls keeps its configured model, so the
+            # keyword is passed only when this call names another.
+            scores = await asyncio.to_thread(
+                self.dense.rerank,
+                query,
+                [chunk_text(chunks_by_id[item]) for item in head],
+                **({"model": model} if model else {}),
+            )
+        except RerankerUnavailable as exc:
+            return _Rerank(
+                ordered_ids,
+                window=window,
+                window_ids=head,
+                fallback={
+                    "reason": "reranker_model_unavailable",
+                    "message": str(exc),
+                    "effect": "unranked_candidate_order_returned",
+                },
+            )
+        by_id = dict(zip(head, scores, strict=True))
+        reordered = sorted(
+            head,
+            key=lambda chunk_id: (-by_id[chunk_id], base_ranks[chunk_id], chunk_id),
+        )
+        return _Rerank(
+            [*reordered, *ordered_ids[window:]],
+            window=window,
+            window_ids=reordered,
+            scored_ids=head,
+            scores=by_id,
+        )
+
+    async def search(
         self,
         query: str,
         *,
@@ -705,15 +1018,8 @@ class SearchWorkflow:
             raise ResearchError("query must not be empty")
         if not 1 <= top_k <= 50:
             raise ResearchError("top_k must be between 1 and 50")
-        if retrieval_method is None:
-            # No surface offers an agent a retrieval mode, so this is the request
-            # the app's own surfaces make. It may be answered with a method other
-            # than the default when the generation cannot serve that one.
-            retrieval_method = DEFAULT_RETRIEVAL_METHOD
-            method_was_default = True
-        else:
+        if retrieval_method is not None:
             retrieval_method = retrieval_method.casefold().strip()
-            method_was_default = False
             if retrieval_method not in RETRIEVAL_METHODS:
                 raise ResearchError(
                     "retrieval_method must be one of: bm25, dense, hybrid"
@@ -725,6 +1031,7 @@ class SearchWorkflow:
             applied_reranker_revision = _reranker_revision(applied_reranker)
         except ValueError as exc:
             raise ResearchError(str(exc)) from exc
+        settings = self.config.settings
 
         async with self._search_read() as lease:
             current = self._load_current_optional()
@@ -739,97 +1046,42 @@ class SearchWorkflow:
                     "Select a generation belonging to this project; build one only "
                     "if no compatible generation is retained."
                 )
-            passage_token_policy = self._passage_token_policy(manifest)
-            gate_stopwords = self.config.settings.gate_stopwords
+            token_policy = self._passage_token_policy(manifest)
             lookup = await self._ensure_artifact_lookup(generation_root, manifest)
             total_chunk_count = await asyncio.to_thread(lookup.chunk_count)
             if not total_chunk_count:
                 raise ResearchError("The current generation has no chunks")
-            metadata = self._metadata()
-            documents_by_id = _effective_documents(manifest, metadata)
-            chunks_by_id: dict[str, dict[str, Any]] = {}
+            documents_by_id = _effective_documents(manifest, self._metadata())
             exclusions = self._source_exclusions()
-            excluded_document_ids = self._excluded_document_ids(
-                manifest,
-                exclusions,
-            )
+            excluded_document_ids = self._excluded_document_ids(manifest, exclusions)
             # A chunk id is derived from content, so the same passage keeps it
             # across a rebuild of unchanged bytes: the decision is enforced by
             # every id it names, and which of them this generation holds is
             # reported by the review state rather than guessed here.
             excluded_chunk_ids = set(self._chunk_exclusions())
+            method, retrieval_fallback = _served_method(
+                retrieval_method, manifest, guard_upgrade_reasons
+            )
 
-            retrieval = manifest.get("retrieval", {})
-            # The dense vectors carry the identity of the model that embedded
-            # them. A generation built with a different model cannot be scored
-            # with the current one, so its dense and hybrid methods are not served
-            # even where the manifest records them. The reasons are computed from
-            # the manifest and the resolved settings only, so a caller that skips
-            # the staleness walk cannot bypass this guard.
-            embedding_incompatible = "embedding_model" in guard_upgrade_reasons
-            recorded_methods = set(retrieval.get("available_methods") or ["bm25"])
-            if embedding_incompatible:
-                available_methods = {
-                    method for method in recorded_methods if method == "bm25"
-                } or {"bm25"}
-            else:
-                available_methods = recorded_methods
-            retrieval_fallback: dict[str, Any] | None = None
-            if retrieval_method not in available_methods:
-                if (
-                    method_was_default
-                    and not embedding_incompatible
-                    and "bm25" in available_methods
-                ):
-                    # A readable lexical generation must answer the normal agent
-                    # search surface without requiring an optional dense build.
-                    retrieval_method = "bm25"
-                elif (
-                    method_was_default
-                    and embedding_incompatible
-                    and retrieval_method in {"dense", "hybrid"}
-                ):
-                    # BM25 needs no query embeddings. A default request keeps
-                    # answering and discloses why the dense half was skipped.
-                    retrieval_fallback = {
-                        "reason": "embedding_model_mismatch",
-                        "requested_method": retrieval_method,
-                        "served_method": "bm25",
-                        "message": (
-                            "The selected generation's dense index was built with "
-                            "a different embedding model, so it cannot be scored "
-                            "with the current one. BM25 results are returned. Restore "
-                            "the recorded embedding model to use existing vectors, "
-                            "or explicitly ingest to build matching vectors."
-                        ),
-                        "effect": "bm25_results_returned",
-                    }
-                    retrieval_method = "bm25"
-                else:
-                    raise ResearchError(
-                        f"Current generation does not support {retrieval_method!r}; "
-                        f"available methods: {', '.join(sorted(available_methods))}. "
-                        "Choose an available method; adding another method is optional."
-                    )
-
+            metadata_filters = {
+                "categories_any": _normalized_filter(categories_any),
+                "projects_any": _normalized_filter(projects_any),
+                "keywords": _normalized_filter(keywords),
+                "languages_any": _normalized_filter(languages_any),
+                "authors_any": _normalized_filter(authors_any),
+                "titles_any": _normalized_filter(titles_any),
+            }
             requested_source_ids = _requested_ids(source_ids)
             requested_exclude_source_ids = _requested_ids(exclude_source_ids)
-            category_any_filter = _normalized_filter(categories_any)
-            project_any_filter = _normalized_filter(projects_any)
-            keyword_filter = _normalized_filter(keywords)
-            language_any_filter = _normalized_filter(languages_any)
-            author_any_filter = _normalized_filter(authors_any)
-            title_any_filter = _normalized_filter(titles_any)
-            source_include_document_ids, unknown_source_ids = (
-                self._document_ids_for_source_ids(manifest, requested_source_ids)
+            document_filter, unknown_source_ids = self._document_ids_for_source_ids(
+                manifest, requested_source_ids
             )
-            source_exclude_document_ids, unknown_exclude_source_ids = (
+            excluded_on_request, unknown_exclude_source_ids = (
                 self._document_ids_for_source_ids(
-                    manifest,
-                    requested_exclude_source_ids,
+                    manifest, requested_exclude_source_ids
                 )
             )
-            if requested_source_ids and not source_include_document_ids:
+            if requested_source_ids and not document_filter:
                 raise ResearchError(
                     "source_ids matched no document in the current generation: "
                     f"{', '.join(unknown_source_ids)}. Use find_source to resolve "
@@ -838,32 +1090,14 @@ class SearchWorkflow:
                 )
             # Reviewed exclusions always win over a search-level exclusion, and a
             # search-level include can never re-admit an excluded source.
-            excluded_document_ids = excluded_document_ids | source_exclude_document_ids
-            document_filter = set(source_include_document_ids)
-
-            dense_document_filter: set[str] | None = None
-            metadata_filter_active = bool(
-                category_any_filter
-                or project_any_filter
-                or keyword_filter
-                or language_any_filter
-                or author_any_filter
-                or title_any_filter
-            )
-            if metadata_filter_active:
-                dense_document_filter = {
-                    document_id
-                    for document_id, document in documents_by_id.items()
-                    if _document_matches_metadata(
-                        document,
-                        keywords=keyword_filter,
-                        categories_any=category_any_filter,
-                        projects_any=project_any_filter,
-                        languages_any=language_any_filter,
-                        authors_any=author_any_filter,
-                        titles_any=title_any_filter,
-                    )
-                }
+            excluded_document_ids |= excluded_on_request
+            metadata_filtered = any(metadata_filters.values())
+            matching_document_ids = {
+                document_id
+                for document_id, document in documents_by_id.items()
+                if _document_matches_metadata(document, **metadata_filters)
+            }
+            dense_document_filter = matching_document_ids if metadata_filtered else None
             if document_filter:
                 dense_document_filter = (
                     document_filter
@@ -872,490 +1106,141 @@ class SearchWorkflow:
                 )
             active_document_ids = {
                 document_id
-                for document_id, document in documents_by_id.items()
+                for document_id in matching_document_ids
                 if document_id not in excluded_document_ids
-                and _document_matches_metadata(
-                    document,
-                    keywords=keyword_filter,
-                    categories_any=category_any_filter,
-                    projects_any=project_any_filter,
-                    languages_any=language_any_filter,
-                    authors_any=author_any_filter,
-                    titles_any=title_any_filter,
-                )
                 and (not document_filter or document_id in document_filter)
             }
-            active_chunk_count = await asyncio.to_thread(
-                lookup.chunk_count,
-                (
-                    active_document_ids
-                    if metadata_filter_active
-                    or document_filter
-                    or excluded_document_ids
-                    else None
-                ),
-            )
-            # The count above filters by document, so it still holds every
-            # excluded chunk inside the active documents. The dense backend
-            # filters by document too and cannot be asked for less, so the
-            # candidates it will drop are taken off the depth here instead:
-            # a post-query drop must not cost the reader a passage.
-            if excluded_chunk_ids:
-                excluded_chunks = await asyncio.to_thread(
-                    lookup.chunks_by_ids,
-                    sorted(excluded_chunk_ids),
-                )
-                active_chunk_count = max(
-                    0,
-                    active_chunk_count
-                    - sum(
-                        1
-                        for chunk in excluded_chunks.values()
-                        if str(chunk["document_id"]) in active_document_ids
-                    ),
-                )
-            candidate_depth = min(
-                active_chunk_count,
-                self.config.settings.maximum_candidates,
-                max(self.config.settings.minimum_candidates, top_k * 4),
-            )
-
-            use_bm25 = retrieval_method in {"bm25", "hybrid"}
-            use_dense = retrieval_method in {"dense", "hybrid"}
-            generation = (generation_root, manifest)
-
-            bm25_ranking: list[str] = []
-            bm25_window = 0
-            bm25_returned = 0
-            dense_hits: list[DenseSearchHit] = []
-            withheld: dict[str, dict[str, Any]] = {}
-            bm25_examples: dict[str, list[dict[str, Any]]] = {}
-            bm25_rejected = {
-                "no_query_token_overlap": 0,
-                "extraction_artifact": 0,
-                "corrupt_text": 0,
-                "too_short": 0,
-            }
-
-            async def search_dense() -> list[DenseSearchHit]:
-                if candidate_depth == 0 or dense_document_filter == set():
-                    return []
-                return await asyncio.to_thread(
-                    self._dense_for(manifest).search,
-                    generation_root / manifest["files"]["dense_index"],
-                    query,
-                    candidate_depth,
-                    # Keep Qdrant payloads lean. Translate current reviewed
-                    # metadata filters to document IDs at query time so edits
-                    # remain exact without rebuilding the dense index.
-                    document_ids=sorted(dense_document_filter or []),
-                    excluded_document_ids=sorted(excluded_document_ids),
-                )
-
-            if use_bm25 and use_dense:
-                bm25_result, dense_hits = await asyncio.gather(
-                    self._bm25_ranking(
-                        query,
-                        lookup,
-                        total_chunk_count,
-                        documents_by_id,
-                        candidate_depth,
-                        categories_any=category_any_filter,
-                        keywords=keyword_filter,
-                        projects_any=project_any_filter,
-                        languages_any=language_any_filter,
-                        authors_any=author_any_filter,
-                        titles_any=title_any_filter,
-                        document_filter=document_filter,
-                        excluded_document_ids=excluded_document_ids,
-                        excluded_chunk_ids=excluded_chunk_ids,
-                        withheld=withheld,
-                        stopwords=gate_stopwords,
-                        token_policy=passage_token_policy,
-                        generation=generation,
-                    ),
-                    search_dense(),
-                )
-                (
-                    bm25_ranking,
-                    bm25_rejected,
-                    bm25_chunks,
-                    bm25_examples,
-                    bm25_window,
-                    bm25_returned,
-                ) = bm25_result
-                chunks_by_id.update(bm25_chunks)
-            elif use_bm25:
-                (
-                    bm25_ranking,
-                    bm25_rejected,
-                    bm25_chunks,
-                    bm25_examples,
-                    bm25_window,
-                    bm25_returned,
-                ) = await self._bm25_ranking(
-                    query,
+            context = _SearchContext(
+                generation_root=generation_root,
+                manifest=manifest,
+                lookup=lookup,
+                total_chunk_count=total_chunk_count,
+                documents_by_id=documents_by_id,
+                method=method,
+                filters={
+                    **metadata_filters,
+                    "document_filter": document_filter,
+                    "excluded_document_ids": excluded_document_ids,
+                    "excluded_chunk_ids": excluded_chunk_ids,
+                },
+                dense_document_filter=dense_document_filter,
+                candidate_depth=await self._candidate_depth(
                     lookup,
-                    total_chunk_count,
-                    documents_by_id,
-                    candidate_depth,
-                    categories_any=category_any_filter,
-                    keywords=keyword_filter,
-                    projects_any=project_any_filter,
-                    languages_any=language_any_filter,
-                    authors_any=author_any_filter,
-                    titles_any=title_any_filter,
-                    document_filter=document_filter,
-                    excluded_document_ids=excluded_document_ids,
+                    top_k,
+                    active_document_ids,
+                    narrowed=bool(
+                        metadata_filtered or document_filter or excluded_document_ids
+                    ),
                     excluded_chunk_ids=excluded_chunk_ids,
-                    withheld=withheld,
-                    stopwords=gate_stopwords,
-                    token_policy=passage_token_policy,
-                    generation=generation,
-                )
-                chunks_by_id.update(bm25_chunks)
-            else:
-                dense_hits = await search_dense()
-
-            # Pseudo-relevance feedback: the lexical leaders of the first pass
-            # name the vocabulary the author actually used, so a question asked
-            # in other words can still reach those passages. Terms are mined from
-            # the first-pass ranking only, and the second pass replaces the
-            # lexical ranking that the fusion and the payload see.
-            prf_terms: list[str] = []
-            if use_bm25 and bm25_ranking and self.config.settings.prf:
-                frequencies = await self._generation_document_frequencies(
-                    str(manifest["generation_id"]),
-                    generation_root / str(manifest["files"]["chunks"]),
-                    gate_stopwords,
-                )
-                prf_terms = _pseudo_relevance_terms(
-                    query=query,
-                    texts=[
-                        chunk_text(chunks_by_id[chunk_id])
-                        for chunk_id in bm25_ranking[
-                            : self.config.settings.prf_documents
-                        ]
-                        if chunk_id in chunks_by_id
-                    ],
-                    maximum_terms=self.config.settings.prf_terms,
-                    stopwords=gate_stopwords,
-                    document_frequencies=frequencies,
-                    corpus_size=total_chunk_count,
-                )
-                if prf_terms:
-                    (
-                        bm25_ranking,
-                        bm25_rejected,
-                        bm25_chunks,
-                        bm25_examples,
-                        prf_window,
-                        prf_returned,
-                    ) = await self._bm25_ranking(
-                        f"{query} {' '.join(prf_terms)}",
-                        lookup,
-                        total_chunk_count,
-                        documents_by_id,
-                        candidate_depth,
-                        categories_any=category_any_filter,
-                        keywords=keyword_filter,
-                        projects_any=project_any_filter,
-                        languages_any=language_any_filter,
-                        authors_any=author_any_filter,
-                        titles_any=title_any_filter,
-                        document_filter=document_filter,
-                        excluded_document_ids=excluded_document_ids,
-                        excluded_chunk_ids=excluded_chunk_ids,
-                        withheld=withheld,
-                        stopwords=gate_stopwords,
-                        token_policy=passage_token_policy,
-                        generation=generation,
-                    )
-                    chunks_by_id.update(bm25_chunks)
-                    # The feedback pass searched a second window, so the answer
-                    # reports the wider of the two rather than the first.
-                    bm25_window = max(bm25_window, prf_window)
-                    bm25_returned = prf_returned
-
-            dense_chunks = await asyncio.to_thread(
-                lookup.chunks_by_ids,
-                [hit.chunk_id for hit in dense_hits],
+                ),
+                stopwords=settings.gate_stopwords,
+                token_policy=token_policy,
             )
-            chunks_by_id.update(dense_chunks)
-            accepted_dense_hits: list[DenseSearchHit] = []
-            dense_margin = self.config.settings.dense_relative_similarity_margin
-            dense_floor = self.config.settings.dense_minimum_cosine_similarity
-            dense_below_threshold = 0
-            dense_below_threshold_rescued = 0
-            dense_admitted_above_floor = 0
-            dense_quality_rejected = 0
-            dense_corrupt_text_rejected = 0
-            dense_too_short = 0
-            dense_filtered_out = 0
-            dense_rejected_examples: dict[str, list[dict[str, Any]]] = {}
-            # Every non-score filter runs first, so the score decision below sees
-            # only candidates the corpus can actually offer.
-            eligible_dense_hits: list[tuple[DenseSearchHit, dict[str, Any]]] = []
-            dense_returned_ids = [hit.chunk_id for hit in dense_hits]
-            dense_returned_by_index = len(dense_hits)
-            for dense_hit in dense_hits:
-                chunk = chunks_by_id.get(dense_hit.chunk_id)
-                if chunk is None:
-                    raise ResearchError(
-                        "The dense index returned a chunk absent from the current "
-                        f"chunk store: {dense_hit.chunk_id}"
-                    )
-                dense_flags = _candidate_flags(chunk)
-                if dense_flags & CHUNK_FLAG_EXTRACTION_ARTIFACT:
-                    dense_quality_rejected += 1
-                    continue
-                if dense_flags & CHUNK_FLAG_CORRUPT_TEXT:
-                    dense_corrupt_text_rejected += 1
-                    _record_withheld(
-                        withheld,
-                        chunk,
-                        text_corruption_reasons(chunk_text(chunk)),
-                        limit=self.config.settings.maximum_withheld_examples,
-                    )
-                    continue
-                if not self._matches_filters(
-                    chunk,
-                    documents_by_id,
-                    categories_any=category_any_filter,
-                    keywords=keyword_filter,
-                    projects_any=project_any_filter,
-                    languages_any=language_any_filter,
-                    authors_any=author_any_filter,
-                    titles_any=title_any_filter,
-                    document_filter=document_filter,
-                    excluded_document_ids=excluded_document_ids,
-                    excluded_chunk_ids=excluded_chunk_ids,
-                ):
-                    dense_filtered_out += 1
-                    continue
-                if await self._passage_too_short_async(
-                    chunk, token_policy=passage_token_policy
-                ):
-                    dense_too_short += 1
-                    self._record_rejected_candidate(
-                        dense_rejected_examples,
-                        reason="dense_too_short",
-                        chunk=chunk,
-                        documents_by_id=documents_by_id,
-                    )
-                    continue
-                eligible_dense_hits.append((dense_hit, chunk))
-            # The floor is absolute, and a query whose best passage still scores
-            # below it can have its whole candidate list packed into a band under
-            # it, so the floor drops candidates that matched it about as closely.
-            # The margin admits that band, but only once something has cleared the
-            # floor, so a query the corpus cannot support still abstains rather
-            # than returning its least-bad passage.
-            best_dense_score: float | None = None
-            for dense_hit, _chunk in eligible_dense_hits:
-                if best_dense_score is None or dense_hit.score > best_dense_score:
-                    best_dense_score = dense_hit.score
-            admission_floor = dense_floor
-            if (
-                dense_margin > 0.0
-                and best_dense_score is not None
-                and best_dense_score >= dense_floor
-            ):
-                admission_floor = min(dense_floor, best_dense_score - dense_margin)
-            for dense_hit, chunk in eligible_dense_hits:
-                if dense_hit.score >= admission_floor:
-                    if dense_hit.score < dense_floor:
-                        dense_below_threshold_rescued += 1
-                    accepted_dense_hits.append(dense_hit)
-                    continue
-                dense_below_threshold += 1
-                self._record_rejected_candidate(
-                    dense_rejected_examples,
-                    reason="dense_below_threshold",
-                    chunk=chunk,
-                    documents_by_id=documents_by_id,
-                    cosine_similarity=round(dense_hit.score, 4),
-                )
-            dense_hits = accepted_dense_hits
-            dense_eligible_total = len(eligible_dense_hits)
-            dense_eligible_ids = [hit.chunk_id for hit, _chunk in eligible_dense_hits]
-            dense_admitted_above_floor = len(dense_hits) - dense_below_threshold_rescued
-            # Every eligible candidate was admitted above the floor, admitted
-            # below it by the margin, or rejected below it, and nothing else
-            # happened to it. The three counts are what makes the gate's share
-            # computable, so an arithmetic slip is a wrong count rather than a
-            # plausible one.
-            if dense_eligible_total != (
-                dense_admitted_above_floor
-                + dense_below_threshold_rescued
-                + dense_below_threshold
-            ):
-                raise ResearchError(
-                    "The cosine gate's counts do not add up: "
-                    f"{dense_eligible_total} eligible candidates, "
-                    f"{dense_admitted_above_floor} admitted above the floor, "
-                    f"{dense_below_threshold_rescued} admitted below it, and "
-                    f"{dense_below_threshold} rejected."
-                )
-            dense_ranking = [hit.chunk_id for hit in dense_hits]
-            dense_scores = {hit.chunk_id: hit.score for hit in dense_hits}
-            bm25_ranks = {
-                chunk_id: rank for rank, chunk_id in enumerate(bm25_ranking, 1)
+
+            lexical, dense_hits = await asyncio.gather(
+                self._lexical_ranking(query, context),
+                self._dense_search(query, context),
+            )
+            chunks_by_id = {
+                **lexical.chunks,
+                **await asyncio.to_thread(
+                    lookup.chunks_by_ids, [hit.chunk_id for hit in dense_hits]
+                ),
             }
-            dense_ranks = {
-                chunk_id: rank for rank, chunk_id in enumerate(dense_ranking, 1)
-            }
-            if retrieval_method == "hybrid":
-                ordered_ids, fusion_scores = self._fuse_rankings(
+            gate = await self._dense_gate(dense_hits, context, chunks_by_id)
+            bm25_ranking = lexical.ranking
+            dense_ranking = [hit.chunk_id for hit in gate.admitted]
+            if method == "hybrid":
+                fused_ids, fusion_scores = self._fuse_rankings(
                     bm25_ranking,
                     dense_ranking,
-                    rrf_k=self.config.settings.rrf_k,
-                    bm25_weight=self.config.settings.bm25_weight,
-                    dense_weight=self.config.settings.dense_weight,
-                    maximum_candidates=self.config.settings.maximum_candidates,
+                    rrf_k=settings.rrf_k,
+                    bm25_weight=settings.bm25_weight,
+                    dense_weight=settings.dense_weight,
+                    maximum_candidates=settings.maximum_candidates,
                 )
-            elif retrieval_method == "bm25":
-                ordered_ids = bm25_ranking
-                fusion_scores = {}
             else:
-                ordered_ids = dense_ranking
+                fused_ids = bm25_ranking if method == "bm25" else dense_ranking
                 fusion_scores = {}
-
-            unknown_ids = [item for item in ordered_ids if item not in chunks_by_id]
+            unknown_ids = [item for item in fused_ids if item not in chunks_by_id]
             if unknown_ids:
                 raise ResearchError(
                     "The retrieval index returned chunk IDs absent from the current "
                     f"chunk store: {unknown_ids[:3]}"
                 )
-
-            base_ranks = {
-                chunk_id: rank for rank, chunk_id in enumerate(ordered_ids, 1)
-            }
-            rerank_scores: dict[str, float] = {}
-            rerank_fallback: dict[str, Any] | None = None
-            rerank_count = 0
-            fused_pre_rerank_ids = list(ordered_ids)
-            reranked_window_ids: list[str] = []
-            rerank_scored_ids: list[str] = []
-            if rerank and ordered_ids:
-                rerank_count = min(
-                    len(ordered_ids),
-                    self.config.settings.rerank_max_candidates,
-                    max(
-                        top_k * self.config.settings.rerank_window_multiple,
-                        self.config.settings.rerank_window_floor,
-                    ),
+            base_ranks = {chunk_id: rank for rank, chunk_id in enumerate(fused_ids, 1)}
+            reranked = (
+                await self._rerank(
+                    query,
+                    fused_ids,
+                    base_ranks,
+                    top_k=top_k,
+                    model=rerank_model,
+                    chunks_by_id=chunks_by_id,
                 )
-                rerank_ids = ordered_ids[:rerank_count]
-                rerank_tail = ordered_ids[rerank_count:]
-                # A backend that answers tool calls keeps its configured model,
-                # so the keyword is passed only when this call names another.
-                rerank_kwargs = {"model": rerank_model} if rerank_model else {}
-                try:
-                    scores = await asyncio.to_thread(
-                        self.dense.rerank,
-                        query,
-                        [chunk_text(chunks_by_id[item]) for item in rerank_ids],
-                        **rerank_kwargs,
-                    )
-                except RerankerUnavailable as exc:
-                    # Requested reranking cannot run without its model, so the
-                    # unranked candidate order is returned unchanged and the
-                    # response discloses why instead of failing the search.
-                    rerank_fallback = {
-                        "reason": "reranker_model_unavailable",
-                        "message": str(exc),
-                        "effect": "unranked_candidate_order_returned",
-                    }
-                    reranked_window_ids = list(rerank_ids)
-                else:
-                    rerank_scores = dict(zip(rerank_ids, scores, strict=True))
-                    # The window entered the cross-encoder and came back scored.
-                    # A fallback leaves this empty rather than naming candidates
-                    # no model ever read, which is what makes the difference
-                    # between a window that was scored and one that was not.
-                    rerank_scored_ids = list(rerank_ids)
-                    ordered_ids = (
-                        sorted(
-                            rerank_ids,
-                            key=lambda chunk_id: (
-                                -rerank_scores[chunk_id],
-                                base_ranks[chunk_id],
-                                chunk_id,
-                            ),
-                        )
-                        + rerank_tail
-                    )
-                    reranked_window_ids = list(ordered_ids[:rerank_count])
-            reranked_applied = bool(rerank_scores)
+                if rerank
+                else _Rerank(fused_ids)
+            )
+            reranked_applied = bool(reranked.scores)
 
             # A repeated passage is settled here, on the candidates this search
             # already holds, rather than by dropping a chunk at build time. Two
             # copies of one passage stay in the corpus and independently citable,
             # and the answer shows one of them.
-            ordered_ids, collapsed = await self._collapse_repetitions(
-                ordered_ids,
-                generation_root=generation_root,
-                manifest=manifest,
-                lookup=lookup,
-                chunks_by_id=chunks_by_id,
-                documents_by_id=documents_by_id,
+            candidate_ids, collapsed = await self._collapse_repetitions(
+                reranked.ordered_ids, context, chunks_by_id
             )
-            candidate_count = len(ordered_ids)
-            post_collapse_ids = list(ordered_ids)
             source_id_by_chunk = {
                 item: str(
                     _document_for_chunk(chunks_by_id[item], documents_by_id)[
                         "source_id"
                     ]
                 )
-                for item in ordered_ids
+                for item in candidate_ids
             }
-            candidate_distinct_reference_count = len(set(source_id_by_chunk.values()))
             selected_ids = _source_diverse_selection(
-                ordered_ids,
+                candidate_ids,
                 source_id_by_chunk=source_id_by_chunk,
-                scores=rerank_scores or fusion_scores,
+                scores=reranked.scores or fusion_scores,
                 top_k=top_k,
-                penalty=self.config.settings.source_diversity_penalty,
+                penalty=settings.source_diversity_penalty,
             )
 
+            bm25_ranks = {
+                chunk_id: rank for rank, chunk_id in enumerate(bm25_ranking, 1)
+            }
+            dense_ranks = {
+                chunk_id: rank for rank, chunk_id in enumerate(dense_ranking, 1)
+            }
+            dense_scores = {hit.chunk_id: hit.score for hit in gate.admitted}
             hits: list[dict[str, Any]] = []
             for rank, chunk_id in enumerate(selected_ids, 1):
                 chunk = chunks_by_id[chunk_id]
-                document = _document_for_chunk(chunk, documents_by_id)
-                component_ranks = {
-                    "bm25": bm25_ranks.get(chunk_id),
-                    "dense": dense_ranks.get(chunk_id),
-                }
-                if (
-                    component_ranks["bm25"] is not None
-                    and component_ranks["dense"] is not None
-                ):
-                    match_kind = "hybrid"
-                elif component_ranks["bm25"] is not None:
-                    match_kind = "lexical"
-                else:
-                    match_kind = "semantic"
+                bm25_rank = bm25_ranks.get(chunk_id)
+                dense_rank = dense_ranks.get(chunk_id)
                 hits.append(
                     {
                         "rank": rank,
                         "retrieval_rank": base_ranks[chunk_id],
-                        **_public_passage(chunk, document),
-                        "match_kind": match_kind,
-                        "retrieval_method": retrieval_method,
-                        "component_ranks": component_ranks,
+                        **_public_passage(
+                            chunk, _document_for_chunk(chunk, documents_by_id)
+                        ),
+                        "match_kind": (
+                            ("hybrid" if dense_rank else "lexical")
+                            if bm25_rank
+                            else "semantic"
+                        ),
+                        "retrieval_method": method,
+                        "component_ranks": {"bm25": bm25_rank, "dense": dense_rank},
                         "component_scores": {
                             "dense_cosine_similarity": dense_scores.get(chunk_id),
                             "bm25": None,
                         },
                         "fusion_score": fusion_scores.get(chunk_id),
-                        "rerank_score": rerank_scores.get(chunk_id),
+                        "rerank_score": reranked.scores.get(chunk_id),
                     }
                 )
 
-            distinct_reference_count = len({str(hit["source_id"]) for hit in hits})
-            relevance_limited = candidate_count < top_k
             repetition_disclosure: dict[str, Any] = {}
             if collapsed:
                 # A lean answer states the rule once rather than repeating it per
@@ -1365,11 +1250,10 @@ class SearchWorkflow:
                 by_words = sum(
                     1 for item in collapsed if item["collapsed_by"] == "same_words"
                 )
-                by_meaning = len(collapsed) - by_words
                 repetition_disclosure = {
                     "repetitions_collapsed": len(collapsed),
                     "collapsed_by_same_words": by_words,
-                    "collapsed_by_same_meaning": by_meaning,
+                    "collapsed_by_same_meaning": len(collapsed) - by_words,
                     "note": (
                         "One passage repeated another and only the better-ranked "
                         "copy is shown. Both remain in the corpus and can be "
@@ -1387,6 +1271,7 @@ class SearchWorkflow:
             else:
                 stale = None
                 upgrade_reasons = list(guard_upgrade_reasons)
+            window = lexical.window or context.candidate_depth
             payload = {
                 "query": query,
                 "generation_id": manifest["generation_id"],
@@ -1396,12 +1281,12 @@ class SearchWorkflow:
                 "excluded_source_count": len(exclusions),
                 "excluded_chunk_count": len(excluded_chunk_ids),
                 "filters": {
-                    "categories_any": sorted(category_any_filter),
-                    "projects_any": sorted(project_any_filter),
-                    "keywords_all": sorted(keyword_filter),
-                    "languages_any": sorted(language_any_filter),
-                    "authors_any": sorted(author_any_filter),
-                    "titles_any": sorted(title_any_filter),
+                    "categories_any": sorted(metadata_filters["categories_any"]),
+                    "projects_any": sorted(metadata_filters["projects_any"]),
+                    "keywords_all": sorted(metadata_filters["keywords"]),
+                    "languages_any": sorted(metadata_filters["languages_any"]),
+                    "authors_any": sorted(metadata_filters["authors_any"]),
+                    "titles_any": sorted(metadata_filters["titles_any"]),
                     "source_document_ids": sorted(document_filter),
                     "source_ids": requested_source_ids,
                     "exclude_source_ids": requested_exclude_source_ids,
@@ -1409,9 +1294,8 @@ class SearchWorkflow:
                     "unknown_exclude_source_ids": unknown_exclude_source_ids,
                     "active_document_count": len(active_document_ids),
                     "corpus_chunk_count": total_chunk_count,
-                    "window_chunk_count": bm25_window or candidate_depth,
-                    "window_is_whole_corpus": (bm25_window or candidate_depth)
-                    >= total_chunk_count,
+                    "window_chunk_count": window,
+                    "window_is_whole_corpus": window >= total_chunk_count,
                     "note": (
                         "Filters drop passages after the corpus is ranked, so an "
                         "empty result reads as 'nothing the window reached matches "
@@ -1428,81 +1312,54 @@ class SearchWorkflow:
                         "case-insensitive substring."
                     ),
                 },
-                "retrieval_method": retrieval_method,
+                "retrieval_method": method,
                 "reranked": reranked_applied,
                 "rerank_requested": rerank,
-                "rerank_fallback": rerank_fallback,
+                "rerank_fallback": reranked.fallback,
                 "retrieval_fallback": retrieval_fallback,
-                "rerank_window": rerank_count,
-                "prf_requested": self.config.settings.prf,
-                "prf_terms": prf_terms,
-                "candidate_depth": candidate_depth,
-                "candidate_count": candidate_count,
-                "candidate_distinct_reference_count": (
-                    candidate_distinct_reference_count
+                "rerank_window": reranked.window,
+                "prf_requested": settings.prf,
+                "prf_terms": lexical.prf_terms,
+                "candidate_depth": context.candidate_depth,
+                "candidate_count": len(candidate_ids),
+                "candidate_distinct_reference_count": len(
+                    set(source_id_by_chunk.values())
                 ),
                 "requested_top_k": top_k,
                 "fusion": (
                     {
                         "method": "weighted_reciprocal_rank_fusion",
-                        "rrf_k": self.config.settings.rrf_k,
-                        "bm25_weight": self.config.settings.bm25_weight,
-                        "dense_weight": self.config.settings.dense_weight,
+                        "rrf_k": settings.rrf_k,
+                        "bm25_weight": settings.bm25_weight,
+                        "dense_weight": settings.dense_weight,
                     }
-                    if retrieval_method == "hybrid"
+                    if method == "hybrid"
                     else None
                 ),
                 "relevance_policy": {
                     "bm25_requires_query_token_overlap": True,
                     "dense_minimum_cosine_similarity": (
-                        self.config.settings.dense_minimum_cosine_similarity
+                        settings.dense_minimum_cosine_similarity
                     ),
                 },
                 "selection_policy": {
                     "method": "greedy_source_diversity",
-                    "source_diversity_penalty": (
-                        self.config.settings.source_diversity_penalty
-                    ),
+                    "source_diversity_penalty": settings.source_diversity_penalty,
                 },
                 "dense_gate": {
-                    "minimum_cosine_similarity": dense_floor,
-                    "relative_margin": dense_margin,
+                    "minimum_cosine_similarity": (
+                        settings.dense_minimum_cosine_similarity
+                    ),
+                    "relative_margin": settings.dense_relative_similarity_margin,
                     "best_cosine_similarity": (
-                        None if best_dense_score is None else round(best_dense_score, 4)
+                        None if gate.best_score is None else round(gate.best_score, 4)
                     ),
                     # The denominator, so the share the gate removed is a
-                    # division rather than an estimate: every candidate the
-                    # index returned that survived the quality filters and the
-                    # length floor was admitted above the floor, admitted below
-                    # it by the margin, or rejected below it.
-                    "eligible_total": dense_eligible_total if use_dense else None,
-                    "admitted_above_floor": (
-                        dense_admitted_above_floor if use_dense else None
-                    ),
-                    "admitted_below_floor": (
-                        dense_below_threshold_rescued if use_dense else None
-                    ),
-                    "rejected_below_floor": dense_below_threshold
-                    if use_dense
-                    else None,
-                    "conserved": dense_eligible_total
-                    == (
-                        dense_admitted_above_floor
-                        + dense_below_threshold_rescued
-                        + dense_below_threshold
-                    )
-                    if use_dense
-                    else None,
-                    "excluded_before_gate": (
-                        {
-                            "returned_by_index": dense_returned_by_index,
-                            "extraction_artifact": dense_quality_rejected,
-                            "corrupt_text": dense_corrupt_text_rejected,
-                            "too_short": dense_too_short,
-                            "filtered_out": dense_filtered_out,
-                        }
-                        if use_dense
-                        else None
+                    # division rather than an estimate.
+                    **(
+                        gate.counts()
+                        if context.use_dense
+                        else dict.fromkeys(gate.counts())
                     ),
                     "note": (
                         "Dense candidates are admitted by score. A candidate below "
@@ -1522,11 +1379,11 @@ class SearchWorkflow:
                     ),
                 },
                 "passage_length_policy": {
-                    "minimum_words": self.config.settings.minimum_passage_words,
-                    "minimum_tokens": passage_token_policy["minimum_tokens"],
-                    "token_fraction": self.config.settings.minimum_passage_token_fraction,
-                    "chunk_size": passage_token_policy["chunk_size"],
-                    "tokenizer": passage_token_policy["tokenizer"],
+                    "minimum_words": settings.minimum_passage_words,
+                    "minimum_tokens": token_policy["minimum_tokens"],
+                    "token_fraction": settings.minimum_passage_token_fraction,
+                    "chunk_size": token_policy["chunk_size"],
+                    "tokenizer": token_policy["tokenizer"],
                     "note": (
                         "A candidate below either floor is dropped before fusion: "
                         "fewer words than minimum_words, or fewer tokens than "
@@ -1540,16 +1397,14 @@ class SearchWorkflow:
                     ),
                 },
                 "rejected_candidates": {
-                    "bm25_no_query_token_overlap": bm25_rejected[
-                        "no_query_token_overlap"
-                    ],
-                    "bm25_extraction_artifact": bm25_rejected["extraction_artifact"],
-                    "bm25_corrupt_text": bm25_rejected["corrupt_text"],
-                    "bm25_too_short": bm25_rejected["too_short"],
-                    "dense_below_threshold": dense_below_threshold,
-                    "dense_extraction_artifact": dense_quality_rejected,
-                    "dense_corrupt_text": dense_corrupt_text_rejected,
-                    "dense_too_short": dense_too_short,
+                    **{
+                        f"bm25_{reason}": count
+                        for reason, count in lexical.rejected.items()
+                    },
+                    "dense_below_threshold": gate.rejected_below_floor,
+                    "dense_extraction_artifact": gate.extraction_artifact,
+                    "dense_corrupt_text": gate.corrupt_text,
+                    "dense_too_short": gate.too_short,
                 },
                 "withheld_candidates": {
                     "policy": "corruption_evidence_only",
@@ -1559,25 +1414,24 @@ class SearchWorkflow:
                         "mixed_script_text appear per hit in text_notes and never "
                         "withhold a passage."
                     ),
-                    "total": sum(int(entry["count"]) for entry in withheld.values()),
+                    "total": sum(
+                        int(entry["count"]) for entry in context.withheld.values()
+                    ),
                     "reasons": {
                         reason: {
                             "count": int(entry["count"]),
                             "example_chunk_ids": list(entry["example_chunk_ids"]),
                         }
-                        for reason, entry in sorted(withheld.items())
+                        for reason, entry in sorted(context.withheld.items())
                     },
                     "flagged_passages_returned": sum(
                         1 for hit in hits if hit.get("text_notes")
                     ),
                 },
-                "collapsed_repetitions": {
-                    **repetition_disclosure,
-                    "pairs": collapsed,
-                },
+                "collapsed_repetitions": {**repetition_disclosure, "pairs": collapsed},
                 "rejected_candidate_examples": {
                     "policy": "bounded_examples",
-                    "limit_per_reason": self.config.settings.maximum_withheld_examples,
+                    "limit_per_reason": settings.maximum_withheld_examples,
                     "note": (
                         "The gate's count says how many candidates it removed; "
                         "these name the sources they came from, so a thin answer "
@@ -1585,17 +1439,15 @@ class SearchWorkflow:
                         "silent."
                     ),
                     "reasons": {
-                        "bm25_too_short": bm25_examples.get("bm25_too_short", []),
-                        "dense_below_threshold": dense_rejected_examples.get(
+                        "bm25_too_short": lexical.examples.get("bm25_too_short", []),
+                        "dense_below_threshold": gate.examples.get(
                             "dense_below_threshold", []
                         ),
-                        "dense_too_short": dense_rejected_examples.get(
-                            "dense_too_short", []
-                        ),
+                        "dense_too_short": gate.examples.get("dense_too_short", []),
                     },
                 },
                 "dense_fidelity": {
-                    "embedding_maximum_tokens": self.config.settings.embedding_maximum_tokens,
+                    "embedding_maximum_tokens": settings.embedding_maximum_tokens,
                     "audited_passages_returned": sum(
                         1
                         for hit in hits
@@ -1611,90 +1463,79 @@ class SearchWorkflow:
                         "the generation predates the ingestion audit."
                     ),
                 },
-                "embedding_model": self.config.settings.embedding_model
-                if use_dense
-                else None,
+                "embedding_model": (
+                    settings.embedding_model if context.use_dense else None
+                ),
                 "embedding_model_revision": (
-                    self.config.settings.embedding_model_revision if use_dense else None
+                    settings.embedding_model_revision if context.use_dense else None
                 ),
                 "reranker_model": applied_reranker if reranked_applied else None,
                 "reranker_model_revision": (
                     applied_reranker_revision if reranked_applied else None
                 ),
                 "result_count": len(hits),
-                "distinct_reference_count": distinct_reference_count,
-                "relevance_limited": relevance_limited,
+                "distinct_reference_count": len(
+                    {str(hit["source_id"]) for hit in hits}
+                ),
+                "relevance_limited": len(candidate_ids) < top_k,
                 "hits": hits,
             }
             if evaluation_trace:
                 payload["evaluation_trace"] = _evaluation_trace(
-                    retrieval_method=retrieval_method,
-                    candidate_depth=candidate_depth,
+                    retrieval_method=method,
+                    candidate_depth=context.candidate_depth,
                     bm25=(
                         {
-                            "index_window": bm25_window,
-                            "returned_by_index": bm25_returned,
+                            "index_window": lexical.window,
+                            "returned_by_index": lexical.returned,
                             "after_gates": len(bm25_ranking),
-                            "rejected": dict(sorted(bm25_rejected.items())),
+                            "rejected": dict(sorted(lexical.rejected.items())),
                         }
-                        if use_bm25
+                        if context.use_bm25
                         else None
                     ),
                     dense=(
-                        {
-                            "returned_by_index": dense_returned_by_index,
-                            "eligible_total": dense_eligible_total,
-                            "admitted_above_floor": dense_admitted_above_floor,
-                            "admitted_below_floor": dense_below_threshold_rescued,
-                            "rejected_below_floor": dense_below_threshold,
-                            "conserved": dense_eligible_total
-                            == (
-                                dense_admitted_above_floor
-                                + dense_below_threshold_rescued
-                                + dense_below_threshold
-                            ),
-                            "excluded_before_gate": {
-                                "returned_by_index": dense_returned_by_index,
-                                "extraction_artifact": dense_quality_rejected,
-                                "corrupt_text": dense_corrupt_text_rejected,
-                                "too_short": dense_too_short,
-                                "filtered_out": dense_filtered_out,
-                            },
-                        }
-                        if use_dense
+                        {"returned_by_index": len(gate.returned_ids), **gate.counts()}
+                        if context.use_dense
                         else None
                     ),
                     rerank={
                         "requested": bool(rerank),
                         "applied": reranked_applied,
-                        "fallback": rerank_fallback,
-                        "window": rerank_count,
-                        "scored_ids": rerank_scored_ids[
+                        "fallback": reranked.fallback,
+                        "window": reranked.window,
+                        "scored_ids": reranked.scored_ids[
                             :EVALUATION_TRACE_CANDIDATE_BUDGET
                         ],
-                        "scored_count": len(rerank_scored_ids),
+                        "scored_count": len(reranked.scored_ids),
                         "scored_truncated": (
-                            len(rerank_scored_ids) > EVALUATION_TRACE_CANDIDATE_BUDGET
+                            len(reranked.scored_ids) > EVALUATION_TRACE_CANDIDATE_BUDGET
                         ),
                     },
                     stages={
                         "dense_before_filters": (
-                            _trace_stage(dense_returned_ids) if use_dense else None
+                            _trace_stage(gate.returned_ids)
+                            if context.use_dense
+                            else None
                         ),
                         "dense_eligible": (
-                            _trace_stage(dense_eligible_ids) if use_dense else None
+                            _trace_stage(gate.eligible_ids)
+                            if context.use_dense
+                            else None
                         ),
                         "dense_admitted": (
-                            _trace_stage(dense_ranking) if use_dense else None
+                            _trace_stage(dense_ranking) if context.use_dense else None
                         ),
                         "bm25_after_gates": (
-                            _trace_stage(bm25_ranking) if use_bm25 else None
+                            _trace_stage(bm25_ranking) if context.use_bm25 else None
                         ),
-                        "fused_pre_rerank": _trace_stage(fused_pre_rerank_ids),
+                        "fused_pre_rerank": _trace_stage(fused_ids),
                         "reranked": (
-                            _trace_stage(reranked_window_ids) if rerank_count else None
+                            _trace_stage(reranked.window_ids)
+                            if reranked.window
+                            else None
                         ),
-                        "post_collapse": _trace_stage(post_collapse_ids),
+                        "post_collapse": _trace_stage(candidate_ids),
                         "final": _trace_stage(selected_ids),
                     },
                     collapsed=collapsed,

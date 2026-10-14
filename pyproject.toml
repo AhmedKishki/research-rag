@@ -100,9 +100,8 @@ timeout_method = "thread"
 extend-select = ["ASYNC", "BLE001", "C901", "RUF100", "SIM"]
 
 [tool.ruff.lint.mccabe]
-# Permits the 22 functions already between 11 and 23, and fails anything new
-# above 25. The two that exceed it carry a targeted noqa naming the tracked
-# work, so this stays green while a third function cannot slip through.
+# Fails any function above 25. The one that exceeds it carries a targeted noqa
+# naming the tracked work, so no other function can slip through.
 max-complexity = 25
 
 [tool.ruff.lint.per-file-ignores]
