@@ -3,8 +3,7 @@
 `ReviewWorkflow` holds the lock, resolves the caller's selector, and reads the
 review files; the decisions themselves live in `review_state`, the question of
 which sources a project knows about lives in `source_inventory`, and a refusal
-about a project that cannot be served lives in `blocked_answers`. What moved out
-of this module is named in each of those.
+about a project that cannot be served lives in `blocked_answers`.
 
 No source file is ever edited here, and no generation is ever rebuilt to record a
 decision: a source exclusion is enforced by the retrieval filter at query time,

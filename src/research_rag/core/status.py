@@ -4,8 +4,7 @@
 The answers a blocked project gets live in `blocked_answers`, the walk over
 retained generations lives in `generation_inventory`, and the records a status
 answer lists for excluded sources are built by `source_inventory.exclusion_records`
-rather than by reaching into `ReviewWorkflow`. What moved out of this module is
-named in each of those.
+rather than by reaching into `ReviewWorkflow`.
 
 The payload is built from the groups below rather than from two literals: the
 project identity, the source counts, the corpus vocabulary, the retrieval
