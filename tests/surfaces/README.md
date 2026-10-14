@@ -5,7 +5,7 @@ What each surface sends and must never send.
 - `test_ui.py`: the UI app and adapter against a recording service. Search is always hybrid and reranked, an unserved argument is dropped, an unsafe write or a source path outside the source root is refused, a service failure becomes a safe message, and the generation and clients panels follow the same write rules.
 - `test_bridge.py`: the stdio transport. A registered name resolves to its project, a machine with no such project answers `status` and nothing else, a bridge started before the app holds every tool and works once the app is up, a read dropped mid-call is repeated and a write is not, a project initialised later is found, and a path in a generated `mcp` entry is refused.
 - `test_mcp_tools.py`: tool schemas, descriptions, instructions, response-size budgets, mutation annotations, follow-up IDs, and the bounded app-state projection, through a real MCP client.
-- `test_workspace_app.py`: `surfaces/workspace/app.py` against a fake adapter. Every capability is declared in the markup and enforced at the route, the quotation rule is in the page, and an unactionable write or removal is refused or answered 501.
+- `test_workspace_app.py`: `surfaces/workspace/app.py` against a fake adapter. Only the local panels wait for the profile, the quotation rule is in the page, and an unactionable write or removal is refused.
 - `test_workspace_ui.py`: the shipped pages and stylesheet.
   - The clients view, settings panel, chunk-exclusion controls, and the sidebar as the whole navigation.
   - WCAG AA contrast of every text pair, and the light and dark schemes declaring the same tokens.

@@ -29,10 +29,9 @@ from typing import Any
 import pytest
 from starlette.testclient import TestClient
 
+from research_rag.runtime.app import CLIENT_NAME_ENV
 from research_rag.surfaces.workspace import (
     SourceFile,
-    UICapabilities,
-    UIProfile,
     UIRequestError,
     create_ui_app,
 )
@@ -104,14 +103,9 @@ class ClientControlAdapter:
         return {"session_id": session_id, "attached": False, "reason": reason}
 
 
-def _host(adapter: Any, *, enabled: bool = True) -> TestClient:
+def _host(adapter: Any) -> TestClient:
     return TestClient(
         create_ui_app(
-            profile=UIProfile(
-                application_name="Client host",
-                navigation_label="Views",
-                capabilities=UICapabilities(clients=enabled),
-            ),
             adapter=adapter,
         ),
         base_url=LOOPBACK_BASE_URL,
@@ -153,13 +147,6 @@ def _project_host() -> TestClient:
 
     return TestClient(
         create_ui_app(
-            profile=UIProfile(
-                application_name="Project host",
-                project_start_command="research-rag --project {project} ui",
-                capabilities=UICapabilities(
-                    clients=True, projects=True, agent_entry=True
-                ),
-            ),
             adapter=ProjectHost(),
         ),
         base_url=LOOPBACK_BASE_URL,
@@ -224,11 +211,6 @@ def _update_host(
     return (
         TestClient(
             create_ui_app(
-                profile=UIProfile(
-                    application_name="Update host",
-                    navigation_label="Views",
-                    capabilities=UICapabilities(updates=True),
-                ),
                 adapter=adapter,
             ),
             base_url=LOOPBACK_BASE_URL,
@@ -236,6 +218,11 @@ def _update_host(
         ),
         adapter,
     )
+
+
+def client_page() -> str:
+    with _host(ClientControlAdapter()) as client:
+        return client.get("/").text
 
 
 def client_css() -> str:
@@ -264,16 +251,6 @@ def test_a_host_can_end_one_session_from_the_workspace() -> None:
     assert adapter.dropped == [("s-1", "from the workspace")]
 
 
-def test_the_clients_routes_are_absent_when_the_capability_is_off() -> None:
-    """A stdio-only host has nothing to report, so it says nothing."""
-
-    adapter = ClientControlAdapter()
-    with _host(adapter, enabled=False) as client:
-        assert client.get("/api/clients").status_code == 404
-        assert client.post("/api/clients/s-1/disconnect", json={}).status_code == 404
-    assert adapter.dropped == []
-
-
 def test_a_workspace_disconnect_is_same_origin_and_json_only() -> None:
     """Ending a session is a write, so it is held to the write rules."""
 
@@ -292,28 +269,6 @@ def test_a_workspace_disconnect_is_same_origin_and_json_only() -> None:
     assert cross_origin.status_code == 403
     assert form.status_code == 415
     assert adapter.dropped == []
-
-
-def test_a_host_that_advertises_clients_and_cannot_answer_says_501() -> None:
-    """A capability without the methods is a host fact, not a traceback."""
-
-    class Partial:
-        async def health(self) -> Mapping[str, Any]:
-            return {"status": "ok"}
-
-        async def call(
-            self, operation: str, arguments: Mapping[str, Any]
-        ) -> Mapping[str, Any]:
-            if operation == "status":
-                return {"ready": False, "project_root": "/p", "project_name": "p"}
-            if operation == "list_sources":
-                return {"ready": False, "source_count": 0, "sources": []}
-            raise UIRequestError("no", 404)
-
-    with _host(Partial()) as client:
-        response = client.get("/api/clients")
-    assert response.status_code == 501
-    assert "cannot report" in response.json()["error"]
 
 
 def test_a_host_refusal_keeps_its_own_status_and_reason() -> None:
@@ -414,9 +369,9 @@ def test_a_client_row_shows_who_the_client_is_and_where_it_is_running() -> None:
     # One client holds every session it opened, and the session id is shown whole
     # because it is what `disconnect` is given.
     assert '`${client.sessions || 1} open · id ${client.session_id || ""}`' in script
-    # The host's own words say how a client is named, so a shared page cannot
-    # name a variable only this host has.
-    assert "profile.client_naming_hint" in script
+    # The page says how a client is named, with the bridge's own variable.
+    page = client_page()
+    assert f"Set {CLIENT_NAME_ENV} in the client entry" in page
 
 
 class SettingsHost:
@@ -491,10 +446,6 @@ class SettingsHost:
 def _panel_host() -> TestClient:
     return TestClient(
         create_ui_app(
-            profile=UIProfile(
-                application_name="Settings host",
-                capabilities=UICapabilities(settings=True, chunk_exclusion=True),
-            ),
             adapter=SettingsHost(),
         ),
         base_url=LOOPBACK_BASE_URL,
@@ -509,8 +460,8 @@ def test_the_config_tab_carries_the_settings_panel_and_its_confirmation() -> Non
         page = client.get("/").text
         script = client.get("/assets/app.js").text
 
-    assert 'data-panel="config" data-capability="settings"' in page
-    assert 'data-view="config" data-capability="settings"' in page
+    assert 'data-panel="config"' in page
+    assert 'data-view="config"' in page
     assert 'id="settings-panel" class="settings-panel"' in page
     for element in ("settings-form", "settings-sections", "settings-submit"):
         assert f'id="{element}"' in page
@@ -518,7 +469,7 @@ def test_the_config_tab_carries_the_settings_panel_and_its_confirmation() -> Non
     # by a click, so the dialog is part of what the panel ships.
     assert 'id="settings-confirm-dialog"' in page
     assert 'id="settings-confirm-word"' in page
-    assert 'hasCapability("settings")' in script
+    assert 'api("/api/settings")' in script
     # Settings are the whole Config view. They are not repeated inside the status
     # view, so a reader who edits one sees one copy of every value.
     status_view = page.split('id="status-view"', 1)[1].split('id="config-view"', 1)[0]
@@ -603,15 +554,11 @@ def test_the_workspace_carries_the_chunk_exclusion_controls() -> None:
         page = client.get("/")
         script = client.get("/assets/app.js").text
 
-    assert (
-        'id="chunk-exclusion-summary" class="panel-section"'
-        ' data-capability="chunk_exclusion"' in page.text
-    )
+    assert 'id="chunk-exclusion-summary" class="panel-section"' in page.text
     assert 'id="chunk-exclusion-list"' in page.text
     assert 'id="chunk-dialog"' in page.text
     assert 'id="chunk-error"' in page.text
-    assert 'hasCapability("chunk_exclusion")' in script
-    assert "actions.push(chunkAction(hit))" in script
+    assert "chunkAction(hit)," in script
     assert "/api/chunk-exclusions" in script
     assert "/api/chunk-inclusion" in script
     # A chunk the server already excluded is offered a restore instead.
@@ -619,7 +566,6 @@ def test_the_workspace_carries_the_chunk_exclusion_controls() -> None:
     assert "Not in the current generation" in script
     # The whole-source exclusion is a separate control and stays as it was.
     assert 'id="exclusion-dialog"' in page.text
-    assert 'hasCapability("source_inclusion")' in script
     assert "/api/source-inclusion" in script
 
 
@@ -635,26 +581,20 @@ def test_the_tab_bar_is_the_whole_navigation() -> None:
         page = client.get("/").text
         script = client.get("/assets/app.js").text
 
-    items = re.findall(r'data-view="([^"]+)"\s+data-capability="([^"]+)"', page)
-    assert items == [
-        ("search", "documents"),
-        ("sources", "sources"),
-        ("status", "documents"),
-        ("stats", "stats"),
-        ("config", "settings"),
-        ("mcp", "clients"),
-        ("updates", "updates"),
-    ]
+    items = re.findall(r'data-view="([^"]+)"', page)
+    assert items == ["search", "sources", "status", "stats", "config", "mcp", "updates"]
     # Every item has a panel, and every panel but the detail view of one source is
     # reached by exactly one item. The source view is reached from a name, and its
     # sidebar item stays marked.
-    panels = re.findall(r'data-panel="([^"]+)"\s+data-capability="([^"]+)"', page)
-    assert [panel for panel in panels if panel[0] != "source"] == items
-    assert ("source", "sources") in panels
-    assert 'byId("workspace-nav").hidden = !visibleNavItems.length' in script
-    # A profile that leaves no item shows no panel rather than the panel of an
-    # item that is gone.
-    assert "switchView(activeItem ? activeItem.dataset.view : null);" in script
+    panels = re.findall(r'data-panel="([^"]+)"', page)
+    assert [panel for panel in panels if panel != "source"] == items
+    assert "source" in panels
+    # Only the panels that act on this machine wait for the profile.
+    assert re.findall(r'data-view="([^"]+)"\s+data-capability="([^"]+)"', page) == [
+        ("mcp", "clients"),
+        ("updates", "updates"),
+    ]
+    assert "switchView(activeItem.dataset.view);" in script
     # No id is declared twice: a second copy of a panel is a second place for it
     # to be wrong, and a duplicated id would silently pick the first one.
     identifiers = re.findall(r'\bid="([^"]+)"', page)
@@ -674,7 +614,7 @@ def test_the_sidebar_navigates_without_a_tab_strip() -> None:
         script = client.get("/assets/app.js").text
 
     assert '<nav id="workspace-nav" class="workspace-sidebar"' in page
-    assert 'data-view="search" data-capability="documents"' in page
+    assert '<li class="sidebar-item is-active" data-view="search">' in page
     assert 'class="sidebar-list"' in page
     # One item per view, and the item is a button rather than a tab role.
     assert page.count('<button class="nav-item') == 7
@@ -694,10 +634,9 @@ def test_the_sidebar_navigates_without_a_tab_strip() -> None:
     # the first view is the one the column shows rather than no view at all.
     assert 'class="sidebar-item is-active" data-view="search"' in page
     # A view the fragment names comes first, and the marked item is the fallback.
-    assert "visibleNavItems.find((item) => item.dataset.view === routed)" in script
+    assert "available.find((item) => item.dataset.view === routed)" in script
     assert (
-        '|| visibleNavItems.find((item) => item.classList.contains("is-active"));'
-        in script
+        '|| available.find((item) => item.classList.contains("is-active"));' in script
     )
     # An icon is inline SVG rather than an icon font or a fetched file, so the
     # page adds no request and no dependency.
@@ -755,7 +694,7 @@ def test_the_cleaned_passage_notice_is_shown_once_per_results_view() -> None:
     assert 'node("div", "semantic-text-label"' not in script
     assert 'const notice = byId("results-notice");' in script
     assert "notice.textContent" in script
-    assert "result_text_label" in script
+    assert 'notice.textContent = "Cleaned passage";' in script
     assert "notice.hidden = !count;" in script
     # A cleared view takes the notice with the summary and the results.
     assert 'byId("results-notice").hidden = true;' in script
@@ -963,71 +902,11 @@ def test_a_host_that_sends_no_setting_details_is_drawn_as_before() -> None:
     assert 'return "none";' in script
 
 
-def test_a_host_that_serves_no_panel_leaves_every_nav_item_out() -> None:
-    """A capability off hides its nav item, and no panel is left standing behind it.
-
-    The sidebar is the navigation, so an item that outlived its panel would be a
-    way into a page this host cannot answer, and a profile with nothing on offers
-    no panel rather than the one whose item happened to be active.
-    """
-
-    adapter = ClientControlAdapter()
-    client = TestClient(
-        create_ui_app(
-            profile=UIProfile(
-                application_name="Bare host",
-                capabilities=UICapabilities(
-                    documents=False,
-                    sources=False,
-                    settings=False,
-                    clients=False,
-                ),
-            ),
-            adapter=adapter,
-        ),
-        base_url=LOOPBACK_BASE_URL,
-        client=LOOPBACK_TEST_CLIENT,
-    )
-    with client:
-        capabilities = client.get("/api/ui").json()["capabilities"]
-        page = client.get("/").text
-        script = client.get("/assets/app.js").text
-
-    for capability in ("documents", "sources", "settings", "clients"):
-        assert capabilities[capability] is False
-    # Every panel and the status summary are gated on the same capabilities the
-    # nav items are, so nothing this host cannot answer has a way in.
-    for panel, capability in (
-        ("search", "documents"),
-        ("sources", "sources"),
-        ("status", "documents"),
-        ("stats", "stats"),
-        ("config", "settings"),
-        ("mcp", "clients"),
-        ("updates", "updates"),
-    ):
-        assert re.search(
-            rf'data-panel="{panel}"\s+data-capability="{capability}"', page
-        )
-    assert 'class="view-panel system-summary"' in page
-    # The loop that hides by capability is the only thing that decides an item,
-    # and what it leaves is handled rather than ignored.
-    hide = script.split("function applyProfile(")[1].split("\n}\n")[0]
-    assert "element.hidden = !hasCapability(element.dataset.capability);" in hide
-    assert "switchView(activeItem ? activeItem.dataset.view : null);" in hide
-    assert 'byId("workspace-nav").hidden = !visibleNavItems.length;' in hide
-    # A column with nothing in it is removed, and the button that opens it goes
-    # with the column rather than opening an empty drawer.
-    assert 'byId("nav-toggle").hidden = !visibleNavItems.length;' in hide
-
-
 def test_the_header_carries_a_projects_selector_the_host_supplies() -> None:
     """Each project is named, its state is shown, and switching is never silent.
 
     One installation serves several projects, so a workspace has to say which one
-    it is. Selecting another is offered that project's own workspace, and a
-    project with no app is offered the command that starts it, because it has no
-    address at all.
+    it is. Selecting another is offered that project's own workspace.
     """
 
     with _project_host() as client:
@@ -1038,8 +917,6 @@ def test_the_header_carries_a_projects_selector_the_host_supplies() -> None:
     assert 'data-capability="projects"' in page.text
     assert 'id="project-select"' in page.text
     assert 'id="project-open"' in page.text
-    assert 'id="project-start-command"' in page.text
-    assert 'id="project-copy-command"' in page.text
     # The selector is the first thing in the sidebar and above the views, because
     # changing the workspace is what a reader reaches for before choosing a view.
     sidebar = page.text.split('class="workspace-sidebar"', 1)[1]
@@ -1057,11 +934,6 @@ def test_the_header_carries_a_projects_selector_the_host_supplies() -> None:
     # repoints this one at it.
     assert "Opening another project opens its own workspace in a new tab." in page.text
     assert 'window.open(project.url, "_blank", "noopener")' in script.text
-    # The start command is the host's own, taken from the profile, because a
-    # command composed here is one the reader could paste and fail on.
-    assert "state.profile?.project_start_command" in script.text
-    assert 'template.replace("{project}", project.project_name)' in script.text
-    assert 'copyText(byId("project-start-command").textContent' in script.text
 
 
 def test_the_mcp_tab_carries_a_copyable_client_entry() -> None:
@@ -1178,9 +1050,9 @@ def test_a_filter_group_says_whether_every_value_or_only_one_must_match() -> Non
     assert "At least one value must match" in page
     # The two meanings sit on the two kinds of field, and the sentence is inside
     # the group whose fields it describes rather than above all of them.
-    all_of_them = page.split('data-capability="metadata_filters"', 1)[1]
+    all_of_them = page.split("<legend>Reviewed metadata</legend>", 1)[1]
     assert "Every value must match" in all_of_them.split("</fieldset>", 1)[0]
-    any_of_them = page.split('data-capability="category_partitions"', 1)[1]
+    any_of_them = page.split("<legend>Corpus partitions</legend>", 1)[1]
     assert "At least one value must match" in any_of_them.split("</fieldset>", 1)[0]
     # A list the reader picks from is named as such, and an empty field is stated
     # to match everything rather than to match nothing.
@@ -1245,29 +1117,13 @@ def test_the_page_says_when_reviewed_decisions_take_effect() -> None:
     assert "returns it to the next generation" not in page
 
 
-def test_a_build_that_can_be_continued_says_so_and_one_that_cannot_says_nothing() -> (
-    None
-):
-    """Whether a build resumes is the host's own fact about its own pipeline.
+def test_the_build_dialog_says_a_build_resumes_from_its_checkpoint() -> None:
+    """A build that runs out of time continues where it stopped, and says so."""
 
-    A shared page cannot claim it on behalf of a host that does not checkpoint,
-    so the sentence arrives with the profile and the block is empty until it does.
-    """
+    page = client_page()
 
-    with _host(ClientControlAdapter()) as client:
-        ui = client.get("/api/ui").json()
-        page = client.get("/").text
-        script = client.get("/assets/app.js").text
-
-    # The slot exists on every profile; what a shared page must not do is claim
-    # checkpointing for a host that says nothing about it.
-    assert not ui.get("ingest_resume_note")
-    assert 'id="ingest-note" class="form-note dialog-note" hidden' in page
-    assert 'ingestNote.textContent = profile.ingest_resume_note || "";' in script
-    assert "ingestNote.hidden = !profile.ingest_resume_note;" in script
-    # What the page can state on its own is that the generation in use stays.
-    assert "The current generation" in page
-    assert "remains active unless the complete build succeeds" in page
+    assert "run it again to resume from its checkpoint" in page
+    assert "replaced only after a complete build succeeds" in page
 
 
 def test_identifiers_are_shown_whole_behind_one_labelled_disclosure() -> None:
@@ -1396,7 +1252,7 @@ def test_a_neighbour_the_corpus_left_out_says_so_on_the_passage() -> None:
     assert ".context-passage .context-excluded-warning {" in css
     # Changing what a search reads stays an explicit step taken in the dialog, and
     # a passage already excluded is not offered a toggle beside it.
-    assert 'hasCapability("chunk_exclusion") && !excluded' in script
+    assert "if (!excluded) {" in script
     assert "item.append(chunkExcludeButton(passage));" in script
     # A locator longer than its card wraps rather than being clipped, because a
     # clipped locator is one the reader cannot use.
@@ -1448,11 +1304,10 @@ def test_a_chosen_view_takes_the_focus_and_the_narrow_window_keeps_it_reachable(
 
 
 def test_the_updates_view_is_gated_on_a_capability_the_page_never_invents() -> None:
-    """The view ships behind `updates` and adds no way in for a host that lacks it.
+    """The view ships behind `updates`, which a LAN viewer is not given.
 
-    A page that asked about releases on its own would be a capability the host
-    never granted, so the item, the panel, and the one request that follows the
-    capability all share the same name.
+    The item, the panel, and the one request that follows the capability all
+    share the same name, so a viewer without it has no way in.
     """
 
     with _host(ClientControlAdapter()) as client:
@@ -1460,7 +1315,7 @@ def test_the_updates_view_is_gated_on_a_capability_the_page_never_invents() -> N
         page = client.get("/").text
         script = client.get("/assets/app.js").text
 
-    assert ui["capabilities"].get("updates") is not True
+    assert ui["capabilities"]["updates"] is True
     assert 'data-view="updates" data-capability="updates"' in page
     assert 'id="updates-view" class="view-panel" data-panel="updates"' in page
     assert 'if (!hasCapability("updates")) return;' in script
@@ -2572,32 +2427,18 @@ def test_a_list_that_cannot_narrow_a_search_is_not_drawn(tmp_path: Path) -> None
     result = _drive_page(
         tmp_path,
         """
-state.profile = { capabilities: { category_partitions: true, project_metadata: true } };
 state.status = { searchable_source_count: 106 };
 const group = (id) => document.getElementById(id).closest(".pick-group");
-group("partition-chips").dataset.capability = "category_partitions";
-group("project-chips").dataset.capability = "project_metadata";
 renderInventory("project-chips", [{ project: "all", searchable_source_count: 106 }], "project", "project-filter");
 result.everySource = group("project-chips").hidden;
 renderInventory("partition-chips", [{ category: "some", searchable_source_count: 40 }], "category", "partition-filter");
 result.someSources = group("partition-chips").hidden;
 renderInventory("partition-chips", [], "category", "partition-filter");
 result.none = group("partition-chips").hidden;
-state.profile = { capabilities: {} };
-renderInventory("partition-chips", [
-  { category: "a", searchable_source_count: 4 },
-  { category: "b", searchable_source_count: 5 },
-], "category", "partition-filter");
-result.capabilityOff = group("partition-chips").hidden;
 """,
     )
 
-    assert result == {
-        "everySource": True,
-        "someSources": False,
-        "none": True,
-        "capabilityOff": True,
-    }
+    assert result == {"everySource": True, "someSources": False, "none": True}
 
 
 def test_the_results_follow_the_query_and_the_filters_fold_into_one_drawer() -> None:
@@ -2646,7 +2487,7 @@ def test_a_source_card_names_the_reach_of_each_exclusion() -> None:
         css = client.get("/assets/app.css").text
 
     assert '"Exclude from project…",' in script
-    assert '"action-button action-button-danger",' in script
+    assert '"action-button action-button-danger")' in script
     assert 'button("Search only this source", "only-source"' in script
     assert 'button("Search without this source", "exclude-from-search"' in script
     assert 'button("Exclude", "exclude-source"' not in script
@@ -3256,22 +3097,19 @@ result.history = window.history.entries;
 
 
 def test_a_load_draws_nothing_the_profile_has_not_allowed() -> None:
-    """A refresh showed the page's raw markup before the profile arrived.
+    """A LAN viewer never sees a local panel flash before the profile arrives.
 
-    Panels this app does not serve were drawn for a moment and then removed, so
-    every reload flashed a workspace that is not this one. Each capability-gated
-    element now starts hidden, and the app's name waits for the profile.
+    Each capability-gated element starts hidden, and only the profile shows it.
     """
 
     with _panel_host() as client:
         page = client.get("/").text
 
     gated = re.findall(r"<[a-z]+\b[^>]*\bdata-capability=\"[^\"]+\"[^>]*>", page)
-    assert len(gated) > 20
+    assert len(gated) == 6
     for tag in gated:
         assert re.search(r"\shidden(?:\s|>)", tag), tag
-    assert '<div id="application-name" class="brand-name"></div>' in page
-    assert "UltraRAG MCP</div>" not in page
+    assert '<div id="application-name" class="brand-name">Research RAG</div>' in page
 
 
 def test_the_page_names_the_exact_assets_it_was_written_with() -> None:
@@ -3891,10 +3729,8 @@ result.source = collect(sourceCard({
   title: "Atlas of AI", source_id: "src_1", document_id: "d1",
   source_relative_path: "a.pdf", format: "pdf",
 }));
-state.profile = { capabilities: {} };
 result.unlinked = collect(resultCard({
-  rank: 1, title: "Atlas of AI", source_id: "src_1", chunk_id: "chk_1",
-  locator: { page: 3 }, text: "The passage.",
+  rank: 1, title: "Atlas of AI", locator: { page: 3 }, text: "The passage.",
 }));
 """,
     )
@@ -3904,7 +3740,7 @@ result.unlinked = collect(resultCard({
         ["entity-link locator-badge", "Page 3", "#/passage?id=chk_1"],
     ]
     assert result["source"] == [["entity-link", "Atlas of AI", "#/source?id=src_1"]]
-    # A host that serves neither view draws plain text, not a link to nowhere.
+    # A hit with no source or passage id draws plain text, not a link to nowhere.
     assert result["unlinked"] == []
 
 

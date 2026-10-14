@@ -6,8 +6,8 @@ import pytest
 from starlette.testclient import TestClient
 
 from research_rag.runtime import update
-from research_rag.surfaces.ui import RESEARCH_UI_PROFILE, ResearchUIAdapter
-from research_rag.surfaces.workspace import UICapabilities, UIProfile, create_ui_app
+from research_rag.surfaces.ui import ResearchUIAdapter
+from research_rag.surfaces.workspace import create_ui_app
 
 
 def preview(version: str = "1.2.0") -> dict:
@@ -75,11 +75,11 @@ async def test_offline_preview_does_not_claim_up_to_date(monkeypatch):
     assert "Offline" in answer["message"]
 
 
-def test_updates_route_is_read_only_and_capability_gated(monkeypatch):
+def test_updates_route_is_read_only_and_local(monkeypatch):
     monkeypatch.setattr(update, "read_preview", lambda **_: preview())
     adapter = ResearchUIAdapter(SimpleNamespace(offline=False), None)
     with TestClient(
-        create_ui_app(profile=RESEARCH_UI_PROFILE, adapter=adapter),
+        create_ui_app(adapter=adapter),
         base_url="http://127.0.0.1",
     ) as client:
         assert client.get("/api/updates").json()["update_available"] is True
@@ -88,11 +88,3 @@ def test_updates_route_is_read_only_and_capability_gated(monkeypatch):
             client.get("/api/updates", headers={"Host": "attacker.example"}).status_code
             == 403
         )
-
-    disabled = UIProfile(
-        application_name="No updater", capabilities=UICapabilities(updates=False)
-    )
-    with TestClient(
-        create_ui_app(profile=disabled, adapter=adapter), base_url="http://127.0.0.1"
-    ) as client:
-        assert client.get("/api/updates").status_code == 404

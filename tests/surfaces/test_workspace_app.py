@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
@@ -8,8 +9,6 @@ from starlette.testclient import TestClient
 
 from research_rag.surfaces.workspace import (
     SourceFile,
-    UICapabilities,
-    UIProfile,
     UIRequestError,
     create_ui_app,
 )
@@ -184,17 +183,8 @@ class FakeAdapter:
         )
 
 
-def _profile(**capabilities: bool) -> UIProfile:
-    return UIProfile(
-        application_name="Test UltraRAG",
-        capabilities=UICapabilities(**capabilities),
-    )
-
-
 def test_remote_page_is_local_and_preserves_workspace(tmp_path: Path) -> None:
-    app = create_ui_app(
-        profile=_profile(), adapter=FakeAdapter(tmp_path / "source.pdf")
-    )
+    app = create_ui_app(adapter=FakeAdapter(tmp_path / "source.pdf"))
     with TestClient(
         app, base_url=LOOPBACK_BASE_URL, client=LOOPBACK_TEST_CLIENT
     ) as client:
@@ -240,7 +230,6 @@ def test_remote_qr_encodes_workspace_url_from_policy(
             return False
 
     app = create_ui_app(
-        profile=_profile(clients=True, projects=True),
         adapter=FakeAdapter(tmp_path / "source.pdf"),
         network_access=Policy(),
     )
@@ -267,7 +256,6 @@ def test_lan_policy_enforces_workspace_routes_writes_and_originals(
     source.write_bytes(b"%PDF-1.7 authorized original")
     adapter = FakeAdapter(source)
     app = create_ui_app(
-        profile=_profile(documents=True, source_files=True),
         adapter=adapter,
         network_access=NetworkAccess(5051, lan=True, addresses=("192.168.1.20",)),
     )
@@ -353,7 +341,7 @@ def test_workspace_and_normalized_read_operations(tmp_path: Path) -> None:
     source = tmp_path / "evidence.pdf"
     source.write_bytes(b"%PDF-1.4\n% test\n")
     adapter = FakeAdapter(source)
-    app = create_ui_app(profile=_profile(), adapter=adapter)
+    app = create_ui_app(adapter=adapter)
 
     with TestClient(
         app, base_url=LOOPBACK_BASE_URL, client=LOOPBACK_TEST_CLIENT
@@ -368,11 +356,16 @@ def test_workspace_and_normalized_read_operations(tmp_path: Path) -> None:
         passage = client.get("/api/passages/chunk-1?context_chunks=2")
 
     assert page.status_code == 200
-    assert "UltraRAG MCP" in page.text
+    assert "<title>Research RAG</title>" in page.text
     assert "default-src 'self'" in page.headers["content-security-policy"]
     assert stylesheet.headers["content-type"].startswith("text/css")
     assert "applyProfile" in script.text
-    assert profile.json()["application_name"] == "Test UltraRAG"
+    assert set(profile.json()["capabilities"]) == {
+        "clients",
+        "projects",
+        "agent_entry",
+        "updates",
+    }
     assert health.json()["project_root"] == "/project"
     assert status.json()["generation_id"] == "generation-1"
     assert sources.json()["sources"][0]["title"] == "Evidence"
@@ -394,11 +387,6 @@ def test_source_selection_and_partitions_are_forwarded(tmp_path: Path) -> None:
     source.write_bytes(b"%PDF-1.4\n% test\n")
     adapter = FakeAdapter(source)
     app = create_ui_app(
-        profile=_profile(
-            source_selection=True,
-            category_partitions=True,
-            project_metadata=True,
-        ),
         adapter=adapter,
     )
 
@@ -478,7 +466,7 @@ def test_writes_and_source_file_are_constrained(tmp_path: Path) -> None:
     source = tmp_path / "evidence.pdf"
     source.write_bytes(b"%PDF-1.4\n% test\n")
     adapter = FakeAdapter(source)
-    app = create_ui_app(profile=_profile(), adapter=adapter)
+    app = create_ui_app(adapter=adapter)
 
     with TestClient(
         app, base_url=LOOPBACK_BASE_URL, client=LOOPBACK_TEST_CLIENT
@@ -505,10 +493,7 @@ def test_writes_and_source_file_are_constrained(tmp_path: Path) -> None:
             "/api/search",
             json={"query": "test", "unsupported": True},
         )
-        unsupported_force = client.post(
-            "/api/ingest",
-            json={"force_recompute": True},
-        )
+        unsupported_ingest = client.post("/api/ingest", json={"chunk_size": 384})
 
     assert search.status_code == 200
     assert metadata.json()["requires_ingest"] is True
@@ -519,15 +504,14 @@ def test_writes_and_source_file_are_constrained(tmp_path: Path) -> None:
     assert non_json.status_code == 415
     assert cross_origin.status_code == 403
     assert unknown.status_code == 400
-    assert unsupported_force.status_code == 400
+    assert unsupported_ingest.status_code == 400
 
 
-def test_force_recompute_is_capability_gated_and_forwarded(tmp_path: Path) -> None:
+def test_force_recompute_is_forwarded(tmp_path: Path) -> None:
     source = tmp_path / "evidence.pdf"
     source.write_bytes(b"%PDF-1.4\n% test\n")
     adapter = FakeAdapter(source)
     app = create_ui_app(
-        profile=_profile(force_recompute=True),
         adapter=adapter,
     )
 
@@ -545,102 +529,10 @@ def test_force_recompute_is_capability_gated_and_forwarded(tmp_path: Path) -> No
     assert ("ingest", {"force_recompute": True}) in adapter.calls
 
 
-def test_disabled_capabilities_are_reported_and_enforced(tmp_path: Path) -> None:
-    source = tmp_path / "evidence.pdf"
-    source.write_bytes(b"%PDF-1.4\n% test\n")
-    profile = _profile(
-        sources=False,
-        passage_context=False,
-        ingestion=False,
-        metadata=False,
-        source_inclusion=False,
-        source_files=False,
-        metadata_filters=False,
-        source_selection=False,
-        category_partitions=False,
-        project_metadata=False,
-        generations=False,
-    )
-    app = create_ui_app(profile=profile, adapter=FakeAdapter(source))
-
-    with TestClient(
-        app, base_url=LOOPBACK_BASE_URL, client=LOOPBACK_TEST_CLIENT
-    ) as client:
-        ui = client.get("/api/ui")
-        sources = client.get("/api/sources")
-        ingest = client.post("/api/ingest", json={})
-        chunked_ingest = client.post(
-            "/api/ingest",
-            json={"chunk_size": 384, "chunk_overlap": 64},
-        )
-        rerank = client.post(
-            "/api/search",
-            json={"query": "evidence", "rerank": True},
-        )
-        partitions = client.post(
-            "/api/search",
-            json={"query": "evidence", "categories_any": ["theory"]},
-        )
-        selection = client.post(
-            "/api/search",
-            json={"query": "evidence", "source_ids": ["src_1"]},
-        )
-        project_filter = client.post(
-            "/api/search",
-            json={"query": "evidence", "projects_any": ["ai-and-fetishism"]},
-        )
-        authors = client.post(
-            "/api/search",
-            json={"query": "evidence", "authors_any": ["Crawford"]},
-        )
-        titles = client.post(
-            "/api/search",
-            json={"query": "evidence", "titles_any": ["Atlas of AI"]},
-        )
-        source_file = client.get("/api/source-file?path=evidence.pdf")
-
-    assert ui.json()["capabilities"]["sources"] is False
-    assert ui.json()["capabilities"]["bibliographic_filters"] is False
-    assert sources.status_code == 404
-    assert ingest.status_code == 404
-    # Chunking and reranking are engine settings, never a browser field.
-    assert chunked_ingest.status_code == 400
-    assert rerank.status_code == 400
-    assert partitions.status_code == 400
-    assert selection.status_code == 400
-    assert project_filter.status_code == 400
-    assert authors.status_code == 400
-    assert titles.status_code == 400
-    assert source_file.status_code == 404
-
-
-def test_configuration_rejects_ambiguous_adapter_setup(tmp_path: Path) -> None:
-    source = tmp_path / "evidence.pdf"
-    adapter = FakeAdapter(source)
-
-    try:
-        create_ui_app(profile=_profile())
-    except ValueError as exc:
-        assert "exactly one" in str(exc)
-    else:
-        raise AssertionError("missing adapter was accepted")
-
-    try:
-        create_ui_app(
-            profile=_profile(),
-            adapter=adapter,
-            adapter_factory=lambda: None,  # type: ignore[arg-type,return-value]
-        )
-    except ValueError as exc:
-        assert "exactly one" in str(exc)
-    else:
-        raise AssertionError("ambiguous adapter setup was accepted")
-
-
 def test_version_label_defaults_to_empty(tmp_path: Path) -> None:
     source = tmp_path / "evidence.pdf"
     source.write_bytes(b"%PDF-1.4\n% test\n")
-    app = create_ui_app(profile=_profile(), adapter=FakeAdapter(source))
+    app = create_ui_app(adapter=FakeAdapter(source))
 
     with TestClient(
         app, base_url=LOOPBACK_BASE_URL, client=LOOPBACK_TEST_CLIENT
@@ -653,11 +545,9 @@ def test_version_label_defaults_to_empty(tmp_path: Path) -> None:
 def test_version_label_is_served_and_rendered(tmp_path: Path) -> None:
     source = tmp_path / "evidence.pdf"
     source.write_bytes(b"%PDF-1.4\n% test\n")
-    profile = UIProfile(
-        application_name="Test UltraRAG",
-        version_label="server 1.2.3 · ui 0.5.0",
+    app = create_ui_app(
+        adapter=FakeAdapter(source), version_label="server 1.2.3 · ui 0.5.0"
     )
-    app = create_ui_app(profile=profile, adapter=FakeAdapter(source))
 
     with TestClient(
         app, base_url=LOOPBACK_BASE_URL, client=LOOPBACK_TEST_CLIENT
@@ -671,15 +561,15 @@ def test_version_label_is_served_and_rendered(tmp_path: Path) -> None:
     assert "version_label" in script.text
 
 
-def test_bibliographic_filters_are_capability_gated_and_forwarded(
+def test_bibliographic_filters_are_forwarded(
     tmp_path: Path,
 ) -> None:
-    """An author, title, or language filter travels only where the server implements it."""
+    """An author, title, or language filter reaches the adapter as sent."""
 
     source = tmp_path / "evidence.pdf"
     source.write_bytes(b"%PDF-1.4\n% test\n")
     adapter = FakeAdapter(source)
-    app = create_ui_app(profile=_profile(bibliographic_filters=True), adapter=adapter)
+    app = create_ui_app(adapter=adapter)
 
     with TestClient(
         app, base_url=LOOPBACK_BASE_URL, client=LOOPBACK_TEST_CLIENT
@@ -704,38 +594,8 @@ def test_bibliographic_filters_are_capability_gated_and_forwarded(
     assert forwarded["languages_any"] == ["en", "de"]
 
 
-def test_a_language_filter_is_refused_where_the_capability_is_off(
-    tmp_path: Path,
-) -> None:
-    """Language is a bibliographic filter, so the same flag gates it.
-
-    A layer the app serves and the workspace accepted silently would narrow a
-    search the reader did not know was narrowed, which is the one failure this
-    gate exists to prevent.
-    """
-
-    source = tmp_path / "evidence.pdf"
-    source.write_bytes(b"%PDF-1.4\n% test\n")
-    adapter = FakeAdapter(source)
-    app = create_ui_app(profile=_profile(), adapter=adapter)
-
-    with TestClient(
-        app, base_url=LOOPBACK_BASE_URL, client=LOOPBACK_TEST_CLIENT
-    ) as client:
-        language = client.post(
-            "/api/search", json={"query": "evidence", "languages_any": ["en"]}
-        )
-        author = client.post(
-            "/api/search", json={"query": "evidence", "authors_any": ["Crawford"]}
-        )
-
-    assert language.status_code == 400
-    assert author.status_code == 400
-    assert not any(operation == "search" for operation, _ in adapter.calls)
-
-
 def test_the_quotation_rule_is_not_a_footer(tmp_path: Path) -> None:
-    """The shared UI states no quotation rule of its own.
+    """The workspace states no quotation rule beyond the cleaned-text footer.
 
     A rule that matters on every passage belongs in the documentation and in the
     tool descriptions that an agent reads, not in the corner of every view.
@@ -743,31 +603,26 @@ def test_the_quotation_rule_is_not_a_footer(tmp_path: Path) -> None:
 
     source = tmp_path / "evidence.pdf"
     source.write_bytes(b"%PDF-1.4\n% test\n")
-    app = create_ui_app(profile=_profile(), adapter=FakeAdapter(source))
+    app = create_ui_app(adapter=FakeAdapter(source))
 
     with TestClient(
         app, base_url=LOOPBACK_BASE_URL, client=LOOPBACK_TEST_CLIENT
     ) as client:
-        profile = client.get("/api/ui")
         page = client.get("/")
-        javascript = client.get("/assets/app.js")
 
-    assert profile.json()["footer_text"] == ""
     assert "not for direct quotation" not in page.text.lower()
     assert "Verify important quotations" not in page.text
-    # The footer is emptied and hidden rather than left as an empty band, so a
-    # profile that sets no footer shows none.
-    assert "footer.hidden = !profile.footer_text" in javascript.text
+    assert "Passages are cleaned text, not verified quotations." in page.text
 
 
-def test_every_capability_is_declared_in_the_markup_and_named_in_the_loop(
+def test_only_the_local_panels_are_gated_by_the_profile(
     tmp_path: Path,
 ) -> None:
-    """A control the profile hides must be declared in the markup, not left inert."""
+    """A LAN viewer is not shown the panels that act on this machine."""
 
     source = tmp_path / "evidence.pdf"
     source.write_bytes(b"%PDF-1.4\n% test\n")
-    app = create_ui_app(profile=_profile(), adapter=FakeAdapter(source))
+    app = create_ui_app(adapter=FakeAdapter(source))
 
     with TestClient(
         app, base_url=LOOPBACK_BASE_URL, client=LOOPBACK_TEST_CLIENT
@@ -777,24 +632,8 @@ def test_every_capability_is_declared_in_the_markup_and_named_in_the_loop(
 
     assert page.status_code == 200
     assert javascript.status_code == 200
-    for capability in (
-        "bibliographic_filters",
-        "category_partitions",
-        "documents",
-        "ingestion",
-        "metadata_filters",
-        "project_metadata",
-        "source_selection",
-        "sources",
-        "settings",
-        "chunk_exclusion",
-        "projects",
-        "agent_entry",
-    ):
-        assert f'data-capability="{capability}"' in page.text
-    # The search payload sends a capability-gated field only when that
-    # capability is on, so a hidden control never travels as a value.
-    assert 'hasCapability("bibliographic_filters")' in javascript.text
+    gated = set(re.findall(r'data-capability="([^"]+)"', page.text))
+    assert gated == {"clients", "projects", "agent_entry", "updates"}
     # The language filter and the inventory that names the languages in a
     # project are one capability: a box a reader cannot fill from the status
     # beside it is a box that asks them to know the codes already listed.
@@ -816,13 +655,12 @@ def test_a_generation_is_removed_only_with_a_matching_confirmation(
     source = tmp_path / "evidence.pdf"
     source.write_bytes(b"%PDF-1.4\n% test\n")
     adapter = FakeAdapter(source)
-    app = create_ui_app(profile=_profile(generations=True), adapter=adapter)
+    app = create_ui_app(adapter=adapter)
     generation_id = "20260930T191235Z-45608dc5"
 
     with TestClient(
         app, base_url=LOOPBACK_BASE_URL, client=LOOPBACK_TEST_CLIENT
     ) as client:
-        assert client.get("/api/ui").json()["capabilities"]["generations"] is True
         removed = client.post(
             "/api/generations/remove",
             json={"generation_id": generation_id, "confirm": generation_id},
@@ -849,31 +687,7 @@ def test_a_generation_is_removed_only_with_a_matching_confirmation(
     assert [name for name, _ in adapter.calls] == ["remove_generation"]
 
 
-def test_a_generation_cannot_be_removed_where_the_capability_is_off(
-    tmp_path: Path,
-) -> None:
-    """A panel that shows chips and a button is not shown without a way to act."""
-
-    source = tmp_path / "evidence.pdf"
-    source.write_bytes(b"%PDF-1.4\n% test\n")
-    adapter = FakeAdapter(source)
-    app = create_ui_app(profile=_profile(generations=False), adapter=adapter)
-    generation_id = "20260930T191235Z-45608dc5"
-
-    with TestClient(
-        app, base_url=LOOPBACK_BASE_URL, client=LOOPBACK_TEST_CLIENT
-    ) as client:
-        assert client.get("/api/ui").json()["capabilities"]["generations"] is False
-        refused = client.post(
-            "/api/generations/remove",
-            json={"generation_id": generation_id, "confirm": generation_id},
-        )
-
-    assert refused.status_code == 404
-    assert adapter.calls == []
-
-
-def test_a_generation_is_loaded_only_where_the_capability_is_on(
+def test_a_generation_is_loaded_by_its_id(
     tmp_path: Path,
 ) -> None:
     """Loading names exactly one retained generation, with no other field.
@@ -885,7 +699,7 @@ def test_a_generation_is_loaded_only_where_the_capability_is_on(
     source = tmp_path / "evidence.pdf"
     source.write_bytes(b"%PDF-1.4\n% test\n")
     adapter = FakeAdapter(source)
-    app = create_ui_app(profile=_profile(generations=True), adapter=adapter)
+    app = create_ui_app(adapter=adapter)
     generation_id = "20260930T191235Z-45608dc5"
 
     with TestClient(
@@ -925,30 +739,10 @@ def test_a_generation_is_loaded_only_where_the_capability_is_on(
     assert adapter.calls == [("use_generation", {"generation_id": generation_id})]
 
 
-def test_a_generation_cannot_be_loaded_where_the_capability_is_off(
-    tmp_path: Path,
-) -> None:
-    source = tmp_path / "evidence.pdf"
-    source.write_bytes(b"%PDF-1.4\n% test\n")
-    adapter = FakeAdapter(source)
-    app = create_ui_app(profile=_profile(generations=False), adapter=adapter)
-
-    with TestClient(
-        app, base_url=LOOPBACK_BASE_URL, client=LOOPBACK_TEST_CLIENT
-    ) as client:
-        refused = client.post(
-            "/api/generations/use",
-            json={"generation_id": "20260930T191235Z-45608dc5"},
-        )
-
-    assert refused.status_code == 404
-    assert adapter.calls == []
-
-
 def test_the_status_view_carries_the_generation_panel_and_its_dialog() -> None:
     """The listing is free in the status payload, so the panel needs only markup."""
 
-    app = create_ui_app(profile=_profile(), adapter=FakeAdapter(Path("evidence.pdf")))
+    app = create_ui_app(adapter=FakeAdapter(Path("evidence.pdf")))
 
     with TestClient(
         app, base_url=LOOPBACK_BASE_URL, client=LOOPBACK_TEST_CLIENT
@@ -957,13 +751,11 @@ def test_the_status_view_carries_the_generation_panel_and_its_dialog() -> None:
         javascript = client.get("/assets/app.js").text
 
     assert 'id="generation-chips"' in page
-    assert 'data-capability="generations"' in page
     assert 'id="generation-dialog"' in page
     assert 'id="generation-load-dialog"' in page
     # The remove button stays disabled until the typed id matches, so the
     # confirmation is a gate rather than a message.
     assert 'id="generation-submit"' in page and "disabled" in page
-    assert 'hasCapability("generations")' in javascript
     assert "renderGenerations(status.generations || [])" in javascript
     assert 'byId("generation-confirm").addEventListener' in javascript
     assert "/api/generations/remove" in javascript
@@ -984,9 +776,7 @@ def test_a_host_reports_the_projects_it_serves_and_its_own_client_entry(
     """
 
     adapter = FakeAdapter(_source(tmp_path))
-    app = create_ui_app(
-        profile=_profile(projects=True, agent_entry=True), adapter=adapter
-    )
+    app = create_ui_app(adapter=adapter)
 
     with TestClient(
         app, base_url=LOOPBACK_BASE_URL, client=LOOPBACK_TEST_CLIENT
@@ -1030,30 +820,6 @@ def test_a_host_reports_the_projects_it_serves_and_its_own_client_entry(
     assert ("agent_entry", {}) in adapter.calls
 
 
-def test_the_projects_and_agent_entry_routes_are_absent_when_the_flags_are_off(
-    tmp_path: Path,
-) -> None:
-    """A host that serves one project has nothing to select and no entry to give."""
-
-    adapter = FakeAdapter(_source(tmp_path))
-
-    with TestClient(
-        create_ui_app(
-            profile=_profile(projects=False, agent_entry=False), adapter=adapter
-        ),
-        base_url=LOOPBACK_BASE_URL,
-        client=LOOPBACK_TEST_CLIENT,
-    ) as client:
-        assert client.get("/api/ui").json()["capabilities"]["projects"] is False
-        assert client.get("/api/ui").json()["capabilities"]["agent_entry"] is False
-        projects = client.get("/api/projects")
-        entry = client.get("/api/agent-entry")
-
-    assert projects.status_code == 404
-    assert entry.status_code == 404
-    assert adapter.calls == []
-
-
 def test_settings_are_read_and_written_through_the_adapter(tmp_path: Path) -> None:
     """The panel reads the server's settings and sends back only what changed.
 
@@ -1063,12 +829,11 @@ def test_settings_are_read_and_written_through_the_adapter(tmp_path: Path) -> No
     """
 
     adapter = FakeAdapter(_source(tmp_path))
-    app = create_ui_app(profile=_profile(settings=True), adapter=adapter)
+    app = create_ui_app(adapter=adapter)
 
     with TestClient(
         app, base_url=LOOPBACK_BASE_URL, client=LOOPBACK_TEST_CLIENT
     ) as client:
-        assert client.get("/api/ui").json()["capabilities"]["settings"] is True
         read = client.get("/api/settings")
         written = client.post(
             "/api/settings",
@@ -1101,29 +866,6 @@ def test_settings_are_read_and_written_through_the_adapter(tmp_path: Path) -> No
     ) in adapter.calls
 
 
-def test_the_settings_routes_are_absent_when_the_capability_is_off(
-    tmp_path: Path,
-) -> None:
-    """A server with no settings panel of its own gets no settings surface."""
-
-    adapter = FakeAdapter(_source(tmp_path))
-    app = create_ui_app(profile=_profile(settings=False), adapter=adapter)
-
-    with TestClient(
-        app, base_url=LOOPBACK_BASE_URL, client=LOOPBACK_TEST_CLIENT
-    ) as client:
-        assert client.get("/api/ui").json()["capabilities"]["settings"] is False
-        read = client.get("/api/settings")
-        write = client.post(
-            "/api/settings",
-            json={"values": {"retrieval.rrf_k": 40}, "confirm": True},
-        )
-
-    assert read.status_code == 404
-    assert write.status_code == 404
-    assert adapter.calls == []
-
-
 def test_a_settings_write_is_same_origin_and_json_only(tmp_path: Path) -> None:
     """Changing a setting changes the server, so it is held to the write rules."""
 
@@ -1131,7 +873,7 @@ def test_a_settings_write_is_same_origin_and_json_only(tmp_path: Path) -> None:
     body = {"values": {"retrieval.rrf_k": 40}, "expected_revision": "rev-1"}
 
     with TestClient(
-        create_ui_app(profile=_profile(settings=True), adapter=adapter),
+        create_ui_app(adapter=adapter),
         base_url=LOOPBACK_BASE_URL,
         client=LOOPBACK_TEST_CLIENT,
     ) as client:
@@ -1151,12 +893,11 @@ def test_a_settings_write_is_same_origin_and_json_only(tmp_path: Path) -> None:
 
 def test_chunk_exclusions_are_listed_and_one_chunk_is_set(tmp_path: Path) -> None:
     adapter = FakeAdapter(_source(tmp_path))
-    app = create_ui_app(profile=_profile(chunk_exclusion=True), adapter=adapter)
+    app = create_ui_app(adapter=adapter)
 
     with TestClient(
         app, base_url=LOOPBACK_BASE_URL, client=LOOPBACK_TEST_CLIENT
     ) as client:
-        assert client.get("/api/ui").json()["capabilities"]["chunk_exclusion"] is True
         listed = client.get("/api/chunk-exclusions")
         excluded = client.post(
             "/api/chunk-inclusion",
@@ -1183,25 +924,6 @@ def test_chunk_exclusions_are_listed_and_one_chunk_is_set(tmp_path: Path) -> Non
     assert ("list_chunk_exclusions", {}) in adapter.calls
 
 
-def test_the_chunk_routes_are_absent_when_the_capability_is_off(tmp_path: Path) -> None:
-    adapter = FakeAdapter(_source(tmp_path))
-    app = create_ui_app(profile=_profile(chunk_exclusion=False), adapter=adapter)
-
-    with TestClient(
-        app, base_url=LOOPBACK_BASE_URL, client=LOOPBACK_TEST_CLIENT
-    ) as client:
-        assert client.get("/api/ui").json()["capabilities"]["chunk_exclusion"] is False
-        listed = client.get("/api/chunk-exclusions")
-        excluded = client.post(
-            "/api/chunk-inclusion",
-            json={"chunk_id": "chunk-9", "included": False, "reason": "why"},
-        )
-
-    assert listed.status_code == 404
-    assert excluded.status_code == 404
-    assert adapter.calls == []
-
-
 def test_a_chunk_inclusion_write_is_same_origin_and_json_only(
     tmp_path: Path,
 ) -> None:
@@ -1210,7 +932,7 @@ def test_a_chunk_inclusion_write_is_same_origin_and_json_only(
     form = {"Content-Type": "application/x-www-form-urlencoded"}
 
     with TestClient(
-        create_ui_app(profile=_profile(chunk_exclusion=True), adapter=adapter),
+        create_ui_app(adapter=adapter),
         base_url=LOOPBACK_BASE_URL,
         client=LOOPBACK_TEST_CLIENT,
     ) as client:
