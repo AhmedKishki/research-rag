@@ -127,13 +127,13 @@ def invokes_this_app(arguments: Sequence[str], project_root: Path) -> bool:
     return False
 
 
-def project_argument(arguments: Sequence[str]) -> str | None:
-    """The `--project-root` value this process was given, in either spelling."""
+def option_value(arguments: Sequence[str], option: str) -> str | None:
+    """The value a command line gave `option`, as `option value` or `option=value`."""
 
     for index, argument in enumerate(arguments):
-        if argument == "--project-root" and index + 1 < len(arguments):
+        if argument == option and index + 1 < len(arguments):
             return arguments[index + 1]
-        if argument.startswith("--project-root="):
+        if argument.startswith(f"{option}="):
             return argument.split("=", 1)[1]
     return None
 
@@ -201,7 +201,7 @@ def judge(
     command = " ".join(arguments)
     if not invokes_this_app(arguments, project_root):
         return Verdict(False, f"pid {pid} does not run this app: {command}")
-    if project_argument(arguments) == str(project_root):
+    if option_value(arguments, "--project-root") == str(project_root):
         return Verdict(True, f"pid {pid} is this project's app: {command}", command)
     if port is not None and holds_port(pid, port, proc_root):
         return Verdict(

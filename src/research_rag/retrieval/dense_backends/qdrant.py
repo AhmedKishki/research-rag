@@ -19,40 +19,14 @@ from typing import Any
 import numpy as np
 from qdrant_client import QdrantClient, models
 
-from ..embeddings import DEFAULT_EMBEDDING_MODEL, EmbeddingModel
-from ..model_runtime import ModelRuntime
-from ..rerankers import DEFAULT_RERANKER_MODEL
+from ..model_runtime import RuntimeBackend
 from . import COLLECTION_NAME, QDRANT_BACKEND_NAME, DenseSearchHit
 from .portable_vectors import load_portable_vectors
 
 
-class LocalQdrantDenseBackend:
-    def __init__(
-        self,
-        model_cache_root: Path,
-        *,
-        offline: bool = False,
-        embedding_threads: int | None = None,
-        reranker_model: str = DEFAULT_RERANKER_MODEL,
-        embedding_inference_batch_size: int = 1,
-        embedding_model: str = DEFAULT_EMBEDDING_MODEL,
-        runtime: ModelRuntime | None = None,
-    ) -> None:
-        self.runtime = (
-            runtime
-            if runtime is not None
-            else ModelRuntime(
-                model_cache_root,
-                offline=offline,
-                embedding_threads=embedding_threads,
-                reranker_model=reranker_model,
-                embedding_inference_batch_size=embedding_inference_batch_size,
-                embedding_model=embedding_model,
-            )
-        )
-        # The index and every manifest number are written against the runtime's
-        # model facts, so an injected runtime is the only statement of them.
-        self.embedding_facts: EmbeddingModel = self.runtime.embedding_facts
+class LocalQdrantDenseBackend(RuntimeBackend):
+    def __init__(self, *args: Any, **kwargs: Any) -> None:
+        super().__init__(*args, **kwargs)
         self._path_locks: dict[Path, threading.Lock] = {}
         self._path_locks_guard = threading.Lock()
 
@@ -73,15 +47,6 @@ class LocalQdrantDenseBackend:
                 yield client
             finally:
                 client.close()
-
-    def embedding_token_counts(self, texts: list[str]) -> list[int]:
-        return self.runtime.embedding_token_counts(texts)
-
-    def embed_texts(
-        self,
-        texts: list[str],
-    ) -> np.ndarray[Any, np.dtype[np.float32]]:
-        return self.runtime.embed_texts(texts)
 
     def build_from_vectors(
         self,
@@ -283,12 +248,3 @@ class LocalQdrantDenseBackend:
                 raise RuntimeError("Qdrant returned a point without a chunk_id")
             hits.append(DenseSearchHit(chunk_id=chunk_id, score=float(point.score)))
         return hits
-
-    def rerank(
-        self,
-        query: str,
-        documents: list[str],
-        *,
-        model: str | None = None,
-    ) -> list[float]:
-        return self.runtime.rerank(query, documents, model=model)

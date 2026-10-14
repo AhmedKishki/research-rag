@@ -27,6 +27,7 @@ from ..project.config import (
 from ..retrieval.embeddings import resolve_embedding_model
 from ..retrieval.rerankers import resolve_reranker_model
 from .health import WARN, Check, HealthReport, health_report
+from .ownership import option_value
 
 
 class DoctorError(ValueError):
@@ -500,7 +501,7 @@ def check_entry(config: ResearchConfig, path: str | Path) -> tuple[Check, ...]:
                     f"{config.project_name}.",
                 )
             )
-        entry_runtime_root = _runtime_root_argument(arguments)
+        entry_runtime_root = option_value(arguments, "--runtime-root")
         configured = str(config.runtime_root) if config.runtime_root else None
         if entry_runtime_root and entry_runtime_root != configured:
             findings.append(
@@ -559,15 +560,6 @@ def check_entry(config: ResearchConfig, path: str | Path) -> tuple[Check, ...]:
     return tuple(findings)
 
 
-def _runtime_root_argument(arguments: list[str]) -> str | None:
-    for index, argument in enumerate(arguments):
-        if argument == "--runtime-root" and index + 1 < len(arguments):
-            return arguments[index + 1]
-        if argument.startswith("--runtime-root="):
-            return argument.split("=", 1)[1]
-    return None
-
-
 def _server_lines(config: ResearchConfig, running: list[tuple[int, str]]) -> list[str]:
     """The processes serving this project, and the command that stops them.
 
@@ -590,7 +582,7 @@ def _server_lines(config: ResearchConfig, running: list[tuple[int, str]]) -> lis
         {
             root
             for _pid, command in servers
-            if (root := _runtime_root_argument(shlex.split(command)))
+            if (root := option_value(shlex.split(command), "--runtime-root"))
             and Path(root).expanduser().resolve() != config.runtime_root
         }
     )
