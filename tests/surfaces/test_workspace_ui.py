@@ -1,13 +1,9 @@
-"""The clients view, the SQL console, the sidebar that holds them, and its styles.
+"""The clients view, the sidebar that holds it, and its styles.
 
 A host may serve this workspace and still not be a server — a stdio-only process
 has no other client to report — so both the capability and the two routes are off
 until a host turns them on, and a host that turns them on without the methods is
 told so rather than raising.
-
-A store this library cannot know about is the same case: the SQL panel ships
-hidden and only an adapter that declares `sql_console` fills it, because the
-scopes it offers and the statements it will run are the adapter's decisions.
 
 One installation serving several projects is the same case again: the selector
 and the client entry are the host's facts, so both ship behind a flag and neither
@@ -114,7 +110,7 @@ def _host(adapter: Any, *, enabled: bool = True) -> TestClient:
             profile=UIProfile(
                 application_name="Client host",
                 navigation_label="Views",
-                capabilities=UICapabilities(clients=enabled, retrieval_modes=False),
+                capabilities=UICapabilities(clients=enabled),
             ),
             adapter=adapter,
         ),
@@ -231,7 +227,7 @@ def _update_host(
                 profile=UIProfile(
                     application_name="Update host",
                     navigation_label="Views",
-                    capabilities=UICapabilities(updates=True, retrieval_modes=False),
+                    capabilities=UICapabilities(updates=True),
                 ),
                 adapter=adapter,
             ),
@@ -269,7 +265,7 @@ def test_a_host_can_end_one_session_from_the_workspace() -> None:
 
 
 def test_the_clients_routes_are_absent_when_the_capability_is_off() -> None:
-    """A memory-only or stdio-only host has nothing to report, so it says nothing."""
+    """A stdio-only host has nothing to report, so it says nothing."""
 
     adapter = ClientControlAdapter()
     with _host(adapter, enabled=False) as client:
@@ -421,59 +417,6 @@ def test_a_client_row_shows_who_the_client_is_and_where_it_is_running() -> None:
     # The host's own words say how a client is named, so a shared page cannot
     # name a variable only this host has.
     assert "profile.client_naming_hint" in script
-
-
-class SqlConsoleHost:
-    """A host that serves the workspace without exposing a store at all.
-
-    No statement method, because this half of the capability is about what the
-    page ships: the panel, its gating, and the envelope it renders.
-    """
-
-    async def health(self) -> Mapping[str, Any]:
-        return {"status": "ok"}
-
-    async def call(
-        self, operation: str, arguments: Mapping[str, Any]
-    ) -> Mapping[str, Any]:
-        if operation == "status":
-            return {
-                "ready": True,
-                "project_root": "/p",
-                "project_name": "p",
-                "sql_scopes": [{"scope": "generations", "label": "Generations"}],
-            }
-        if operation == "list_sources":
-            return {"ready": True, "source_count": 0, "sources": []}
-        raise UIRequestError(f"Operation {operation!r} is not available", 404)
-
-    async def source_file(self, source_path: str) -> SourceFile:  # pragma: no cover
-        raise UIRequestError("not used")
-
-
-def _sql_host(*, enabled: bool) -> TestClient:
-    return TestClient(
-        create_ui_app(
-            profile=UIProfile(
-                application_name="SQL host",
-                capabilities=UICapabilities(sql_console=enabled),
-            ),
-            adapter=SqlConsoleHost(),
-        ),
-        base_url=LOOPBACK_BASE_URL,
-        client=LOOPBACK_TEST_CLIENT,
-    )
-
-
-def test_the_sql_console_is_off_until_an_adapter_declares_it() -> None:
-    """A library cannot know which store an adapter keeps, so it offers none."""
-
-    with _sql_host(enabled=False) as client:
-        ui = client.get("/api/ui").json()
-        page = client.get("/").text
-
-    assert ui["capabilities"]["sql_console"] is False
-    assert 'data-capability="sql_console" hidden' in page
 
 
 class SettingsHost:
@@ -700,7 +643,6 @@ def test_the_tab_bar_is_the_whole_navigation() -> None:
         ("stats", "stats"),
         ("config", "settings"),
         ("mcp", "clients"),
-        ("memory", "memory"),
         ("updates", "updates"),
     ]
     # Every item has a panel, and every panel but the detail view of one source is
@@ -735,7 +677,7 @@ def test_the_sidebar_navigates_without_a_tab_strip() -> None:
     assert 'data-view="search" data-capability="documents"' in page
     assert 'class="sidebar-list"' in page
     # One item per view, and the item is a button rather than a tab role.
-    assert page.count('<button class="nav-item') == 8
+    assert page.count('<button class="nav-item') == 7
     assert 'role="tab"' not in page
     assert "aria-selected" not in page
     # The current view is marked as the current page, and only one is.
@@ -759,7 +701,7 @@ def test_the_sidebar_navigates_without_a_tab_strip() -> None:
     )
     # An icon is inline SVG rather than an icon font or a fetched file, so the
     # page adds no request and no dependency.
-    assert page.count('<svg class="nav-item-icon"') == 8
+    assert page.count('<svg class="nav-item-icon"') == 7
     assert "http://" not in page
     # The column is keyboard operable with a visible focus ring.
     assert ":focus-visible {" in client_css()
@@ -1039,7 +981,6 @@ def test_a_host_that_serves_no_panel_leaves_every_nav_item_out() -> None:
                     sources=False,
                     settings=False,
                     clients=False,
-                    memory=False,
                 ),
             ),
             adapter=adapter,
@@ -1052,7 +993,7 @@ def test_a_host_that_serves_no_panel_leaves_every_nav_item_out() -> None:
         page = client.get("/").text
         script = client.get("/assets/app.js").text
 
-    for capability in ("documents", "sources", "settings", "clients", "memory"):
+    for capability in ("documents", "sources", "settings", "clients"):
         assert capabilities[capability] is False
     # Every panel and the status summary are gated on the same capabilities the
     # nav items are, so nothing this host cannot answer has a way in.
@@ -1063,7 +1004,6 @@ def test_a_host_that_serves_no_panel_leaves_every_nav_item_out() -> None:
         ("stats", "stats"),
         ("config", "settings"),
         ("mcp", "clients"),
-        ("memory", "memory"),
         ("updates", "updates"),
     ):
         assert re.search(
@@ -1133,7 +1073,7 @@ def test_the_mcp_tab_carries_a_copyable_client_entry() -> None:
 
     assert 'id="agent-entry-summary" class="panel-section"' in page.text
     assert 'data-capability="agent_entry"' in page.text
-    assert 'id="agent-entry" class="standing-document"' in page.text
+    assert 'id="agent-entry" class="entry-document"' in page.text
     assert 'id="agent-entry-copy"' in page.text
     assert 'hasCapability("agent_entry")' in script.text
     assert "/api/agent-entry" in script.text
@@ -1178,7 +1118,6 @@ def test_a_panel_holds_only_the_blocks_that_belong_to_it() -> None:
         "stats",
         "config",
         "mcp",
-        "memory",
         "updates",
     }
     # The filters and the lists that fill them are one job, and both are in the
@@ -1192,8 +1131,8 @@ def test_a_panel_holds_only_the_blocks_that_belong_to_it() -> None:
         'id="language-chips"',
     ):
         assert element in panels["search"]
-    # The build, its generations, the passage decisions, and the record console
-    # are all facts about what is stored, so they are one status view.
+    # The build, its generations, and the passage decisions are all facts about
+    # what is stored, so they are one status view.
     for element in (
         'id="status-cards"',
         'id="status-message"',
@@ -1202,7 +1141,6 @@ def test_a_panel_holds_only_the_blocks_that_belong_to_it() -> None:
         'id="generation-summary"',
         'id="rebuild-button"',
         'id="chunk-exclusion-summary"',
-        'id="sql-console"',
     ):
         assert element in panels["status"]
     # Settings stay the whole Config view, and the clients the whole MCP view.
@@ -1593,7 +1531,7 @@ def test_reading_and_declining_an_update_writes_nothing() -> None:
     updates_source = script.split(
         "// --------------------------------------------------------------- updates --"
     )[1]
-    updates_source = updates_source.split("function renderSqlConsole")[0]
+    updates_source = updates_source.split("function parseSettingValue")[0]
     for forbidden in (
         '"/api/updates", {',
         "apply_update",
@@ -1965,8 +1903,6 @@ function element(tagName = "div") {
 }
 
 const registry = new Map();
-const radio = element("input");
-radio.value = "hybrid";
 // The sidebar's views, so navigation and routes have items to mark.
 const navItems = ["search", "sources", "status", "config", "mcp", "updates"].map((view) => {
   const item = element("li");
@@ -1984,7 +1920,6 @@ const document = {
   createDocumentFragment: () => element("fragment"),
   createTextNode: (text) => ({ textContent: text, children: [] }),
   querySelectorAll(selector) {
-    if (selector.includes("retrieval_method")) return [radio];
     if (selector === ".sidebar-item") return navItems;
     return [];
   },
@@ -3323,9 +3258,8 @@ result.history = window.history.entries;
 def test_a_load_draws_nothing_the_profile_has_not_allowed() -> None:
     """A refresh showed the page's raw markup before the profile arrived.
 
-    The retrieval switches, the rerank box, Export, Import, and a Memory view
-    this app does not serve were drawn for a moment and then removed, so every
-    reload flashed a workspace that is not this one. Each capability-gated
+    Panels this app does not serve were drawn for a moment and then removed, so
+    every reload flashed a workspace that is not this one. Each capability-gated
     element now starts hidden, and the app's name waits for the profile.
     """
 

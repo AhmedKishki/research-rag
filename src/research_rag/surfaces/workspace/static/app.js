@@ -16,10 +16,6 @@ const state = {
   projects: [],
   currentProject: "",
   agentEntry: "",
-  memory: null,
-  memoryRounds: new Map(),
-  memoryStanding: new Map(),
-  standingScope: null,
   generationActions: [],
   busy: false,
   forceRecompute: false,
@@ -69,12 +65,6 @@ function applyProfile(profile) {
   const footer = byId("footer-text");
   footer.textContent = profile.footer_text || "";
   footer.hidden = !profile.footer_text;
-  byId("bundle-import-intro").textContent = profile.bundle_import_intro;
-  byId("memory-tab-label").textContent = profile.memory_label;
-  byId("memory-heading").textContent = profile.memory_label;
-  const memoryNote = byId("memory-note");
-  memoryNote.textContent = profile.memory_note || "";
-  memoryNote.hidden = !profile.memory_note;
   const versionLabel = byId("version-label");
   versionLabel.textContent = profile.version_label || "";
   versionLabel.hidden = !profile.version_label;
@@ -288,8 +278,6 @@ function setBusy(active, message = "Working…") {
   byId("refresh-button").disabled = active;
   byId("ingest-button").disabled = active || !hasCapability("ingestion");
   byId("rebuild-button").disabled = active || !hasCapability("force_recompute");
-  byId("export-button").disabled = active || !hasCapability("bundle_export");
-  byId("import-button").disabled = active || !hasCapability("bundle_import");
   // A generation's Load and Remove are ordinary buttons rather than gated
   // submits, so the loop above does not reach them. They are held here, where
   // the busy state is decided, so one operation cannot start while another is
@@ -301,12 +289,11 @@ function setBusy(active, message = "Working…") {
 }
 
 // A submit marked `data-gated` is not switched by the loop above, because its
-// own condition — a statement to run, a changed value, a typed confirmation —
+// own condition — a changed value or a typed confirmation —
 // is what decides it. Each gate is re-read here instead, so a button that said
 // nothing had been typed does not come back live because a refresh elsewhere
 // finished.
 function syncGatedSubmits() {
-  syncSqlControls();
   syncSettingsSubmit();
   syncGenerationSubmit();
   syncSettingsConfirmSubmit();
@@ -354,19 +341,7 @@ function changeSummary(changes) {
     : "The source collection differs from the selected generation.";
 }
 
-function configureRetrieval(status) {
-  const available = new Set(status.available_retrieval_methods || []);
-  const radios = [...document.querySelectorAll("input[name='retrieval_method']")];
-  radios.forEach((radio) => {
-    radio.disabled = status.ready && !available.has(radio.value);
-  });
-  const checked = radios.find((radio) => radio.checked && !radio.disabled);
-  if (!checked) {
-    const preferred = radios.find(
-      (radio) => radio.value === status.default_retrieval_method && !radio.disabled,
-    );
-    (preferred || radios.find((radio) => !radio.disabled) || radios[0]).checked = true;
-  }
+function syncSearchButton(status) {
   byId("search-button").disabled = !status.ready || state.busy;
 }
 
@@ -843,14 +818,13 @@ function renderStatus(status) {
   message.hidden = !status.message;
   renderHealth(status);
   renderStatusFacts(status);
-  configureRetrieval(status);
+  syncSearchButton(status);
   renderPartitions(status);
   renderProjectTags(status);
   renderLanguages(status);
   syncFilterPicks();
   renderAgentEndpoint(status);
   if (hasCapability("generations")) renderGenerations(status.generations || []);
-  if (hasCapability("sql_console")) renderSqlConsole(status);
 }
 
 function tagList(values, className = "tag") {
@@ -969,264 +943,6 @@ function renderProjectTags(status) {
 
 function renderLanguages(status) {
   renderInventory("language-chips", status.languages || [], "language", "language-filter");
-}
-
-const MEMORY_SCOPE_LIMIT = 10;
-
-function memoryScopeLine(entry) {
-  return [
-    entry.directory,
-    `${formatNumber(entry.round_count)} recorded round${entry.round_count === 1 ? "" : "s"}`,
-    entry.latest_round_date ? `latest ${entry.latest_round_date}` : "no rounds yet",
-  ]
-    .filter(Boolean)
-    .join(" · ");
-}
-
-function memorySubheading(label, id) {
-  const row = node("div", "section-heading-row");
-  row.append(node("h4", "memory-subheading", label));
-  if (id) row.append(node("span", "count-badge", id));
-  return row;
-}
-
-function memoryRoundCard(round) {
-  const card = node("article", "memory-round");
-  card.dataset.user = round.user;
-  card.dataset.assistant = round.assistant;
-  card.dataset.searchText = [round.date, round.time, round.user, round.assistant]
-    .map(inlineText)
-    .join(" ")
-    .toLocaleLowerCase();
-
-  const header = node("div", "result-card-header");
-  header.append(node("h4", "result-title", `${round.date} ${round.time}`));
-  header.append(node("span", "locator-badge", round.source_file || "Memory round"));
-  card.append(header);
-
-  const lines = node("div", "memory-lines");
-  [
-    ["user", round.user],
-    ["assistant", round.assistant],
-  ].forEach(([speaker, text]) => {
-    const line = node("p", `memory-line memory-line-${speaker}`);
-    line.append(node("span", "memory-speaker", speaker));
-    line.append(node("span", "memory-text", readableText(text)));
-    lines.append(line);
-  });
-  card.append(lines);
-
-  const actions = node("div", "result-actions");
-  actions.append(button("Copy round", "copy-round"));
-  card.append(actions);
-  return card;
-}
-
-function memoryAppendForm(scope) {
-  const form = node("form", "memory-append");
-  form.dataset.scope = scope;
-  form.append(
-    node("h4", "memory-subheading", state.profile?.memory_add_label || "Add a round"),
-  );
-  [
-    ["user", "User line"],
-    ["assistant", "Assistant line"],
-  ].forEach(([field, label]) => {
-    const wrapper = node("label", "memory-append-field");
-    wrapper.append(node("span", "field-label", label));
-    const input = node("textarea", "memory-append-input");
-    input.rows = 2;
-    input.required = true;
-    input.dataset.field = field;
-    wrapper.append(input);
-    form.append(wrapper);
-  });
-  const actions = node("div", "dialog-actions");
-  const submit = node("button", "button button-primary", "Save round");
-  submit.type = "submit";
-  actions.append(submit);
-  form.append(actions);
-  form.addEventListener("submit", appendMemory);
-  return form;
-}
-
-function memoryRoundList(scope, rounds) {
-  const list = node("div", "memory-rounds");
-  if (!rounds.rounds?.length) {
-    list.append(node("div", "no-records", "No rounds have been recorded in this scope."));
-    return list;
-  }
-  rounds.rounds.forEach((round) => list.append(memoryRoundCard(round)));
-  if (rounds.truncated) {
-    list.append(
-      node(
-        "div",
-        "form-note",
-        `Showing the newest ${formatNumber(rounds.rounds.length)} of ${formatNumber(rounds.round_count)} rounds.`,
-      ),
-    );
-  }
-  return list;
-}
-
-function memoryScopeCard(entry, rounds, standing) {
-  state.memoryRounds.set(entry.scope, rounds);
-  state.memoryStanding.set(entry.scope, standing);
-
-  const card = node("article", "memory-scope");
-  card.dataset.scope = entry.scope;
-
-  const header = node("div", "memory-scope-header");
-  header.append(node("h3", "memory-scope-title", entry.label));
-  header.append(
-    node("span", "locator-badge", `${formatNumber(entry.round_count)} rounds`),
-  );
-  card.append(header);
-  card.append(node("p", "result-meta", memoryScopeLine(entry)));
-
-  card.append(
-    memorySubheading(
-      state.profile?.memory_standing_label || "Standing memory",
-      standing.sha256 ? `sha256 ${compactId(standing.sha256)}` : "not created yet",
-    ),
-  );
-  const standingActions = node("div", "result-actions");
-  standingActions.append(button("Copy standing memory", "copy-standing"));
-  if (hasCapability("memory_writes")) {
-    standingActions.append(button("Edit standing memory", "edit-standing"));
-  }
-  card.append(standingActions);
-  card.append(node("pre", "standing-document", standing.content || ""));
-
-  card.append(
-    memorySubheading(state.profile?.memory_rounds_label || "Recorded rounds"),
-  );
-  const filter = node("input", "memory-round-filter");
-  filter.type = "search";
-  filter.placeholder = "Filter by date or text…";
-  filter.setAttribute("aria-label", "Filter rounds");
-  card.append(filter);
-
-  const list = memoryRoundList(entry.scope, rounds);
-  filter.addEventListener("input", () => filterRounds(list, filter.value));
-  card.append(list);
-
-  if (hasCapability("memory_writes")) card.append(memoryAppendForm(entry.scope));
-  return card;
-}
-
-async function loadMemory() {
-  if (!hasCapability("memory")) return;
-  const status = await api("/api/memory");
-  const scopes = status.scopes || [];
-  byId("memory-nav-count").textContent = String(scopes.length);
-  const shown = scopes.slice(0, MEMORY_SCOPE_LIMIT);
-  const loaded = await Promise.all(
-    shown.map((entry) =>
-      Promise.all([
-        api(`/api/memory/rounds?scope=${encodeURIComponent(entry.scope)}&limit=20`),
-        api(`/api/memory/standing?scope=${encodeURIComponent(entry.scope)}`),
-      ]),
-    ),
-  );
-  const container = byId("memory-scopes");
-  container.replaceChildren();
-  shown.forEach((entry, index) => {
-    container.append(memoryScopeCard(entry, loaded[index][0], loaded[index][1]));
-  });
-  if (scopes.length > shown.length) {
-    container.append(
-      node(
-        "p",
-        "form-note",
-        `Showing the first ${formatNumber(shown.length)} of ${formatNumber(scopes.length)} memory scopes.`,
-      ),
-    );
-  }
-}
-
-async function refreshMemory({ announce = false } = {}) {
-  if (!hasCapability("memory")) return;
-  setBusy(true, "Reading memory…");
-  try {
-    await loadMemory();
-    if (announce) toast("Memory refreshed.");
-  } catch (error) {
-    toast(error.message, true);
-  } finally {
-    setBusy(false);
-  }
-}
-
-async function appendMemory(event) {
-  event.preventDefault();
-  const form = event.currentTarget;
-  const scope = form.dataset.scope;
-  const userMessage = form.querySelector("[data-field='user']").value.trim();
-  const assistantMessage = form.querySelector("[data-field='assistant']").value.trim();
-  if (!scope || !userMessage || !assistantMessage) {
-    toast("A user line and an assistant line are required.", true);
-    return;
-  }
-  setBusy(true, "Saving the round…");
-  try {
-    await api("/api/memory/append", {
-      method: "POST",
-      body: JSON.stringify({
-        scope,
-        user_message: userMessage,
-        assistant_message: assistantMessage,
-      }),
-    });
-    await loadMemory();
-    toast("Round saved.");
-  } catch (error) {
-    toast(error.message, true);
-  } finally {
-    setBusy(false);
-  }
-}
-
-function openStandingEditor(scope) {
-  const standing = state.memoryStanding.get(scope);
-  state.standingScope = scope;
-  byId("memory-standing-content").value = standing?.content || "";
-  byId("memory-standing-dialog").showModal();
-}
-
-async function saveStanding(event) {
-  event.preventDefault();
-  const scope = state.standingScope;
-  const content = byId("memory-standing-content").value;
-  if (!scope || !content.trim()) {
-    toast("Standing memory must not be empty.", true);
-    return;
-  }
-  const body = { scope, content };
-  const standing = state.memoryStanding.get(scope);
-  if (standing?.sha256) body.expected_sha256 = standing.sha256;
-  setBusy(true, "Saving standing memory…");
-  try {
-    await api("/api/memory/standing", {
-      method: "POST",
-      body: JSON.stringify(body),
-    });
-    byId("memory-standing-dialog").close();
-    state.standingScope = null;
-    await loadMemory();
-    toast("Standing memory saved.");
-  } catch (error) {
-    toast(error.message, true);
-  } finally {
-    setBusy(false);
-  }
-}
-
-function filterRounds(list, value) {
-  const query = value.trim().toLocaleLowerCase();
-  list.querySelectorAll(".memory-round").forEach((card) => {
-    card.hidden = Boolean(query) && !card.dataset.searchText.includes(query);
-  });
 }
 
 function sourceSearchText(source) {
@@ -1501,13 +1217,6 @@ async function loadWorkspace({ announce = false } = {}) {
         toast(error.message, true);
       }
     }
-    if (hasCapability("memory")) {
-      try {
-        await loadMemory();
-      } catch (error) {
-        toast(error.message, true);
-      }
-    }
     if (hasCapability("chunk_exclusion")) {
       try {
         await loadChunkExclusions();
@@ -1538,7 +1247,7 @@ async function loadWorkspace({ announce = false } = {}) {
     toast(error.message, true);
   } finally {
     setBusy(false);
-    if (state.status) configureRetrieval(state.status);
+    if (state.status) syncSearchButton(state.status);
   }
 }
 
@@ -2794,7 +2503,6 @@ async function runSearch() {
     return;
   }
   const key = searchKey();
-  const method = document.querySelector("input[name='retrieval_method']:checked")?.value || "hybrid";
   const payload = {
     query,
     top_k: Number(byId("top-k").value),
@@ -2814,9 +2522,7 @@ async function runSearch() {
   for (const [field, value] of Object.entries(optional)) {
     if (value?.length) payload[field] = value;
   }
-  if (hasCapability("retrieval_modes")) payload.retrieval_method = method;
-  if (hasCapability("reranking")) payload.rerank = byId("rerank").checked;
-  setBusy(true, payload.rerank ? "Searching and CPU reranking…" : "Searching evidence…");
+  setBusy(true, "Searching evidence…");
   try {
     state.hits = new Map();
     renderResults(await api("/api/search", { method: "POST", body: JSON.stringify(payload) }));
@@ -2832,7 +2538,7 @@ async function runSearch() {
     toast(error.message, true);
   } finally {
     setBusy(false);
-    if (state.status) configureRetrieval(state.status);
+    if (state.status) syncSearchButton(state.status);
   }
 }
 
@@ -2951,7 +2657,7 @@ async function showContext(chunkId) {
     toast(error.message, true);
   } finally {
     setBusy(false);
-    if (state.status) configureRetrieval(state.status);
+    if (state.status) syncSearchButton(state.status);
   }
 }
 
@@ -3267,24 +2973,8 @@ async function loadGeneration(event) {
     line.textContent = `Not possible: ${error.message}`;
   } finally {
     setBusy(false);
-    if (state.status) configureRetrieval(state.status);
+    if (state.status) syncSearchButton(state.status);
   }
-}
-
-function sqlScopes(status) {
-  // A scope is an opaque identifier the server reported, so it is read here and
-  // nowhere else, and a bare string is accepted as well as a described entry.
-  return (status.sql_scopes || [])
-    .map((entry) => (typeof entry === "string" ? { scope: entry } : entry))
-    .filter((entry) => entry && typeof entry.scope === "string" && entry.scope.trim());
-}
-
-function syncSqlControls() {
-  const ready = Boolean(
-    byId("sql-scope").value && byId("sql-statement").value.trim() && !state.busy,
-  );
-  byId("sql-run-button").disabled = !ready;
-  byId("sql-execute-button").disabled = !ready;
 }
 
 // --------------------------------------------------------------- updates --
@@ -3437,128 +3127,6 @@ async function checkUpdates({ manual = false } = {}) {
     byId("update-detail").hidden = true;
     byId("update-nav-badge").hidden = true;
     if (manual) toast(error.message, true);
-  }
-}
-
-function renderSqlConsole(status) {
-  const select = byId("sql-scope");
-  const scopes = sqlScopes(status);
-  const chosen = select.value;
-  select.replaceChildren();
-  for (const entry of scopes) {
-    const option = node("option", "", entry.label || entry.scope);
-    option.value = entry.scope;
-    select.append(option);
-  }
-  if (scopes.some((entry) => entry.scope === chosen)) select.value = chosen;
-  select.disabled = !scopes.length;
-  const message = byId("sql-message");
-  message.hidden = scopes.length > 0;
-  message.textContent = scopes.length
-    ? ""
-    : "This server reports no SQL scope, so there is nothing to run a statement against.";
-  syncSqlControls();
-}
-
-function sqlCell(value) {
-  return node(
-    "td",
-    "sql-cell",
-    value === null || value === undefined ? "—" : String(value),
-  );
-}
-
-function renderSqlResult(payload) {
-  const container = byId("sql-results");
-  container.replaceChildren();
-  const columns = Array.isArray(payload.columns) ? payload.columns : [];
-  const rows = Array.isArray(payload.rows) ? payload.rows : [];
-  const count = payload.row_count ?? rows.length;
-  container.append(node("p", "result-meta", `${formatNumber(count)} row${count === 1 ? "" : "s"}`));
-  if (!columns.length) {
-    container.append(node("div", "no-records", "The server returned no columns."));
-    return;
-  }
-
-  const table = node("table", "sql-table");
-  const header = node("tr");
-  for (const column of columns) {
-    const cell = node("th", "", column);
-    cell.scope = "col";
-    header.append(cell);
-  }
-  const head = node("thead");
-  head.append(header);
-  const body = node("tbody");
-  for (const row of rows) {
-    const line = node("tr");
-    for (const value of row) line.append(sqlCell(value));
-    body.append(line);
-  }
-  table.append(head, body);
-  container.append(table);
-  if (payload.truncated) {
-    container.append(
-      node(
-        "p",
-        "form-note",
-        `The server truncated this result: ${formatNumber(rows.length)} rows are shown of ${formatNumber(count)}.`,
-      ),
-    );
-  }
-}
-
-function sqlRequest() {
-  const scope = byId("sql-scope").value;
-  const statement = byId("sql-statement").value.trim();
-  if (!scope || !statement) {
-    toast("A scope and a statement are required.", true);
-    return null;
-  }
-  return { scope, statement };
-}
-
-async function runSql(event) {
-  event.preventDefault();
-  const request = sqlRequest();
-  if (!request) return;
-  setBusy(true, "Running the statement…");
-  try {
-    const result = await api("/api/sql/query", {
-      method: "POST",
-      body: JSON.stringify(request),
-    });
-    byId("sql-affected").hidden = true;
-    renderSqlResult(result);
-  } catch (error) {
-    toast(error.message, true);
-  } finally {
-    setBusy(false);
-  }
-}
-
-async function executeSql() {
-  const request = sqlRequest();
-  if (!request) return;
-  setBusy(true, "Applying the statement to stored records…");
-  try {
-    const result = await api("/api/sql/execute", {
-      method: "POST",
-      body: JSON.stringify(request),
-    });
-    const affected = result.rows_affected ?? 0;
-    byId("sql-results").replaceChildren();
-    const line = byId("sql-affected");
-    line.hidden = false;
-    line.textContent = `Statement applied. ${formatNumber(affected)} record${affected === 1 ? "" : "s"} affected.${result.reindexed ? " The server reindexed the change." : ""}`;
-    toast("Statement applied.");
-    // A reindexed write changed what a search reads, so the status beside the
-    // panel would otherwise go on describing the records before it.
-    if (result.reindexed) await loadWorkspace();
-  } catch (error) {
-    toast(error.message, true);
-  } finally {
-    setBusy(false);
   }
 }
 
@@ -4073,7 +3641,7 @@ async function saveMetadata(event) {
     toast(error.message, true);
   } finally {
     setBusy(false);
-    if (state.status) configureRetrieval(state.status);
+    if (state.status) syncSearchButton(state.status);
   }
 }
 
@@ -4095,7 +3663,7 @@ async function excludeSource(event) {
     toast(error.message, true);
   } finally {
     setBusy(false);
-    if (state.status) configureRetrieval(state.status);
+    if (state.status) syncSearchButton(state.status);
   }
 }
 
@@ -4113,7 +3681,7 @@ async function restoreSource(path) {
     toast(error.message, true);
   } finally {
     setBusy(false);
-    if (state.status) configureRetrieval(state.status);
+    if (state.status) syncSearchButton(state.status);
   }
 }
 
@@ -4280,20 +3848,10 @@ function pollIngestionProgress() {
 async function ingest(event) {
   event.preventDefault();
   if (state.busy) return;
-  const chunkSize = Number(byId("chunk-size").value);
-  const chunkOverlap = Number(byId("chunk-overlap").value);
-  if (hasCapability("chunk_settings") && chunkOverlap >= chunkSize) {
-    toast("Chunk overlap must be smaller than chunk size.", true);
-    return;
-  }
   setBusy(true, state.profile?.ingest_busy_message || "Building the indexes. This can take several minutes…");
   const stopProgress = pollIngestionProgress();
   try {
     const request = {};
-    if (hasCapability("chunk_settings")) {
-      request.chunk_size = chunkSize;
-      request.chunk_overlap = chunkOverlap;
-    }
     if (hasCapability("force_recompute")) request.force_recompute = state.forceRecompute;
     const result = await api("/api/ingest", {
       method: "POST",
@@ -4315,50 +3873,7 @@ async function ingest(event) {
   } finally {
     stopProgress();
     setBusy(false);
-    if (state.status) configureRetrieval(state.status);
-  }
-}
-
-async function exportBundle() {
-  const warning = state.profile?.bundle_export_warning
-    || "Export this generation? The archive may contain complete original sources.";
-  if (!window.confirm(warning)) return;
-  setBusy(true, "Exporting the current generation and original sources…");
-  try {
-    const result = await api("/api/bundles/export", {
-      method: "POST",
-      body: JSON.stringify({}),
-    });
-    toast(`Bundle created: ${result.bundle_name}`);
-  } catch (error) {
-    toast(error.message, true);
-  } finally {
-    setBusy(false);
-    if (state.status) configureRetrieval(state.status);
-  }
-}
-
-async function importBundle(event) {
-  event.preventDefault();
-  const payload = {
-    bundle_name: byId("bundle-name").value.trim(),
-    activate: byId("bundle-activate").checked,
-  };
-  setBusy(true, "Validating the bundle and rebuilding local indexes…");
-  try {
-    const result = await api("/api/bundles/import", {
-      method: "POST",
-      body: JSON.stringify(payload),
-    });
-    byId("bundle-dialog").close();
-    clearResults();
-    toast(result.message || `Bundle ${result.generation_id} imported.`);
-    await loadWorkspace();
-  } catch (error) {
-    toast(error.message, true);
-  } finally {
-    setBusy(false);
-    if (state.status) configureRetrieval(state.status);
+    if (state.status) syncSearchButton(state.status);
   }
 }
 
@@ -4388,23 +3903,6 @@ function handleAction(event) {
   else if (action === "language-filter") addSearchFilter("language-filter", value);
   else if (action === "only-source") searchWithSource("include-source-filter", value);
   else if (action === "exclude-from-search") searchWithSource("exclude-source-filter", value);
-  else if (action === "copy-standing" || action === "edit-standing") {
-    const scope = target.closest(".memory-scope")?.dataset.scope;
-    if (!scope) return;
-    if (action === "copy-standing") {
-      copyText(
-        target.closest(".memory-scope")?.querySelector(".standing-document")?.textContent || "",
-        "Standing memory copied.",
-      );
-    } else {
-      openStandingEditor(scope);
-    }
-  } else if (action === "copy-round") {
-    const round = target.closest(".memory-round");
-    if (round) {
-      copyText(`user: ${round.dataset.user}\nassistant: ${round.dataset.assistant}`, "Round copied.");
-    }
-  }
 }
 
 // A changed filter matches a different set, so it starts from that set's first
@@ -4480,8 +3978,6 @@ function initialize() {
   byId("ingest-button").addEventListener("click", () => openIngest(state.ingestPlan));
   byId("rebuild-button").addEventListener("click", () => openIngest(REBUILD_PLAN));
   byId("health-section").addEventListener("click", handleAction);
-  byId("export-button").addEventListener("click", exportBundle);
-  byId("import-button").addEventListener("click", () => byId("bundle-dialog").showModal());
   byId("notice-action").addEventListener("click", handleAction);
   byId("update-check-button").addEventListener("click", () => {
     void checkUpdates({ manual: true });
@@ -4511,10 +4007,7 @@ function initialize() {
   byId("metadata-form").addEventListener("submit", saveMetadata);
   byId("exclusion-form").addEventListener("submit", excludeSource);
   byId("ingest-form").addEventListener("submit", ingest);
-  byId("bundle-form").addEventListener("submit", importBundle);
   byId("source-filter").addEventListener("input", filterSources);
-  byId("memory-scopes").addEventListener("click", handleAction);
-  byId("memory-standing-form").addEventListener("submit", saveStanding);
   byId("results").addEventListener("click", handleAction);
   byId("source-list").addEventListener("click", handleAction);
   byId("source-pager").addEventListener("click", handleAction);
@@ -4532,9 +4025,6 @@ function initialize() {
   byId("generation-form").addEventListener("submit", removeGeneration);
   byId("generation-confirm").addEventListener("input", syncGenerationSubmit);
   byId("generation-load-form").addEventListener("submit", loadGeneration);
-  byId("sql-form").addEventListener("submit", runSql);
-  byId("sql-execute-button").addEventListener("click", executeSql);
-  byId("sql-statement").addEventListener("input", syncSqlControls);
   byId("settings-form").addEventListener("submit", saveSettings);
   byId("settings-sections").addEventListener("input", syncSettingsSubmit);
   // A select reports a chosen value on change; without this the submit gate

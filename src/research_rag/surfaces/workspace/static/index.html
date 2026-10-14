@@ -53,12 +53,6 @@
         <button id="refresh-button" class="button button-quiet" type="button">
           Refresh
         </button>
-        <button id="export-button" class="button button-quiet" type="button" data-capability="bundle_export" hidden>
-          Export
-        </button>
-        <button id="import-button" class="button button-quiet" type="button" data-capability="bundle_import" hidden>
-          Import
-        </button>
         <button id="ingest-button" class="button button-primary" type="button" data-capability="ingestion" hidden>
           Ingest changes
         </button>
@@ -144,17 +138,6 @@
               <span class="nav-item-name">MCP</span>
             </button>
           </li>
-          <li class="sidebar-item" data-view="memory" data-capability="memory" hidden>
-            <button class="nav-item" type="button">
-              <svg class="nav-item-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
-                <path d="M6 4h12v16l-6-4.5L6 20z"></path>
-              </svg>
-              <span class="nav-item-name">
-                <span id="memory-tab-label">Memory</span>
-                <span id="memory-nav-count" class="nav-item-count">0</span>
-              </span>
-            </button>
-          </li>
           <li class="sidebar-item" data-view="updates" data-capability="updates" hidden>
             <button class="nav-item" type="button">
               <svg class="nav-item-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
@@ -189,24 +172,9 @@
             </label>
 
             <div class="search-controls">
-              <fieldset class="method-control" data-capability="retrieval_modes" hidden>
-                <legend>Retrieval</legend>
-                <label><input type="radio" name="retrieval_method" value="hybrid" checked><span>Hybrid</span></label>
-                <label><input type="radio" name="retrieval_method" value="bm25"><span>BM25</span></label>
-                <label><input type="radio" name="retrieval_method" value="dense"><span>Dense</span></label>
-              </fieldset>
-
               <label class="compact-field" for="top-k">
                 <span>Results</span>
                 <input id="top-k" name="top_k" type="number" min="1" max="50" step="1" value="10" inputmode="numeric" required>
-              </label>
-
-              <label class="check-control" for="rerank" data-capability="reranking" hidden>
-                <input id="rerank" name="rerank" type="checkbox">
-                <span>
-                  <strong>CPU rerank</strong>
-                  <small>Slower, precision-focused</small>
-                </span>
               </label>
 
               <button id="search-button" class="button button-primary search-submit" type="submit">
@@ -482,33 +450,6 @@
             </details>
           </div>
 
-          <div id="sql-console" class="panel-section" data-capability="sql_console" hidden>
-            <h3>SQL console</h3>
-            <p class="form-note measure">
-              Read this project's stored records, or run a statement that changes them.
-              The server owns its store: it decides which scope a statement may reach and
-              refuses whatever it will not run. This workspace sends the statement as typed
-              and shows what came back.
-            </p>
-            <form id="sql-form" class="sql-console-form">
-              <label class="sql-scope-field" for="sql-scope">
-                <span class="field-label">Scope</span>
-                <select id="sql-scope" name="scope"></select>
-              </label>
-              <label class="sql-statement-field" for="sql-statement">
-                <span class="field-label">Statement</span>
-                <textarea id="sql-statement" name="statement" rows="4" spellcheck="false" placeholder="SELECT …"></textarea>
-              </label>
-              <div class="action-row">
-                <button id="sql-run-button" data-gated class="button button-primary" type="submit" disabled>Run query</button>
-                <button id="sql-execute-button" class="button button-danger" type="button" disabled>Execute write</button>
-                <small class="action-note">Execute changes stored records, and the server reindexes the change. This workspace cannot undo it.</small>
-              </div>
-            </form>
-            <p id="sql-message" class="form-note" hidden></p>
-            <p id="sql-affected" class="sql-affected" hidden></p>
-            <div id="sql-results" class="sql-results" aria-live="polite"></div>
-          </div>
         </section>
 
         <section id="stats-view" class="view-panel" data-panel="stats" data-capability="stats" hidden>
@@ -596,22 +537,12 @@
               For a client that cannot open a socket: it names the project rather
               than its directory, so one entry works on every machine.
             </p>
-            <pre id="agent-entry" class="standing-document"></pre>
+            <pre id="agent-entry" class="entry-document"></pre>
             <div class="action-row">
               <button id="agent-entry-copy" class="text-button" type="button" disabled>Copy client entry</button>
               <small class="action-note">Generated by the server this page is served by, and indented here to be read. The copy button sends exactly what the server produced.</small>
             </div>
           </div>
-        </section>
-
-        <section id="memory-view" class="view-panel" data-panel="memory" data-capability="memory" hidden>
-          <div class="memory-toolbar">
-            <h2 id="memory-heading">Memory</h2>
-          </div>
-
-          <p id="memory-note" class="form-note measure" hidden></p>
-
-          <div id="memory-scopes" class="memory-scopes" aria-live="polite"></div>
         </section>
 
         <section id="updates-view" class="view-panel" data-panel="updates" data-capability="updates" hidden>
@@ -659,18 +590,6 @@
         </p>
         <p id="ingest-note" class="form-note dialog-note" hidden></p>
         <p id="ingest-cost" class="notice-inline" hidden></p>
-        <div class="two-column-fields" data-capability="chunk_settings" hidden>
-          <label for="chunk-size">
-            <span class="field-label">Chunk size</span>
-            <input id="chunk-size" type="number" min="50" max="384" value="384" required>
-            <small>GPT-2 tokens, maximum 384.</small>
-          </label>
-          <label for="chunk-overlap">
-            <span class="field-label">Overlap</span>
-            <input id="chunk-overlap" type="number" min="0" max="383" value="64" required>
-            <small>Must be smaller than chunk size.</small>
-          </label>
-        </div>
         <div class="dialog-actions">
           <button class="button button-quiet dialog-close" type="button">Cancel</button>
           <button id="ingest-submit" class="button button-primary" type="submit">Create generation</button>
@@ -846,56 +765,6 @@
         <button class="icon-button dialog-close" type="button" aria-label="Close">×</button>
       </div>
       <div id="context-content" class="context-content"></div>
-    </dialog>
-
-    <dialog id="bundle-dialog" class="dialog">
-      <form id="bundle-form" method="dialog">
-        <div class="dialog-header">
-          <h2>Import a project bundle</h2>
-          <button class="icon-button dialog-close" type="button" aria-label="Close">×</button>
-        </div>
-        <p id="bundle-import-intro" class="dialog-intro">
-          Place the archive in the server's project-local bundle directory, then
-          enter its filename.
-        </p>
-        <label for="bundle-name">
-          <span class="field-label">Bundle filename</span>
-          <input id="bundle-name" type="text" required placeholder="project-generation.research-rag.zip">
-        </label>
-        <label class="check-control bundle-activate" for="bundle-activate">
-          <input id="bundle-activate" type="checkbox" checked>
-          <span>
-            <strong>Select after import</strong>
-            <small>The current generation changes only after validation and index reconstruction.</small>
-          </span>
-        </label>
-        <div class="dialog-actions">
-          <button class="button button-quiet dialog-close" type="button">Cancel</button>
-          <button class="button button-primary" type="submit">Import bundle</button>
-        </div>
-      </form>
-    </dialog>
-
-    <dialog id="memory-standing-dialog" class="dialog dialog-wide">
-      <form id="memory-standing-form" method="dialog">
-        <div class="dialog-header">
-          <h2 id="memory-standing-dialog-title">Edit standing memory</h2>
-          <button class="icon-button dialog-close" type="button" aria-label="Close">×</button>
-        </div>
-        <p id="memory-standing-intro" class="dialog-intro">
-          The whole standing document is replaced. It is written only when it still
-          matches the version this page read, so a change made meanwhile is never
-          overwritten.
-        </p>
-        <label for="memory-standing-content">
-          <span class="field-label">Standing memory</span>
-          <textarea id="memory-standing-content" rows="12" required></textarea>
-        </label>
-        <div class="dialog-actions">
-          <button class="button button-quiet dialog-close" type="button">Cancel</button>
-          <button id="memory-standing-submit" class="button button-primary" type="submit">Save standing memory</button>
-        </div>
-      </form>
     </dialog>
 
     <dialog id="update-dialog" class="dialog dialog-wide">

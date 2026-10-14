@@ -65,9 +65,6 @@ RESEARCH_UI_PROFILE = UIProfile(
         project_metadata=True,
         metadata_filters=True,
         bibliographic_filters=True,
-        retrieval_modes=False,
-        reranking=False,
-        chunk_settings=False,
         # The app is a server, so a person in the workspace can see which agents
         # are attached to it and end one. A host that is not a server leaves this
         # off and the panel and its routes stay absent.
@@ -75,7 +72,7 @@ RESEARCH_UI_PROFILE = UIProfile(
         # A build leaves its predecessor on disk, so a reader in the workspace
         # can see what those builds cost and reclaim one. The listing is already
         # in the status payload. The removal asks for the id twice, which the
-        # shared workspace insists on before it calls here.
+        # workspace host insists on before it calls here.
         generations=True,
         # A reader tunes this project in the browser, and the cost of a change is
         # named before anything is written, because a generation records most of

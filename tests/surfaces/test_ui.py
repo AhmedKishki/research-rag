@@ -269,17 +269,14 @@ def test_the_workspace_serves_the_page_and_read_apis(project: Path) -> None:
     assert health.json()["project_root"] == str(project)
     assert profile.json()["application_name"] == "Research RAG"
     assert profile.json()["capabilities"]["metadata"] is True
-    assert profile.json()["capabilities"]["bundle_export"] is False
-    assert profile.json()["capabilities"]["bundle_import"] is False
     assert profile.json()["capabilities"]["force_recompute"] is True
     assert profile.json()["capabilities"]["source_selection"] is True
     assert profile.json()["capabilities"]["category_partitions"] is True
     assert profile.json()["capabilities"]["project_metadata"] is True
     assert profile.json()["capabilities"]["metadata_filters"] is True
     assert profile.json()["capabilities"]["bibliographic_filters"] is True
-    assert profile.json()["capabilities"]["retrieval_modes"] is False
-    assert profile.json()["capabilities"]["reranking"] is False
-    assert profile.json()["capabilities"]["chunk_settings"] is False
+    for removed in ("retrieval_modes", "reranking", "chunk_settings", "memory"):
+        assert removed not in profile.json()["capabilities"]
     # The quote rule is stated once in the README, not on every passage a browser renders.
     assert "not for direct quotation" not in json.dumps(profile.json()).lower()
     assert status.json()["generation_id"] == "generation-1"
@@ -503,8 +500,8 @@ def test_the_workspace_leaves_the_method_to_the_engine_and_always_reranks(
 
     assert rejected_mode.status_code == 400
     assert rejected_rerank.status_code == 400
+    assert declined_rerank.status_code == 400
     assert accepted.status_code == 200
-    assert declined_rerank.status_code == 200
     assert all(
         "retrieval_method" not in arguments
         for name, arguments in fake.calls

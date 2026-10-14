@@ -1,4 +1,4 @@
-"""Secure loopback web host for the shared document workspace."""
+"""Secure loopback web host for this app's document workspace."""
 
 from __future__ import annotations
 
@@ -33,9 +33,6 @@ _ASSETS = {
     "remote.js": "text/javascript",
 }
 MAX_ERROR_LENGTH = 1200
-# A statement is forwarded whole and unchanged, so the request layer is where an
-# accidental paste stops: past this length it is a file, not a statement.
-MAX_SQL_STATEMENT = 20000
 
 _OPERATION_CAPABILITY = {
     "search": "documents",
@@ -46,13 +43,6 @@ _OPERATION_CAPABILITY = {
     "set_source_inclusion": "source_inclusion",
     "remove_generation": "generations",
     "use_generation": "generations",
-    "export_bundle": "bundle_export",
-    "import_bundle": "bundle_import",
-    "memory_status": "memory",
-    "memory_rounds": "memory",
-    "memory_standing": "memory",
-    "memory_append": "memory_writes",
-    "memory_standing_save": "memory_writes",
     "settings_read": "settings",
     "settings_write": "settings",
     "list_chunk_exclusions": "chunk_exclusion",
@@ -211,11 +201,6 @@ async def _ui_profile(request: Request) -> Response:
             "projects",
             "agent_entry",
             "updates",
-            "sql_console",
-            "memory",
-            "memory_writes",
-            "bundle_export",
-            "bundle_import",
         ):
             value["capabilities"][name] = False
     return JSONResponse(value)
@@ -291,8 +276,6 @@ async def _search(request: Request) -> Response:
         "document_ids",
         "source_ids",
         "exclude_source_ids",
-        "retrieval_method",
-        "rerank",
     }
     unknown = set(body) - allowed
     if unknown:
@@ -325,10 +308,6 @@ async def _search(request: Request) -> Response:
             status_code=400,
             detail="Author, title, and language filters are not available",
         )
-    if body.get("rerank") and not capabilities.reranking:
-        raise HTTPException(status_code=400, detail="Reranking is not available")
-    if body.get("retrieval_method") and not capabilities.retrieval_modes:
-        raise HTTPException(status_code=400, detail="Retrieval modes are not available")
     return JSONResponse(await _adapter_call(request, "search", body))
 
 
@@ -356,8 +335,6 @@ async def _ingest(request: Request) -> Response:
     body = await _json_body(request)
     capabilities = request.app.state.profile.capabilities
     allowed: set[str] = set()
-    if capabilities.chunk_settings:
-        allowed |= {"chunk_size", "chunk_overlap"}
     if capabilities.force_recompute:
         allowed.add("force_recompute")
     unknown = set(body) - allowed
@@ -442,27 +419,6 @@ async def _use_generation(request: Request) -> Response:
     return JSONResponse(await _adapter_call(request, "use_generation", body))
 
 
-async def _export_bundle(request: Request) -> Response:
-    body = await _json_body(request)
-    if body:
-        raise HTTPException(status_code=400, detail="Bundle export takes no fields")
-    return JSONResponse(await _adapter_call(request, "export_bundle"))
-
-
-async def _import_bundle(request: Request) -> Response:
-    body = await _json_body(request)
-    if set(body) - {"bundle_name", "activate"} or "bundle_name" not in body:
-        raise HTTPException(
-            status_code=400,
-            detail="Bundle import requires bundle_name and optional activate",
-        )
-    if not isinstance(body["bundle_name"], str) or not body["bundle_name"].strip():
-        raise HTTPException(status_code=400, detail="bundle_name must not be empty")
-    if "activate" in body and not isinstance(body["activate"], bool):
-        raise HTTPException(status_code=400, detail="activate must be true or false")
-    return JSONResponse(await _adapter_call(request, "import_bundle", body))
-
-
 def _adapter_protocol(request: Request, methods: tuple[str, ...], refusal: str) -> Any:
     """The adapter's own methods for one protocol, or a refusal when it has none.
 
@@ -532,68 +488,6 @@ async def _disconnect(request: Request) -> Response:
     )
 
 
-def _sql_console(request: Request) -> Any:
-    return _adapter_protocol(
-        request,
-        ("sql_query", "sql_execute"),
-        "This host cannot run statements against its records.",
-    )
-
-
-def _sql_request(body: Mapping[str, Any]) -> dict[str, str]:
-    """The scope and statement a reader sent, checked before the adapter sees it.
-
-    The scope is trimmed because an identifier carried with stray whitespace is
-    one the adapter does not recognise; the statement is not, because its own
-    whitespace and its semicolon are part of what was asked for.
-    """
-
-    unknown = set(body) - {"scope", "statement"}
-    if unknown:
-        raise HTTPException(
-            status_code=400,
-            detail=f"Unsupported SQL fields: {', '.join(sorted(unknown))}",
-        )
-    scope = body.get("scope")
-    if not isinstance(scope, str) or not scope.strip():
-        raise HTTPException(status_code=400, detail="A SQL scope is required")
-    statement = body.get("statement")
-    if not isinstance(statement, str) or not statement.strip():
-        raise HTTPException(status_code=400, detail="A SQL statement is required")
-    if len(statement) > MAX_SQL_STATEMENT:
-        raise HTTPException(
-            status_code=400,
-            detail=f"A SQL statement is limited to {MAX_SQL_STATEMENT} characters",
-        )
-    return {"scope": scope.strip(), "statement": statement}
-
-
-async def _sql_query(request: Request) -> Response:
-    """Read the records an adapter stores, as the rows the adapter returned."""
-
-    adapter = _sql_console(request)
-    _require_capability(request, "sql_console")
-    arguments = _sql_request(await _json_body(request))
-    return JSONResponse(
-        await _call_adapter(
-            adapter, "sql_query", arguments["scope"], arguments["statement"]
-        )
-    )
-
-
-async def _sql_execute(request: Request) -> Response:
-    """Run a statement that changes stored records; the adapter decides it may."""
-
-    adapter = _sql_console(request)
-    _require_capability(request, "sql_console")
-    arguments = _sql_request(await _json_body(request))
-    return JSONResponse(
-        await _call_adapter(
-            adapter, "sql_execute", arguments["scope"], arguments["statement"]
-        )
-    )
-
-
 async def _source_file(request: Request) -> Response:
     _require_capability(request, "source_files")
     raw_path = request.query_params.get("path", "").strip()
@@ -614,86 +508,6 @@ async def _source_file(request: Request) -> Response:
         filename=source.filename,
         content_disposition_type=source.content_disposition_type,
     )
-
-
-async def _memory_status(request: Request) -> Response:
-    return JSONResponse(await _adapter_call(request, "memory_status"))
-
-
-def _memory_scope(value: Any) -> str:
-    if not isinstance(value, str) or not value.strip():
-        raise HTTPException(status_code=400, detail="A memory scope is required")
-    return value.strip()
-
-
-def _reject_unknown(body: Mapping[str, Any], allowed: set[str]) -> None:
-    unknown = set(body) - allowed
-    if unknown:
-        raise HTTPException(
-            status_code=400,
-            detail=f"Unsupported memory fields: {', '.join(sorted(unknown))}",
-        )
-
-
-async def _memory_rounds(request: Request) -> Response:
-    try:
-        limit = int(request.query_params.get("limit", "20"))
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail="limit must be an integer") from exc
-    if not 1 <= limit <= 200:
-        raise HTTPException(status_code=400, detail="limit must be between 1 and 200")
-    return JSONResponse(
-        await _adapter_call(
-            request,
-            "memory_rounds",
-            {"scope": _memory_scope(request.query_params.get("scope")), "limit": limit},
-        )
-    )
-
-
-async def _memory_standing(request: Request) -> Response:
-    return JSONResponse(
-        await _adapter_call(
-            request,
-            "memory_standing",
-            {"scope": _memory_scope(request.query_params.get("scope"))},
-        )
-    )
-
-
-async def _memory_append(request: Request) -> Response:
-    body = await _json_body(request)
-    _reject_unknown(body, {"scope", "user_message", "assistant_message"})
-    for field in ("user_message", "assistant_message"):
-        if not isinstance(body.get(field), str) or not body[field].strip():
-            raise HTTPException(status_code=400, detail=f"{field} must not be empty")
-    return JSONResponse(
-        await _adapter_call(
-            request,
-            "memory_append",
-            {
-                "scope": _memory_scope(body.get("scope")),
-                "user_message": body["user_message"].strip(),
-                "assistant_message": body["assistant_message"].strip(),
-            },
-        )
-    )
-
-
-async def _memory_standing_save(request: Request) -> Response:
-    body = await _json_body(request)
-    _reject_unknown(body, {"scope", "content", "expected_sha256"})
-    if not isinstance(body.get("content"), str) or not body["content"].strip():
-        raise HTTPException(status_code=400, detail="content must not be empty")
-    if "expected_sha256" in body and not isinstance(body["expected_sha256"], str):
-        raise HTTPException(status_code=400, detail="expected_sha256 must be a string")
-    arguments: dict[str, Any] = {
-        "scope": _memory_scope(body.get("scope")),
-        "content": body["content"],
-    }
-    if "expected_sha256" in body:
-        arguments["expected_sha256"] = body["expected_sha256"]
-    return JSONResponse(await _adapter_call(request, "memory_standing_save", arguments))
 
 
 async def _settings_read(request: Request) -> Response:
@@ -927,20 +741,11 @@ def create_ui_app(
         Route("/api/source-inclusion", _set_inclusion, methods=["POST"]),
         Route("/api/generations/remove", _remove_generation, methods=["POST"]),
         Route("/api/generations/use", _use_generation, methods=["POST"]),
-        Route("/api/bundles/export", _export_bundle, methods=["POST"]),
-        Route("/api/bundles/import", _import_bundle, methods=["POST"]),
         Route("/api/clients", _clients),
         Route(
             "/api/clients/{session_id:str}/disconnect", _disconnect, methods=["POST"]
         ),
-        Route("/api/sql/query", _sql_query, methods=["POST"]),
-        Route("/api/sql/execute", _sql_execute, methods=["POST"]),
         Route("/api/source-file", _source_file),
-        Route("/api/memory", _memory_status),
-        Route("/api/memory/rounds", _memory_rounds),
-        Route("/api/memory/standing", _memory_standing),
-        Route("/api/memory/append", _memory_append, methods=["POST"]),
-        Route("/api/memory/standing", _memory_standing_save, methods=["POST"]),
         Route("/api/settings", _settings_read),
         Route("/api/settings", _settings_write, methods=["POST"]),
         Route("/api/chunk-exclusions", _chunk_exclusions),
