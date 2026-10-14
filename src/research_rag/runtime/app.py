@@ -220,10 +220,6 @@ class ClientError(Exception):
     """A control request that named something this app does not have."""
 
 
-def _now() -> float:
-    return time.monotonic()
-
-
 def _same_client(one: Client, other: Client) -> bool:
     """Whether two sightings are one client opening more than one connection.
 
@@ -281,11 +277,11 @@ class Client:
     def attached(self) -> bool:
         if self.pending or self.dropped:
             return False
-        return _now() - self.last_seen < CLIENT_IDLE_SECONDS
+        return time.monotonic() - self.last_seen < CLIENT_IDLE_SECONDS
 
     @property
     def idle_seconds(self) -> float:
-        return round(_now() - self.last_seen, 1)
+        return round(time.monotonic() - self.last_seen, 1)
 
     @property
     def transport(self) -> str:
@@ -383,12 +379,12 @@ class ClientRegistry:
             existing = Client(
                 session_id=session_id,
                 name=name or session_id,
-                first_seen=_now(),
-                last_seen=_now(),
+                first_seen=time.monotonic(),
+                last_seen=time.monotonic(),
                 pending=pending,
             )
             self._clients[key] = existing
-        existing.last_seen = _now()
+        existing.last_seen = time.monotonic()
         existing.requests += 1
         if name:
             existing.name = name
@@ -475,7 +471,10 @@ class ClientRegistry:
         """
 
         for key, client in list(self._clients.items()):
-            if client.attached or _now() - client.last_seen < CLIENT_RETENTION_SECONDS:
+            if (
+                client.attached
+                or time.monotonic() - client.last_seen < CLIENT_RETENTION_SECONDS
+            ):
                 continue
             self._clients.pop(key)
             self._awaiting.pop(client.session_id, None)
@@ -892,7 +891,7 @@ class App:
                 proxy_headers=False,
             )
         )
-        self.started_at = _now()
+        self.started_at = time.monotonic()
         _record_state(self.config, self.port)
         self._task = asyncio.create_task(self._server.serve(sockets=[claim]))
         self._task.add_done_callback(self._task_finished)

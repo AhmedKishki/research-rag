@@ -74,6 +74,7 @@ from . import ownership
 from .process import Runner, subprocess_runner
 from .release import (
     NONE,
+    SKIPPED,
     UNREADABLE,
     Fetch,
     PublishedRelease,
@@ -83,7 +84,6 @@ from .release import (
     is_release_version,
     published_release,
     remote_release,
-    skipped_published_release,
 )
 from .tool_ownership import (
     available_version,
@@ -434,9 +434,12 @@ def published_release_for(
     """
 
     if offline:
-        return skipped_published_release(
-            "the published release was not asked because --offline was given, so "
-            "there is no changelog to show"
+        return PublishedRelease(
+            SKIPPED,
+            detail=(
+                "the published release was not asked because --offline was given, "
+                "so there is no changelog to show"
+            ),
         )
     remote_url = (
         origin_url(local.checkout, run)

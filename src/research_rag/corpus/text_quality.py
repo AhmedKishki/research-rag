@@ -176,12 +176,6 @@ def text_health_reasons(value: str) -> list[str]:
     return reasons
 
 
-def _unclean_character_count(value: str) -> int:
-    """The characters in a passage that no readable text is expected to carry."""
-
-    return sum(_counts_as_unreadable(character) for character in value)
-
-
 def _pdf_lexical_spans(value: str) -> Iterator[tuple[int, int]]:
     """Keep whitespace-free scripts local without splitting Latin words."""
 
@@ -268,7 +262,7 @@ def passage_health_reasons(
     if maximum_unclean_percent is not None:
         total = len(value)
         if total > 0:
-            unreadable = _unclean_character_count(value)
+            unreadable = sum(_counts_as_unreadable(character) for character in value)
             if unreadable * 100 > total * maximum_unclean_percent:
                 reasons.append(SOURCE_REASON_UNCLEAN)
     return list(dict.fromkeys(reasons))
@@ -386,17 +380,6 @@ def _is_heading_line(line: str) -> bool:
     return stripped[-1] not in _SENTENCE_END
 
 
-def opens_with_note_marker(line: str) -> bool:
-    """Whether a line opens with the marker its number or note is printed with.
-
-    A note apparatus is printed with a marker on every one of its paragraphs, and
-    an argument paragraph is not. The test is on the line rather than the
-    paragraph because a page sets one note per line.
-    """
-
-    return bool(_NOTE_MARKER.match(line))
-
-
 def is_reference_entry(value: str) -> bool:
     """Whether a paragraph reads as an entry of a reference list.
 
@@ -453,7 +436,7 @@ def _continuation_entry(paragraph: str, kind: str) -> bool:
     return (
         is_reference_entry(paragraph)
         if kind == "bibliography"
-        else opens_with_note_marker(paragraph)
+        else bool(_NOTE_MARKER.match(paragraph))
     )
 
 

@@ -534,12 +534,6 @@ def published_release(
     )
 
 
-def skipped_published_release(detail: str) -> PublishedRelease:
-    """The answer when the reader asked for no network at all."""
-
-    return PublishedRelease(SKIPPED, detail=detail)
-
-
 def declared_version(checkout: Path | None) -> str | None:
     """Return the version `pyproject.toml` declares, or None when it declares none."""
 

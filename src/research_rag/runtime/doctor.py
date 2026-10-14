@@ -120,25 +120,6 @@ def prefetch_models(config: ResearchConfig) -> tuple[str, ...]:
     return tuple(lines)
 
 
-def _argument_value(arguments: list[str], name: str) -> str | None:
-    """One argument's value, whether written `--name value` or `--name=value`."""
-
-    for index, argument in enumerate(arguments):
-        if argument == name and index + 1 < len(arguments):
-            return arguments[index + 1]
-        if argument.startswith(f"{name}="):
-            return argument.split("=", 1)[1]
-    return None
-
-
-def _project_root_argument(arguments: list[str]) -> str | None:
-    return _argument_value(arguments, "--project-root")
-
-
-def _project_name_argument(arguments: list[str]) -> str | None:
-    return _argument_value(arguments, "--project-name")
-
-
 # The MCP client entry the doctor prints and validates. The app is reached two
 # ways, so there are two: a URL entry for a client that can open a socket, which
 # points at the app's own port, and a stdio entry for one that cannot, which runs
@@ -471,8 +452,8 @@ def check_entry(config: ResearchConfig, path: str | Path) -> tuple[Check, ...]:
                     f"{Path(sys.executable).parent / SERVER_COMMAND}.",
                 )
             )
-        root = _project_root_argument(arguments)
-        project_name = _project_name_argument(arguments)
+        root = option_value(arguments, "--project-root")
+        project_name = option_value(arguments, "--project-name")
         if root is not None:
             findings.append(
                 Check(
@@ -535,7 +516,7 @@ def check_entry(config: ResearchConfig, path: str | Path) -> tuple[Check, ...]:
         name
         for name, entry in entries.items()
         if _runs_this_app(entry)
-        and (named := _project_name_argument(_arguments_of(entry))) is not None
+        and (named := option_value(_arguments_of(entry), "--project-name")) is not None
         and named.casefold() == config.project_name.casefold()
     ]
     if len(matching) > 1:

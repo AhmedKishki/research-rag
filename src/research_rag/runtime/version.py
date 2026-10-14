@@ -16,10 +16,6 @@ def distribution_version(name: str) -> str | None:
         return None
 
 
-def distribution_files(name: str) -> Path:
-    return Path(str(distribution(name)._path))
-
-
 # Read once, when this module is first imported: a running process keeps naming
 # the version it started with, so an update that only changed the environment is
 # visible as a difference instead of being reported as already current.
@@ -60,7 +56,7 @@ def checkout_drift() -> str | None:
 
 def install_origin() -> Path | None:
     try:
-        recorded = distribution_files(DISTRIBUTION_NAME)
+        recorded = Path(str(distribution(DISTRIBUTION_NAME)._path))
     except Exception:  # noqa: BLE001 - a broken environment must not raise here.
         return None
     direct_url = recorded / "direct_url.json"

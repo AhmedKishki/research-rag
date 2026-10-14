@@ -639,9 +639,6 @@ class ArtifactLookup:
                 is not None
             )
 
-    def ordinal_for_contents(self, contents: str) -> int | None:
-        return self.ordinals_by_contents([contents]).get(contents)
-
 
 class DocumentArtifactMapping(Mapping[str, list[dict[str, Any]]]):
     """Lazy document-to-record mapping backed by an :class:`ArtifactLookup`."""
@@ -683,7 +680,7 @@ class VectorByContentsMapping(Mapping[str, Any]):
         self.vectors = vectors
 
     def __getitem__(self, contents: str) -> Any:
-        ordinal = self.lookup.ordinal_for_contents(contents)
+        ordinal = self.lookup.ordinals_by_contents([contents]).get(contents)
         if ordinal is None:
             raise KeyError(contents)
         return self.vectors[ordinal]

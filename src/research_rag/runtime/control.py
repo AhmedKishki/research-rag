@@ -36,10 +36,6 @@ class ControlError(Exception):
     """A control call the app refused, or could not be delivered to one."""
 
 
-def _json(payload: Any, status_code: int = 200) -> JSONResponse:
-    return JSONResponse(payload, status_code=status_code)
-
-
 def _write_refusal(request: Request) -> JSONResponse | None:
     """Refuse a request this app cannot show came from its own page on this machine.
 
@@ -51,9 +47,9 @@ def _write_refusal(request: Request) -> JSONResponse | None:
     refusal = write_guard.write_refusal(request)
     if refusal is not None:
         status, reason = refusal
-        return _json({"error": reason}, status_code=status)
+        return JSONResponse({"error": reason}, status_code=status)
     if not write_guard.json_content_type(request):
-        return _json(
+        return JSONResponse(
             {"error": "Write requests require application/json"}, status_code=415
         )
     return None
@@ -84,11 +80,11 @@ async def _operation(app: App, request: Request) -> JSONResponse:
     # answer the workspace's status carries.
     if name == "status":
         payload = {**payload, **app.state()}
-    return _json(payload)
+    return JSONResponse(payload)
 
 
 async def _health(app: App, request: Request) -> JSONResponse:
-    return _json(
+    return JSONResponse(
         {
             "status": "ok",
             "project_root": str(app.config.project_root),
@@ -99,21 +95,21 @@ async def _health(app: App, request: Request) -> JSONResponse:
 
 
 async def _clients(app: App, request: Request) -> JSONResponse:
-    return _json({"clients": app.clients.report()})
+    return JSONResponse({"clients": app.clients.report()})
 
 
 async def _lan(app: App, request: Request) -> JSONResponse:
     body = await _body(request)
     if set(body) != {"enabled"} or not isinstance(body.get("enabled"), bool):
         raise ResearchError("LAN control requires only a boolean enabled")
-    return _json(await app.set_lan(body["enabled"]))
+    return JSONResponse(await app.set_lan(body["enabled"]))
 
 
 async def _disconnect(app: App, request: Request) -> JSONResponse:
     session_id = request.path_params["session_id"]
     reason = (await _body(request)).get("reason") or "Disconnected by request."
     client = app.clients.disconnect(session_id, str(reason))
-    return _json({"disconnected": client.report()})
+    return JSONResponse({"disconnected": client.report()})
 
 
 async def _handle(app: App, endpoint: Any, request: Request) -> JSONResponse:
@@ -127,7 +123,7 @@ async def _handle(app: App, endpoint: Any, request: Request) -> JSONResponse:
         with as_caller("command line"):
             return await endpoint(app, request)
     except (ClientError, ResearchError) as exc:
-        return _json({"error": str(exc)}, status_code=400)
+        return JSONResponse({"error": str(exc)}, status_code=400)
 
 
 def control_routes(app: App) -> list[Route]:
