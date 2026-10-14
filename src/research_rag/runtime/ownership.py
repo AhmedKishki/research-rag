@@ -12,7 +12,10 @@ inferred:
 
 - the process runs this app, as a console script or as ``python -m research_rag``;
 - it names this project as ``--project-root``, exactly, because a relative path
-  would be resolved against the other process's own directory;
+  would be resolved against the other process's own directory; or, when the caller
+  passes the port this project recorded, it holds that port's listening socket,
+  which proves an app started by `--project`, by a bare call, or by a relative
+  path, because only the process that claimed the port holds it;
 - it is neither this process nor one this process descends from, because a sweep
   that signalled its own parent would take the terminal running it.
 
@@ -135,8 +138,54 @@ def project_argument(arguments: Sequence[str]) -> str | None:
     return None
 
 
-def judge(pid: int, project_root: Path, proc_root: Path = Path("/proc")) -> Verdict:
-    """Whether this pid is an app of this project, and the reason either way."""
+def holds_port(pid: int, port: int, proc_root: Path = Path("/proc")) -> bool:
+    """Whether this pid holds the socket listening on ``port``.
+
+    `net/tcp` and `net/tcp6` name each listening socket's inode (field 10, state
+    ``0A``), and a process's `fd` entries link to the sockets it holds.
+    """
+
+    inodes: set[str] = set()
+    for table in ("tcp", "tcp6"):
+        try:
+            rows = (proc_root / "net" / table).read_text(encoding="utf-8")
+        except OSError:
+            continue
+        for row in rows.splitlines()[1:]:
+            fields = row.split()
+            if (
+                len(fields) > 9
+                and fields[3] == "0A"
+                and int(fields[1].rsplit(":", 1)[-1], 16) == port
+            ):
+                inodes.add(f"socket:[{fields[9]}]")
+    if not inodes:
+        return False
+    try:
+        descriptors = list((proc_root / str(pid) / "fd").iterdir())
+    except OSError:
+        return False
+    for descriptor in descriptors:
+        try:
+            if os.readlink(descriptor) in inodes:
+                return True
+        except OSError:
+            continue
+    return False
+
+
+def judge(
+    pid: int,
+    project_root: Path,
+    proc_root: Path = Path("/proc"),
+    *,
+    port: int | None = None,
+) -> Verdict:
+    """Whether this pid is an app of this project, and the reason either way.
+
+    `port` is the port this project's state records; holding its listening socket
+    proves an app whose command line does not name the project.
+    """
 
     here = os.getpid()
     if pid <= 0:
@@ -152,12 +201,15 @@ def judge(pid: int, project_root: Path, proc_root: Path = Path("/proc")) -> Verd
     command = " ".join(arguments)
     if not invokes_this_app(arguments, project_root):
         return Verdict(False, f"pid {pid} does not run this app: {command}")
-    if project_argument(arguments) != str(project_root):
+    if project_argument(arguments) == str(project_root):
+        return Verdict(True, f"pid {pid} is this project's app: {command}", command)
+    if port is not None and holds_port(pid, port, proc_root):
         return Verdict(
-            False,
-            f"pid {pid} runs this app for another project: {command}",
+            True,
+            f"pid {pid} is this project's app on port {port}: {command}",
+            command,
         )
-    return Verdict(True, f"pid {pid} is this project's app: {command}", command)
+    return Verdict(False, f"pid {pid} runs this app for another project: {command}")
 
 
 def _pidfd_for(pid: int) -> int | None:
@@ -177,6 +229,8 @@ def ask_to_stop(
     project_root: Path,
     proc_root: Path = Path("/proc"),
     number: int = signal.SIGTERM,
+    *,
+    port: int | None = None,
 ) -> Outcome:
     """Ask one process to stop, but only after proving it is this project's app.
 
@@ -184,10 +238,10 @@ def ask_to_stop(
     reused between the two readings would change the command line, and a handle
     opened before the reuse still names the process that is gone. A kernel without
     `pidfd_send_signal` leaves the target running, because signalling a bare number
-    is the case that cannot be made safe here.
+    is the case that cannot be made safe here. `port` is passed to `judge`.
     """
 
-    first = judge(pid, project_root, proc_root)
+    first = judge(pid, project_root, proc_root, port=port)
     if not first.owned:
         return Outcome(False, first.reason)
     handle = _pidfd_for(pid)
@@ -198,7 +252,7 @@ def ask_to_stop(
             "handle that survives a reused pid, so it was left running.",
         )
     try:
-        second = judge(pid, project_root, proc_root)
+        second = judge(pid, project_root, proc_root, port=port)
         if not second.owned or second.command != first.command:
             return Outcome(
                 False,

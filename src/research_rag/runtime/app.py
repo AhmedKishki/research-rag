@@ -37,6 +37,7 @@ from ..project.config import ConfigurationError, ResearchConfig
 from ..project.state_files import PID_FILE, PORT_FILE, TTY_FILE
 from ..project.state_files import process_alive as alive
 from ..project.state_files import recorded_pid as _recorded_pid
+from ..project.state_files import recorded_port as _recorded_port
 from .network import NetworkAccess, discover_lan_addresses
 
 if TYPE_CHECKING:
@@ -997,13 +998,7 @@ def recorded_port(config: ResearchConfig) -> int | None:
     failure.
     """
 
-    state = config.state_root
-    try:
-        port = int((state / PORT_FILE).read_text(encoding="utf-8").strip())
-        pid = int((state / PID_FILE).read_text(encoding="utf-8").strip())
-    except (OSError, ValueError):
-        return None
-    return port if alive(pid) else None
+    return _recorded_port(config.state_root)
 
 
 def recorded_pid(config: ResearchConfig) -> int | None:

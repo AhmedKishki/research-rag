@@ -70,6 +70,7 @@ from ..project.state_files import (
     ProjectState,
     process_alive,
     recorded_pid,
+    recorded_port,
     resident_build,
 )
 from . import ownership
@@ -1012,7 +1013,9 @@ def stop_app(project: ProjectState, run: Runner) -> StoppedProject:
     pid = recorded_pid(project.state_root)
     if pid is None:
         return StoppedProject(project, False, "no app was running for this project")
-    outcome = ownership.ask_to_stop(pid, project.project_root)
+    outcome = ownership.ask_to_stop(
+        pid, project.project_root, port=recorded_port(project.state_root)
+    )
     if not outcome.asked:
         return StoppedProject(project, False, outcome.reason)
     return StoppedProject(
