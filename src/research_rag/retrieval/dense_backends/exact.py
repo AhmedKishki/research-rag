@@ -28,10 +28,8 @@ from typing import Any
 
 import numpy as np
 
-from ...storage.records import StorageError, atomic_write_json, read_json
-from ..embeddings import DEFAULT_EMBEDDING_MODEL, EmbeddingModel
-from ..model_runtime import ModelRuntime
-from ..rerankers import DEFAULT_RERANKER_MODEL
+from ...storage.durable_io import StorageError, atomic_write_json, read_json
+from ..model_runtime import RuntimeBackend
 from . import (
     EXACT_BACKEND_NAME,
     EXACT_DOCUMENTS_FILENAME,
@@ -74,57 +72,15 @@ def _read_index_object(path: Path, label: str) -> dict[str, Any]:
     return value
 
 
-class LocalVectorDenseBackend:
+class LocalVectorDenseBackend(RuntimeBackend):
     """Exact dense search over a generation's portable float32 vectors."""
 
-    def __init__(
-        self,
-        model_cache_root: Path,
-        *,
-        offline: bool = False,
-        embedding_threads: int | None = None,
-        reranker_model: str = DEFAULT_RERANKER_MODEL,
-        embedding_inference_batch_size: int = 1,
-        embedding_model: str = DEFAULT_EMBEDDING_MODEL,
-        runtime: ModelRuntime | None = None,
-    ) -> None:
-        self.runtime = (
-            runtime
-            if runtime is not None
-            else ModelRuntime(
-                model_cache_root,
-                offline=offline,
-                embedding_threads=embedding_threads,
-                reranker_model=reranker_model,
-                embedding_inference_batch_size=embedding_inference_batch_size,
-                embedding_model=embedding_model,
-            )
-        )
-        # The index and every manifest number are written against the runtime's
-        # model facts, so an injected runtime is the only statement of them.
-        self.embedding_facts: EmbeddingModel = self.runtime.embedding_facts
+    def __init__(self, *args: Any, **kwargs: Any) -> None:
+        super().__init__(*args, **kwargs)
         # The one index searches read, as (path, file stamps, index). Only the
         # current generation is searched, so one is enough, and a generation that
         # stopped being searched releases its mapped vectors on the next search.
         self._loaded: tuple[Path, tuple[int, int], _ExactIndex] | None = None
-
-    def embedding_token_counts(self, texts: list[str]) -> list[int]:
-        return self.runtime.embedding_token_counts(texts)
-
-    def embed_texts(
-        self,
-        texts: list[str],
-    ) -> np.ndarray[Any, np.dtype[np.float32]]:
-        return self.runtime.embed_texts(texts)
-
-    def rerank(
-        self,
-        query: str,
-        documents: list[str],
-        *,
-        model: str | None = None,
-    ) -> list[float]:
-        return self.runtime.rerank(query, documents, model=model)
 
     @staticmethod
     def _generation_root(index_path: Path) -> Path:

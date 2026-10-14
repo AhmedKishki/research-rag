@@ -1579,7 +1579,7 @@ def _service_processes(
         ]
         if not ownership.invokes_this_app(arguments, project_root):
             continue
-        if ownership.project_argument(arguments) != str(project_root):
+        if ownership.option_value(arguments, "--project-root") != str(project_root):
             continue
         found.append((pid, " ".join(arguments)))
     return found
