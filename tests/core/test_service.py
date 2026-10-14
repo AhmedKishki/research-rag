@@ -21,14 +21,7 @@ import research_rag.core.status as status_module
 import research_rag.generations.ingestion as ingestion_module
 import research_rag.project.support as support_module
 import research_rag.retrieval.artifact_lookup as artifact_lookup_module
-from research_rag.core.service import (
-    ResearchError,
-    ResearchService,
-    _citation,
-    _effective_document_metadata,
-    _enrich_chunks,
-    _public_document,
-)
+from research_rag.core.service import ResearchError, ResearchService
 from research_rag.corpus.extraction import ExtractionError
 from research_rag.project.config import (
     ConfigurationError,
@@ -36,8 +29,14 @@ from research_rag.project.config import (
     project_command,
     resolve_config,
 )
-from research_rag.project.policy import DEFAULT_RETRIEVAL_METHOD
+from research_rag.project.policy import DEFAULT_RETRIEVAL_METHOD, value_fingerprint
 from research_rag.project.settings import resolve_gate_stopwords
+from research_rag.project.support import (
+    _citation,
+    _effective_document_metadata,
+    _enrich_chunks,
+    _public_document,
+)
 from research_rag.retrieval.dense import (
     DenseSearchHit,
     DenseTokenAuditUnavailable,
@@ -1578,7 +1577,7 @@ def test_removed_legacy_reviewed_metadata_uses_safe_fallback() -> None:
         "doi": "10.1000/wrong",
         "categories": ["wrong category"],
         "keywords": ["wrong keyword"],
-        "metadata_override_revision": service_module.value_fingerprint(
+        "metadata_override_revision": value_fingerprint(
             {
                 "title": "Wrong Reviewed Title",
                 "authors": ["Wrong Author"],
@@ -1632,19 +1631,19 @@ def test_provenance_free_legacy_metadata_falls_back_only_after_snapshot_change()
         "categories": [],
         "keywords": [],
     }
-    empty_revision = service_module.value_fingerprint({})
+    empty_revision = value_fingerprint({})
     matching_manifest = {
         "metadata_revision": empty_revision,
         "documents": [legacy_document],
     }
 
-    matching = service_module._effective_documents(matching_manifest, {})["doc_legacy"]
+    matching = support_module._effective_documents(matching_manifest, {})["doc_legacy"]
     assert matching["title"] == "Valid Automatic Title"
     assert matching["authors"] == ["Automatic Author"]
     assert matching["year"] == 2020
     assert matching["doi"] == "10.1000/automatic"
 
-    changed = service_module._effective_documents(
+    changed = support_module._effective_documents(
         matching_manifest,
         {"legacy.pdf": {"categories": ["corrected"]}},
     )["doc_legacy"]
@@ -3177,7 +3176,7 @@ async def _assert_ordinary_ingest_migrates_legacy_metadata_storage(
         )
     )
     assert migrated_manifest["metadata_storage_policy"] == (
-        service_module.METADATA_STORAGE_POLICY
+        support_module.METADATA_STORAGE_POLICY
     )
     assert migrated_manifest["documents"][0]["title"] == "Automatic Title"
 
@@ -4114,7 +4113,7 @@ async def _assert_metadata_edit_preserves_ingestion_checkpoint(
         (Path(result["generation_root"]) / "manifest.json").read_text(encoding="utf-8")
     )
     assert manifest["metadata_storage_policy"] == (
-        service_module.METADATA_STORAGE_POLICY
+        support_module.METADATA_STORAGE_POLICY
     )
     assert manifest["documents"][0]["title"] == "Automatic Title"
     listed = await service.list_sources()
