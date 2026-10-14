@@ -71,7 +71,6 @@ An item is done when the harness has produced its measurement and the validation
 - [ ] **Give `stale` one meaning.** Feature. With no generation it doubles as "ready to build", so a caller cannot tell a changed corpus from a never-built one.
 - [ ] **Report activation failures as structured values.** Feature. A failed activation does not say which step failed or what it left on disk.
 - [ ] **Decide how the source inventory exposes the keyword vocabulary.** Feature. The keyword layer is all-of, and the vocabulary exists only across sources, so a reader cannot discover which keywords exist. Report counts in `status` or reduce the list to handles.
-- [ ] **Hash a drifted source once.** Bug. `_status` hashes every source whose mtime changed while its size did not, and every agent search runs `_status`. An unchanged ingest never rewrites the recorded mtime, so the hashing repeats on every search until a real build.
 
 ## ingestion
 

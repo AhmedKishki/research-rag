@@ -332,6 +332,24 @@ def _review_state_payload(
 
 
 class StatusWorkflow:
+    def _drifted_digest(self, path: Path) -> str:
+        """A source's digest, hashed once for each file identity this process sees.
+
+        A source whose mtime moved while its size did not is compared by digest,
+        and every agent search reads `_status`, while an unchanged ingest never
+        rewrites the recorded mtime. The change time moves on every write and
+        cannot be set back, so an identity seen before holds the same bytes.
+        """
+
+        stat = path.stat()
+        identity = (stat.st_size, stat.st_mtime_ns, stat.st_ctime_ns, stat.st_ino)
+        cached = self._drift_digests.get(path)
+        if cached is not None and cached[0] == identity:
+            return cached[1]
+        digest = sha256_file(path)
+        self._drift_digests[path] = (identity, digest)
+        return digest
+
     def _generation_upgrade_reasons(self, manifest: dict[str, Any]) -> list[str]:
         return generation_upgrade_reasons(
             self.config,
@@ -432,7 +450,10 @@ class StatusWorkflow:
                 continue
             if source.mtime_ns != existing.get("mtime_ns"):
                 recorded_digest = str(existing.get("sha256") or "")
-                if not recorded_digest or sha256_file(source.path) != recorded_digest:
+                if (
+                    not recorded_digest
+                    or self._drifted_digest(source.path) != recorded_digest
+                ):
                     modified.append(relative)
         metadata_changed = _metadata_snapshot_changed(manifest, metadata)
         stored_exclusion_revision = manifest.get("source_exclusion_revision")
