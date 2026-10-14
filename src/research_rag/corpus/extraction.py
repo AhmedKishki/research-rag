@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import hashlib
 import re
+import threading
 from collections import Counter
 from dataclasses import dataclass
 from pathlib import Path
@@ -773,6 +774,29 @@ def pdf_page_count(source: SourceFile) -> int:
         document.close()
 
 
+# The book parsed last, kept while its file is unchanged. A build reads one spine
+# item per checkpointed step, and parsing reads every item in the archive, so
+# each step would otherwise parse the whole book again.
+_PARSED_EPUB: tuple[tuple[str, int, int, int], epub.EpubBook] | None = None
+_PARSED_EPUB_LOCK = threading.Lock()
+
+
+def _read_epub(path: Path) -> epub.EpubBook:
+    global _PARSED_EPUB
+    try:
+        stat = path.stat()
+        identity = (str(path), stat.st_size, stat.st_mtime_ns, stat.st_ctime_ns)
+        with _PARSED_EPUB_LOCK:
+            if _PARSED_EPUB is not None and _PARSED_EPUB[0] == identity:
+                return _PARSED_EPUB[1]
+        book = epub.read_epub(str(path), options={"ignore_ncx": True})
+    except Exception as exc:
+        raise ExtractionError(f"Cannot open EPUB source: {path}") from exc
+    with _PARSED_EPUB_LOCK:
+        _PARSED_EPUB = (identity, book)
+    return book
+
+
 def prepare_epub_extraction(
     source: SourceFile,
     digest: str,
@@ -782,10 +806,7 @@ def prepare_epub_extraction(
     """EPUB metadata and its deterministic spine work count."""
 
     if book is None:
-        try:
-            book = epub.read_epub(str(source.path), options={"ignore_ncx": True})
-        except Exception as exc:
-            raise ExtractionError(f"Cannot open EPUB source: {source.path}") from exc
+        book = _read_epub(source.path)
     titles = _epub_metadata_values(book, "title")
     authors = _epub_metadata_values(book, "creator")
     identifiers = _epub_metadata_values(book, "identifier")
@@ -1266,10 +1287,7 @@ def extract_epub_spine_item(
     """
 
     removals = empty_removal_counts()
-    try:
-        book = epub.read_epub(str(source.path), options={"ignore_ncx": True})
-    except Exception as exc:
-        raise ExtractionError(f"Cannot open EPUB source: {source.path}") from exc
+    book = _read_epub(source.path)
     spine_entry = book.spine[spine_index]
     item_id = spine_entry[0] if isinstance(spine_entry, tuple) else spine_entry
     item = book.get_item_with_id(item_id)

@@ -141,6 +141,36 @@ def test_pdf_pages_and_epub_sections_preserve_locators(project: Path) -> None:
     assert all("block_index" in item["locator"] for item in epub_units)
 
 
+def test_an_epub_is_parsed_once_while_its_file_is_unchanged(
+    project: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A build reads one spine item per step, and parsing reads the whole archive.
+
+    The parsed book is kept for the next item while the file's identity holds,
+    and a write, which moves that identity, is parsed again.
+    """
+
+    path = project / "sources" / "book.epub"
+    write_epub(path, "Section evidence about quartz.")
+    parsed: list[str] = []
+    real = extraction_module.epub.read_epub
+    monkeypatch.setattr(
+        extraction_module.epub,
+        "read_epub",
+        lambda name, **kwargs: parsed.append(name) or real(name, **kwargs),
+    )
+    config = resolve_config(project, vanilla_executable=sys.executable)
+    (source,) = scan_sources(config).selected
+
+    _documents, units = extract_sources([source], docling_env=_FAKE_ENV)
+    assert any("quartz" in item["contents"] for item in units)
+    assert parsed == [str(source.path)]
+
+    path.write_bytes(path.read_bytes())
+    extract_sources([source], docling_env=_FAKE_ENV)
+    assert len(parsed) == 2
+
+
 def test_epub_preserves_element_and_preceding_anchors_with_stable_fallbacks(
     project: Path,
 ) -> None:

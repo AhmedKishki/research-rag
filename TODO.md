@@ -79,7 +79,6 @@ An item is done when the harness has produced its measurement and the validation
 - [ ] **Refuse to start a build that cannot fit.** Feature. `status` and `doctor` report free space against existing generation sizes, but `ingest` ignores the verdict. A build that runs out of room leaves a staging directory and no generation.
 - [ ] **Add an `ingest` dry run.** Feature. Report what would change and what would be reused, and write nothing.
 - [ ] **Split the resumable ingestion loop into per-phase handlers, then enable `C901`.** Feature. `generations/ingestion.py::_advance_ingestion` holds the whole loop. Three phase blocks call closures defined inside it, and eight read loop-local state, so the split needs an ingestion state object that handlers take and return. Acceptance: a green suite, a re-ingest that reuses every chunk and vector, and `C901` enabled at the level the rest of the package meets.
-- [ ] **Open an EPUB once per build call.** Feature. `extract_epub_spine_item` re-reads the whole book for every spine item.
 - [ ] **Validate an unchanged generation without holding it in memory.** Feature. A no-op ingest parses every artifact and hashes both JSONL files, and `validate_artifact_lookup` loads every chunk record at once.
 - [ ] **Survive a touched source mid-build.** Feature. The checkpoint identity and the final inventory check include `mtime_ns`, so touching a file between ingest calls discards a build whose bytes did not change.
 
