@@ -35,9 +35,9 @@ ALTERNATIVES = (
 def _owns_tool(tool: str, run: Runner) -> tuple[str, str] | None:
     """What one tool says it installed from, or None when it claims nothing.
 
-    The second element is the specifier `uv` records for the install and an
-    empty string for `pipx`, which records none. It is empty rather than guessed
-    because a reader is told what the tool said, not what it might have meant.
+    The second element is the specifier the tool records for the install, or an
+    empty string when it records none. It is empty rather than guessed because a
+    reader is told what the tool said, not what it might have meant.
     """
 
     if tool == UV:
@@ -47,10 +47,10 @@ def _owns_tool(tool: str, run: Runner) -> tuple[str, str] | None:
         for line in result.stdout.splitlines():
             if not line.startswith(f"{DISTRIBUTION_NAME} "):
                 continue
-            specifier = re.search(r"\(from (.+)\)\s*$", line)
-            return (
-                DISTRIBUTION_NAME,
-                specifier.group(1) if specifier else line.split(maxsplit=1)[1],
+            # uv prints `[required: SPEC]`; earlier releases printed `(from SPEC)`.
+            specifier = re.search(r"(?:\[required: (.+)\]|\(from (.+)\))\s*$", line)
+            return DISTRIBUTION_NAME, (
+                (specifier.group(1) or specifier.group(2)) if specifier else ""
             )
         return None
     result = run(["pipx", "list", "--json"])
@@ -68,7 +68,7 @@ def _owns_tool(tool: str, run: Runner) -> tuple[str, str] | None:
         main = metadata.get("main_package") if isinstance(metadata, dict) else None
         packages = main.get("package") if isinstance(main, dict) else None
         if packages and DISTRIBUTION_NAME in packages:
-            return DISTRIBUTION_NAME, ""
+            return DISTRIBUTION_NAME, str(main.get("package_or_url") or "")
     return None
 
 
@@ -112,6 +112,34 @@ def available_version(tool: str, result: CommandResult) -> str | None:
     return found.group(1) if found else None
 
 
+def git_source(specifier: str) -> str | None:
+    """The repository a `git+` install specifier names, without its ref.
+
+    A release is installed from this repository at its tag, so the ref the
+    original install named, if any, is not carried over.
+    """
+
+    if not specifier.startswith("git+"):
+        return None
+    url = specifier.removeprefix("git+").split("#", 1)[0]
+    head, separator, ref = url.rpartition("@")
+    # An `@` inside the authority is a user, not a ref.
+    if separator and "/" not in ref and "/" in head.split("://", 1)[-1]:
+        url = head
+    return url or None
+
+
+def install_release_arguments(tool: str, url: str, tag: str) -> tuple[str, ...]:
+    """The arguments that install one release tag, replacing this installation."""
+
+    target = f"git+{url}@{tag}"
+    return (
+        ("tool", "install", "--force", target)
+        if tool == UV
+        else ("install", "--force", target)
+    )
+
+
 def upgrade_arguments(tool: str) -> tuple[str, ...]:
     """The arguments the owning tool takes to upgrade this distribution."""
 
@@ -137,6 +165,8 @@ __all__ = [
     "PIPX",
     "UV",
     "available_version",
+    "git_source",
+    "install_release_arguments",
     "outdated_command",
     "owning_tool",
     "unowned_refusal",

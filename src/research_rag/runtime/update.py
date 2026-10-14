@@ -20,9 +20,10 @@ since is refused rather than moved to a different release than the one previewed
 Two install shapes exist and neither is assumed. A git checkout is updated by
 detaching it onto the release tag and syncing its environment, and the answer
 prints the command that returns it to the branch. An installed distribution is
-updated to the release version by the tool that owns the install, and that tool
+reinstalled at the release tag by the tool that owns the install, and that tool
 is detected by asking each of `uv` and `pipx` rather than by guessing from `PATH`
-order.
+order. A git install's releases are read from its repository's tags, because no
+package index publishes this app.
 
 Whether an update is available comes from the release comparison alone: a commit
 on the branch head that nobody published is unreleased work, which is a fact to
@@ -77,6 +78,7 @@ from . import ownership
 from .process import Runner, subprocess_runner
 from .release import (
     NONE,
+    UNREADABLE,
     Fetch,
     PublishedRelease,
     ReleaseSet,
@@ -89,6 +91,8 @@ from .release import (
 )
 from .tool_ownership import (
     available_version,
+    git_source,
+    install_release_arguments,
     outdated_command,
     owning_tool,
     unowned_refusal,
@@ -395,6 +399,17 @@ def _distribution_remote(
         )
     if local.tool is None:
         return RemoteState(reachable=True, detail="no tool claims this installation")
+    url = git_source(local.tool_specifier)
+    if url is not None:
+        # Installed from the repository, so its release tags are the answer; a
+        # package index knows nothing of a package published only there.
+        releases = remote_release(None, run, remote=url)
+        return RemoteState(
+            reachable=releases.state != UNREADABLE,
+            detail=releases.detail,
+            available_version=releases.version,
+            releases=releases,
+        )
     result = run(outdated_command(local.tool))
     available = available_version(local.tool, result)
     if not result.ok:
@@ -440,7 +455,12 @@ def published_release_for(
             "the published release was not asked because --offline was given, so "
             "there is no changelog to show"
         )
-    return published_release(remote_url=origin_url(local.checkout, run), fetch=fetch)
+    remote_url = (
+        origin_url(local.checkout, run)
+        if local.is_checkout
+        else git_source(local.tool_specifier)
+    )
+    return published_release(remote_url=remote_url, fetch=fetch)
 
 
 def _where_sentence(local: LocalState, revision: str) -> str:
@@ -727,7 +747,8 @@ def _distribution_plan(local: LocalState, remote: RemoteState) -> UpdatePlan:
             local_revision=local.version,
             release_position=UNREADABLE_RELEASE,
         )
-    if remote.available_version == local.version:
+    order = _release_order(remote.available_version, local.version)
+    if remote.available_version == local.version or (order is not None and order < 0):
         return UpdatePlan(
             shape=DISTRIBUTION,
             available=False,
@@ -741,6 +762,15 @@ def _distribution_plan(local: LocalState, remote: RemoteState) -> UpdatePlan:
             remote_revision=remote.available_version,
             release_position=AT_RELEASE,
         )
+    url = git_source(local.tool_specifier)
+    tag = remote.releases.tag
+    # A release tag pins what is installed to the version the changelog named;
+    # an upgrade from the bare git URL would install the branch head instead.
+    arguments = (
+        install_release_arguments(local.tool, url, tag)
+        if url is not None and tag is not None
+        else upgrade_arguments(local.tool)
+    )
     return UpdatePlan(
         shape=DISTRIBUTION,
         available=True,
@@ -750,9 +780,11 @@ def _distribution_plan(local: LocalState, remote: RemoteState) -> UpdatePlan:
                 f"`{local.tool}`; {remote.available_version} is available."
             ),
         ),
-        commands=((local.tool, *upgrade_arguments(local.tool)),),
+        commands=((local.tool, *arguments),),
         local_revision=local.version,
         remote_revision=remote.available_version,
+        release_version=remote.releases.version,
+        release_tag=tag,
         release_position=BEHIND_RELEASE,
     )
 
@@ -836,9 +868,9 @@ def target_moved(
 
     A checkout is detached onto one tag, decided when the plan was built, so the
     commit the preview named is the commit it lands on. An installed distribution
-    is upgraded by the tool that owns it, and that tool picks whatever is newest
-    at the moment it runs, so its answer is asked once more and a changed answer
-    refuses the install rather than delivering a release nobody approved.
+    is installed at the tag the plan named, and its latest release is asked once
+    more, so a release published since the preview refuses the install rather
+    than leaving a reader on a version they did not read.
     """
 
     if local.is_checkout:
