@@ -23,7 +23,6 @@ from ..project.support import (
     _document_for_chunk,
     _document_matches_metadata,
     _effective_documents,
-    _is_extraction_artifact,
     _normalized_filter,
     _passage_equality_key,
     _pseudo_relevance_terms,
@@ -1767,36 +1766,26 @@ class SearchWorkflow:
                     "The requested chunk is currently excluded from retrieval; "
                     "include the chunk before requesting its passage"
                 )
-            if _is_extraction_artifact(target):
+            flags = _candidate_flags(target)
+            if flags & CHUNK_FLAG_EXTRACTION_ARTIFACT:
                 raise ResearchError(
                     "The requested chunk is an extraction artifact and is not "
                     "available; re-ingest to remove it from the generation"
                 )
-            if text_corruption_reasons(_chunk_text(target)):
+            if flags & CHUNK_FLAG_CORRUPT_TEXT:
                 raise ResearchError(
                     "The requested chunk contains corrupt extracted text and is "
                     "not available; re-ingest to remove it from the generation"
                 )
-            document_chunks = await asyncio.to_thread(
-                lookup.chunks_for_document,
+            window = await asyncio.to_thread(
+                lookup.passage_window,
                 str(target["document_id"]),
+                int(target["document_chunk_index"]),
+                radius=context_chunks,
             )
-            same_document = [
-                item
-                for item in document_chunks
-                if not _is_extraction_artifact(item)
-                and not text_corruption_reasons(_chunk_text(item))
-            ]
-            target_position = next(
-                index
-                for index, item in enumerate(same_document)
-                if item["chunk_id"] == chunk_id
-            )
-            start = max(0, target_position - context_chunks)
-            end = min(len(same_document), target_position + context_chunks + 1)
             context = []
             document = _document_for_chunk(target, documents_by_id)
-            for item in same_document[start:end]:
+            for item in window:
                 passage = _public_passage(item, document)
                 if item["chunk_id"] in excluded_chunk_ids:
                     passage["excluded_from_search"] = True

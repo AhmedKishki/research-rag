@@ -630,7 +630,7 @@ class ResearchUIAdapter:
     async def source_file(self, source_path: str) -> SourceFile:
         try:
             target = resolve_source_reference(self.config, source_path)
-            scan = scan_sources(self.config)
+            scan = await asyncio.to_thread(scan_sources, self.config)
         except (ConfigurationError, SourcePolicyError, ValueError) as exc:
             raise UIRequestError(str(exc)) from exc
         selected = next((item for item in scan.selected if item.path == target), None)

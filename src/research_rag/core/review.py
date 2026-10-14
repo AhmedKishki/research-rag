@@ -126,7 +126,7 @@ class ReviewWorkflow:
 
         async with self._operation():
             try:
-                scan = scan_sources(self.config)
+                scan = await asyncio.to_thread(scan_sources, self.config)
                 current = self._load_current_optional()
                 selected = self._resolve_source_selector(
                     source_id=source_id,
@@ -217,7 +217,7 @@ class ReviewWorkflow:
 
         async with self._operation():
             try:
-                scan = scan_sources(self.config)
+                scan = await asyncio.to_thread(scan_sources, self.config)
                 current = self._load_current_optional()
                 selected = self._resolve_source_selector(
                     source_id=source_id,
@@ -256,7 +256,7 @@ class ReviewWorkflow:
         async with self._read():
             current = self._load_current_optional()
             try:
-                scan = scan_sources(self.config)
+                scan = await asyncio.to_thread(scan_sources, self.config)
             except SourcePolicyError as exc:
                 raise ResearchError(str(exc)) from exc
             exclusions = self._source_exclusions()
@@ -394,7 +394,7 @@ class ReviewWorkflow:
         async with self._read():
             current = self._load_current_optional()
             try:
-                scan = scan_sources(self.config)
+                scan = await asyncio.to_thread(scan_sources, self.config)
             except SourcePolicyError as exc:
                 raise ResearchError(str(exc)) from exc
             exclusions = self._source_exclusions()

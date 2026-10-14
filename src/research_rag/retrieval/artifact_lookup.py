@@ -583,6 +583,35 @@ class ArtifactLookup:
         )
         return [record for _row, record in loaded]
 
+    def passage_window(
+        self, document_id: str, document_chunk_index: int, *, radius: int
+    ) -> list[dict[str, Any]]:
+        """One passage and up to `radius` retrievable neighbours on each side.
+
+        A neighbour is retrievable when its stored verdict carries no flag, so
+        the window is read from the index without scanning the document.
+        """
+
+        query = (
+            "SELECT * FROM chunks WHERE document_id = ? AND health_flags = 0 "
+            "AND document_chunk_index {} ? ORDER BY document_chunk_index {} LIMIT ?"
+        )
+        with self._connect() as connection:
+            before = connection.execute(
+                query.format("<", "DESC"), (document_id, document_chunk_index, radius)
+            ).fetchall()
+            target = connection.execute(
+                "SELECT * FROM chunks WHERE document_id = ? "
+                "AND document_chunk_index = ?",
+                (document_id, document_chunk_index),
+            ).fetchall()
+            after = connection.execute(
+                query.format(">", "ASC"), (document_id, document_chunk_index, radius)
+            ).fetchall()
+        loaded = self._load_rows(self.chunks_path, [*before, *target, *after])
+        loaded.sort(key=lambda item: int(item[0]["document_chunk_index"]))
+        return [record for _row, record in loaded]
+
     def units_for_document(self, document_id: str) -> list[dict[str, Any]]:
         with self._connect() as connection:
             rows = connection.execute(
