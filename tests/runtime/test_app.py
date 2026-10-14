@@ -9,7 +9,6 @@ from __future__ import annotations
 import asyncio
 import http.client
 import json
-import os
 import socket
 import sys
 from pathlib import Path
@@ -273,7 +272,7 @@ async def test_lan_opt_in_keeps_local_frontends_and_disables_proxy_headers(
         code, body = await asyncio.to_thread(
             post_ordered,
             app.url,
-            "/control/search",
+            "/control/operations/search",
             {"query": "heron"},
             {"Content-Type": "application/json", "X-Forwarded-For": "8.8.8.8"},
         )
@@ -298,7 +297,7 @@ async def test_the_control_api_and_the_agent_surface_share_one_service(
     try:
         await wait_until_ready(app)
         code, body = await asyncio.to_thread(
-            post, app.url, "/control/search", {"query": "heron", "top_k": 3}
+            post, app.url, "/control/operations/search", {"query": "heron", "top_k": 3}
         )
         assert code == 200
         # The control API fills every filter with its omitted default, so the two
@@ -340,13 +339,15 @@ async def test_a_control_settings_write_reaches_the_one_service(project: Path) -
     await app.start()
     try:
         await wait_until_ready(app)
-        code, body = await asyncio.to_thread(get, app.url, "/control/settings")
+        code, body = await asyncio.to_thread(
+            post, app.url, "/control/operations/settings_read", {}
+        )
         assert code == 200
         assert body["operation"] == "settings_read"
         code, body = await asyncio.to_thread(
             post,
             app.url,
-            "/control/settings",
+            "/control/operations/settings_write",
             {
                 "values": {"retrieval.rrf_k": 40},
                 "expected_revision": "rev-1",
@@ -376,7 +377,7 @@ async def test_a_control_settings_write_is_refused_from_another_site(
         code, body = await asyncio.to_thread(
             post_ordered,
             app.url,
-            "/control/settings",
+            "/control/operations/settings_write",
             {"values": {"retrieval.rrf_k": 40}, "expected_revision": "r"},
             {
                 "Content-Type": "application/json",
@@ -392,7 +393,7 @@ async def test_a_control_settings_write_is_refused_from_another_site(
         code, body = await asyncio.to_thread(
             post_ordered,
             app.url,
-            "/control/settings",
+            "/control/operations/settings_write",
             {"values": {"retrieval.rrf_k": 40}, "expected_revision": "r"},
             {
                 "Content-Type": "application/json",
@@ -416,7 +417,7 @@ async def test_a_control_settings_write_requires_a_json_body(project: Path) -> N
         code, body = await asyncio.to_thread(
             post_ordered,
             app.url,
-            "/control/settings",
+            "/control/operations/settings_write",
             {"values": {"retrieval.rrf_k": 40}, "expected_revision": "r"},
             {"Content-Type": "text/plain"},
         )
@@ -442,7 +443,7 @@ async def test_a_control_settings_write_takes_no_path_in_its_body(
         code, body = await asyncio.to_thread(
             post,
             app.url,
-            "/control/settings",
+            "/control/operations/settings_write",
             {
                 "values": {"retrieval.rrf_k": 40},
                 "expected_revision": "r",
@@ -535,14 +536,14 @@ async def test_the_control_api_moves_a_generation_the_way_the_service_does(
         selected = await asyncio.to_thread(
             post,
             app.url,
-            "/control/generations/use",
+            "/control/operations/use_generation",
             {"generation_id": "20260930T191235Z-45608dc5"},
         )
         assert selected[0] == 200
         removed = await asyncio.to_thread(
             post,
             app.url,
-            "/control/generations/remove",
+            "/control/operations/remove_generation",
             {
                 "generation_id": "20260930T191235Z-45608dc5",
                 "confirm": "20260930T191235Z-45608dc5",
@@ -576,11 +577,19 @@ async def test_the_control_api_refuses_a_generation_request_it_cannot_serve(
     try:
         await wait_until_ready(app)
         for path, payload, expected in (
-            ("/control/generations/use", {"generation_id": ""}, "generation_id"),
-            ("/control/generations/use", {}, "generation_id"),
-            ("/control/generations/remove", {"generation_id": "x"}, "confirm"),
             (
-                "/control/generations/remove",
+                "/control/operations/use_generation",
+                {"generation_id": ""},
+                "generation_id",
+            ),
+            ("/control/operations/use_generation", {}, "generation_id"),
+            (
+                "/control/operations/remove_generation",
+                {"generation_id": "x"},
+                "confirm",
+            ),
+            (
+                "/control/operations/remove_generation",
                 {"generation_id": "x", "confirm": 7},
                 "confirm",
             ),
@@ -601,7 +610,7 @@ async def test_the_control_api_refuses_a_search_it_cannot_serve(project: Path) -
     try:
         await wait_until_ready(app)
         code, body = await asyncio.to_thread(
-            post, app.url, "/control/search", {"query": "  "}
+            post, app.url, "/control/operations/search", {"query": "  "}
         )
         assert code == 400
         assert "query" in body["error"]
@@ -612,12 +621,7 @@ async def test_the_control_api_refuses_a_search_it_cannot_serve(project: Path) -
 async def test_the_control_api_reads_a_passage_with_the_neighbours_it_was_asked_for(
     project: Path,
 ) -> None:
-    """A query parameter arrives as text, and the command line sends one.
-
-    `research-rag passage ID --context-chunks N` reaches the running app as
-    `?context_chunks=N`. Refusing that string refused the command itself, and the
-    engine accepts 0 neighbours, so the route takes the engine's range.
-    """
+    """The engine accepts 0 neighbours, so the route takes the engine's range."""
 
     config = resolve_config(project, vanilla_executable=sys.executable)
     app = App(config, port=free_port())
@@ -626,24 +630,20 @@ async def test_the_control_api_reads_a_passage_with_the_neighbours_it_was_asked_
     await app.start()
     try:
         await wait_until_ready(app)
-        for query, expected in (
-            ("", 1),
-            ("?context_chunks=0", 0),
-            ("?context_chunks=2", 2),
-            ("?context_chunks=5", 5),
-            ("?context_chunks=%202%20", 2),
-        ):
+        path = "/control/operations/get_passage"
+        for given, expected in ((None, 1), (0, 0), (2, 2), (5, 5), (" 2 ", 2)):
+            payload = {"chunk_id": "chunk-1"}
+            if given is not None:
+                payload["context_chunks"] = given
+            code, body = await asyncio.to_thread(post, app.url, path, payload)
+            assert code == 200, given
+            assert body["arguments"]["context_chunks"] == expected, given
+        for given in (6, -1, "two"):
             code, body = await asyncio.to_thread(
-                get, app.url, f"/control/passages/chunk-1{query}"
+                post, app.url, path, {"chunk_id": "chunk-1", "context_chunks": given}
             )
-            assert code == 200, query
-            assert body["arguments"]["context_chunks"] == expected, query
-        for query in ("?context_chunks=6", "?context_chunks=-1", "?context_chunks=two"):
-            code, body = await asyncio.to_thread(
-                get, app.url, f"/control/passages/chunk-1{query}"
-            )
-            assert code == 400, query
-            assert "context_chunks" in body["error"], query
+            assert code == 400, given
+            assert "context_chunks" in body["error"], given
     finally:
         await app.stop()
     assert "get_passage" in [name for name, _ in fake.calls]
@@ -666,7 +666,9 @@ async def test_the_command_line_reads_a_passage_through_the_control_api(
             from research_rag.runtime.control import Control
 
             with Control(app.url, timeout=30) as handle:
-                return handle.passage("chunk-1", context_chunks=2)
+                return handle.operation(
+                    "get_passage", {"chunk_id": "chunk-1", "context_chunks": 2}
+                )
 
         answer = await asyncio.to_thread(through_control)
         assert answer["arguments"] == {"chunk_id": "chunk-1", "context_chunks": 2}
@@ -695,19 +697,25 @@ async def test_a_rebound_name_cannot_drive_this_app(project: Path) -> None:
     try:
         await wait_until_ready(app)
         for path, payload in (
-            ("/control/chunk-inclusion", {"chunk_id": "c-1", "included": False}),
-            ("/control/source-inclusion", {"source_path": "a.pdf", "included": False}),
             (
-                "/control/source-metadata",
+                "/control/operations/set_chunk_inclusion",
+                {"chunk_id": "c-1", "included": False},
+            ),
+            (
+                "/control/operations/set_source_inclusion",
+                {"source_path": "a.pdf", "included": False},
+            ),
+            (
+                "/control/operations/set_source_metadata",
                 {"source_path": "a.pdf", "metadata": {"y": 1}},
             ),
-            ("/control/ingest", {"force_recompute": False}),
+            ("/control/operations/ingest", {"force_recompute": False}),
             (
-                "/control/generations/remove",
+                "/control/operations/remove_generation",
                 {"generation_id": generation, "confirm": generation},
             ),
             (
-                "/control/settings",
+                "/control/operations/settings_write",
                 {"values": {"retrieval.rrf_k": 40}, "expected_revision": "r"},
             ),
         ):
@@ -761,7 +769,7 @@ async def test_a_malformed_origin_is_a_refusal_and_not_a_failure(project: Path) 
             code, body = await asyncio.to_thread(
                 post_ordered,
                 app.url,
-                "/control/ingest",
+                "/control/operations/ingest",
                 {"force_recompute": False},
                 {
                     "Host": f"127.0.0.1:{port}",
@@ -790,19 +798,28 @@ async def test_every_control_write_is_refused_from_another_site(project: Path) -
     await app.start()
     generation = "20260930T191235Z-45608dc5"
     writes = (
-        ("/control/ingest", {"force_recompute": False}),
-        ("/control/search", {"query": "heron"}),
-        ("/control/source-inclusion", {"source_path": "a.pdf", "included": False}),
-        ("/control/chunk-inclusion", {"chunk_id": "c-1", "included": False}),
-        ("/control/source-metadata", {"source_path": "a.pdf", "metadata": {"year": 1}}),
-        ("/control/generations/use", {"generation_id": generation}),
+        ("/control/operations/ingest", {"force_recompute": False}),
+        ("/control/operations/search", {"query": "heron"}),
         (
-            "/control/generations/remove",
+            "/control/operations/set_source_inclusion",
+            {"source_path": "a.pdf", "included": False},
+        ),
+        (
+            "/control/operations/set_chunk_inclusion",
+            {"chunk_id": "c-1", "included": False},
+        ),
+        (
+            "/control/operations/set_source_metadata",
+            {"source_path": "a.pdf", "metadata": {"year": 1}},
+        ),
+        ("/control/operations/use_generation", {"generation_id": generation}),
+        (
+            "/control/operations/remove_generation",
             {"generation_id": generation, "confirm": generation},
         ),
         ("/control/clients/nope/disconnect", {"reason": "because"}),
         (
-            "/control/settings",
+            "/control/operations/settings_write",
             {"values": {"retrieval.rrf_k": 40}, "expected_revision": "r"},
         ),
     )
@@ -838,23 +855,23 @@ async def test_a_control_write_from_a_terminal_is_answered(project: Path) -> Non
     try:
         await wait_until_ready(app)
         for path, payload in (
-            ("/control/ingest", {"force_recompute": False}),
-            ("/control/search", {"query": "heron"}),
+            ("/control/operations/ingest", {"force_recompute": False}),
+            ("/control/operations/search", {"query": "heron"}),
             (
-                "/control/source-inclusion",
+                "/control/operations/set_source_inclusion",
                 {"source_path": "a.pdf", "included": False, "reason": "duplicate"},
             ),
             (
-                "/control/chunk-inclusion",
+                "/control/operations/set_chunk_inclusion",
                 {"chunk_id": "c-1", "included": False, "reason": "duplicate"},
             ),
             (
-                "/control/source-metadata",
+                "/control/operations/set_source_metadata",
                 {"source_path": "a.pdf", "metadata": {"year": 2001}},
             ),
-            ("/control/generations/use", {"generation_id": generation}),
+            ("/control/operations/use_generation", {"generation_id": generation}),
             (
-                "/control/generations/remove",
+                "/control/operations/remove_generation",
                 {"generation_id": generation, "confirm": generation},
             ),
         ):
@@ -903,7 +920,7 @@ async def test_a_hostile_settings_value_is_answered_with_a_refusal_naming_the_ke
         ).encode("utf-8", errors="surrogatepass")
 
         code, answer = await asyncio.to_thread(
-            post_bytes, app.url, "/control/settings", body
+            post_bytes, app.url, "/control/operations/settings_write", body
         )
     finally:
         await app.stop()
@@ -925,63 +942,6 @@ async def test_the_control_api_names_a_client_it_does_not_have(project: Path) ->
         )
         assert code == 400
         assert "nope" in body["error"]
-    finally:
-        await app.stop()
-
-
-async def test_the_control_api_answers_the_account_and_the_client_entry(
-    project: Path,
-) -> None:
-    """A terminal naming a project and a browser naming the same one cannot differ, because
-    both read the app's own answer rather than a command-line reconstruction.
-    """
-
-    from research_rag.project import registry
-    from research_rag.runtime.app import PID_FILE, PORT_FILE, has_terminal
-    from research_rag.runtime.control import Control
-    from research_rag.runtime.doctor import mcp_entry_block
-
-    config = resolve_config(project, vanilla_executable=sys.executable)
-    registry.register(config.project_id, config.project_name, config.project_root)
-    app = App(config, port=free_port())
-    app.service = FakeService()  # type: ignore[assignment]
-    await app.start()
-    try:
-        await wait_until_ready(app)
-        # The app records its own address, so one started in process is recorded the
-        # same way before a probe can find it.
-        (config.state_root / PORT_FILE).write_text(str(app.port), encoding="utf-8")
-        (config.state_root / PID_FILE).write_text(str(os.getpid()), encoding="utf-8")
-
-        code, body = await asyncio.to_thread(get, app.url, "/control/projects")
-        assert code == 200
-        assert [entry["project_name"] for entry in body["projects"]] == [
-            config.project_name
-        ]
-        assert body["projects"][0]["app"] == {
-            "attached_to": None,
-            # This test's own process is the serving one, so the answer is whatever
-            # its controlling terminal is rather than a value the run happens to have.
-            "detached": has_terminal(os.getpid()) is False,
-            "running": True,
-            "url": app.url,
-            "port": app.port,
-        }
-        assert body["projects"][0]["attached_clients"] == 0
-
-        code, entry = await asyncio.to_thread(get, app.url, "/control/agent-entry")
-        assert code == 200
-        assert entry == {"entry": mcp_entry_block(config)}
-
-        # `Control` is synchronous: the listing probes each project's own app, and a probe
-        # made on the loop would wait for an app waiting for the probe.
-        def through_control() -> tuple[dict[str, Any], dict[str, Any]]:
-            with Control(app.url) as handle:
-                return handle.projects(), handle.agent_entry()
-
-        projects, entry_through_control = await asyncio.to_thread(through_control)
-        assert projects["project_count"] == body["project_count"]
-        assert entry_through_control == entry
     finally:
         await app.stop()
 

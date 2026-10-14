@@ -20,6 +20,7 @@ import pytest
 import research_rag.runtime.app as app_module
 import research_rag.runtime.ownership as ownership_module
 import research_rag.surfaces.cli as cli_module
+from research_rag.core.operations import run
 from research_rag.project import registry
 from research_rag.project.config import GATEWAY_EXECUTABLE, ConfigurationError
 from research_rag.project.policy import ResearchError
@@ -66,8 +67,8 @@ class RecordingService:
     async def search(self, query: str, **options: Any) -> dict[str, Any]:
         return self._record("search", {"query": query, **options})
 
-    async def list_sources(self) -> dict[str, Any]:
-        return self._record("list_sources", {})
+    async def list_sources(self, **filters: Any) -> dict[str, Any]:
+        return self._record("list_sources", filters)
 
     async def use_generation(self, generation_id: str) -> dict[str, Any]:
         return self._record("use_generation", {"generation_id": generation_id})
@@ -132,77 +133,22 @@ class RecordingService:
 
 class Operations:
     """The command line does not know or care whether an answer came from the app over
-    loopback or from a service it opened itself, so the double stands in for the
-    interface, not for either implementation.
+    loopback or from a service it opened itself, so the double runs the operation
+    table in process against a recording service, as `Local` does.
     """
 
     def __init__(self) -> None:
         self.service = RecordingService()
 
-    async def status(self) -> dict[str, Any]:
-        return await self.service.status()
-
-    async def ingest(self, *, force_recompute: bool) -> dict[str, Any]:
-        return await self.service.ingest(force_recompute=force_recompute)
-
-    async def search(self, query: str, **arguments: Any) -> dict[str, Any]:
-        return await self.service.search(query, **arguments)
-
-    async def sources(self) -> dict[str, Any]:
-        return await self.service.list_sources()
-
-    async def passage(self, chunk_id: str, *, context_chunks: int) -> dict[str, Any]:
-        return await self.service.get_passage(chunk_id, context_chunks=context_chunks)
-
-    async def set_source_inclusion(
-        self,
-        *,
-        source_path: str | None,
-        source_id: str | None,
-        included: bool,
-        reason: str | None,
-    ) -> dict[str, Any]:
-        return await self.service.set_source_inclusion(
-            source_path, source_id=source_id, included=included, reason=reason
-        )
-
-    async def set_chunk_inclusion(
-        self,
-        *,
-        chunk_id: str,
-        included: bool,
-        reason: str | None,
-    ) -> dict[str, Any]:
-        return await self.service.set_chunk_inclusion(
-            chunk_id, included=included, reason=reason
-        )
-
-    async def set_source_metadata(
-        self,
-        *,
-        source_path: str | None,
-        source_id: str | None,
-        metadata: dict[str, Any],
-    ) -> dict[str, Any]:
-        return await self.service.set_source_metadata(
-            metadata, source_path=source_path, source_id=source_id
-        )
-
-    async def generations(self) -> dict[str, Any]:
-        return {
-            "generations": [{"generation_id": "20260930T191235Z-45608dc5"}],
-            "retained_generation_count": 1,
-            "retained_generation_bytes": 1024,
-            "current_generation_id": "20260930T191235Z-45608dc5",
-        }
-
-    async def use_generation(self, generation_id: str) -> dict[str, Any]:
-        return await self.service.use_generation(generation_id)
-
-    async def remove_generation(
-        self, generation_id: str, *, confirm: str
-    ) -> dict[str, Any]:
-        return await self.service.remove_generation(generation_id, confirm=confirm)
+    async def call(self, name: str, **arguments: Any) -> dict[str, Any]:
+        if name == "list_generations":
+            return {
+                "generations": [{"generation_id": "20260930T191235Z-45608dc5"}],
+                "retained_generation_count": 1,
+                "retained_generation_bytes": 1024,
+                "current_generation_id": "20260930T191235Z-45608dc5",
+            }
+        return await run(self.service, name, arguments, diagnostics=True)  # type: ignore[arg-type]
 
 
 def test_init_creates_a_project_and_records_the_name_it_was_given(
@@ -452,7 +398,8 @@ class _StatusStub:
     def __init__(self, payload: dict[str, Any]) -> None:
         self._payload = payload
 
-    async def status(self) -> dict[str, Any]:
+    async def call(self, name: str, **arguments: Any) -> dict[str, Any]:
+        assert name == "status"
         return self._payload
 
 
@@ -533,7 +480,7 @@ def test_cli_logging_follows_the_project_level_on_the_named_logger() -> None:
 
 
 def test_search_carries_its_filters_and_reranks_by_default() -> None:
-    service = RecordingService()
+    service = Operations()
 
     payload = asyncio.run(
         _operate(
@@ -567,11 +514,12 @@ def test_search_carries_its_filters_and_reranks_by_default() -> None:
         "source_ids": None,
         "exclude_source_ids": ["sid-1"],
         "rerank": True,
+        "include_staleness": True,
     }
 
 
 def test_excluding_a_source_records_the_reason_it_was_given() -> None:
-    service = RecordingService()
+    service = Operations()
 
     payload = asyncio.run(
         _operate(
@@ -590,7 +538,7 @@ def test_excluding_a_source_records_the_reason_it_was_given() -> None:
 def test_excluding_a_passage_names_the_chunk_it_decides_about() -> None:
     """One command, two subjects: --chunk decides about a passage, a path about a file."""
 
-    service = RecordingService()
+    service = Operations()
 
     payload = asyncio.run(
         _operate(
@@ -610,7 +558,9 @@ def test_excluding_a_passage_names_the_chunk_it_decides_about() -> None:
         "included": True,
         "reason": None,
     }
-    assert not [call for call in service.calls if call[0] == "set_source_inclusion"]
+    assert not [
+        call for call in service.service.calls if call[0] == "set_source_inclusion"
+    ]
 
 
 def test_a_decision_that_names_two_subjects_or_none_is_refused() -> None:
@@ -1056,54 +1006,32 @@ def test_remove_generation_refuses_without_a_confirmation() -> None:
         _parser().parse_args(["remove-generation", "20260930T191235Z-45608dc5"])
 
 
-def test_the_running_app_answers_generations_and_stats_without_awaiting_a_dict() -> (
-    None
-):
+def test_the_running_app_answers_in_a_thread_and_without_diagnostics() -> None:
     """`Control` is synchronous, so awaiting its answer raised a TypeError.
 
-    `generations`, `generations --use`, and `remove-generation` failed whenever
-    an app was serving the project, because the remote half awaited a dict.
+    The running app chooses its own retrieval, so the command line's diagnostic
+    search flags are not sent to it.
     """
 
     class Answering:
-        def generations(self) -> dict[str, Any]:
-            return {"generations": []}
-
-        def use_generation(self, generation_id: str) -> dict[str, Any]:
-            return {"generation_id": generation_id}
-
-        def remove_generation(
-            self, generation_id: str, *, confirm: str
-        ) -> dict[str, Any]:
-            return {"generation_id": generation_id, "confirm": confirm}
-
-        def stats(
-            self, *, days: float | None, top: int, largest_by: str
-        ) -> dict[str, Any]:
-            return {
-                "searches": {"search_count": 2},
-                "days": days,
-                "top": top,
-                "largest_by": largest_by,
-            }
+        def operation(self, name: str, arguments: dict[str, Any]) -> dict[str, Any]:
+            return {"name": name, "arguments": arguments}
 
     async def exercise() -> list[dict[str, Any]]:
         remote = cli_module.Remote(Answering())  # type: ignore[arg-type]
         return [
-            await remote.generations(),
-            await remote.use_generation("g1"),
-            await remote.remove_generation("g1", confirm="g1"),
-            await remote.stats(days=7, top=5, largest_by="size"),
+            await remote.call("list_generations"),
+            await remote.call("remove_generation", generation_id="g1", confirm="g1"),
+            await remote.call(
+                "search", query="q", rerank=False, retrieval_method="bm25"
+            ),
         ]
 
     assert asyncio.run(exercise()) == [
-        {"generations": []},
-        {"generation_id": "g1"},
-        {"generation_id": "g1", "confirm": "g1"},
+        {"name": "list_generations", "arguments": {}},
         {
-            "searches": {"search_count": 2},
-            "days": 7,
-            "top": 5,
-            "largest_by": "size",
+            "name": "remove_generation",
+            "arguments": {"generation_id": "g1", "confirm": "g1"},
         },
+        {"name": "search", "arguments": {"query": "q"}},
     ]

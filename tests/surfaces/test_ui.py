@@ -55,8 +55,8 @@ class FakeResearchService:
             "default_retrieval_method": "hybrid",
         }
 
-    async def list_sources(self) -> dict[str, Any]:
-        self._record("list_sources", {})
+    async def list_sources(self, **arguments: Any) -> dict[str, Any]:
+        self._record("list_sources", arguments)
         return {
             "ready": True,
             "source_count": 1,
@@ -276,7 +276,16 @@ def test_the_workspace_serves_the_page_and_read_apis(project: Path) -> None:
     assert sources.json()["sources"][0]["title"] == "Evidence"
     assert context.json()["requested_chunk_id"] == "chunk-1"
     assert ("status", {}) in fake.calls
-    assert ("list_sources", {}) in fake.calls
+    assert (
+        "list_sources",
+        {
+            "categories": ["theory", "history"],
+            "categories_any": None,
+            "projects": None,
+            "projects_any": None,
+            "keywords": None,
+        },
+    ) in fake.calls
     assert ("get_passage", {"chunk_id": "chunk-1", "context_chunks": 2}) in fake.calls
 
 
@@ -383,14 +392,16 @@ def test_the_workspace_forwards_search_and_the_surviving_mutations(
     assert (
         "set_source_metadata",
         {
-            "source_path": "evidence.pdf",
             "metadata": {"categories": ["theory"]},
+            "source_path": "evidence.pdf",
+            "source_id": None,
         },
     ) in fake.calls
     assert (
         "set_source_inclusion",
         {
             "source_path": "evidence.pdf",
+            "source_id": None,
             "included": False,
             "reason": "Reviewed duplicate",
         },
@@ -457,8 +468,8 @@ def test_the_workspace_refuses_a_chunk_decision_it_cannot_act_on(
     client, fake = _client(project)
     with client:
         for body, expected in (
-            ({"included": False, "reason": "x"}, "needs a chunk_id"),
-            ({"chunk_id": "chunk-1", "reason": "x"}, "needs a boolean included"),
+            ({"included": False, "reason": "x"}, "chunk_id is required"),
+            ({"chunk_id": "chunk-1", "reason": "x"}, "included is required"),
             ({"chunk_id": "chunk-1", "included": False, "reason": 7}, "must be"),
         ):
             answer = client.post("/api/chunk-inclusion", json=body)
@@ -504,68 +515,37 @@ def test_the_workspace_leaves_the_method_to_the_engine_and_always_reranks(
     )
 
 
-def test_an_unserved_search_argument_never_reaches_the_service(
-    project: Path,
-) -> None:
-    """A control the workspace hides must not travel as an ignored argument."""
+def test_a_page_only_search_field_never_reaches_the_service(project: Path) -> None:
+    """The page's reviewed-metadata categories box is dropped, as it always was.
 
-    from research_rag.surfaces.ui import _OPERATION_ARGUMENTS, ResearchUIAdapter
+    The engine keeps its own retrieval choices: a browser naming either one is
+    refused rather than obeyed.
+    """
 
-    adapter = ResearchUIAdapter(resolve_config(project), FakeResearchService())  # type: ignore[arg-type]
+    from research_rag.surfaces.ui import ResearchUIAdapter, UIRequestError
 
-    assert adapter._arguments(
-        "search",
-        {
-            "query": "q",
-            "categories": ["theory"],
-            "retrieval_method": "bm25",
-            "rerank": False,
-            "top_k": 5,
-        },
-    ) == {"query": "q", "top_k": 5}
-    assert adapter._arguments(
-        "search",
-        {
-            "query": "q",
-            "authors_any": ["Crawford"],
-            "titles_any": ["Atlas of AI"],
-            "languages_any": ["en"],
-        },
-    ) == {
-        "query": "q",
-        "authors_any": ["Crawford"],
-        "titles_any": ["Atlas of AI"],
-        "languages_any": ["en"],
-    }
-    assert set(_OPERATION_ARGUMENTS) == {
-        "status",
-        "ingest",
-        "search",
-        "list_sources",
-        "get_passage",
-        "set_source_inclusion",
-        "set_chunk_inclusion",
-        "list_chunk_exclusions",
-        "set_source_metadata",
-        "remove_generation",
-        "use_generation",
-        "settings_read",
-        "settings_write",
-        "list_projects",
-        "agent_entry",
-        "check_updates",
-        "search_stats",
-        "search_history",
-        "clear_search_history",
-        "source_chunks",
-        "open_source",
-    }
-    assert _OPERATION_ARGUMENTS["search_stats"] == frozenset(
-        {"days", "top", "largest_by"}
+    service = FakeResearchService()
+    adapter = ResearchUIAdapter(resolve_config(project), service)  # type: ignore[arg-type]
+    asyncio.run(
+        adapter.call(
+            "search",
+            {
+                "query": "q",
+                "categories": ["theory"],
+                "top_k": 5,
+                "authors_any": ["Crawford"],
+            },
+        )
     )
-    assert _OPERATION_ARGUMENTS["list_projects"] == frozenset()
-    assert _OPERATION_ARGUMENTS["agent_entry"] == frozenset()
-    assert _OPERATION_ARGUMENTS["check_updates"] == frozenset()
+    [(name, forwarded)] = service.calls
+    assert name == "search"
+    assert "categories" not in forwarded
+    assert forwarded["top_k"] == 5
+    assert forwarded["authors_any"] == ["Crawford"]
+    assert forwarded["rerank"] is True
+    for diagnostic in ({"rerank": False}, {"retrieval_method": "bm25"}):
+        with pytest.raises(UIRequestError, match="does not take"):
+            asyncio.run(adapter.call("search", {"query": "q", **diagnostic}))
 
 
 def test_an_unknown_operation_is_refused(project: Path) -> None:
@@ -839,12 +819,8 @@ def test_the_workspace_loads_a_generation_only_from_a_nonblank_id(
         "message": f"Search now reads generation {generation_id}.",
     }
     assert service.calls == [("use_generation", {"generation_id": generation_id})]
-    # An argument this operation does not accept never reaches the service.
-    assert adapter._arguments(
-        "use_generation",
-        {"generation_id": generation_id, "confirm": generation_id, "force": True},
-    ) == {"generation_id": generation_id}
     for body in (
+        {"generation_id": generation_id, "force": True},
         {},
         {"generation_id": ""},
         {"generation_id": "   "},

@@ -47,6 +47,7 @@ if TYPE_CHECKING:
     from ..core.service import ResearchService
     from ..runtime.release import PublishedRelease
 
+from ..core.operations import run
 from ..project.config import (
     CLI_COMMAND,
     DEFAULT_UI_PORT,
@@ -1701,132 +1702,27 @@ class Local:
 
     def __init__(self, config: ResearchConfig) -> None:
         self._context = _service(config)
-        self._enter: Any = None
         self.service: ResearchService | None = None
 
     async def __aenter__(self) -> Self:
-        self._enter = self._context
-        self.service = await self._enter.__aenter__()
+        self.service = await self._context.__aenter__()
         return self
 
     async def __aexit__(self, *exc: object) -> None:
-        if self._enter is not None:
-            await self._enter.__aexit__(*exc)
-            self._enter = None
+        await self._context.__aexit__(*exc)
 
-    def _require(self) -> ResearchService:
+    async def call(self, name: str, **arguments: Any) -> dict[str, Any]:
         if self.service is None:
             raise ResearchError("The local service is not open")
-        return self.service
-
-    async def status(self) -> dict[str, Any]:
-        return await self._require().status()
-
-    async def ingest(self, *, force_recompute: bool) -> dict[str, Any]:
-        return await self._require().ingest(force_recompute=force_recompute)
-
-    async def search(self, query: str, **arguments: Any) -> dict[str, Any]:
-        return await self._require().search(query, **arguments)
-
-    async def sources(self) -> dict[str, Any]:
-        return await self._require().list_sources()
-
-    async def stats(
-        self, *, days: float | None, top: int, largest_by: str
-    ) -> dict[str, Any]:
-        return await self._require().search_stats(
-            since_days=days, top=top, largest_by=largest_by
-        )
-
-    async def history(self, *, limit: int, days: float | None) -> dict[str, Any]:
-        return await self._require().search_history(limit=limit, since_days=days)
-
-    async def clear_history(self) -> dict[str, Any]:
-        return await self._require().clear_search_history()
-
-    async def source_chunks(
-        self, *, source: str, page: int, page_size: int
-    ) -> dict[str, Any]:
-        return await self._require().source_chunks(
-            source_id=source if source.startswith("src_") else None,
-            source_path=None if source.startswith("src_") else source,
-            page=page,
-            page_size=page_size,
-        )
-
-    async def passage(self, chunk_id: str, *, context_chunks: int) -> dict[str, Any]:
-        return await self._require().get_passage(
-            chunk_id, context_chunks=context_chunks
-        )
-
-    async def set_source_inclusion(
-        self,
-        *,
-        source_path: str | None,
-        source_id: str | None,
-        included: bool,
-        reason: str | None,
-    ) -> dict[str, Any]:
-        return await self._require().set_source_inclusion(
-            source_path=source_path,
-            source_id=source_id,
-            included=included,
-            reason=reason,
-        )
-
-    async def set_chunk_inclusion(
-        self,
-        *,
-        chunk_id: str,
-        included: bool,
-        reason: str | None,
-    ) -> dict[str, Any]:
-        return await self._require().set_chunk_inclusion(
-            chunk_id, included=included, reason=reason
-        )
-
-    async def set_source_metadata(
-        self,
-        *,
-        source_path: str | None,
-        source_id: str | None,
-        metadata: dict[str, Any],
-    ) -> dict[str, Any]:
-        return await self._require().set_source_metadata(
-            metadata, source_path=source_path, source_id=source_id
-        )
-
-    async def generations(self) -> dict[str, Any]:
-        # The inventory already exists in the status payload, so a listing reads
-        # it rather than walking the directory a second time with a second shape.
-        status = await self._require().status()
-        generations = status.get("generations")
-        return {
-            "generations": generations if isinstance(generations, list) else [],
-            "retained_generation_count": int(
-                status.get("retained_generation_count") or 0
-            ),
-            "retained_generation_bytes": int(
-                status.get("retained_generation_bytes") or 0
-            ),
-            "current_generation_id": status.get("generation_id"),
-        }
-
-    async def use_generation(self, generation_id: str) -> dict[str, Any]:
-        return await self._require().use_generation(generation_id)
-
-    async def remove_generation(
-        self, generation_id: str, *, confirm: str
-    ) -> dict[str, Any]:
-        return await self._require().remove_generation(generation_id, confirm=confirm)
+        # Only a search in process may name a diagnostic method or rerank choice.
+        return await run(self.service, name, arguments, diagnostics=True)
 
 
 class Remote:
     """The running app's operations, awaited.
 
-    `Control` speaks HTTP and is synchronous, because two of the commands that
-    use it are synchronous. It is the same interface `Local` implements, so
-    `_operate` does not know which one answered.
+    `Control` speaks HTTP and is synchronous, so each call runs in a thread and a
+    build's progress can be read while the build is outstanding.
     """
 
     def __init__(self, control: Control) -> None:
@@ -1838,86 +1734,12 @@ class Remote:
     async def __aexit__(self, *exc: object) -> None:
         self.control.close()
 
-    async def status(self) -> dict[str, Any]:
-        return await asyncio.to_thread(self.control.status)
-
-    async def ingest(self, *, force_recompute: bool) -> dict[str, Any]:
-        return await asyncio.to_thread(
-            self.control.ingest, force_recompute=force_recompute
-        )
-
-    async def search(self, query: str, **arguments: Any) -> dict[str, Any]:
-        return self.control.search(query, **arguments)
-
-    async def sources(self) -> dict[str, Any]:
-        return self.control.sources()
-
-    async def stats(
-        self, *, days: float | None, top: int, largest_by: str
-    ) -> dict[str, Any]:
-        return self.control.stats(days=days, top=top, largest_by=largest_by)
-
-    async def history(self, *, limit: int, days: float | None) -> dict[str, Any]:
-        return self.control.history(limit=limit, days=days)
-
-    async def clear_history(self) -> dict[str, Any]:
-        return self.control.clear_history()
-
-    async def source_chunks(
-        self, *, source: str, page: int, page_size: int
-    ) -> dict[str, Any]:
-        return self.control.source_chunks(source=source, page=page, page_size=page_size)
-
-    async def passage(self, chunk_id: str, *, context_chunks: int) -> dict[str, Any]:
-        return self.control.passage(chunk_id, context_chunks=context_chunks)
-
-    async def set_source_inclusion(
-        self,
-        *,
-        source_path: str | None,
-        source_id: str | None,
-        included: bool,
-        reason: str | None,
-    ) -> dict[str, Any]:
-        return self.control.set_source_inclusion(
-            source_path=source_path,
-            source_id=source_id,
-            included=included,
-            reason=reason,
-        )
-
-    async def set_chunk_inclusion(
-        self,
-        *,
-        chunk_id: str,
-        included: bool,
-        reason: str | None,
-    ) -> dict[str, Any]:
-        return self.control.set_chunk_inclusion(
-            chunk_id=chunk_id, included=included, reason=reason
-        )
-
-    async def set_source_metadata(
-        self,
-        *,
-        source_path: str | None,
-        source_id: str | None,
-        metadata: dict[str, Any],
-    ) -> dict[str, Any]:
-        return self.control.set_source_metadata(
-            source_path=source_path, source_id=source_id, metadata=metadata
-        )
-
-    async def generations(self) -> dict[str, Any]:
-        return self.control.generations()
-
-    async def use_generation(self, generation_id: str) -> dict[str, Any]:
-        return self.control.use_generation(generation_id)
-
-    async def remove_generation(
-        self, generation_id: str, *, confirm: str
-    ) -> dict[str, Any]:
-        return self.control.remove_generation(generation_id, confirm=confirm)
+    async def call(self, name: str, **arguments: Any) -> dict[str, Any]:
+        # The running app answers a search with the method and reranking the
+        # engine chooses; `TODO.md` holds the decision about the two flags.
+        arguments.pop("retrieval_method", None)
+        arguments.pop("rerank", None)
+        return await asyncio.to_thread(self.control.operation, name, arguments)
 
 
 INGEST_PROGRESS_INTERVAL = 2.0
@@ -2168,7 +1990,9 @@ async def _ingest_with_progress(
     operations: Local | Remote, *, force_recompute: bool
 ) -> dict[str, Any]:
     """Poll read-only status while the single ingestion request is outstanding."""
-    ingest = asyncio.create_task(operations.ingest(force_recompute=force_recompute))
+    ingest = asyncio.create_task(
+        operations.call("ingest", force_recompute=force_recompute)
+    )
     status_task: asyncio.Task[dict[str, Any]] | None = None
     estimator = _PhaseETA()
     previous_key: tuple[Any, ...] | None = None
@@ -2183,7 +2007,7 @@ async def _ingest_with_progress(
             done, _ = await asyncio.wait({ingest}, timeout=INGEST_PROGRESS_INTERVAL)
             if done:
                 break
-            status_task = asyncio.create_task(operations.status())
+            status_task = asyncio.create_task(operations.call("status"))
             await asyncio.wait(
                 {ingest, status_task}, return_when=asyncio.FIRST_COMPLETED
             )
@@ -2253,7 +2077,7 @@ async def _operate(
 
     command = args.command
     if command == "status":
-        payload = await operations.status()
+        payload = await operations.call("status")
         # The terminal is an agent's second bounded reader: the same projection,
         # so the two cannot answer differently. `--verbose` is where a person
         # goes for the complete payload the workspace reads.
@@ -2282,12 +2106,12 @@ async def _operate(
         # disclosure when only the dense half is unavailable.
         if args.method is not None:
             search["retrieval_method"] = args.method
-        return await operations.search(args.query, **search)
+        return await operations.call("search", query=args.query, **search)
     if command == "sources":
-        return await operations.sources()
+        return await operations.call("list_sources")
     if command == "passage":
-        return await operations.passage(
-            args.chunk_id, context_chunks=args.context_chunks
+        return await operations.call(
+            "get_passage", chunk_id=args.chunk_id, context_chunks=args.context_chunks
         )
     if command in {"include", "exclude"}:
         # One decision about retrievable evidence, two subjects. Each refusal
@@ -2300,7 +2124,8 @@ async def _operate(
                 "about a whole source; name one of them."
             )
         if args.chunk:
-            return await operations.set_chunk_inclusion(
+            return await operations.call(
+                "set_chunk_inclusion",
                 chunk_id=args.chunk,
                 included=command == "include",
                 reason=args.reason,
@@ -2310,37 +2135,46 @@ async def _operate(
                 "Name the passage with --chunk CHUNK_ID, or the source with a "
                 "path or --source-id."
             )
-        return await operations.set_source_inclusion(
+        return await operations.call(
+            "set_source_inclusion",
             source_path=args.source,
             source_id=args.source_id,
             included=command == "include",
             reason=args.reason,
         )
     if command == "metadata":
-        return await operations.set_source_metadata(
+        return await operations.call(
+            "set_source_metadata",
             source_path=args.source,
             source_id=args.source_id,
             metadata=_metadata_body(args),
         )
     if command == "stats":
-        return await operations.stats(
-            days=args.days, top=args.top, largest_by=args.largest_by
+        return await operations.call(
+            "search_stats", days=args.days, top=args.top, largest_by=args.largest_by
         )
     if command == "history":
         if args.clear:
-            return await operations.clear_history()
-        return await operations.history(limit=args.limit, days=args.days)
+            return await operations.call("clear_search_history")
+        return await operations.call("search_history", limit=args.limit, days=args.days)
     if command == "chunks":
-        return await operations.source_chunks(
-            source=args.source, page=args.page, page_size=args.page_size
+        by_id = args.source.startswith("src_")
+        return await operations.call(
+            "source_chunks",
+            source_id=args.source if by_id else None,
+            source_path=None if by_id else args.source,
+            page=args.page,
+            page_size=args.page_size,
         )
     if command == "generations":
         if args.use_generation:
-            return await operations.use_generation(args.use_generation)
-        return await operations.generations()
+            return await operations.call(
+                "use_generation", generation_id=args.use_generation
+            )
+        return await operations.call("list_generations")
     if command == "remove-generation":
-        return await operations.remove_generation(
-            args.generation_id, confirm=args.confirm
+        return await operations.call(
+            "remove_generation", generation_id=args.generation_id, confirm=args.confirm
         )
     raise ResearchError(f"Unknown command: {command}")
 
@@ -3078,7 +2912,7 @@ async def _doctor(args: argparse.Namespace, config: ResearchConfig) -> CommandRe
     if entry_check is None:
         try:
             async with _operations(config) as operations:
-                status = await operations.status()
+                status = await operations.call("status")
         except ImportError as exc:
             # Without the retrieval stack there is no corpus answer to report, so
             # the report is told which of its checks that leaves unknown.

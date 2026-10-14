@@ -363,7 +363,7 @@ def project_app_state(project_root: Path) -> dict[str, Any]:
         return state
     try:
         with Control(url, timeout=10.0) as handle:
-            verdict = lean_status(handle.status())
+            verdict = lean_status(handle.operation("status", {}))
             clients = handle.clients()
     except ControlError as exc:
         state["error"] = str(exc)
