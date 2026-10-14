@@ -61,6 +61,19 @@ def fsync_directory(path: Path) -> None:
         os.close(descriptor)
 
 
+def file_identity(path: Path) -> dict[str, int]:
+    """The stat fields that change whenever a file's bytes may have."""
+
+    stat = path.stat()
+    return {
+        "size": stat.st_size,
+        "mtime_ns": stat.st_mtime_ns,
+        "ctime_ns": stat.st_ctime_ns,
+        "device": stat.st_dev,
+        "inode": stat.st_ino,
+    }
+
+
 def fsync_file(path: Path) -> None:
     """Persist the contents of a file another writer has already closed."""
 

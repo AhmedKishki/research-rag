@@ -17,7 +17,7 @@ and the report and file helpers both halves share from here.
 from __future__ import annotations
 
 import sys
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
 
@@ -40,11 +40,7 @@ class WriteReport:
     message: str
 
     def as_dict(self) -> dict[str, Any]:
-        return {
-            "path": str(self.path),
-            "state": self.state,
-            "message": self.message,
-        }
+        return {**asdict(self), "path": str(self.path)}
 
 
 def _absolute(directory: Path | None, fallback: Path) -> Path:

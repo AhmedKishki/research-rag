@@ -67,7 +67,6 @@ from ..project.support import (
     SCHEMA_VERSION,
     _atomic_to_thread,
     _checkpoint_identity,
-    _chunk_text,
     _embedding_text,
     _enrich_chunks,
     _generation_id,
@@ -76,7 +75,6 @@ from ..project.support import (
     _record_embedding_token_counts,
     _reranker_revision,
     _source_inventory,
-    _source_stat_identity,
     _source_work_key,
     reflowable_document_is_current,
 )
@@ -84,6 +82,7 @@ from ..retrieval.artifact_lookup import (
     LOOKUP_RELATIVE_PATH,
     ArtifactLookup,
     ArtifactLookupError,
+    chunk_text,
     ensure_artifact_lookup,
 )
 from ..retrieval.dense import DENSE_INDEX_PATHS, EXACT_BACKEND_NAME, QDRANT_BACKEND_NAME
@@ -93,6 +92,7 @@ from ..storage.durable_io import (
     atomic_write_json,
     atomic_write_jsonl,
     directory_statistics,
+    file_identity,
     fsync_directories,
     fsync_directory,
     fsync_file,
@@ -821,7 +821,7 @@ class IngestionWorkflow:
                 isinstance(source_stats, dict)
                 and set(source_stats) == source_paths
                 and all(
-                    _source_stat_identity(source.path)
+                    file_identity(source.path)
                     == source_stats[source.source_relative_path]
                     for source in scan.selected
                 )
@@ -1348,7 +1348,7 @@ class IngestionWorkflow:
                 return False
             try:
                 return all(
-                    _source_stat_identity(sources_by_path[relative].path) == identity
+                    file_identity(sources_by_path[relative].path) == identity
                     for relative, identity in recorded.items()
                     if relative in sources_by_path
                 ) and set(recorded).issubset(sources_by_path)
@@ -2218,7 +2218,7 @@ class IngestionWorkflow:
                 # differ: recomputing a vector is always correct, while reusing
                 # another chunk's vector is not.
                 batch_texts = [_embedding_text(chunk) for chunk in batch]
-                reuse_keys = [_chunk_text(chunk) for chunk in batch]
+                reuse_keys = [chunk_text(chunk) for chunk in batch]
                 reusable_vectors = (
                     await _atomic_to_thread(
                         snapshot.vectors_for_texts,
