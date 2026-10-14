@@ -6,9 +6,6 @@ no corpus behind it has no inventory to report, and an answer that carried one
 would answer a question the caller did not ask. `status.py` does not re-export
 these; `surfaces/mcp.py` and the bridge's own tests import them from here, so
 there is one refusal rather than two that can drift.
-
-What moved here from `status.py`: `blocked_status`, `uninitialised_status`, and
-`not_served_status`.
 """
 
 from __future__ import annotations

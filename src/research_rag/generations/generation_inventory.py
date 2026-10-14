@@ -5,8 +5,6 @@ manifest per retained generation and measures the directory, so `status` can nam
 what a prune would consider. It may never validate a generation, select one, or
 decide that a project can be served, because a retained generation is not a
 served one and a damaged manifest is a reportable fact rather than a failure.
-
-What moved here from `status.py`: `generation_inventory`.
 """
 
 from __future__ import annotations

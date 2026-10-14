@@ -13,11 +13,10 @@ caller was writing itself: whether a pid is still running, and which pid a proje
 recorded. A pid file survives the terminal that wrote it, so the process behind it
 is checked rather than trusted.
 
-`ProjectState` and `resident_build` moved here from `update.py`, which asked both
-questions about a project it had not resolved and must not resolve. The staging
-checkpoint is ingestion's own format and is read here from the files themselves,
-without importing `ingestion`, because the answer is needed before a service can
-be built to ask it.
+`ProjectState` and `resident_build` answer for a project `update` has not resolved
+and must not resolve. The staging checkpoint is ingestion's own format and is read
+here from the files themselves, without importing `ingestion`, because the answer
+is needed before a service can be built to ask it.
 """
 
 from __future__ import annotations

@@ -13,9 +13,8 @@ being told is the fault the rule prevents. `--uninstall` removes exactly what
 `ConfigurationError` from `config.py`: `install` resolves no project, so a foreign
 file here is the account's own configuration, and that is what the class names.
 
-The console script moved to `install_entry.py`, which owns the wrapper, where it
-lands on the `PATH`, and the report both halves return. The `ALTERNATIVES` copy
-that stood here was never read here; `tool_ownership.py` owns those commands.
+`install_entry.py` owns the console script: the wrapper, where it lands on the
+`PATH`, and the report both halves return.
 """
 
 from __future__ import annotations

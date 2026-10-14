@@ -8,10 +8,6 @@ running a command the tool that owns the install does not take.
 Nothing here reads a project, and nothing here writes. This module holds the tool
 vocabulary, the detection, the command each tool takes, and the refusal that
 names both install commands instead of leaving a reader to work one out.
-
-`UV`, `PIPX`, `ALTERNATIVES`, `owning_tool`, and the upgrade commands moved here
-from `update.py`. The byte-identical `ALTERNATIVES` that stood in `installation.py`
-was never read there and is gone with it.
 """
 
 from __future__ import annotations

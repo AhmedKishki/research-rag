@@ -1,10 +1,10 @@
 """The models both dense backends run against.
 
-It owns the three model loaders and the six operations the backends each carried a
-copy of, so an embedding is produced, counted, and reranked one way per process.
-The backends, the Qdrant filter type, and the portable-vector checks moved to
-`dense_backends/`; this module may never import any of those, so a runtime stays
-usable by a backend that stores nothing.
+It owns the three model loaders and the operations both backends share, so an
+embedding is produced, counted, and reranked one way per process. The backends,
+the Qdrant filter type, and the portable-vector checks are in `dense_backends/`;
+this module may never import any of those, so a runtime stays usable by a backend
+that stores nothing.
 """
 
 from __future__ import annotations

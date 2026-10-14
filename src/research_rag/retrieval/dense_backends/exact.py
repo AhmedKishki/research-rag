@@ -9,8 +9,8 @@ The index lives at `<generation>/indexes/<name>` and references the portable vec
 file relative to the generation root, so a copied generation keeps a valid
 descriptor.
 
-The model loaders and the embedding, token-count, and rerank operations moved to
-`model_runtime.py`, and the portable-vector file check moved to
+The model loaders and the embedding, token-count, and rerank operations are in
+`model_runtime.py`, and the portable-vector file check is in
 `portable_vectors.py`; this module may never re-implement either, because two copies
 of a check are two places for it to be wrong. It may also never hold one build's
 rows on the instance, because the service keeps one instance per backend name for

@@ -2,9 +2,8 @@
 
 `qdrant.py` is the Qdrant local-mode backend, `exact.py` is the portable-vector
 backend, and `portable_vectors.py` is the file check they share. The model
-loaders and the embedding, token-count, and rerank operations moved to
-`model_runtime.py`, which both backends reach through a `ModelRuntime` rather than
-through their own copies. Nothing in this package may re-open a model or reach the
+loaders and the embedding, token-count, and rerank operations are in
+`model_runtime.py`, which both backends reach through a `ModelRuntime`. Nothing in this package may re-open a model or reach the
 service: a backend indexes and searches, and `dense.py` is the façade the app
 imports.
 
