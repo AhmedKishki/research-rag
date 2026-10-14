@@ -26,7 +26,7 @@ from typing import Any
 
 import ebooklib
 import pymupdf
-from bs4 import BeautifulSoup, Comment, NavigableString, Tag
+from bs4 import BeautifulSoup, Comment, NavigableString, PageElement, Tag
 from ebooklib import epub
 
 from ..project.settings import BM25_STOPWORD_LANGUAGES, bm25_stopwords
@@ -1161,11 +1161,20 @@ def _epub_text_segments(
         if text:
             segments.append((text, active_anchor))
 
+    def inside(node: PageElement, block: Tag) -> bool:
+        # Identity, not `==`: a Tag compares equal to any tag with the same markup.
+        parent = node.parent
+        while parent is not None and parent is not element:
+            if parent is block:
+                return True
+            parent = parent.parent
+        return False
+
     # A nested block ends a paragraph where it closes as well as where it opens,
     # so text after a quotation inside a paragraph is not run into its last word.
-    open_blocks: list[set[int]] = []
+    open_blocks: list[Tag] = []
     for node in element.descendants:
-        while open_blocks and id(node) not in open_blocks[-1]:
+        while open_blocks and not inside(node, open_blocks[-1]):
             open_blocks.pop()
             parts.append("\n\n")
         if isinstance(node, Comment):
@@ -1180,7 +1189,7 @@ def _epub_text_segments(
                 parts.append("\n")
             elif name in _EPUB_CONTENT_ELEMENTS:
                 parts.append("\n\n")
-                open_blocks.append({id(inner) for inner in node.descendants})
+                open_blocks.append(node)
             continue
         if isinstance(node, NavigableString):
             parts.append(str(node))

@@ -84,7 +84,6 @@ An item is done when the harness has produced its measurement and the validation
 
 - [ ] **Refuse a garbage passage, not only a garbage unit.** Feature. `corpus/text_quality.py` judges a unit and extraction withholds one whose text carries a reason. Extend the verdicts to what a reader retrieves — running heads, page numbers, a table of contents, an index, a reference list, boilerplate — and refuse the passage at build time. Measure what it removes, and what it takes with it, against the judged set.
 - [ ] **Measure the EPUB note-reference rule.** Test. `extraction._is_epub_noteref` treats a linked number as a note reference when the link carries an `id`, so a cross-reference number with an `id` loses its text. Count what the rule removes on the judged corpus.
-- [ ] **Track open EPUB blocks without descendant sets.** Feature. `_epub_text_segments` builds a set of every descendant for each content element it enters.
 
 ## chunking
 
