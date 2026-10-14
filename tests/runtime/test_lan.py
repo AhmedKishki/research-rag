@@ -284,7 +284,7 @@ async def test_live_lan_listener_and_rollback(
                 break
             await asyncio.sleep(0.01)
         assert app.ready
-        task, server, gateway = app._task, app._server, app.gateway
+        task, server, gateway = app._task, app._server, app.lexical
         async with httpx.AsyncClient(base_url=app.url) as client:
             page = await client.get("/remote")
             assert "Enable LAN browser access" in page.text
@@ -330,6 +330,6 @@ async def test_live_lan_listener_and_rollback(
                 await app.set_lan(True)
             assert (await client.get("/control/health")).status_code == 200
             assert not policy.lan
-        assert (app._task, app._server, app.gateway) == (task, server, gateway)
+        assert (app._task, app._server, app.lexical) == (task, server, gateway)
     finally:
         await app.stop()

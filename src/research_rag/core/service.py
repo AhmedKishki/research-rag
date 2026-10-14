@@ -135,17 +135,7 @@ class ResearchService(
         dense: DenseBackend | None = None,
         *,
         record_searches: bool = True,
-        ultrarag: LexicalBackend | None = None,
     ) -> None:
-        # `ultrarag` is the retired name of this backend, kept so an existing
-        # caller keeps working. Nothing here imports or spawns UltraRAG.
-        if ultrarag is not None:
-            if lexical is not None:
-                raise TypeError(
-                    "ResearchService takes one lexical backend: pass 'lexical', "
-                    "or the retired 'ultrarag' alias, not both."
-                )
-            lexical = ultrarag
         self.config = config
         self.lexical = lexical
         # A measurement builds its own service and runs hundreds of searches, so
@@ -230,16 +220,6 @@ class ResearchService(
         # Digests of sources whose mtime drifted, keyed by path and file identity,
         # so `status` hashes a drifted source once rather than on every search.
         self._drift_digests: dict[Path, tuple[tuple[int, int, int, int], str]] = {}
-
-    @property
-    def ultrarag(self) -> LexicalBackend | None:
-        """The retired name for the lexical backend, kept for existing callers."""
-
-        return self.lexical
-
-    @ultrarag.setter
-    def ultrarag(self, backend: LexicalBackend | None) -> None:
-        self.lexical = backend
 
     @asynccontextmanager
     async def _operation(self, *, busy_command: str = "") -> AsyncIterator[None]:

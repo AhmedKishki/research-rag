@@ -22,6 +22,7 @@ from urllib.request import urlopen
 
 from ..project.config import ResearchConfig
 from ..project.policy import ResearchError
+from ..storage.durable_io import fsync_directory
 
 GPT2_CACHE_INPUTS = (
     ("vocab.bpe", "1ce1664773c50f3e0cc8842619a93edc4624525b728b188a9e0be33b7726adc5"),
@@ -31,14 +32,6 @@ GPT2_CACHE_INPUTS = (
     ),
 )
 GPT2_CACHE_URL = "https://openaipublic.blob.core.windows.net/gpt-2/encodings/main/"
-
-
-def _sync_directory(path: Path) -> None:
-    descriptor = os.open(path, os.O_RDONLY | os.O_DIRECTORY)
-    try:
-        os.fsync(descriptor)
-    finally:
-        os.close(descriptor)
 
 
 def _cache_directories(cache_root: Path | None) -> tuple[Path | None, list[Path]]:
@@ -175,7 +168,7 @@ def _load_verified_gpt2_tokenizer(
                         target.flush()
                         os.fsync(target.fileno())
                     os.replace(temporary, path)
-                    _sync_directory(primary)
+                    fsync_directory(primary)
                 finally:
                     Path(temporary).unlink(missing_ok=True)
         inputs[name] = data
@@ -302,7 +295,7 @@ class DirectRetrieval:
                     target.write(json.dumps(row, ensure_ascii=False) + "\n")
                 target.flush()
                 os.fsync(target.fileno())
-            _sync_directory(output_path.parent)
+            fsync_directory(output_path.parent)
 
         await self._run(execute)
 
@@ -310,10 +303,12 @@ class DirectRetrieval:
         import bm25s
         import orjson
 
+        backend = "numba"
         try:
-            model = bm25s.BM25(backend="numba")
+            model = bm25s.BM25(backend=backend)
         except Exception:  # noqa: BLE001 - pinned upstream backend fallback
-            model = bm25s.BM25(backend="numpy")
+            backend = "numpy"
+            model = bm25s.BM25(backend=backend)
         try:
             tokenizer = bm25s.tokenization.Tokenizer(stopwords=language)
         except Exception as exc:
@@ -339,7 +334,8 @@ class DirectRetrieval:
             tokenizer.load_stopwords(str(index_path))
             tokenizer.load_vocab(str(index_path))
             model.corpus = contents
-            model.backend = "numba"
+            # A loaded index takes the backend that was constructed above.
+            model.backend = backend
         self._model, self._tokenizer = model, tokenizer
         self._contents = contents
 
@@ -365,8 +361,8 @@ class DirectRetrieval:
                         if path.is_file():
                             with path.open("rb") as artifact:
                                 os.fsync(artifact.fileno())
-                    _sync_directory(index_path)
-                    _sync_directory(index_path.parent)
+                    fsync_directory(index_path)
+                    fsync_directory(index_path.parent)
                 self._initialize(chunks_path, index_path, language)
             except BaseException:
                 self._model, self._tokenizer, self._contents = previous

@@ -9,7 +9,7 @@ from research_rag.project.config import resolve_config
 
 def test_selected_partial_is_stale_and_requests_retry(project, monkeypatch):
     config = resolve_config(project, vanilla_executable=sys.executable)
-    service = ResearchService(config, ultrarag=None)
+    service = ResearchService(config, lexical=None)
     monkeypatch.setattr(service, "_generation_upgrade_reasons", lambda manifest: [])
     manifest = {
         "generation_id": "partial",
@@ -30,7 +30,7 @@ def test_selected_partial_is_stale_and_requests_retry(project, monkeypatch):
 
 def test_unselected_partial_mentions_manual_load(project, monkeypatch):
     config = resolve_config(project, vanilla_executable=sys.executable)
-    service = ResearchService(config, ultrarag=None)
+    service = ResearchService(config, lexical=None)
     monkeypatch.setattr(
         service,
         "_generation_inventory",

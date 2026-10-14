@@ -24,7 +24,7 @@ from ..core.admission import as_caller
 from ..project.config import ResearchConfig
 from ..project.policy import ResearchError
 from ..project.registry import account_projects
-from . import write_guard
+from ..surfaces.workspace import write_guard
 from .app import CONTROL_PREFIX, ClientError, running_url
 from .doctor import mcp_entry_block
 
