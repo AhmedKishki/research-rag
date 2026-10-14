@@ -209,6 +209,10 @@ def test_ingest_progress_is_concurrent_and_stderr_only(monkeypatch, capsys):
     monkeypatch.setattr(cli, "INGEST_PROGRESS_INTERVAL", 0.001)
 
     class Operations:
+        async def call(self, name, **arguments):
+
+            return await getattr(self, name)(**arguments)
+
         calls = 0
         reads = 0
         finished = False
@@ -283,6 +287,9 @@ def test_tty_progress_replaces_one_line_and_finishes_with_newline(monkeypatch):
 
     async def run():
         class Operations:
+            async def call(self, name, **arguments):
+                return await getattr(self, name)(**arguments)
+
             reads = 0
 
             async def ingest(self, **kwargs):
@@ -335,6 +342,9 @@ def test_terminal_frame_uses_phase_percentage_and_eta_without_batch_counts():
 @pytest.mark.parametrize("fail", [False, True])
 def test_immediate_ingest_does_not_poll(fail):
     class Operations:
+        async def call(self, name, **arguments):
+            return await getattr(self, name)(**arguments)
+
         async def ingest(self, **kwargs):
             if fail:
                 raise ValueError("build failed")
@@ -359,6 +369,10 @@ def test_failed_progress_read_does_not_fail_ingestion(monkeypatch):
         read = asyncio.Event()
 
         class Operations:
+            async def call(self, name, **arguments):
+
+                return await getattr(self, name)(**arguments)
+
             async def ingest(self, **kwargs):
                 await read.wait()
                 return {"ok": True}
@@ -379,22 +393,20 @@ def test_remote_blocking_calls_leave_event_loop_free():
         loop_thread = threading.get_ident()
 
         class Control:
-            def ingest(self, *, force_recompute) -> dict[str, Any]:
+            def operation(self, name, arguments) -> dict[str, Any]:
                 assert threading.get_ident() != loop_thread
-                started.set()
-                assert release.wait(2)
-                return {"ok": True}
-
-            def status(self):
-                assert threading.get_ident() != loop_thread
+                if name == "ingest":
+                    started.set()
+                    assert release.wait(2)
+                    return {"ok": True}
                 assert started.wait(2)
                 release.set()
                 return {}
 
         remote = cli.Remote(Control())
-        task = asyncio.create_task(remote.ingest(force_recompute=False))
+        task = asyncio.create_task(remote.call("ingest", force_recompute=False))
         try:
-            await remote.status()
+            await remote.call("status")
             return await task
         finally:
             release.set()

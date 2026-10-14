@@ -180,167 +180,52 @@ async def _health(request: Request) -> Response:
     return JSONResponse({"status": "ok", **dict(adapter_health)})
 
 
-async def _status(request: Request) -> Response:
-    return JSONResponse(await _adapter_call(request, "status"))
+# The routes that each forward one adapter operation. A GET carries its
+# arguments in the query string and a POST in a JSON body, and a path parameter is
+# an argument too. The adapter checks the arguments; this host checks only that a
+# write came from this page.
+_OPERATION_ROUTES = (
+    ("/api/status", "GET", "status"),
+    ("/api/sources", "GET", "list_sources"),
+    ("/api/search", "POST", "search"),
+    ("/api/passages/{chunk_id:str}", "GET", "get_passage"),
+    ("/api/ingest", "POST", "ingest"),
+    ("/api/source-metadata", "POST", "set_source_metadata"),
+    ("/api/source-inclusion", "POST", "set_source_inclusion"),
+    ("/api/generations/remove", "POST", "remove_generation"),
+    ("/api/generations/use", "POST", "use_generation"),
+    ("/api/settings", "GET", "settings_read"),
+    ("/api/settings", "POST", "settings_write"),
+    ("/api/chunk-exclusions", "GET", "list_chunk_exclusions"),
+    ("/api/chunk-inclusion", "POST", "set_chunk_inclusion"),
+    ("/api/projects", "GET", "list_projects"),
+    ("/api/agent-entry", "GET", "agent_entry"),
+    ("/api/updates", "GET", "check_updates"),
+    ("/api/stats", "GET", "search_stats"),
+    ("/api/stats/history", "GET", "search_history"),
+    ("/api/stats/history/clear", "POST", "clear_search_history"),
+    ("/api/source-chunks", "GET", "source_chunks"),
+    ("/api/open-source", "POST", "open_source"),
+)
 
 
-def _query_list(request: Request, name: str) -> list[str] | None:
-    values: list[str] = []
-    for raw in request.query_params.getlist(name):
-        values.extend(item.strip() for item in raw.split(",") if item.strip())
-    return values or None
+def _operation_route(path: str, method: str, operation: str) -> Route:
+    async def endpoint(request: Request) -> Response:
+        if method == "POST":
+            arguments = await _json_body(request)
+        else:
+            query = request.query_params
+            arguments = {
+                name: ",".join(query.getlist(name)) for name in query if query[name]
+            }
+        arguments.update(request.path_params)
+        return JSONResponse(await _adapter_call(request, operation, arguments))
 
-
-async def _sources(request: Request) -> Response:
-    names = ("categories", "categories_any", "projects", "projects_any", "keywords")
-    return JSONResponse(
-        await _adapter_call(
-            request,
-            "list_sources",
-            {name: _query_list(request, name) for name in names},
-        )
-    )
-
-
-async def _search(request: Request) -> Response:
-    body = await _json_body(request)
-    allowed = {
-        "query",
-        "top_k",
-        "categories",
-        "categories_any",
-        "projects",
-        "projects_any",
-        "keywords",
-        "authors_any",
-        "titles_any",
-        "languages_any",
-        "document_ids",
-        "source_ids",
-        "exclude_source_ids",
-    }
-    unknown = set(body) - allowed
-    if unknown:
-        raise HTTPException(
-            status_code=400,
-            detail=f"Unsupported search fields: {', '.join(sorted(unknown))}",
-        )
-    if not isinstance(body.get("query"), str) or not body["query"].strip():
-        raise HTTPException(status_code=400, detail="Search requires a non-empty query")
-    return JSONResponse(await _adapter_call(request, "search", body))
-
-
-async def _passage(request: Request) -> Response:
-    try:
-        context_chunks = int(request.query_params.get("context_chunks", "1"))
-    except ValueError as exc:
-        raise HTTPException(
-            status_code=400,
-            detail="context_chunks must be an integer",
-        ) from exc
-    return JSONResponse(
-        await _adapter_call(
-            request,
-            "get_passage",
-            {
-                "chunk_id": request.path_params["chunk_id"],
-                "context_chunks": context_chunks,
-            },
-        )
-    )
-
-
-async def _ingest(request: Request) -> Response:
-    body = await _json_body(request)
-    unknown = set(body) - {"force_recompute"}
-    if unknown:
-        raise HTTPException(
-            status_code=400,
-            detail=f"Unsupported ingestion fields: {', '.join(sorted(unknown))}",
-        )
-    if "force_recompute" in body and not isinstance(body["force_recompute"], bool):
-        raise HTTPException(
-            status_code=400,
-            detail="force_recompute must be a boolean",
-        )
-    return JSONResponse(await _adapter_call(request, "ingest", body))
-
-
-async def _set_metadata(request: Request) -> Response:
-    body = await _json_body(request)
-    if set(body) != {"source_path", "metadata"}:
-        raise HTTPException(
-            status_code=400,
-            detail="Metadata requests require source_path and metadata",
-        )
-    return JSONResponse(await _adapter_call(request, "set_source_metadata", body))
-
-
-async def _set_inclusion(request: Request) -> Response:
-    body = await _json_body(request)
-    allowed = {"source_path", "included", "reason"}
-    unknown = set(body) - allowed
-    if unknown or not {"source_path", "included"}.issubset(body):
-        raise HTTPException(
-            status_code=400,
-            detail="Inclusion requests require source_path and included",
-        )
-    return JSONResponse(await _adapter_call(request, "set_source_inclusion", body))
-
-
-async def _remove_generation(request: Request) -> Response:
-    """Delete one retained generation, which is the only way a generation leaves."""
-
-    body = await _json_body(request)
-    allowed = {"generation_id", "confirm"}
-    unknown = set(body) - allowed
-    if unknown or not {"generation_id", "confirm"}.issubset(body):
-        # The confirmation is required rather than defaulted. A host that
-        # supplied its own default would be a host where a click removed a
-        # generation nobody chose, which is the one thing this dialog exists to
-        # prevent.
-        raise HTTPException(
-            status_code=400,
-            detail="Generation removal requires generation_id and confirm",
-        )
-    if body["confirm"] != body["generation_id"]:
-        raise HTTPException(
-            status_code=400,
-            detail="The confirmation must repeat the generation_id",
-        )
-    return JSONResponse(await _adapter_call(request, "remove_generation", body))
-
-
-async def _use_generation(request: Request) -> Response:
-    """Select one retained generation for search, which changes indexed evidence.
-
-    The body names exactly the one generation to load. Selection is not removal:
-    the generation already on disk is validated and becomes the one a search
-    reads, and nothing is deleted or rebuilt.
-    """
-
-    body = await _json_body(request)
-    if set(body) != {"generation_id"}:
-        raise HTTPException(
-            status_code=400,
-            detail="Generation selection requires only generation_id",
-        )
-    if not isinstance(body["generation_id"], str) or not body["generation_id"].strip():
-        raise HTTPException(
-            status_code=400,
-            detail="generation_id must be a non-empty string",
-        )
-    return JSONResponse(await _adapter_call(request, "use_generation", body))
+    return Route(path, endpoint, methods=[method])
 
 
 async def _call_adapter(adapter: Any, method: str, *args: Any) -> Any:
-    """One direct adapter call, with the adapter's own refusal kept intact.
-
-    A host refuses a direct request for a reason a reader can act on — a session
-    that is already gone, a store that is read-only, a statement it will not run
-    — and translating that into a generic failure would throw the reason away.
-    The translation `_adapter_call` applies is therefore applied here too.
-    """
+    """One direct adapter call, with the adapter's own refusal kept intact."""
 
     try:
         return await getattr(adapter, method)(*args)
@@ -381,161 +266,15 @@ async def _source_file(request: Request) -> Response:
     raw_path = request.query_params.get("path", "").strip()
     if not raw_path:
         raise HTTPException(status_code=400, detail="Source path is required")
-    adapter: UIAdapter = request.app.state.adapter
-    try:
-        source: SourceFile = await adapter.source_file(raw_path)
-    except UIRequestError as exc:
-        raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
-    if not isinstance(source, SourceFile):
-        raise HTTPException(
-            status_code=502, detail="Adapter returned an invalid source file"
-        )
+    source: SourceFile = await _call_adapter(
+        request.app.state.adapter, "source_file", raw_path
+    )
     return FileResponse(
         source.path,
         media_type=source.media_type,
         filename=source.filename,
         content_disposition_type=source.content_disposition_type,
     )
-
-
-async def _settings_read(request: Request) -> Response:
-    """The settings the server has, forwarded as the server reported them.
-
-    Nothing here is named, defaulted, or dropped: which settings exist, what a
-    value is, where it came from, and what changing it costs are the server's
-    facts, and this repository states none of them.
-    """
-
-    return JSONResponse(await _adapter_call(request, "settings_read"))
-
-
-async def _settings_write(request: Request) -> Response:
-    """A settings change, forwarded verbatim so the server can refuse it.
-
-    The body reaches the adapter exactly as the page sent it, because the keys
-    are the server's setting names and the revision is its own comparison
-    token; the refusal that follows is shown unchanged and never retried.
-    """
-
-    body = await _json_body(request)
-    return JSONResponse(await _adapter_call(request, "settings_write", body))
-
-
-def _query_number(request: Request, name: str) -> float | None:
-    """A numeric query parameter, or None when absent; anything else is a 400."""
-
-    raw = request.query_params.get(name)
-    if raw is None or raw == "":
-        return None
-    try:
-        return float(raw)
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=f"{name} must be a number") from exc
-
-
-def _present_arguments(**values: Any) -> dict[str, Any]:
-    return {key: value for key, value in values.items() if value is not None}
-
-
-async def _stats(request: Request) -> Response:
-    """Search counts by rank and corpus facts, as the server reports them."""
-
-    top = _query_number(request, "top")
-    return JSONResponse(
-        await _adapter_call(
-            request,
-            "search_stats",
-            _present_arguments(
-                days=_query_number(request, "days"),
-                top=None if top is None else int(top),
-                largest_by=request.query_params.get("largest_by") or None,
-            ),
-        )
-    )
-
-
-async def _stats_history(request: Request) -> Response:
-    limit = _query_number(request, "limit")
-    return JSONResponse(
-        await _adapter_call(
-            request,
-            "search_history",
-            _present_arguments(
-                days=_query_number(request, "days"),
-                limit=None if limit is None else int(limit),
-            ),
-        )
-    )
-
-
-async def _stats_history_clear(request: Request) -> Response:
-    await _json_body(request)
-    return JSONResponse(await _adapter_call(request, "clear_search_history"))
-
-
-async def _source_chunks(request: Request) -> Response:
-    page = _query_number(request, "page")
-    size = _query_number(request, "page_size")
-    return JSONResponse(
-        await _adapter_call(
-            request,
-            "source_chunks",
-            _present_arguments(
-                source_id=request.query_params.get("source_id") or None,
-                source_path=request.query_params.get("path") or None,
-                page=None if page is None else int(page),
-                page_size=None if size is None else int(size),
-            ),
-        )
-    )
-
-
-async def _open_source(request: Request) -> Response:
-    """Open one source in the desktop's own viewer, forwarded to the host's decision."""
-
-    body = await _json_body(request)
-    return JSONResponse(await _adapter_call(request, "open_source", body))
-
-
-async def _chunk_exclusions(request: Request) -> Response:
-    """The chunks this server has excluded from retrieval."""
-
-    return JSONResponse(await _adapter_call(request, "list_chunk_exclusions"))
-
-
-async def _set_chunk_inclusion(request: Request) -> Response:
-    """Exclude or restore one chunk, forwarded verbatim to the server's decision."""
-
-    body = await _json_body(request)
-    return JSONResponse(await _adapter_call(request, "set_chunk_inclusion", body))
-
-
-async def _projects(request: Request) -> Response:
-    """The projects this installation serves, as the adapter reported them.
-
-    Which projects exist, which one this page serves, whether an app is up for
-    one, and what address it is on are the host's facts, so the answer is
-    forwarded whole: nothing is added, renamed, dropped, or defaulted here.
-    """
-
-    return JSONResponse(await _adapter_call(request, "list_projects"))
-
-
-async def _agent_entry(request: Request) -> Response:
-    """This project's MCP client entry, generated by the adapter that owns it.
-
-    The text reaches the browser as the host wrote it. A second generator here
-    would be a second place for a client's configuration to be wrong, so the
-    entry is shown and copied unchanged.
-    """
-
-    return JSONResponse(await _adapter_call(request, "agent_entry"))
-
-
-async def _updates(request: Request) -> Response:
-    """Read a release preview; this route never installs or approves an update."""
-
-    return JSONResponse(await _adapter_call(request, "check_updates"))
 
 
 async def _security_headers(request: Request, call_next: Any) -> Response:
@@ -600,32 +339,12 @@ def create_ui_app(
         Route("/assets/{filename:str}", _asset),
         Route("/api/ui", _ui_profile),
         Route("/api/health", _health),
-        Route("/api/status", _status),
-        Route("/api/sources", _sources),
-        Route("/api/search", _search, methods=["POST"]),
-        Route("/api/passages/{chunk_id:str}", _passage),
-        Route("/api/ingest", _ingest, methods=["POST"]),
-        Route("/api/source-metadata", _set_metadata, methods=["POST"]),
-        Route("/api/source-inclusion", _set_inclusion, methods=["POST"]),
-        Route("/api/generations/remove", _remove_generation, methods=["POST"]),
-        Route("/api/generations/use", _use_generation, methods=["POST"]),
+        *(_operation_route(*route) for route in _OPERATION_ROUTES),
         Route("/api/clients", _clients),
         Route(
             "/api/clients/{session_id:str}/disconnect", _disconnect, methods=["POST"]
         ),
         Route("/api/source-file", _source_file),
-        Route("/api/settings", _settings_read),
-        Route("/api/settings", _settings_write, methods=["POST"]),
-        Route("/api/chunk-exclusions", _chunk_exclusions),
-        Route("/api/chunk-inclusion", _set_chunk_inclusion, methods=["POST"]),
-        Route("/api/projects", _projects),
-        Route("/api/agent-entry", _agent_entry),
-        Route("/api/updates", _updates),
-        Route("/api/stats", _stats),
-        Route("/api/stats/history", _stats_history),
-        Route("/api/stats/history/clear", _stats_history_clear, methods=["POST"]),
-        Route("/api/source-chunks", _source_chunks),
-        Route("/api/open-source", _open_source, methods=["POST"]),
     ]
     app = Starlette(
         routes=routes,

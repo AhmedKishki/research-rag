@@ -370,16 +370,11 @@ def test_workspace_and_normalized_read_operations(tmp_path: Path) -> None:
     assert status.json()["generation_id"] == "generation-1"
     assert sources.json()["sources"][0]["title"] == "Evidence"
     assert passage.json()["requested_chunk_id"] == "chunk-1"
-    assert (
-        "list_sources",
-        {
-            "categories": ["theory", "history"],
-            "categories_any": None,
-            "projects": None,
-            "projects_any": None,
-            "keywords": None,
-        },
-    ) in adapter.calls
+    # A query string reaches the adapter as text; the operation table reads it.
+    assert ("list_sources", {"categories": "theory,history"}) in adapter.calls
+    assert ("get_passage", {"chunk_id": "chunk-1", "context_chunks": "2"}) in (
+        adapter.calls
+    )
 
 
 def test_source_selection_and_partitions_are_forwarded(tmp_path: Path) -> None:
@@ -420,26 +415,8 @@ def test_source_selection_and_partitions_are_forwarded(tmp_path: Path) -> None:
 
     assert partitions.status_code == 200
     assert projects.status_code == 200
-    assert (
-        "list_sources",
-        {
-            "categories": None,
-            "categories_any": ["theory", "history"],
-            "projects": None,
-            "projects_any": None,
-            "keywords": None,
-        },
-    ) in adapter.calls
-    assert (
-        "list_sources",
-        {
-            "categories": None,
-            "categories_any": None,
-            "projects": None,
-            "projects_any": ["ai-and-fetishism"],
-            "keywords": None,
-        },
-    ) in adapter.calls
+    assert ("list_sources", {"categories_any": "theory,history"}) in adapter.calls
+    assert ("list_sources", {"projects_any": "ai-and-fetishism"}) in adapter.calls
     assert search.status_code == 200
     forwarded = next(
         arguments for operation, arguments in adapter.calls if operation == "search"
@@ -489,11 +466,6 @@ def test_writes_and_source_file_are_constrained(tmp_path: Path) -> None:
             headers={"Origin": "https://example.com"},
             json={"query": "test"},
         )
-        unknown = client.post(
-            "/api/search",
-            json={"query": "test", "unsupported": True},
-        )
-        unsupported_ingest = client.post("/api/ingest", json={"chunk_size": 384})
 
     assert search.status_code == 200
     assert metadata.json()["requires_ingest"] is True
@@ -503,8 +475,6 @@ def test_writes_and_source_file_are_constrained(tmp_path: Path) -> None:
     assert missing.status_code == 404
     assert non_json.status_code == 415
     assert cross_origin.status_code == 403
-    assert unknown.status_code == 400
-    assert unsupported_ingest.status_code == 400
 
 
 def test_force_recompute_is_forwarded(tmp_path: Path) -> None:
@@ -519,13 +489,8 @@ def test_force_recompute_is_forwarded(tmp_path: Path) -> None:
         app, base_url=LOOPBACK_BASE_URL, client=LOOPBACK_TEST_CLIENT
     ) as client:
         ingestion = client.post("/api/ingest", json={"force_recompute": True})
-        invalid = client.post(
-            "/api/ingest",
-            json={"force_recompute": "yes"},
-        )
 
     assert ingestion.status_code == 200
-    assert invalid.status_code == 400
     assert ("ingest", {"force_recompute": True}) in adapter.calls
 
 
@@ -646,7 +611,7 @@ def test_only_the_local_panels_are_gated_by_the_profile(
 def test_a_generation_is_removed_only_with_a_matching_confirmation(
     tmp_path: Path,
 ) -> None:
-    """The dialog's typed id reaches the adapter, and a mismatch never does.
+    """The dialog's typed id reaches the adapter as the reader typed it.
 
     A host that supplied its own confirmation would be a host where one click
     removed a generation nobody chose, which is the only thing the dialog is for.
@@ -666,35 +631,18 @@ def test_a_generation_is_removed_only_with_a_matching_confirmation(
             json={"generation_id": generation_id, "confirm": generation_id},
         )
         assert removed.status_code == 200
-        assert (
+    assert adapter.calls == [
+        (
             "remove_generation",
             {"generation_id": generation_id, "confirm": generation_id},
-        ) in adapter.calls
-
-        for body, expected in (
-            ({"generation_id": generation_id, "confirm": "nope"}, "repeat"),
-            ({"generation_id": generation_id}, "generation_id and confirm"),
-            (
-                {"generation_id": generation_id, "confirm": generation_id, "x": 1},
-                "generation_id and confirm",
-            ),
-        ):
-            refused = client.post("/api/generations/remove", json=body)
-            assert refused.status_code == 400
-            assert expected in refused.json()["error"]
-
-    # Every refusal happened in the workspace, so the adapter saw one call.
-    assert [name for name, _ in adapter.calls] == ["remove_generation"]
+        )
+    ]
 
 
 def test_a_generation_is_loaded_by_its_id(
     tmp_path: Path,
 ) -> None:
-    """Loading names exactly one retained generation, with no other field.
-
-    The route and the adapter both reject anything but the id, because a load
-    that accepted a stray field would be a host deciding what that field meant.
-    """
+    """Loading a generation is a write, so it is same-origin and JSON only."""
 
     source = tmp_path / "evidence.pdf"
     source.write_bytes(b"%PDF-1.4\n% test\n")
@@ -707,13 +655,6 @@ def test_a_generation_is_loaded_by_its_id(
     ) as client:
         loaded = client.post(
             "/api/generations/use", json={"generation_id": generation_id}
-        )
-        missing = client.post("/api/generations/use", json={})
-        blank = client.post("/api/generations/use", json={"generation_id": "  "})
-        numeric = client.post("/api/generations/use", json={"generation_id": 7})
-        extra = client.post(
-            "/api/generations/use",
-            json={"generation_id": generation_id, "confirm": generation_id},
         )
         form = client.post(
             "/api/generations/use",
@@ -729,13 +670,8 @@ def test_a_generation_is_loaded_by_its_id(
     assert loaded.status_code == 200
     assert loaded.json()["status"] == "changed"
     assert loaded.json()["generation_id"] == generation_id
-    assert missing.status_code == 400
-    assert blank.status_code == 400
-    assert numeric.status_code == 400
-    assert extra.status_code == 400
     assert form.status_code == 415
     assert cross_origin.status_code == 403
-    # Every refusal happened in the workspace, so the adapter saw one call.
     assert adapter.calls == [("use_generation", {"generation_id": generation_id})]
 
 

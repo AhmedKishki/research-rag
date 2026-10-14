@@ -23,8 +23,7 @@ An item is done when the harness has produced its measurement and the validation
 
 - [ ] **Let a command start the app when the corpus is not ready.** Decision. A command that touches the corpus goes to the running app. With no app up, it is answered in process, which opens a second service nobody serves. Starting an app instead makes `status` leave a process behind. App should be started explicitly for any process.
 - [ ] **Decide whether `search --method` and `--no-rerank` stay.** Decision. They reproduce a `MEASUREMENTS.md` row on demand, and no reader-facing surface offers either. Removing them is a deliberate simplification.
-  - The running app's control route ignores both flags and returns hybrid, reranked results. Forward the diagnostic choices if retained, or reject unsupported flags explicitly. Test local and running-app behavior.
-- [ ] **Share workflow decisions without coupling the surfaces.** Refactor. Audit duplicated argument validation and workflow decisions in the CLI, control API, and workspace adapter. Move shared rules below the surfaces; keep terminal formatting and browser interaction separate. Preserve the no-cross-surface-import gate and test equivalent calls against the same service.
+  - `Remote.call` drops both flags, so the running app returns hybrid, reranked results. Forward them through `diagnostics=True` if retained, or reject them explicitly. Test local and running-app behavior.
 - [ ] **Split `surfaces/cli.py`.** Refactor. One 3,352-line module holds the help text, the parser, the local and remote operations, attached serving, and `update`. Give each its own module behind the same `main`.
 
 ## agents
@@ -63,6 +62,8 @@ An item is done when the harness has produced its measurement and the validation
 - [ ] **Diagnose intermittent MCP initialization HTTP 500.** Test. Reproduce `/mcp` termination before `http.response.start` with synthetic projects and a minimized execution-order or load trigger. Capture session, lifespan, and cancellation events; compare the trigger against `c95e435` with identical dependencies. Correct the demonstrated cause with a deterministic regression test, not retries, skips, longer timeouts, or weaker security. Validate app/LAN tests and a serialized non-integration suite.
   - Test `BaseHTTPMiddleware` first. `runtime/app.py` wraps the streaming MCP app in it, and Starlette's base middleware raises `No response returned` when the wrapped app ends before `http.response.start`. Pure ASGI middleware avoids it.
 - [ ] **Reuse the bridge's upstream session.** Feature. Each bridged tool call costs a health request, a control request, and a new MCP handshake.
+
+- [ ] **The search page's Categories field does nothing.** Bug. The Reviewed metadata box sends `categories`, which `search` does not take, so `surfaces/ui.py` drops it. Add an all-of category filter to `search`, or remove the field.
 
 ## reporting
 

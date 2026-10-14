@@ -21,6 +21,7 @@ from pydantic import Field
 
 from ..core.admission import as_caller
 from ..core.blocked_answers import not_served_status, uninitialised_status
+from ..core.operations import MAXIMUM_TOP_K, run
 from ..core.review import DEFAULT_FIND_SOURCE_LIMIT
 from ..core.tool_views import present_tool_response
 from ..project.config import ResearchConfig
@@ -54,9 +55,11 @@ SearchQuery: TypeAlias = Annotated[
 TopK: TypeAlias = Annotated[
     int,
     Field(
-        description="Maximum number of ranked evidence passages to return (1-50).",
+        description=(
+            f"Maximum number of ranked evidence passages to return (1-{MAXIMUM_TOP_K})."
+        ),
         ge=1,
-        le=50,
+        le=MAXIMUM_TOP_K,
     ),
 ]
 KeywordFilter: TypeAlias = Annotated[
@@ -552,19 +555,21 @@ def create_mcp(
         return _present(
             "search",
             await _service_call(
-                lambda instance: instance.search(
-                    query,
-                    top_k=top_k,
-                    categories_any=categories_any,
-                    projects_any=projects_any,
-                    keywords=keywords,
-                    languages_any=languages_any,
-                    authors_any=authors_any,
-                    titles_any=titles_any,
-                    source_ids=source_ids,
-                    exclude_source_ids=exclude_source_ids,
-                    rerank=True,
-                    include_staleness=True,
+                lambda instance: run(
+                    instance,
+                    "search",
+                    {
+                        "query": query,
+                        "top_k": top_k,
+                        "categories_any": categories_any,
+                        "projects_any": projects_any,
+                        "keywords": keywords,
+                        "languages_any": languages_any,
+                        "authors_any": authors_any,
+                        "titles_any": titles_any,
+                        "source_ids": source_ids,
+                        "exclude_source_ids": exclude_source_ids,
+                    },
                 )
             ),
         )
