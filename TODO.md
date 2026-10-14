@@ -143,8 +143,6 @@ An item is done when the harness has produced its measurement and the validation
 ## release
 
 - [ ] **Install from a release tag in README.** Feature. README installs from the default branch head, so a first install can carry unreleased commits until `update` moves it to a release.
-- [ ] **Run `uv lock --check` in CI.** Bug. `AGENTS.md` requires it before a commit, and `.github/workflows/test.yml` omits it.
-- [ ] **Point the `default.toml` package data at its file.** Bug. `pyproject.toml` names `research_rag/default.toml`; the file is `research_rag/project/default.toml` and ships only through setuptools' default discovery.
 
 ## evaluation
 
@@ -161,4 +159,3 @@ An item is done when the harness has produced its measurement and the validation
 - [ ] **Type-check in CI.** Refactor. `ResearchService` combines six workflow mixins that share undeclared attributes, and no checker reads the type hints. Declare the shared state as a `Protocol` and add pyright or mypy to CI.
 - [ ] **Decide whether the dense gate's `conserved` flag stays.** Decision. `retrieval/search.py` derives `admitted_above_floor` from the other two counts, so `conserved` cannot be false, and `scripts/evaluate_retrieval.py` reports it as `dense_conserved`. Removing it changes the measurement protocol.
 - [ ] **Remove workspace routes this app never enables.** Decision. The memory, SQL, and bundle routes and their `LOCAL_ONLY_PATHS` entries serve no capability here. The workspace copy shared with memory-rag is deliberate, so removal is a choice.
-- [ ] **Correct the `runtime.offline` comment.** Bug. `default.toml` still says offline mode requires an installed vanilla runtime.

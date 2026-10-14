@@ -201,6 +201,18 @@ def test_the_distribution_installs_nothing_named_for_another_product() -> None:
     assert project["project"]["version"]
 
 
+def test_every_package_data_pattern_names_a_shipped_file() -> None:
+    """A pattern that matches nothing ships nothing, whatever the comment beside it says."""
+
+    project = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
+    package_data = project["tool"]["setuptools"]["package-data"]
+
+    for package, patterns in package_data.items():
+        directory = ROOT / "src" / package.replace(".", "/")
+        for pattern in patterns:
+            assert list(directory.glob(pattern)), f"{package}: {pattern}"
+
+
 def test_the_package_and_lockfile_have_no_ultrarag_install_dependency() -> None:
     project = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
     locked = tomllib.loads((ROOT / "uv.lock").read_text(encoding="utf-8"))

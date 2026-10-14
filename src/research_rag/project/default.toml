@@ -35,7 +35,8 @@ corpus = "en"
 bm25_stopwords = ""
 
 [runtime]
-# Require an installed vanilla runtime and already-cached models.
+# Use only already-cached models, tokenizers, and the Docling environment; fetch
+# nothing.
 offline = false
 # Keep each search's question and filters on this machine so the Stats view can list
 # recent searches and run one again. false keeps only the counts.
