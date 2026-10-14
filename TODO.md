@@ -96,7 +96,7 @@ An item is done when the harness has produced its measurement and the validation
   - Reproduce the largest case and each distinct cause. Acceptance: every actual embedding input fits the model limit without losing source text, with preserved locators and explicit regeneration cost.
 - [ ] **Reuse vectors across a contextual-header change.** Feature. Vector reuse keys on canonical passage text, so turning `chunking.headers` on recomputes every vector.
   - Fix: two hash columns, one canonical and one embedded, plus a lookup-schema bump. The bump rebuilds the sidecar from canonical artifacts, not the corpus.
-  - `generation_is_reusable` validates the sidecar before anything ensures it, so a version bump denies reuse to the first ingest after it.
+  - `generation_artifacts_are_valid` validates the sidecar before anything ensures it, so a version bump denies reuse to the first ingest after it.
 - [ ] **Chunk by paragraph, not by a fixed token window.** Feature. `chunking.size` and `chunking.overlap` cut fixed GPT-2 token windows, so a passage can begin and end mid-sentence and neighbours repeat the overlap. A paragraph boundary, with a size ceiling and an overlap only where one paragraph exceeds it, is what a reader quotes. Needs a judged-set measurement before it changes the default; both settings are identity, so a change rebuilds the generation.
 - [ ] **Measure headers on a corpus with sections.** Test. A PDF locator carries a page, so the header is the title alone. An EPUB locator carries a section, which the passage does not state.
 

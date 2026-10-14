@@ -181,20 +181,6 @@ def _validate_kf8(processor: K8Processor, raw: bytes) -> None:
         raise MobiReadError("Unmatched KF8 fragments")
 
 
-def read_mobi(path: Path) -> MobiText:
-    """Bound parser memory/CPU in an offline, output-free child process."""
-    payload = _worker_payload(path)
-    try:
-        return MobiText(
-            payload["metadata"],
-            tuple(payload["parts"]),
-            payload["version"],
-            payload["compression"],
-        )
-    except (ValueError, KeyError, TypeError) as exc:
-        raise MobiReadError("MOBI parser returned an invalid response") from exc
-
-
 def extract_mobi_payload(path: Path, request: dict) -> tuple[dict, list[dict]]:
     """Return bounded serialized units, never HTML for the serving parent to parse."""
     payload = _worker_payload(path, request)
@@ -208,7 +194,7 @@ def extract_mobi_payload(path: Path, request: dict) -> tuple[dict, list[dict]]:
     return document, units
 
 
-def _worker_payload(path: Path, request: dict | None = None) -> dict:
+def _worker_payload(path: Path, request: dict) -> dict:
     """Drain both pipes under byte/time caps before loading any JSON in the parent."""
     # Insert only our known package root, never the caller's PYTHONPATH or cwd.
     # This supports source-tree use as well as installed distributions.
@@ -219,8 +205,6 @@ def _worker_payload(path: Path, request: dict | None = None) -> dict:
         "runpy.run_module('research_rag.corpus.mobi_reader', run_name='__main__')"
     )
     command = [sys.executable, "-I", "-c", bootstrap, str(path)]
-    if request is not None:
-        command.append("--extract")
     environment = child_process_environment(purpose="parser")
     # HTML worker imports the shared extraction helpers lazily. Do not let a
     # numerical library's idle thread stacks consume the worker's address budget.
@@ -228,7 +212,7 @@ def _worker_payload(path: Path, request: dict | None = None) -> dict:
     environment["OMP_NUM_THREADS"] = "1"
     buffers = {"stdout": bytearray(), "stderr": bytearray()}
     deadline = time.monotonic() + MOBI_TIMEOUT_SECONDS
-    encoded = json.dumps(request).encode("utf-8") if request is not None else b""
+    encoded = json.dumps(request).encode("utf-8")
     if len(encoded) > 64 * 1024:
         raise MobiReadError("MOBI worker request exceeds its safety limit")
     with subprocess.Popen(
@@ -245,11 +229,8 @@ def _worker_payload(path: Path, request: dict | None = None) -> dict:
             with selectors.DefaultSelector() as selector:
                 selector.register(process.stdout, selectors.EVENT_READ, "stdout")
                 selector.register(process.stderr, selectors.EVENT_READ, "stderr")
-                if encoded:
-                    os.set_blocking(process.stdin.fileno(), False)
-                    selector.register(process.stdin, selectors.EVENT_WRITE, "stdin")
-                else:
-                    process.stdin.close()
+                os.set_blocking(process.stdin.fileno(), False)
+                selector.register(process.stdin, selectors.EVENT_WRITE, "stdin")
                 while selector.get_map():
                     remaining = deadline - time.monotonic()
                     if remaining <= 0:
@@ -329,41 +310,33 @@ def _write_payload(payload: dict) -> None:
 def _main() -> int:
     import contextlib
     import io
-    from dataclasses import asdict
 
     try:
         import resource
 
         resource.setrlimit(resource.RLIMIT_AS, (512 * 1024 * 1024,) * 2)
         resource.setrlimit(resource.RLIMIT_CPU, (30, 30))
-        request = None
-        if "--extract" in sys.argv[2:]:
-            encoded_request = sys.stdin.buffer.read(64 * 1024 + 1)
-            if len(encoded_request) > 64 * 1024:
-                raise MobiReadError("MOBI worker request exceeds its safety limit")
-            request = json.loads(encoded_request)
+        encoded_request = sys.stdin.buffer.read(64 * 1024 + 1)
+        if len(encoded_request) > 64 * 1024:
+            raise MobiReadError("MOBI worker request exceeds its safety limit")
+        request = json.loads(encoded_request)
         # The dependency occasionally prints malformed-record diagnostics. They
         # must not contaminate the JSON handoff, and the failed source owns them.
         diagnostics = io.StringIO()
         with contextlib.redirect_stdout(diagnostics):
             parsed = _read_mobi_in_process(Path(sys.argv[1]))
-            if request is not None:
-                if sum(part.count("<") for part in parsed.parts) > MAX_MOBI_HTML_TAGS:
-                    raise MobiReadError("MOBI HTML exceeds its 50,000-tag safety limit")
-                # All source-driven HTML parsing, metadata inference and unit
-                # construction execute inside the same memory/CPU limits.
-                from .extraction import _mobi_units_from_text
-                from .sources import SourceFile
+            if sum(part.count("<") for part in parsed.parts) > MAX_MOBI_HTML_TAGS:
+                raise MobiReadError("MOBI HTML exceeds its 50,000-tag safety limit")
+            # All source-driven HTML parsing, metadata inference and unit
+            # construction execute inside the same memory/CPU limits.
+            from .extraction import _mobi_units_from_text
+            from .sources import SourceFile
 
-                source = SourceFile(path=Path(sys.argv[1]), **request["source"])
-                document, units = _mobi_units_from_text(
-                    source, request["digest"], parsed
-                )
-                if len(units) > MAX_MOBI_UNITS:
-                    raise MobiReadError("MOBI exceeds its 10,000-unit safety limit")
-                payload = {"document": document, "units": units}
-            else:
-                payload = asdict(parsed)
+            source = SourceFile(path=Path(sys.argv[1]), **request["source"])
+            document, units = _mobi_units_from_text(source, request["digest"], parsed)
+            if len(units) > MAX_MOBI_UNITS:
+                raise MobiReadError("MOBI exceeds its 10,000-unit safety limit")
+            payload = {"document": document, "units": units}
         if "fixed corrupt fragment table" in diagnostics.getvalue():
             raise MobiReadError(
                 "Corrupt KF8 fragment insertion table; repair is unsupported"

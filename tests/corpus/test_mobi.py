@@ -6,10 +6,11 @@ import time
 
 import pytest
 
-from research_rag.corpus.extraction import ExtractionError, extract_sources
-from research_rag.corpus.mobi_reader import MobiReadError, read_mobi
+from research_rag.corpus.extraction import ExtractionError
+from research_rag.corpus.mobi_reader import MobiReadError
 from research_rag.corpus.sources import SourcePolicyError, scan_sources, sha256_file
 from research_rag.project.config import resolve_config
+from tests.extraction_helpers import extract_sources
 from tests.mobi_fixtures import (
     dual_mobi_bytes,
     huff_mobi_bytes,
@@ -17,6 +18,7 @@ from tests.mobi_fixtures import (
     kf8_bytes,
     kf8_fragment_bytes,
     mobi_bytes,
+    read_mobi,
     write_mobi,
 )
 
@@ -110,14 +112,11 @@ def test_mobi_does_not_admit_source_symlinks(project, tmp_path):
 def test_kf8_reconstructs_real_skeleton_index_without_output_files(project):
     path = project / "sources" / "modern.mobi"
     path.write_bytes(kf8_bytes())
-    parsed = read_mobi(path)
-    assert parsed.version == 8
-    assert len(parsed.parts) == 1
-    assert "cobalt institutions" in parsed.parts[0]
     config = resolve_config(project, vanilla_executable=sys.executable)
     documents, units = extract_sources(scan_sources(config).selected)
     assert documents[0]["mobi_version"] == 8
     assert len(units) == 2
+    assert "cobalt institutions" in units[0]["contents"]
     assert list(path.parent.iterdir()) == [path]
 
 
@@ -130,11 +129,10 @@ def test_huff_and_dual_containers_decode_one_rendition(
 ):
     path = project / "sources" / "book.mobi"
     path.write_bytes(builder())
-    parsed = read_mobi(path)
-    assert parsed.version == version
-    assert parsed.compression == compression
-    assert len(parsed.parts) == 1
-    assert "cobalt institutions" in parsed.parts[0]
+    document, text = read_mobi(path)
+    assert document["mobi_version"] == version
+    assert document["mobi_compression"] == compression
+    assert "cobalt institutions" in text
 
 
 def test_dual_mobi_refuses_encrypted_second_rendition(project):
@@ -177,7 +175,7 @@ def test_source_tree_worker_ignores_ambient_import_paths(
     monkeypatch.chdir(tmp_path)
     path = project / "sources" / "trusted.mobi"
     write_mobi(path, "<p>trusted worker evidence</p>")
-    assert "trusted worker evidence" in read_mobi(path).parts[0]
+    assert "trusted worker evidence" in read_mobi(path)[1]
 
 
 def test_dual_mobi_refuses_unsupported_unused_compression(project):
@@ -248,7 +246,7 @@ def test_mobi_declared_size_limit_and_nonregular_files_fail_closed(tmp_path):
 def test_huff_recursive_phrase_decodes_and_cycle_fails_closed(project):
     path = project / "sources" / "recursive.mobi"
     path.write_bytes(huff_mobi_bytes(recursive=True))
-    assert "Research evidence" in read_mobi(path).parts[0]
+    assert "Research evidence" in read_mobi(path)[1]
     path.write_bytes(huff_mobi_bytes(cycle=True))
     with pytest.raises(MobiReadError, match="Cannot parse MOBI"):
         read_mobi(path)
@@ -257,12 +255,11 @@ def test_huff_recursive_phrase_decodes_and_cycle_fails_closed(project):
 def test_kf8_nonzero_fragment_reconstruction_and_corrupt_bounds(project):
     path = project / "sources" / "fragment.mobi"
     path.write_bytes(kf8_fragment_bytes())
-    parsed = read_mobi(path)
-    assert "cobalt institutions" in parsed.parts[0]
-    assert '<h2 id="second">Second argument</h2>' in parsed.parts[0]
     config = resolve_config(project, vanilla_executable=sys.executable)
     _documents, units = extract_sources(scan_sources(config).selected)
     assert len(units) == 2
+    assert "cobalt institutions" in units[0]["contents"]
+    assert units[1]["locator"]["section_title"] == "Second argument"
     path.write_bytes(kf8_fragment_bytes(corrupt_length=True))
     with pytest.raises(MobiReadError, match="Corrupt KF8 fragment bounds"):
         read_mobi(path)

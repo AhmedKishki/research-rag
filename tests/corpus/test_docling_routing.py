@@ -17,13 +17,12 @@ from research_rag.corpus.docling_env import DoclingEnv
 from research_rag.corpus.extraction import (
     ExtractionError,
     docling_pdf_batch,
-    extract_pdf_docling,
-    extract_sources,
 )
 from research_rag.corpus.pdf_backend import DoclingConversionError
 from research_rag.corpus.sources import scan_sources, sha256_file
 from research_rag.project.config import resolve_config
 from tests.conftest import write_pdf
+from tests.extraction_helpers import extract_pdf_docling, extract_sources
 
 _FAKE_ENV = DoclingEnv(
     root=Path("/nonexistent/docling-env"),

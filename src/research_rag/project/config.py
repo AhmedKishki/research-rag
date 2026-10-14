@@ -46,18 +46,6 @@ _RUNTIME_MARKER = ".research-rag-runtime.json"
 # and absent for a project that keeps its state inside its own root.
 RUNTIME_ROOT_RECORD = "runtime-root"
 
-# A server this project starts for itself is a managed child: it may not serve
-# the browser UI, because only a server an operator started may. Every child
-# transport marks the server it starts and drops the variables that describe a
-# top-level invocation, so no exported setting can turn one server into a chain
-# of them.
-MANAGED_CHILD_ENV = "RESEARCH_RAG_MANAGED_CHILD"
-# The process that started a child. A child orphaned before it can read its own
-# parent, a client that dies between spawning and startup, still knows who owned
-# it and can end itself with them.
-OWNER_PID_ENV = "RESEARCH_RAG_OWNER_PID"
-TOP_LEVEL_ONLY_ENV = ("RESEARCH_RAG_UI_PORT",)
-
 
 ChildProcessPurpose = Literal[
     "parser", "docling-offline", "docling", "provisioner", "viewer", "systemctl"
@@ -136,7 +124,7 @@ def child_process_environment(*, purpose: ChildProcessPurpose) -> dict[str, str]
         allowed |= _DESKTOP_CHILD_ENV
     if purpose in {"docling", "provisioner"}:
         allowed |= _NETWORK_CHILD_ENV
-    environment = {
+    return {
         name: value
         for name, value in os.environ.items()
         if name in allowed
@@ -157,23 +145,6 @@ def child_process_environment(*, purpose: ChildProcessPurpose) -> dict[str, str]
             "LC_IDENTIFICATION",
         }
     }
-    environment[MANAGED_CHILD_ENV] = "1"
-    environment[OWNER_PID_ENV] = str(os.getpid())
-    return environment
-
-
-def declared_owner_pid() -> int | None:
-    raw = os.environ.get(OWNER_PID_ENV)
-    if raw is None or not raw.strip().isdigit():
-        return None
-    owner = int(raw)
-    return owner if owner > 1 else None
-
-
-def is_managed_child() -> bool:
-    """Whether another server in this project started this process."""
-
-    return os.environ.get(MANAGED_CHILD_ENV) == "1"
 
 
 def apply_process_priority(nice: int) -> int | None:
@@ -249,10 +220,6 @@ class ResearchConfig:
     @property
     def logs_root(self) -> Path:
         return self.state_root / "logs"
-
-    @property
-    def ultrarag_workspace(self) -> Path:
-        return self.state_root / "ultrarag-runtime"
 
     @property
     def models_root(self) -> Path:

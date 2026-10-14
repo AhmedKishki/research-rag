@@ -61,40 +61,16 @@ PDF_BACKENDS = PDF_BACKEND_CHOICES
 _KNOWN_PDF_BACKENDS = (PDF_BACKEND_CUSTOM, PDF_BACKEND_DOCLING)
 DEFAULT_PDF_BACKEND = PDF_BACKEND_DOCLING
 
-# The pinned, tested Docling release. The optional extra carries it; a different
-# installed version still runs but changes the fingerprint and so forces a
-# rebuild, keeping a recorded backend's output reproducible.
-DOCLING_PINNED_VERSION = "2.135.0"
 # The adapter's own emission policy. Bump it when the mapping from a Docling
 # payload to units changes, so a recorded generation re-extracts rather than
 # reusing units the new adapter would not produce. Version 2 carries the
 # structural labels (heading/reference/caption/item) that gate cleaning; a
 # generation with the version-1 adapter keeps its own fingerprint and provenance.
 DOCLING_ADAPTER_POLICY_VERSION = 2
-# The Docling extraction packages whose versions shape the payload. They move
-# independently of the `docling` metapackage, so their versions join the
-# fingerprint.
-DOCLING_COMPONENT_PACKAGES = (
-    "docling-core",
-    "docling-parse",
-    "docling-ibm-models",
-)
-# Docling and rapidocr are pinned together because docling 2.135.0 imports a
-# symbol rapidocr 3.10.0 removed. They are built into a managed environment on
-# first use, not installed into the app; `doctor --prefetch-models` provisions.
-DOCLING_PINNED_RAPIDOCR = "3.9.1"
-DOCLING_PACKAGE = "docling"
 DOCLING_PACKAGE_REMEDY = (
     "run `research-rag doctor --prefetch-models` with a network connection, or "
     "set runtime.offline=false and run the first PDF ingest online; the managed "
     "environment is built on first use and pins docling and rapidocr together"
-)
-# Offline extraction cannot fetch. `doctor --prefetch-models` provisions through
-# the same bounded worker, and an online extraction can also fetch lazily on its
-# first call.
-DOCLING_PREFETCH_REMEDY = (
-    "run `research-rag doctor --prefetch-models` once with a network connection "
-    "to provision the Docling models, then re-run ingestion"
 )
 
 MEMORY_MAX_BYTES = 2 * 1024**3
@@ -174,19 +150,6 @@ def pdf_backend_available(backend: str, config: ResearchConfig | None = None) ->
 
     normalize_pdf_backend(backend)
     return config is not None and resolve_docling_env(config) is not None
-
-
-def docling_component_versions(
-    config: ResearchConfig | None = None,
-) -> dict[str, str | None]:
-    """Versions recorded in the ready managed environment, or empty.
-
-    Read from the environment's completion manifest with the standard library;
-    Docling is never imported to answer this.
-    """
-
-    env = resolve_docling_env(config) if config is not None else None
-    return dict(env.versions) if env is not None else {}
 
 
 def legacy_custom_backend_record() -> dict[str, Any]:

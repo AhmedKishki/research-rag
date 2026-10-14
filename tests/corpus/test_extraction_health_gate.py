@@ -30,7 +30,6 @@ from research_rag.corpus.extraction import (
     ExtractionError,
     UncleanSourceError,
     empty_removal_counts,
-    extract_sources,
     merge_removal_counts,
     screen_source_units,
     strip_non_argument_units,
@@ -48,12 +47,12 @@ from research_rag.corpus.text_quality import (
     is_reference_entry,
     non_argument_removal_flags,
     source_health_reasons,
-    strip_non_argument_sections,
 )
 from research_rag.project.config import resolve_config
 from research_rag.project.policy import ResearchError
 from tests.conftest import write_epub, write_pdf
 from tests.core.test_service import FakeDenseBackend, FakeUltraRAG
+from tests.extraction_helpers import extract_sources
 
 # A prose paragraph long enough that a page's own text, rather than a title line,
 # establishes the body font size the footnote rule measures against.
@@ -103,6 +102,14 @@ DEVANAGARI = (
     "यह अध्याय विवेचन करता है कि स्मृति नगर के रास्तों में कैसे दर्ज होती है "
     "और वहाँ फिर से क्यों लौटती है, और यह प्रश्न पिछले तीन दशकों के शोध से अलग नहीं।"
 )
+
+
+def strip_non_argument_sections(paragraphs):
+    """The paragraphs `non_argument_removal_flags` keeps, and the kinds it removed."""
+
+    flags = non_argument_removal_flags(paragraphs)
+    kept = [text for text, removed in zip(paragraphs, flags) if removed is None]
+    return kept, tuple(dict.fromkeys(kind for kind in flags if kind is not None))
 
 
 def _paragraphs(*paragraphs: str) -> str:

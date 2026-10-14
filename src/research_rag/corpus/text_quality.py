@@ -546,23 +546,6 @@ def non_argument_removal_flags(
     return flags
 
 
-def strip_non_argument_sections(
-    paragraphs: Sequence[str],
-) -> tuple[list[str], tuple[str, ...]]:
-    """Remove confirmed reference and note sections from a sequence of paragraphs.
-
-    Returns the retained paragraphs and the kinds removed, in the order they first
-    fired. `extraction.strip_non_argument_units` is the same decision over a whole
-    source's units and is what both build paths call; this is the paragraph-level
-    answer to the same question.
-    """
-
-    flags = non_argument_removal_flags(paragraphs)
-    kept = [text for text, removed in zip(paragraphs, flags) if removed is None]
-    removed_kinds = [kind for kind in flags if kind is not None]
-    return kept, tuple(dict.fromkeys(removed_kinds))
-
-
 # ---------------------------------------------------------------------------
 # Refusing a source whose own text says it is unreadable
 # ---------------------------------------------------------------------------

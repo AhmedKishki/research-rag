@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-import subprocess
 from importlib.metadata import PackageNotFoundError, distribution
 from importlib.metadata import version as _distribution_version
 from pathlib import Path
@@ -33,60 +32,6 @@ def installed_version() -> str:
 
 def restart_required() -> bool:
     return installed_version() != APP_VERSION
-
-
-def checkout_revision() -> str | None:
-    """Return the commit the loaded package came from, or None when unknowable.
-
-    A version number cannot tell two checkouts apart: two copies of the same
-    version may sit 63 commits apart, and only the commit identifies which one is
-    answering.
-
-    The installed distribution's ``direct_url.json`` records the commit when it
-    was installed from a checkout, the only case worth reporting.
-    """
-
-    try:
-        recorded = distribution_files(DISTRIBUTION_NAME)
-    except Exception:  # noqa: BLE001 - a broken environment must not raise here.
-        return None
-    direct_url = recorded / "direct_url.json"
-    if not direct_url.is_file():
-        return None
-    try:
-        payload = json.loads(direct_url.read_text(encoding="utf-8"))
-    except (OSError, ValueError):
-        return None
-    commit = payload.get("vcs_info", {}).get("commit_id")
-    return commit if isinstance(commit, str) and commit else None
-
-
-def working_tree_revision() -> str | None:
-    """The commit checked out beside this process, or None.
-
-    The loaded package is one directory and the checkout is another, and the
-    difference between them is the fault this reports: an app answering from a
-    copy of the code that is no longer the one on disk.
-    """
-
-    package_root = Path(__file__).resolve().parents[2]
-    for candidate in (package_root, *package_root.parents):
-        head = candidate / ".git"
-        if not head.exists():
-            continue
-        try:
-            revision = subprocess.run(
-                ["git", "-C", str(candidate), "rev-parse", "HEAD"],
-                capture_output=True,
-                text=True,
-                timeout=5,
-                check=False,
-            )
-        except (OSError, subprocess.SubprocessError):
-            return None
-        commit = revision.stdout.strip()
-        return commit or None
-    return None
 
 
 def checkout_drift() -> str | None:

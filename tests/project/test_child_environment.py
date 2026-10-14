@@ -37,15 +37,13 @@ def test_children_reject_credentials_and_execution_overrides(monkeypatch, purpos
         "UV_INDEX_URL",
         "PIP_INDEX_URL",
         "RESEARCH_RAG_UI_PORT",
+        "RESEARCH_RAG_OWNER_PID",
         "LC_SECRET",
     ]
     for name in rejected:
         monkeypatch.setenv(name, "must-not-leak")
-    monkeypatch.setenv("RESEARCH_RAG_OWNER_PID", "999999")
     environment = child_process_environment(purpose=purpose)
     assert not set(rejected).intersection(environment)
-    assert environment["RESEARCH_RAG_MANAGED_CHILD"] == "1"
-    assert environment["RESEARCH_RAG_OWNER_PID"] == str(os.getpid())
 
 
 @pytest.mark.parametrize("purpose", PURPOSES)

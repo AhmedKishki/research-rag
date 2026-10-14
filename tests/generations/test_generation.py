@@ -9,10 +9,10 @@ import pytest
 from research_rag.generations.generation import (
     ReuseSnapshot,
     chunks_are_reusable,
-    generation_is_reusable,
     load_reuse_snapshot,
     source_set_matches,
     units_are_reusable,
+    vectors_are_reusable,
 )
 from research_rag.generations.generation_inventory import generation_inventory
 from research_rag.project.config import resolve_config
@@ -61,17 +61,22 @@ def _dense_manifest(model: EmbeddingModel) -> dict[str, Any]:
 
 
 def _is_reusable(manifest: dict[str, Any], model: EmbeddingModel) -> bool:
-    return generation_is_reusable(
-        manifest,
-        schema_version=SCHEMA_VERSION,
-        extraction_policy_version=EXTRACTION_POLICY_VERSION,
-        cleaning_policy_version=CLEANING_POLICY_VERSION,
-        artifact_policy_version=ARTIFACT_POLICY_VERSION,
-        project_id=_PROJECT_ID,
-        chunk_size=_CHUNK_SIZE,
-        chunk_overlap=_CHUNK_OVERLAP,
-        chunk_headers=False,
-        embedding=model,
+    return (
+        units_are_reusable(
+            manifest,
+            schema_version=SCHEMA_VERSION,
+            extraction_policy_version=EXTRACTION_POLICY_VERSION,
+            cleaning_policy_version=CLEANING_POLICY_VERSION,
+            artifact_policy_version=ARTIFACT_POLICY_VERSION,
+            project_id=_PROJECT_ID,
+        )
+        and chunks_are_reusable(
+            manifest,
+            chunk_size=_CHUNK_SIZE,
+            chunk_overlap=_CHUNK_OVERLAP,
+            chunk_headers=False,
+        )
+        and vectors_are_reusable(manifest, embedding=model)
     )
 
 

@@ -15,7 +15,11 @@ import pytest
 
 from research_rag.core import status as status_module
 from research_rag.corpus.pdf_backend import CUSTOM_BACKEND_FINGERPRINT
-from research_rag.generations.generation import generation_is_reusable
+from research_rag.generations.generation import (
+    chunks_are_reusable,
+    units_are_reusable,
+    vectors_are_reusable,
+)
 from research_rag.project.config import resolve_config
 from research_rag.project.support import (
     ARTIFACT_POLICY_VERSION,
@@ -57,17 +61,19 @@ def _manifest() -> dict[str, Any]:
 
 
 def _reusable(manifest: dict[str, Any]) -> bool:
-    return generation_is_reusable(
-        manifest,
-        schema_version=SCHEMA_VERSION,
-        extraction_policy_version=EXTRACTION_POLICY_VERSION,
-        cleaning_policy_version=CLEANING_POLICY_VERSION,
-        artifact_policy_version=ARTIFACT_POLICY_VERSION,
-        project_id=_PROJECT_ID,
-        chunk_size=100,
-        chunk_overlap=10,
-        chunk_headers=False,
-        embedding=_MODEL,
+    return (
+        units_are_reusable(
+            manifest,
+            schema_version=SCHEMA_VERSION,
+            extraction_policy_version=EXTRACTION_POLICY_VERSION,
+            cleaning_policy_version=CLEANING_POLICY_VERSION,
+            artifact_policy_version=ARTIFACT_POLICY_VERSION,
+            project_id=_PROJECT_ID,
+        )
+        and chunks_are_reusable(
+            manifest, chunk_size=100, chunk_overlap=10, chunk_headers=False
+        )
+        and vectors_are_reusable(manifest, embedding=_MODEL)
     )
 
 

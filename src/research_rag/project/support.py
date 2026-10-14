@@ -30,7 +30,6 @@ from ..corpus.sources import (
 )
 from ..corpus.text_normalization import normalize_inline_text, normalize_reading_text
 from ..corpus.text_quality import (
-    EXTRACTION_ARTIFACT_TOKEN,
     chunk_health_flags,
     has_searchable_alphanumeric_content,
     text_corruption_reasons,
@@ -833,13 +832,6 @@ def _enrich_chunks(
         discarded_empty_chunks,
         discarded_symbol_only_chunks,
         discarded_corrupt_chunks,
-    )
-
-
-def _is_extraction_artifact(chunk: dict[str, Any]) -> bool:
-    quality_flags = {str(item) for item in chunk.get("quality_flags", [])}
-    return EXTRACTION_ARTIFACT_TOKEN in quality_flags or not (
-        has_searchable_alphanumeric_content(_chunk_text(chunk))
     )
 
 
