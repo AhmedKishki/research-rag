@@ -44,7 +44,7 @@ _GLOBAL_VALUE_OPTIONS = (
 def _installed_commands() -> set[str]:
     """Every subcommand the one console command registers."""
 
-    from research_rag.surfaces.cli import _parser
+    from research_rag.surfaces.cli.parser import _parser
 
     return {
         name
@@ -90,7 +90,7 @@ def test_the_help_is_the_command_reference_and_holds_every_command() -> None:
     the menu twice is a menu that has drifted from the parser.
     """
 
-    from research_rag.surfaces.cli import HELP_GROUPS
+    from research_rag.surfaces.cli.help import HELP_GROUPS
 
     listed = [name for _, entries in HELP_GROUPS for name, _ in entries]
     # `help` is reached by name and cannot list itself in a group it is the contents of.
@@ -105,7 +105,7 @@ def test_the_help_is_the_command_reference_and_holds_every_command() -> None:
 def test_every_command_the_readme_shows_is_one_the_parser_accepts() -> None:
     """An example a reader can copy but not run is the quickstart's only real defect."""
 
-    from research_rag.surfaces.cli import _parser
+    from research_rag.surfaces.cli.parser import _parser
 
     parser = _parser()
     commands: set[str | None] = set()
@@ -125,7 +125,8 @@ def test_every_command_the_readme_shows_is_one_the_parser_accepts() -> None:
 def test_the_readme_points_at_the_help_reference_for_the_rest() -> None:
     """The README is a way in; the reference is where every other command lives."""
 
-    from research_rag.surfaces.cli import CLI_NAME, HELP_TOPICS
+    from research_rag.project.config import CLI_COMMAND as CLI_NAME
+    from research_rag.surfaces.cli.help import HELP_TOPICS
 
     assert f"{CLI_NAME} help" in README
     assert f"{CLI_NAME} COMMAND --help" in README
@@ -325,7 +326,7 @@ def test_a_shipped_client_template_names_a_project_after_the_command() -> None:
 def test_a_subject_page_names_a_command_and_the_help_menu_prints() -> None:
     """The menu and the subject pages are the same document argparse cannot print."""
 
-    from research_rag.surfaces.cli import HELP_TOPICS, _help_menu
+    from research_rag.surfaces.cli.help import HELP_TOPICS, _help_menu
 
     menu = _help_menu()
     assert "help" in menu

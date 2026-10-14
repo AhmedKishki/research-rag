@@ -11,7 +11,7 @@
 | File | Owns |
 |---|---|
 | `README.md` | The quickstart: requirements, installation, a first project, a first search, the three front ends, and the limits a first reader hits. |
-| `help` in `surfaces/cli.py` | The command reference: `HELP_GROUPS` for every command, `HELP_TOPICS` for a subject, and each command's own usage. |
+| `surfaces/cli/help.py` | The command reference: `HELP_GROUPS` for every command, `HELP_TOPICS` for a subject, and each command's own usage. |
 | `STORAGE.md` | Files, fields, portability, and hand edits. |
 | `FEATURES.md` | Shipped and excluded capabilities, and UltraRAG reuse. |
 | `MEASUREMENTS.md` | Measurement protocols, the operating envelope, and tunable mechanisms. |

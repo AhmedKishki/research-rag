@@ -25,7 +25,7 @@ SURFACES = PACKAGE / "surfaces"
 # the app the workspace and the agent surface are already served by.
 # Retired gateway command shims import no web stack or external framework.
 #
-# `surfaces/cli.py` is deliberately absent: the command line reaches the app
+# `surfaces/cli/` is deliberately absent: the command line reaches the app
 # through `app.py` and `control.py` and imports no web stack of its own, which is
 # what makes `research-rag config` and `research-rag doctor` work on a machine
 # with no Starlette importable.
@@ -229,7 +229,9 @@ def test_the_answer_projection_is_shared_by_the_two_bounded_readers() -> None:
         if "lean_status" in path.read_text(encoding="utf-8")
         and path.name != "tool_views.py"
     )
-    assert lean_callers == ["project/registry.py", "surfaces/cli.py"], lean_callers
+    assert lean_callers == ["project/registry.py", "surfaces/cli/corpus.py"], (
+        lean_callers
+    )
     # The workspace, with the whole payload on screen, still must not reach for
     # it: it reads the service's own answer rather than a projection of it.
     assert "surfaces/ui.py" not in lean_callers

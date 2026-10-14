@@ -8,7 +8,7 @@ from typing import Any
 
 import pytest
 
-from research_rag.surfaces import cli
+from research_rag.surfaces.cli import corpus as cli_corpus
 
 
 def _phase(completed=0, total=10, **changes):
@@ -31,7 +31,7 @@ def _file_phase(completed=0, total=10, **changes):
 
 
 def test_phase_eta_needs_two_advances_and_includes_stalled_time():
-    estimator = cli._PhaseETA()
+    estimator = cli_corpus._PhaseETA()
     assert estimator.observe(_phase(2), 100) is None
     assert estimator.observe(_phase(2), 102) is None
     assert estimator.observe(_phase(4), 104) is None
@@ -41,7 +41,7 @@ def test_phase_eta_needs_two_advances_and_includes_stalled_time():
 
 
 def test_phase_eta_accepts_batch_jumps_and_ignores_source_change():
-    estimator = cli._PhaseETA()
+    estimator = cli_corpus._PhaseETA()
     assert estimator.observe(_file_phase(0, source="a.pdf"), 100) is None
     assert estimator.observe(_file_phase(3, source="d.pdf"), 106) is None
     assert estimator.observe(_file_phase(6, source="e.pdf"), 112) == 8
@@ -59,7 +59,7 @@ def test_phase_eta_accepts_batch_jumps_and_ignores_source_change():
     ],
 )
 def test_phase_eta_resets(changed):
-    estimator = cli._PhaseETA()
+    estimator = cli_corpus._PhaseETA()
     for completed, now in [(0, 100), (2, 102), (4, 104)]:
         estimator.observe(_file_phase(completed), now)
     assert estimator.observe(changed, 106) is None
@@ -67,32 +67,34 @@ def test_phase_eta_resets(changed):
 
 def test_phase_eta_rendering_uses_global_chunks_and_buckets(monkeypatch):
     clock = iter([100, 102, 104, 106, 108])
-    monkeypatch.setattr(cli.time, "monotonic", lambda: next(clock))
-    estimator = cli._PhaseETA()
+    monkeypatch.setattr(cli_corpus.time, "monotonic", lambda: next(clock))
+    estimator = cli_corpus._PhaseETA()
     progress = _file_phase(0)
-    assert "ETA —" in cli._ingestion_progress_line(
+    assert "ETA —" in cli_corpus._ingestion_progress_line(
         {"ingestion_progress": progress}, estimator
     )
     progress["progress"]["completed"] = 2
-    cli._ingestion_progress_line({"ingestion_progress": progress}, estimator)
+    cli_corpus._ingestion_progress_line({"ingestion_progress": progress}, estimator)
     progress["progress"]["completed"] = 3
-    assert "ETA ~10s" in cli._ingestion_progress_line(
+    assert "ETA ~10s" in cli_corpus._ingestion_progress_line(
         {"ingestion_progress": progress}, estimator
     )
     assert progress["eta_seconds"] is None
     progress["eta_seconds"] = 42
-    line = cli._ingestion_progress_line({"ingestion_progress": progress}, estimator)
+    line = cli_corpus._ingestion_progress_line(
+        {"ingestion_progress": progress}, estimator
+    )
     assert "ETA ~10s" in line
     progress.pop("overall_progress")
     progress["eta_seconds"] = None
-    assert "ETA ~10s" in cli._ingestion_progress_line(
+    assert "ETA ~10s" in cli_corpus._ingestion_progress_line(
         {"ingestion_progress": progress}, estimator
     )
 
 
-@pytest.mark.parametrize("phase", sorted(cli.PASSAGE_ETA_PHASES))
+@pytest.mark.parametrize("phase", sorted(cli_corpus.PASSAGE_ETA_PHASES))
 def test_passage_eta_supported_phases_and_resume(phase):
-    estimator = cli._PhaseETA()
+    estimator = cli_corpus._PhaseETA()
     assert estimator.observe(_phase(50, 100, phase=phase), 100) is None
     assert estimator.observe(_phase(60, 100, phase=phase), 110) is None
     assert estimator.observe(_phase(70, 100, phase=phase), 120) == 30
@@ -103,20 +105,20 @@ def test_passage_eta_supported_phases_and_resume(phase):
 )
 def test_non_passage_phases_never_display_numeric_eta(phase):
     status = {"ingestion_progress": _file_phase(5, phase=phase, eta_seconds=42)}
-    line = cli._ingestion_progress_line(status, cli._PhaseETA())
+    line = cli_corpus._ingestion_progress_line(status, cli_corpus._PhaseETA())
     assert "ETA —" in line
     assert "~" not in line
-    assert "ETA —" in cli._ingestion_progress_frame(status, line, 120)
+    assert "ETA —" in cli_corpus._ingestion_progress_frame(status, line, 120)
 
 
 def test_unknown_total_and_completed_passages_do_not_claim_deadline():
     unknown = {"ingestion_progress": _phase(0, 0, eta_seconds=42)}
-    assert "ETA —" in cli._ingestion_progress_line(unknown)
+    assert "ETA —" in cli_corpus._ingestion_progress_line(unknown)
     complete = {"ingestion_progress": _phase(10, 10, eta_seconds=0)}
-    line = cli._ingestion_progress_line(complete)
+    line = cli_corpus._ingestion_progress_line(complete)
     assert "Finalizing" in line
     assert "~0s" not in line
-    assert "Finalizing" in cli._ingestion_progress_frame(complete, line, 120)
+    assert "Finalizing" in cli_corpus._ingestion_progress_frame(complete, line, 120)
 
 
 @pytest.mark.parametrize(
@@ -130,26 +132,26 @@ def test_unknown_total_and_completed_passages_do_not_claim_deadline():
     ],
 )
 def test_invalid_passage_counts_do_not_estimate(counts):
-    estimator = cli._PhaseETA()
+    estimator = cli_corpus._PhaseETA()
     assert estimator.observe(_phase(progress=counts), 100) is None
 
 
 def test_eta_minute_buckets_are_stable_across_nearby_polls(monkeypatch):
     clock = iter([100, 110, 120, 122])
-    monkeypatch.setattr(cli.time, "monotonic", lambda: next(clock))
-    estimator = cli._PhaseETA()
+    monkeypatch.setattr(cli_corpus.time, "monotonic", lambda: next(clock))
+    estimator = cli_corpus._PhaseETA()
     for completed in (0, 10):
-        cli._ingestion_progress_line(
+        cli_corpus._ingestion_progress_line(
             {"ingestion_progress": _phase(completed, 100)}, estimator
         )
     status = {"ingestion_progress": _phase(20, 100)}
-    assert "ETA ~2m" in cli._ingestion_progress_line(status, estimator)
-    assert "ETA ~2m" in cli._ingestion_progress_line(status, estimator)
+    assert "ETA ~2m" in cli_corpus._ingestion_progress_line(status, estimator)
+    assert "ETA ~2m" in cli_corpus._ingestion_progress_line(status, estimator)
 
 
 @pytest.mark.parametrize("phase", ["extraction", "chunking"])
 def test_source_eta_samples_completions_not_snapshots_and_keeps_source_rate(phase):
-    estimator = cli._PhaseETA()
+    estimator = cli_corpus._PhaseETA()
     assert estimator.observe(_file_phase(5, 30, phase=phase), 100) is None
     assert estimator.observe(_file_phase(7, 30, phase=phase), 220) is None
     estimate = estimator.observe(
@@ -168,7 +170,7 @@ def test_source_eta_samples_completions_not_snapshots_and_keeps_source_rate(phas
     "changes", [{"build_id": "new"}, {"phase": "chunking"}, {"total": 40}]
 )
 def test_source_eta_resets_on_build_phase_or_total(changes):
-    estimator = cli._PhaseETA()
+    estimator = cli_corpus._PhaseETA()
     estimator.observe(_file_phase(5, 30, phase="extraction"), 100)
     estimator.observe(_file_phase(8, 30, phase="extraction"), 280)
     assert (
@@ -181,7 +183,7 @@ def test_source_eta_resets_on_build_phase_or_total(changes):
 
 
 def test_source_counter_regression_resets_sample():
-    estimator = cli._PhaseETA()
+    estimator = cli_corpus._PhaseETA()
     estimator.observe(_file_phase(5, phase="extraction"), 100)
     estimator.observe(_file_phase(8, phase="extraction"), 160)
     assert estimator.observe(_file_phase(2, phase="extraction"), 180) is None
@@ -190,23 +192,23 @@ def test_source_counter_regression_resets_sample():
 
 def test_stall_is_visible_without_claiming_ready_and_clears_on_progress(monkeypatch):
     now = 100.0
-    monkeypatch.setattr(cli.time, "monotonic", lambda: now)
-    estimator = cli._PhaseETA()
+    monkeypatch.setattr(cli_corpus.time, "monotonic", lambda: now)
+    estimator = cli_corpus._PhaseETA()
     status = {"ingestion_progress": _file_phase(0, phase="extraction")}
-    cli._ingestion_progress_line(status, estimator)
+    cli_corpus._ingestion_progress_line(status, estimator)
     now = 159
-    assert "Stalled" not in cli._ingestion_progress_line(status, estimator)
+    assert "Stalled" not in cli_corpus._ingestion_progress_line(status, estimator)
     now = 160
-    line = cli._ingestion_progress_line(status, estimator)
+    line = cli_corpus._ingestion_progress_line(status, estimator)
     assert "Stalled" in line and "ETA —" in line
-    assert "Stalled" in cli._ingestion_progress_frame(status, line, 120)
+    assert "Stalled" in cli_corpus._ingestion_progress_frame(status, line, 120)
     assert "ready" not in line.lower()
     status["ingestion_progress"] = _file_phase(1, phase="extraction")
-    assert "Stalled" not in cli._ingestion_progress_line(status, estimator)
+    assert "Stalled" not in cli_corpus._ingestion_progress_line(status, estimator)
 
 
 def test_ingest_progress_is_concurrent_and_stderr_only(monkeypatch, capsys):
-    monkeypatch.setattr(cli, "INGEST_PROGRESS_INTERVAL", 0.001)
+    monkeypatch.setattr(cli_corpus, "INGEST_PROGRESS_INTERVAL", 0.001)
 
     class Operations:
         async def call(self, name, **arguments):
@@ -243,7 +245,9 @@ def test_ingest_progress_is_concurrent_and_stderr_only(monkeypatch, capsys):
             }
 
     operations = Operations()
-    result = asyncio.run(cli._ingest_with_progress(operations, force_recompute=True))
+    result = asyncio.run(
+        cli_corpus._ingest_with_progress(operations, force_recompute=True)
+    )
     assert result == {"result": "unchanged"}
     assert operations.calls == 1
     assert operations.reads == 2
@@ -267,7 +271,7 @@ def test_progress_line_suppresses_duplicate_counters_and_unsafe_source_controls(
             "source_progress": {"completed": 0, "total": 1, "unit": "sources"},
         }
     }
-    line = cli._ingestion_progress_line(status)
+    line = cli_corpus._ingestion_progress_line(status)
     assert line == "Hashing sources | 96/127 sources | book  [31m.pdf | ETA —"
     assert "\n" not in line and "\x1b" not in line
 
@@ -278,12 +282,14 @@ def test_tty_progress_replaces_one_line_and_finishes_with_newline(monkeypatch):
             return True
 
     terminal = Terminal()
-    monkeypatch.setattr(cli.sys, "stderr", terminal)
+    monkeypatch.setattr(cli_corpus.sys, "stderr", terminal)
     monkeypatch.setenv("TERM", "xterm")
     monkeypatch.setattr(
-        cli.shutil, "get_terminal_size", lambda fallback: os.terminal_size((36, 24))
+        cli_corpus.shutil,
+        "get_terminal_size",
+        lambda fallback: os.terminal_size((36, 24)),
     )
-    monkeypatch.setattr(cli, "INGEST_PROGRESS_INTERVAL", 0.001)
+    monkeypatch.setattr(cli_corpus, "INGEST_PROGRESS_INTERVAL", 0.001)
 
     async def run():
         class Operations:
@@ -300,7 +306,9 @@ def test_tty_progress_replaces_one_line_and_finishes_with_newline(monkeypatch):
                 self.reads += 1
                 return {"ingestion_progress": _phase(self.reads, source="书.pdf")}
 
-        return await cli._ingest_with_progress(Operations(), force_recompute=False)
+        return await cli_corpus._ingest_with_progress(
+            Operations(), force_recompute=False
+        )
 
     assert asyncio.run(run()) == {"status": "unchanged"}
     output = terminal.getvalue()
@@ -317,7 +325,7 @@ def test_tty_progress_replaces_one_line_and_finishes_with_newline(monkeypatch):
 
 
 def test_terminal_progress_clips_by_display_width():
-    assert cli._terminal_progress_line("ab书cd", 5) == "ab书"
+    assert cli_corpus._terminal_progress_line("ab书cd", 5) == "ab书"
 
 
 def test_terminal_frame_uses_phase_percentage_and_eta_without_batch_counts():
@@ -331,8 +339,8 @@ def test_terminal_frame_uses_phase_percentage_and_eta_without_batch_counts():
             overall_progress={"completed": 3, "total": 117, "unit": "sources"},
         )
     }
-    line = cli._ingestion_progress_line(status)
-    frame = cli._ingestion_progress_frame(status, line, 80)
+    line = cli_corpus._ingestion_progress_line(status)
+    frame = cli_corpus._ingestion_progress_frame(status, line, 80)
     assert frame.splitlines()[0] == "Extraction | 3/117 sources | book.pdf"
     assert "  3%" in frame.splitlines()[1]
     assert "ETA —" in frame
@@ -355,15 +363,17 @@ def test_immediate_ingest_does_not_poll(fail):
 
     if fail:
         with pytest.raises(ValueError, match="build failed"):
-            asyncio.run(cli._ingest_with_progress(Operations(), force_recompute=False))
+            asyncio.run(
+                cli_corpus._ingest_with_progress(Operations(), force_recompute=False)
+            )
     else:
         assert asyncio.run(
-            cli._ingest_with_progress(Operations(), force_recompute=False)
+            cli_corpus._ingest_with_progress(Operations(), force_recompute=False)
         ) == {"ok": True}
 
 
 def test_failed_progress_read_does_not_fail_ingestion(monkeypatch):
-    monkeypatch.setattr(cli, "INGEST_PROGRESS_INTERVAL", 0.001)
+    monkeypatch.setattr(cli_corpus, "INGEST_PROGRESS_INTERVAL", 0.001)
 
     async def run():
         read = asyncio.Event()
@@ -381,7 +391,9 @@ def test_failed_progress_read_does_not_fail_ingestion(monkeypatch):
                 read.set()
                 raise RuntimeError("status unavailable")
 
-        return await cli._ingest_with_progress(Operations(), force_recompute=False)
+        return await cli_corpus._ingest_with_progress(
+            Operations(), force_recompute=False
+        )
 
     assert asyncio.run(run()) == {"ok": True}
 
@@ -403,7 +415,7 @@ def test_remote_blocking_calls_leave_event_loop_free():
                 release.set()
                 return {}
 
-        remote = cli.Remote(Control())
+        remote = cli_corpus.Remote(Control())
         task = asyncio.create_task(remote.call("ingest", force_recompute=False))
         try:
             await remote.call("status")

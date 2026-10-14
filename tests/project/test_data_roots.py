@@ -109,13 +109,13 @@ def test_the_agent_answer_detail_is_declared_and_used() -> None:
         for path in ROOT.glob("src/research_rag/**/*.py")
         if "tool_detail" in path.read_text(encoding="utf-8")
     )
-    # `surfaces/cli.py` names the key in the `help settings` page rather than reading
+    # `surfaces/cli/help.py` names the key in the `help settings` page rather than reading
     # it, so the assertion guards the reader set: a module that behaves differently on
     # the key is added here deliberately, and the agent surface stays the one that acts
     # on its value.
     assert readers == [
         "src/research_rag/project/config.py",
         "src/research_rag/project/settings.py",
-        "src/research_rag/surfaces/cli.py",
+        "src/research_rag/surfaces/cli/help.py",
         "src/research_rag/surfaces/mcp.py",
     ], readers

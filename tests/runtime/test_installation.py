@@ -19,7 +19,8 @@ import research_rag.surfaces.cli as cli_module
 from research_rag.project.config import ConfigurationError
 from research_rag.runtime import installation
 from research_rag.runtime.doctor import desktop_entry_checks
-from research_rag.surfaces.cli import _init, _parser
+from research_rag.surfaces.cli.parser import _parser
+from research_rag.surfaces.cli.projects import _init
 
 FAKE_SCRIPT = "#!/bin/sh\n# a console script standing in for the real one\n"
 
