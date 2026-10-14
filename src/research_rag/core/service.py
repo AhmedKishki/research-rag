@@ -9,73 +9,13 @@ from typing import Any
 from filelock import AsyncFileLock
 from filelock import Timeout as FileLockTimeout
 
-from ..corpus.sources import (  # noqa: F401
-    SourcePolicyError,
-    scan_sources,
-    stable_source_id,
-)
-
-# The storage writers and the source walk are re-exported because tests and
-# `scripts/benchmark_write_pattern.py` read them from this module. The code that
-# calls them lives in the workflow modules, so a patch intercepting a call targets
-# that module, not this one.
-# Read by tests through this module; the ingestion workflow imports it separately.
+from ..corpus.sources import SourcePolicyError, stable_source_id
 from ..generations.ingestion import IngestionWorkflow
 from ..project.config import ResearchConfig
-
-# Re-exported on the same terms as the helpers below: the tests read the digest
-# from this module, and one definition of it lives in `policy.py`.
-from ..project.policy import (
-    ResearchError,
-    retrieval_policy_fingerprint,
-    value_fingerprint,  # noqa: F401
-)
+from ..project.policy import ResearchError, retrieval_policy_fingerprint
 from ..project.settings_document import SettingsWorkflow
 from ..project.state_files import LOCK_FILE
-
-# The pure helpers moved to `support`, re-exported so every existing import
-# path, including the tests that read them from this module, keeps working.
-from ..project.support import (  # noqa: F401
-    _WORD,
-    ARTIFACT_POLICY_VERSION,
-    CLEANING_POLICY_VERSION,
-    EXTRACTION_POLICY_VERSION,
-    INGESTION_IDENTITY_POLICY_VERSION,
-    METADATA_STORAGE_POLICY,
-    SCHEMA_VERSION,
-    _atomic_to_thread,
-    _candidate_flags,
-    _canonical_metadata_override,
-    _checkpoint_identity,
-    _chunk_text,
-    _citation,
-    _content_tokens,
-    _document_for_chunk,
-    _document_matches_metadata,
-    _effective_document_metadata,
-    _effective_documents,
-    _embedding_text,
-    _enrich_chunks,
-    _generation_id,
-    _hash_with_stable_stat,
-    _is_extraction_artifact,
-    _metadata_inventory,
-    _metadata_snapshot_changed,
-    _normalized_filter,
-    _pdf_batch_count,
-    _pseudo_relevance_terms,
-    _public_document,
-    _public_passage,
-    _record_embedding_token_counts,
-    _record_withheld,
-    _requested_ids,
-    _reranker_revision,
-    _source_diverse_selection,
-    _source_inventory,
-    _source_stat_identity,
-    _source_work_key,
-    document_frequencies,
-)
+from ..project.support import _canonical_metadata_override
 from ..retrieval.dense import (
     DENSE_INDEX_PATHS,
     EXACT_BACKEND_NAME,
@@ -86,19 +26,14 @@ from ..retrieval.dense import (
 )
 from ..retrieval.lexical import LexicalBackend
 from ..retrieval.search import SearchWorkflow
-from ..storage.records import (  # noqa: F401
+from ..storage.records import (
     StorageError,
-    atomic_write_json,
-    atomic_write_jsonl,
-    fsync_directories,
     load_chunk_exclusions,
     load_current_generation,
     load_metadata_overrides,
     load_source_catalog,
     load_source_exclusions,
     read_json,
-    read_jsonl,
-    write_handoff_jsonl,
 )
 from .admission import Admission, AdmissionTimeout
 from .review import ReviewWorkflow
