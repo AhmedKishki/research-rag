@@ -192,8 +192,10 @@ pdf_backend = "docling"
 # the languages it covers, and any query/passage prefix it requires. (engine choice,
 # recorded in every generation it builds.)
 embedding_model = "BAAI/bge-small-en-v1.5"
-# Dense index backend for new generations: auto, exact, or qdrant. (engine choice,
-# recorded in every generation it builds.)
+# Dense index backend for new generations: auto, exact, or qdrant. auto builds
+# the exact scan; Qdrant local mode reloads every point per search and scores by
+# brute force, so it is built only when named. (engine choice, recorded in every
+# generation it builds.)
 backend = "auto"
 # CPU cross-encoder that reranks every search. Every supported name is pinned to a
 # revision in rerankers.py. (engine choice, recorded in the answer and the manifest.)
@@ -201,6 +203,6 @@ reranker_model = "Xenova/ms-marco-MiniLM-L-6-v2"
 # Sequences per embedding inference. Throughput only: one sequence per inference
 # returns exactly the same floats as a large batch does (MEASUREMENTS.md).
 embedding_inference_batch_size = 1
-# Above this many chunks, `auto` selects the embedded ANN index instead of the exact
-# scan. (engine choice, recorded in every generation it builds.)
+# Retired: `auto` builds the exact scan at every size. Accepted so an existing
+# config keeps resolving; it has no effect.
 exact_backend_chunk_limit = 200000
