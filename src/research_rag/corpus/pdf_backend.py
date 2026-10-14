@@ -47,6 +47,7 @@ from .docling_env import (
     DoclingEnv,
     ensure_docling_env,
     resolve_docling_env,
+    spec_fingerprint,
     worker_command,
 )
 
@@ -185,7 +186,7 @@ def pdf_backend_record(
     normalize_pdf_backend(backend)
     env = resolve_docling_env(config) if config is not None else None
     components = dict(env.versions) if env is not None else {}
-    spec = env.spec_fingerprint if env is not None else _expected_spec_fingerprint()
+    spec = env.spec_fingerprint if env is not None else spec_fingerprint()
     return _docling_record(components, spec)
 
 
@@ -216,12 +217,6 @@ def _docling_record(components: dict[str, str | None], spec: str) -> dict[str, A
         "options": dict(_DOCLING_OPTIONS),
         "fingerprint": f"pdf-backend:{PDF_BACKEND_DOCLING}:{spec}:{digest}",
     }
-
-
-def _expected_spec_fingerprint() -> str:
-    from .docling_env import spec_fingerprint
-
-    return spec_fingerprint()
 
 
 def pdf_backend_fingerprint(backend: str, config: ResearchConfig | None = None) -> str:

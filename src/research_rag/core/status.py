@@ -630,18 +630,12 @@ class StatusWorkflow:
             "message": status_message,
         }
 
-    def _generation_inventory(
-        self, current_generation_id: str | None
-    ) -> dict[str, Any]:
-        return generation_inventory(self.config, current_generation_id)
-
     async def status(self) -> dict[str, Any]:
         async with self._read():
             payload = await asyncio.to_thread(self._status)
             payload.update(
                 await asyncio.to_thread(
-                    self._generation_inventory,
-                    payload.get("generation_id"),
+                    generation_inventory, self.config, payload.get("generation_id")
                 )
             )
             if not payload.get("generation_id") and any(

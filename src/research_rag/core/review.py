@@ -105,14 +105,6 @@ class ReviewWorkflow:
             source_path=source_path,
         )
 
-    def _exclusion_records(
-        self,
-        scan: SourceScan,
-        exclusions: dict[str, dict[str, str]],
-        manifest: dict[str, Any] | None = None,
-    ) -> list[dict[str, Any]]:
-        return exclusion_records(self.config, scan, exclusions, manifest)
-
     async def set_source_inclusion(
         self,
         source_path: str | None = None,
@@ -458,7 +450,9 @@ class ReviewWorkflow:
                     "known_source_count": len(known_source_records),
                     "known_sources": known_source_records,
                     "excluded_source_count": len(exclusions),
-                    "excluded_sources": self._exclusion_records(scan, exclusions),
+                    "excluded_sources": exclusion_records(
+                        self.config, scan, exclusions
+                    ),
                     "reviewed_metadata_source_count": len(reviewed_metadata_sources),
                     "reviewed_metadata_sources": reviewed_metadata_sources,
                 }
@@ -479,7 +473,8 @@ class ReviewWorkflow:
                 "known_source_count": len(known_source_records),
                 "known_sources": known_source_records,
                 "excluded_source_count": len(exclusions),
-                "excluded_sources": self._exclusion_records(
+                "excluded_sources": exclusion_records(
+                    self.config,
                     scan,
                     exclusions,
                     manifest,

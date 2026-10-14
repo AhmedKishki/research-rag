@@ -3,6 +3,7 @@
 import asyncio
 import sys
 
+from research_rag.core import status as status_module
 from research_rag.core.service import ResearchService
 from research_rag.project.config import resolve_config
 
@@ -32,9 +33,9 @@ def test_unselected_partial_mentions_manual_load(project, monkeypatch):
     config = resolve_config(project, vanilla_executable=sys.executable)
     service = ResearchService(config, lexical=None)
     monkeypatch.setattr(
-        service,
-        "_generation_inventory",
-        lambda current: {
+        status_module,
+        "generation_inventory",
+        lambda config, current: {
             "generations": [{"generation_id": "partial", "partial": True}]
         },
     )

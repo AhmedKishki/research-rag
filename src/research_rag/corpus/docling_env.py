@@ -176,10 +176,6 @@ def worker_command(env: DoclingEnv) -> list[str]:
     return [str(env.python), "-I", str(worker_path())]
 
 
-def _normalize_name(name: str) -> str:
-    return re.sub(r"[-_.]+", "-", name).strip().lower()
-
-
 # --- version checks ------------------------------------------------------------
 
 
@@ -261,7 +257,7 @@ def _read_dist_info_versions(root: Path) -> dict[str, str]:
             continue
         for line in text.splitlines():
             if name is None and line.startswith("Name: "):
-                name = _normalize_name(line[6:].strip())
+                name = re.sub(r"[-_.]+", "-", line[6:].strip()).strip().lower()
             elif version is None and line.startswith("Version: "):
                 version = line[9:].strip()
             if name is not None and version is not None:
