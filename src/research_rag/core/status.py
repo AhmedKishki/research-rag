@@ -53,6 +53,7 @@ from ..project.support import (
     _effective_documents,
     _metadata_inventory,
     _metadata_snapshot_changed,
+    reflowable_document_is_current,
 )
 from ..runtime.health import health_report
 from ..runtime.version import version_block
@@ -120,6 +121,13 @@ def generation_policy_differences(
         )
         if any(recorded != current_backend for recorded in recorded_backends):
             reasons.append("extraction_backend")
+    documents = manifest.get("documents")
+    if isinstance(documents, list) and not all(
+        reflowable_document_is_current(document)
+        for document in documents
+        if isinstance(document, dict)
+    ):
+        reasons.append("reflowable_extraction")
     if int(manifest.get("artifact_policy_version") or 0) != ARTIFACT_POLICY_VERSION:
         reasons.append("generation_artifacts")
     if manifest.get("metadata_storage_policy") != METADATA_STORAGE_POLICY:

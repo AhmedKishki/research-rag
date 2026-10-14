@@ -235,6 +235,71 @@ def test_epub_mid_paragraph_anchor_splits_without_marker_leakage(
     assert "midpoint" not in " ".join(unit["contents"] for unit in units)
 
 
+def test_epub_note_references_neither_split_nor_leak_and_note_labels_stay(
+    project: Path,
+) -> None:
+    path = project / "sources" / "notes.epub"
+    _write_custom_epub(
+        path,
+        (
+            # Four publishers' references: a superscript after an empty backlink
+            # anchor, a plain link after one, a link carrying its own backlink
+            # inside a superscript, and a declared noteref.
+            '<p>Hans was celebrated.<a id="r1"></a><a href="notes.xhtml#n1">'
+            "<sup>1</sup></a> His trainer"
+            '<span id="r2"></span><a href="notes.xhtml#n2" class="ref">2</a> '
+            'taught arithmetic<sup><a href="notes.xhtml#n3" id="r3"> 3 </a></sup> '
+            'to the horse.<a epub:type="noteref" href="notes.xhtml#n4">[4]</a></p>'
+            # A cross-reference prints a digit but is not a note.
+            '<p>See chapter <a href="ch3.xhtml#c3">3</a> for the method.</p>'
+            # A note's own number opens its block and stays.
+            '<p><a href="locator.xhtml#r1" id="n1">1</a>. Heyn, Berlin’s Horse.</p>'
+        ),
+    )
+    config = resolve_config(project, vanilla_executable=sys.executable)
+
+    documents, units = extract_sources(
+        scan_sources(config).selected, docling_env=_FAKE_ENV
+    )
+
+    assert [unit["contents"] for unit in units] == [
+        "Hans was celebrated. His trainer taught arithmetic to the horse.",
+        "See chapter 3 for the method.",
+        "1. Heyn, Berlin’s Horse.",
+    ]
+    assert "fragment" not in units[0]["locator"]
+    assert units[2]["locator"]["fragment"] == "n1"
+    assert documents[0]["removed_epub_furniture_elements"] == 4
+
+
+def test_epub_paragraph_role_is_read_as_a_paragraph(project: Path) -> None:
+    path = project / "sources" / "journal.epub"
+    _write_custom_epub(
+        path,
+        (
+            "<section><h2>Introduction</h2>"
+            '<div role="paragraph">Journal prose has no p element.</div>'
+            '<div role="paragraph">Ingold writes:<blockquote>'
+            '<div role="paragraph">Technology could be safely ignored.</div>'
+            "</blockquote>He is right.</div></section>"
+        ),
+    )
+    config = resolve_config(project, vanilla_executable=sys.executable)
+
+    _documents, units = extract_sources(
+        scan_sources(config).selected, docling_env=_FAKE_ENV
+    )
+
+    assert [unit["contents"] for unit in units] == [
+        "Introduction\n\nJournal prose has no p element.",
+        "Ingold writes:\n\nTechnology could be safely ignored.\n\nHe is right.",
+    ]
+    assert [unit["locator"]["element_path"] for unit in units] == [
+        "/html[1]/body[1]/section[1]/div[1]",
+        "/html[1]/body[1]/section[1]/div[2]",
+    ]
+
+
 def test_epub_tables_keep_document_order_and_nested_blocks_are_not_duplicated(
     project: Path,
 ) -> None:

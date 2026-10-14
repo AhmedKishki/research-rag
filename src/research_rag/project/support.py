@@ -918,6 +918,24 @@ SCHEMA_VERSION = 5
 # denominator is not reused.
 EXTRACTION_POLICY_VERSION = 14
 
+# EPUB and MOBI share one set of HTML reading rules. Their version is recorded on
+# each EPUB or MOBI document rather than on the generation, so a change to those
+# rules re-reads those sources on an ordinary ingest and passes every unchanged PDF
+# through untouched. A document without the field was read under version 1.
+# Version 2 reads `role="paragraph"` blocks and drops note references.
+REFLOWABLE_EXTRACTION_POLICY_VERSION = 2
+REFLOWABLE_FORMATS = frozenset({"epub", "mobi"})
+
+
+def reflowable_document_is_current(document: Mapping[str, Any]) -> bool:
+    """Whether a document was read under the current EPUB/MOBI rules; a PDF is."""
+
+    if document.get("format") not in REFLOWABLE_FORMATS:
+        return True
+    recorded = document.get("reflowable_extraction_policy_version", 1)
+    return recorded == REFLOWABLE_EXTRACTION_POLICY_VERSION
+
+
 # Version 9 records partially cleaned passages, corrupt span counts, and lost
 # characters separately from whole omissions, so a generation built under the
 # earlier cleaning counters is not reused.

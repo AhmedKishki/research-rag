@@ -140,6 +140,7 @@ generations/<generation-id>/
 - Recorded policies describe the generation's build; a different current policy does not rewrite its manifest.
 - Historical UltraRAG-compatible backend labels remain readable identifiers. Dependency retirement changes no chunk boundaries, index layout, source/chunk IDs, or policy fingerprints and does not trigger ingestion.
 - A PDF document's `extraction_backend` identifies the extractor that produced its retained text. A generation can contain unchanged legacy PDF artifacts beside new Docling artifacts; its configured backend describes new extraction, not a conversion of every document.
+- An EPUB or MOBI document's `reflowable_extraction_policy_version` records the HTML reading rules that produced its units. A record without the field was read under version 1.
 - New Docling units retain `docling_label`, `docling_content_layer`, and `docling_ref` beside their provenance. These guide pre-chunk filtering and are not quotation offsets.
 - A query-time retrieval-policy fingerprint change does not invalidate stored evidence or require ingestion.
 - Directory names under `indexes/` vary by backend. No reader may assume a fixed name.
@@ -156,6 +157,7 @@ generations/<generation-id>/
 - `ingest` hashes every source.
 - An exact artifact-affecting input match returns the selected generation unchanged, even when query-time ranking settings differ.
 - A Docling backend or adapter change alone does not reprocess unchanged PDFs. Normal ingestion carries their existing artifacts and provenance forward; `force_recompute` explicitly reprocesses them. Existing generation files are never relabelled in place.
+- An EPUB or MOBI document read under earlier HTML rules is read again by ordinary ingestion. Unchanged PDFs still pass through.
 - Otherwise `ingest` checks text and vector reuse independently and builds complete new BM25 and dense indexes. Vector reuse requires matching model identity and exact embedding input; a text-processing mismatch does not alone discard reusable vectors.
 - Work is checkpointed between bounded units. An interrupted build resumes, and `status.ingestion_progress` reports it.
 - `current.json` changes only after both indexes succeed. A failed or cancelled build leaves the selected generation in place.
