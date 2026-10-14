@@ -219,6 +219,36 @@ def test_two_builds_in_one_backend_do_not_append_to_each_other(tmp_path: Path) -
     assert second["chunk_ids"] == ["x2", "x3", "x0", "x1"]
 
 
+def test_exact_batches_resume_in_another_process(tmp_path: Path) -> None:
+    """A build checkpointed between batches resumes in a new backend instance.
+
+    The ingestion workflow resumes a build after a restart or a retried failure,
+    so the rows already uploaded are read back by offset, and a batch uploaded
+    twice replaces itself rather than appending a second copy.
+    """
+
+    _root, index_path, chunks = _exact_generation(tmp_path)
+    vectors = np.zeros((4, EMBEDDING_DIMENSION), dtype=np.float32)
+    first_process = LocalVectorDenseBackend(tmp_path / "models", offline=True)
+    first_process.initialize_index(index_path, EMBEDDING_DIMENSION)
+    first_process.upload_index_batch(chunks[:2], index_path, vectors[:2], offset=0)
+
+    resumed = LocalVectorDenseBackend(tmp_path / "models", offline=True)
+    resumed.upload_index_batch(chunks[2:], index_path, vectors[2:], offset=2)
+    resumed.upload_index_batch(chunks[2:], index_path, vectors[2:], offset=2)
+    metadata = resumed.finalize_index(
+        index_path, expected_count=4, dimension=EMBEDDING_DIMENSION
+    )
+
+    identity = json.loads((index_path / "documents.json").read_text(encoding="utf-8"))
+    assert identity["chunk_ids"] == ["c0", "c1", "c2", "c3"]
+    assert metadata["point_count"] == 4
+    assert sorted(path.name for path in index_path.iterdir()) == [
+        "documents.json",
+        "index.json",
+    ]
+
+
 def test_exact_backend_applies_document_filters_and_top_k(tmp_path: Path) -> None:
     _root, index_path, chunks = _exact_generation(tmp_path)
     backend = LocalVectorDenseBackend(tmp_path / "models", offline=True)

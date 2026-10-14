@@ -2881,7 +2881,13 @@ def test_untyped_extraction_failures_do_not_activate_partial_generation(
             raise error
 
         monkeypatch.setattr(ingestion, "docling_pdf_batch", fail)
-        with pytest.raises(type(error), match=str(error) or None):
+        # A kept build is reported with its cause; a cancellation stays one.
+        expected = (
+            asyncio.CancelledError
+            if isinstance(error, asyncio.CancelledError)
+            else ResearchError
+        )
+        with pytest.raises(expected, match=str(error) or None):
             await service.ingest(chunk_size=50, chunk_overlap=10, force_recompute=True)
         assert config.current_path.read_bytes() == before
 
@@ -2953,7 +2959,8 @@ def test_gateway_extraction_error_is_not_a_source_omission(
             raise ExtractionError("Gateway failure")
 
         monkeypatch.setattr(ultrarag, "chunk", fail)
-        with pytest.raises(ExtractionError, match="Gateway failure"):
+        # A chunker failure is the build's, kept for a retry, and never an omission.
+        with pytest.raises(ResearchError, match="Gateway failure"):
             await service.ingest(chunk_size=50, chunk_overlap=10, force_recompute=True)
         assert config.current_path.read_bytes() == before
 
@@ -3331,6 +3338,13 @@ def test_pending_metadata_status_is_not_reported_as_active(project: Path) -> Non
 
 
 async def _assert_failed_dense_build_does_not_replace_current(project: Path) -> None:
+    """A failed build keeps its checkpoint, resumes, and ends after repeating.
+
+    The selected generation is never replaced by a failure. A failure not proven
+    to be unusable state keeps the finished phases, so the next call resumes
+    them; the same failure in the same phase three times running is discarded.
+    """
+
     write_pdf(project / "sources" / "article.pdf", ["Stable research evidence."])
     config = resolve_config(project, vanilla_executable=sys.executable)
     dense = FakeDenseBackend()
@@ -3342,18 +3356,36 @@ async def _assert_failed_dense_build_does_not_replace_current(project: Path) -> 
     first = await service.ingest(chunk_size=50, chunk_overlap=10)
     dense.fail_build = True
 
-    with pytest.raises(RuntimeError, match="simulated dense-index failure"):
-        await service.ingest(
+    async def rebuild() -> dict[str, Any]:
+        return await service.ingest(
             chunk_size=50,
             chunk_overlap=10,
             force_recompute=True,
         )
 
+    with pytest.raises(ResearchError, match="simulated dense-index failure"):
+        await rebuild()
     current = json.loads(config.current_path.read_text(encoding="utf-8"))
     assert current["generation_id"] == first["generation_id"]
-    assert [path.name for path in config.generations_root.iterdir()] == [
-        first["generation_id"]
-    ]
+    (kept,) = list(config.staging_root.iterdir())
+    checkpoint = json.loads((kept / "checkpoint.json").read_text(encoding="utf-8"))
+    assert checkpoint["phase"] == "dense_indexing"
+    assert checkpoint["last_failure"]["repeats"] == 1
+    assert not any(config.failures_root.glob("*.json"))
+
+    dense.fail_build = False
+    resumed = await rebuild()
+    assert resumed["status"] == "ready"
+    assert resumed["resumed"] is True
+    assert resumed["generation_id"] == kept.name
+
+    dense.fail_build = True
+    for _ in range(2):
+        with pytest.raises(ResearchError, match="simulated dense-index failure"):
+            await rebuild()
+    with pytest.raises(RuntimeError, match="simulated dense-index failure") as ended:
+        await rebuild()
+    assert ended.type is RuntimeError
     assert not any(config.staging_root.iterdir())
     failures = list(config.failures_root.glob("*.json"))
     assert len(failures) == 1
@@ -3377,10 +3409,11 @@ def test_checkpoint_progress_is_reconciled_from_per_source_state(
     root = config.staging_root / "build"
     checkpoint: dict[str, object] = {
         "phase": "extraction",
-        "selected_source_paths": ["article.pdf", "book.epub"],
+        "selected_source_paths": ["article.pdf", "book.epub", "novel.mobi"],
         "source_inventory": [
             {"source_relative_path": "article.pdf", "format": "pdf"},
             {"source_relative_path": "book.epub", "format": "epub"},
+            {"source_relative_path": "novel.mobi", "format": "mobi"},
         ],
         "extracted_source_paths": ["article.pdf"],
         "extraction_work_total": 0,
@@ -3390,8 +3423,16 @@ def test_checkpoint_progress_is_reconciled_from_per_source_state(
     }
     pdf_root = service._source_artifact_root(root, "article.pdf")
     epub_root = service._source_artifact_root(root, "book.epub")
+    mobi_root = service._source_artifact_root(root, "novel.mobi")
     pdf_root.mkdir(parents=True)
     epub_root.mkdir(parents=True)
+    mobi_root.mkdir(parents=True)
+    # A MOBI is read whole, so a finalizing one has done its read and not its
+    # finalize.
+    (mobi_root / "state.json").write_text(
+        json.dumps({"reused": False, "extraction_stage": "finalize", "total": 1}),
+        encoding="utf-8",
+    )
     (pdf_root / "state.json").write_text(
         json.dumps(
             {
@@ -3421,11 +3462,11 @@ def test_checkpoint_progress_is_reconciled_from_per_source_state(
     service._reconcile_checkpoint_progress(root, checkpoint)  # type: ignore[arg-type]
 
     # Each PDF batch plus finalize is two units; the EPUB's total is its sections
-    # plus finalize.
-    assert checkpoint["extraction_work_total"] == 9
+    # plus finalize; the MOBI's is its read plus finalize.
+    assert checkpoint["extraction_work_total"] == 11
     # The EPUB final state is committed, but its global completion checkpoint is
     # not; the normal resume path will account for that last atomic unit once.
-    assert checkpoint["extraction_work_completed"] == 8
+    assert checkpoint["extraction_work_completed"] == 9
     assert checkpoint["chunking_work_total"] == 2
     assert checkpoint["chunking_work_completed"] == 1
 
@@ -3819,7 +3860,6 @@ def test_vector_outputs_are_fsynced_before_atomic_replace(
         assembled_path,
         batches_root,
         len(vectors),
-        2,
         DEFAULT_EMBEDDING_FACTS.dimension,
     )
 
@@ -3829,6 +3869,39 @@ def test_vector_outputs_are_fsynced_before_atomic_replace(
         np.load(assembled_path, allow_pickle=False),
         vectors,
     )
+
+
+def test_vector_assembly_reads_the_batches_the_embedding_phase_wrote(
+    tmp_path: Path,
+) -> None:
+    """A batch size changed between two ingest calls cannot misplace a batch.
+
+    The batches are found by the offsets that name them, and a gap or a short
+    total is refused as unusable state rather than read as zeros.
+    """
+
+    dimension = DEFAULT_EMBEDDING_FACTS.dimension
+    batches_root = tmp_path / "batches"
+    first = np.full((3, dimension), 1.0, dtype=np.float32)
+    second = np.full((2, dimension), 2.0, dtype=np.float32)
+    ResearchService._save_vector_batch(batches_root / f"{0:012d}.npy", first)
+    ResearchService._save_vector_batch(batches_root / f"{3:012d}.npy", second)
+
+    assembled = tmp_path / "embeddings.npy"
+    ResearchService._assemble_vector_batches(assembled, batches_root, 5, dimension)
+    np.testing.assert_array_equal(
+        np.load(assembled, allow_pickle=False), np.concatenate([first, second])
+    )
+
+    with pytest.raises(ResearchError, match="hold 5 rows, not 6"):
+        ResearchService._assemble_vector_batches(
+            tmp_path / "short.npy", batches_root, 6, dimension
+        )
+    (batches_root / f"{3:012d}.npy").rename(batches_root / f"{4:012d}.npy")
+    with pytest.raises(ResearchError, match="does not start at row 3"):
+        ResearchService._assemble_vector_batches(
+            tmp_path / "gap.npy", batches_root, 5, dimension
+        )
 
 
 async def _assert_checkpointless_staging_is_cleaned_before_ingest(

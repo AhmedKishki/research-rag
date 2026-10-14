@@ -135,6 +135,16 @@ class _SourceChangedDuringIngest(RuntimeError):
     pass
 
 
+class _BuildCannotResume(ResearchError):
+    """The staged build is unusable, so its checkpoint is discarded."""
+
+
+# A failure that is not proven to be unusable state keeps the checkpoint, so the
+# next call resumes. The same failure in the same phase this many times running
+# discards it, so a deterministic fault cannot wedge every later call.
+MAXIMUM_REPEATED_FAILURES = 3
+
+
 class IngestionWorkflow:
     @property
     def _pdf_backend(self) -> str:
@@ -305,17 +315,21 @@ class IngestionWorkflow:
                             )
                         else:
                             return
-                    elif source_format == "epub" and extraction_stage == "epub_items":
-                        source_total = unit_total + 2
-                        source_completed = next_index + 1
-                    elif source_format == "epub" and extraction_stage == "finalize":
-                        source_total = unit_total + 2
-                        source_completed = unit_total + 1
-                    elif source_format == "epub" and extraction_stage == "complete":
-                        source_total = unit_total + 2
-                        source_completed = source_total - int(
-                            relative not in extracted_paths
-                        )
+                    elif source_format in {"epub", "mobi"}:
+                        # An EPUB is read one spine item at a time; a MOBI is
+                        # read whole, so its work is the read and the finalize.
+                        items = unit_total if source_format == "epub" else 0
+                        source_total = items + 2
+                        if extraction_stage == "epub_items" and source_format == "epub":
+                            source_completed = next_index + 1
+                        elif extraction_stage == "finalize":
+                            source_completed = items + 1
+                        elif extraction_stage == "complete":
+                            source_completed = source_total - int(
+                                relative not in extracted_paths
+                            )
+                        else:
+                            return
                     else:
                         return
                     extraction_total += source_total
@@ -531,6 +545,46 @@ class IngestionWorkflow:
             return {"completed": min(completed, total), "total": total, "unit": unit}
         except (OSError, StorageError, TypeError, ValueError, OverflowError):
             return None
+
+    def _keep_failed_build(self, root: Path, error: Exception) -> bool:
+        """Record a failure on the committed checkpoint, unless the build is unusable.
+
+        The checkpoint on disk is re-read rather than the one in memory, so a
+        counter the failed step changed before its own commit is not written. The
+        same failure in the same phase `MAXIMUM_REPEATED_FAILURES` times running
+        is not kept, so a deterministic fault ends instead of repeating.
+        """
+
+        if isinstance(error, _BuildCannotResume | StorageError | ArtifactLookupError):
+            return False
+        try:
+            committed = read_json(root / "checkpoint.json")
+            if not isinstance(committed, dict):
+                return False
+            failure = {
+                "phase": str(committed.get("phase") or ""),
+                "error": f"{type(error).__name__}: {error}"[:500],
+            }
+            previous = committed.get("last_failure")
+            repeats = 1
+            if isinstance(previous, dict) and all(
+                previous.get(key) == value for key, value in failure.items()
+            ):
+                repeats = int(previous.get("repeats") or 0) + 1
+            if repeats >= MAXIMUM_REPEATED_FAILURES:
+                return False
+            committed["last_failure"] = {
+                **failure,
+                "repeats": repeats,
+                "failed_at": _utc_now(),
+            }
+            self._remove_uncommitted_files(root)
+            self._write_checkpoint(root, committed)
+        except (OSError, StorageError):
+            # A disk that refused the work may refuse this write too; the last
+            # committed checkpoint still resumes, and only the count is lost.
+            pass
+        return True
 
     @staticmethod
     def _write_checkpoint(root: Path, checkpoint: dict[str, Any]) -> None:
@@ -1012,10 +1066,13 @@ class IngestionWorkflow:
         path: Path,
         batches_root: Path,
         total: int,
-        embedding_batch_size: int,
         dimension: int,
     ) -> None:
-        """Assemble portable vectors without allocating a second full matrix."""
+        """Assemble portable vectors without allocating a second full matrix.
+
+        The batches are read as the embedding phase named them, by offset, so a
+        batch size changed between two ingest calls cannot misplace one.
+        """
 
         path.parent.mkdir(parents=True, exist_ok=True)
         temporary = path.with_name(f".{path.name}.{uuid.uuid4().hex}.tmp")
@@ -1027,13 +1084,19 @@ class IngestionWorkflow:
                 dtype=np.float32,
                 shape=(total, dimension),
             )
-            for offset in range(0, total, embedding_batch_size):
-                batch = np.load(
-                    batches_root / f"{offset:012d}.npy",
-                    allow_pickle=False,
-                    mmap_mode="r",
-                )
+            offset = 0
+            for batch_path in sorted(batches_root.glob("*.npy")):
+                if int(batch_path.stem) != offset:
+                    raise _BuildCannotResume(
+                        f"Vector batch {batch_path.name} does not start at row {offset}"
+                    )
+                batch = np.load(batch_path, allow_pickle=False, mmap_mode="r")
                 vectors[offset : offset + len(batch)] = batch
+                offset += len(batch)
+            if offset != total:
+                raise _BuildCannotResume(
+                    f"Vector batches hold {offset} rows, not {total}"
+                )
             vectors.flush()
             del vectors
             vectors = None
@@ -1560,7 +1623,7 @@ class IngestionWorkflow:
                             for unit in units
                         )
                     ):
-                        raise ResearchError(
+                        raise _BuildCannotResume(
                             f"Completed extraction artifacts are invalid: {relative}"
                         )
                     checkpoint["extracted_source_paths"].append(relative)
@@ -1741,7 +1804,7 @@ class IngestionWorkflow:
                         int(checkpoint.get("extraction_work_completed") or 0) + 1
                     )
                 else:
-                    raise ResearchError(
+                    raise _BuildCannotResume(
                         f"Unsupported staged extraction phase: {extraction_stage}"
                     )
                 self._add_phase_time(
@@ -1871,7 +1934,7 @@ class IngestionWorkflow:
                             if unit_id not in requested_ids
                         ]
                         if unknown:
-                            raise ResearchError(
+                            raise _BuildCannotResume(
                                 "Chunker returned an unknown extraction unit: "
                                 f"{unknown[0]}"
                             )
@@ -1969,7 +2032,7 @@ class IngestionWorkflow:
                     document = read_json(artifact_root / "document.json")
                     state = read_json(artifact_root / "state.json")
                     if not isinstance(document, dict) or not isinstance(state, dict):
-                        raise ResearchError("Invalid staged source artifacts")
+                        raise _BuildCannotResume("Invalid staged source artifacts")
                     documents.append(document)
                     discarded_empty_chunks += int(
                         state.get("discarded_empty_chunks") or 0
@@ -1982,7 +2045,7 @@ class IngestionWorkflow:
                     )
                 extracted_path = staging_root / "corpus" / "extracted-units.jsonl"
                 if not documents:
-                    raise ResearchError(
+                    raise _BuildCannotResume(
                         "No clean sources remain; the current generation is unchanged. "
                         + " ".join(
                             item["reason"]
@@ -2178,7 +2241,6 @@ class IngestionWorkflow:
                     vectors_path,
                     staging_root / "work" / "vector-batches",
                     total,
-                    self.config.settings.embedding_batch_size,
                     self.config.settings.embedding_dimension,
                 )
                 self._add_phase_time(
@@ -2590,10 +2652,13 @@ class IngestionWorkflow:
                         "A source changed while final artifacts were assembled"
                     )
                 atomic_write_json(staging_root / "manifest.json", manifest)
-                await self._validate_generation_for_activation(
-                    staging_root,
-                    manifest,
-                )
+                try:
+                    await self._validate_generation_for_activation(
+                        staging_root,
+                        manifest,
+                    )
+                except ResearchError as exc:
+                    raise _BuildCannotResume(str(exc)) from exc
                 if not revalidation_stats_match(require_complete=True):
                     raise _SourceChangedDuringIngest(
                         "A source changed while final indexes were validated"
@@ -2707,7 +2772,7 @@ class IngestionWorkflow:
                     **build_metrics,
                 }
 
-            raise ResearchError(f"Unsupported ingestion checkpoint phase: {phase}")
+            raise _BuildCannotResume(f"Unsupported ingestion checkpoint phase: {phase}")
 
     def _generation_root(self, generation_id: str) -> Path:
         """Resolve one generation directory by name, refusing any other name.
@@ -3089,15 +3154,24 @@ class IngestionWorkflow:
                     if self._pending_activation_path.is_file()
                     else None
                 )
-                if not (
-                    isinstance(pending, dict)
-                    and pending.get("build_id") == checkpoint.get("build_id")
-                ):
-                    self._discard_checkpoint(
-                        staging_root,
-                        checkpoint,
-                        reason=str(exc),
+                if isinstance(pending, dict) and pending.get(
+                    "build_id"
+                ) == checkpoint.get("build_id"):
+                    raise
+                if self._keep_failed_build(staging_root, exc):
+                    LOGGER.warning(
+                        "ingest: build %s stopped in %s; its checkpoint is kept",
+                        checkpoint.get("build_id"),
+                        checkpoint.get("phase"),
+                        exc_info=exc,
                     )
+                    raise ResearchError(
+                        f"Ingestion stopped during {checkpoint.get('phase')}: {exc}. "
+                        "Finished work is kept; run "
+                        f"{project_command(self.config.project_root, 'ingest')} "
+                        "again to resume once the cause is fixed."
+                    ) from exc
+                self._discard_checkpoint(staging_root, checkpoint, reason=str(exc))
                 raise
             if superseded_build is not None:
                 # Progress that goes backwards has to be explained: a caller looping

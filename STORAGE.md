@@ -162,6 +162,7 @@ generations/<generation-id>/
 - Work is checkpointed between bounded units. An interrupted build resumes, and `status.ingestion_progress` reports it.
 - `current.json` changes only after both indexes succeed. A failed or cancelled build leaves the selected generation in place.
 - A cancelled or timed-out build keeps its checkpoint.
+- A failed build keeps its checkpoint and records `last_failure`, unless its staged state is unusable or the same failure repeats three times in one phase.
 - A build whose inputs no longer match supersedes the checkpoint with a small diagnostic.
 - A build that cannot resume leaves a small record under `failures/` and removes its heavy staging data.
 - Raw chunker output is staging data and does not survive activation. Raw coordinate extraction is not generated.
