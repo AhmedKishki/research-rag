@@ -62,7 +62,6 @@ An item is done when the harness has produced its measurement and the validation
 - [ ] **A connection an unnamed client opened cannot be dropped.** Limit. A client that declared nothing is one client per MCP session, so a hand-written HTTP client has only its sessions refused. `RESEARCH_RAG_CLIENT_NAME` fixes it, and the stdio bridge always sets it.
 - [ ] **Diagnose intermittent MCP initialization HTTP 500.** Test. Reproduce `/mcp` termination before `http.response.start` with synthetic projects and a minimized execution-order or load trigger. Capture session, lifespan, and cancellation events; compare the trigger against `c95e435` with identical dependencies. Correct the demonstrated cause with a deterministic regression test, not retries, skips, longer timeouts, or weaker security. Validate app/LAN tests and a serialized non-integration suite.
   - Test `BaseHTTPMiddleware` first. `runtime/app.py` wraps the streaming MCP app in it, and Starlette's base middleware raises `No response returned` when the wrapped app ends before `http.response.start`. Pure ASGI middleware avoids it.
-- [ ] **Bound each client's session list.** Bug. The stdio bridge opens an upstream session per call, so an active client's `session_ids` grows for the life of the app and `clients` reports every one.
 - [ ] **Reuse the bridge's upstream session.** Feature. Each bridged tool call costs a health request, a control request, and a new MCP handshake.
 
 ## reporting

@@ -83,6 +83,9 @@ HTTP_CLIENT_LABEL = "http client, unnamed"
 # becomes part of the app's own answer unchecked.
 IDENTITY_HEADER_LIMIT = 1024
 IDENTITY_TEXT_LIMIT = 200
+# The session ids one client row keeps. A bridge opens a session per call, so an
+# agent that stays attached would otherwise grow its row for the life of the app.
+RECENT_SESSION_IDS = 20
 
 
 def parse_client_identity(header: str | None) -> dict[str, Any]:
@@ -247,7 +250,8 @@ class Client:
     One client can hold more than one session id: a stdio bridge opens a new
     upstream session per operation, so the process behind the pipe, not the
     session, is the client. `session_id` is the one a disconnect is asked for
-    and `session_ids` is every one this client has opened.
+    and `session_ids` are the most recent `RECENT_SESSION_IDS` of the
+    `session_count` it has opened.
     """
 
     session_id: str
@@ -271,6 +275,7 @@ class Client:
     peer: str = ""
     user_agent: str = ""
     session_ids: list[str] = field(default_factory=list)
+    session_count: int = 0
 
     @property
     def attached(self) -> bool:
@@ -318,7 +323,7 @@ class Client:
             # A client opens as many sessions as its work needs, and the count
             # is reported rather than hidden: the several rows one agent used to
             # produce are now one row that says how many there were.
-            "sessions": len(self.session_ids),
+            "sessions": self.session_count,
             "requests": self.requests,
             "idle_seconds": self.idle_seconds,
             "detached_reason": self.detached_reason,
@@ -402,6 +407,10 @@ class ClientRegistry:
             return existing
         if session_id not in existing.session_ids:
             existing.session_ids.append(session_id)
+            existing.session_count += 1
+            for forgotten in existing.session_ids[:-RECENT_SESSION_IDS]:
+                self._sessions.pop(forgotten, None)
+            del existing.session_ids[:-RECENT_SESSION_IDS]
         if existing.pending or not existing.session_id:
             # The first session this client carried replaces the peer address the
             # connection was counted against.

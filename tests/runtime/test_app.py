@@ -1160,6 +1160,33 @@ def test_a_client_is_reported_with_what_it_declared_about_itself() -> None:
     assert row["sessions"] == 1
 
 
+def test_a_bridge_row_keeps_its_recent_sessions_and_counts_them_all() -> None:
+    """A bridge opens a session per call, so its row keeps only the recent ids.
+
+    The count still says how many it opened, and a dropped client is refused on
+    the next session it opens, however many came before.
+    """
+
+    from research_rag.runtime.app import RECENT_SESSION_IDS
+
+    registry = ClientRegistry()
+    identity = _bridge_identity(4242, "stdio-bridge")
+    opened = RECENT_SESSION_IDS + 5
+    for number in range(opened):
+        registry.observe(_Request(f"s-{number}", "stdio-bridge", identity=identity))
+
+    (row,) = registry.report()
+    assert row["sessions"] == opened
+    assert row["session_ids"] == [
+        f"s-{number}" for number in range(opened - RECENT_SESSION_IDS, opened)
+    ]
+    assert registry.get("s-0") is None
+
+    registry.disconnect(f"s-{opened - 1}", "Disconnected by request.")
+    registry.observe(_Request("s-new", "stdio-bridge", identity=identity))
+    assert registry.get("s-new").dropped is True
+
+
 def test_one_bridge_that_opened_several_sessions_is_one_client() -> None:
     """A bridge opens a new upstream session per operation, and one agent is one row.
 
