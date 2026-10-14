@@ -49,8 +49,19 @@ _ROWS_DIRECTORY = ".rows"
 class _ExactIndex:
     vectors: np.ndarray[Any, np.dtype[np.float32]]
     chunk_ids: tuple[str, ...]
-    document_ids: tuple[str, ...]
     norms: np.ndarray[Any, np.dtype[np.float32]]
+    # Each row's document as a code into `document_codes`, so a document filter
+    # is one vectorised membership test rather than a pass over every row.
+    row_documents: np.ndarray[Any, np.dtype[np.intp]]
+    document_codes: dict[str, int]
+
+    def rows_for(self, document_ids: list[str]) -> np.ndarray[Any, np.dtype[np.bool_]]:
+        codes = [
+            self.document_codes[item]
+            for item in document_ids
+            if item in self.document_codes
+        ]
+        return np.isin(self.row_documents, codes)
 
 
 def _read_index_object(path: Path, label: str) -> dict[str, Any]:
@@ -92,7 +103,10 @@ class LocalVectorDenseBackend:
         # The index and every manifest number are written against the runtime's
         # model facts, so an injected runtime is the only statement of them.
         self.embedding_facts: EmbeddingModel = self.runtime.embedding_facts
-        self._loaded: dict[Path, tuple[int, _ExactIndex]] = {}
+        # The one index searches read, as (path, file stamps, index). Only the
+        # current generation is searched, so one is enough, and a generation that
+        # stopped being searched releases its mapped vectors on the next search.
+        self._loaded: tuple[Path, tuple[int, int], _ExactIndex] | None = None
 
     def embedding_token_counts(self, texts: list[str]) -> list[int]:
         return self.runtime.embedding_token_counts(texts)
@@ -211,7 +225,6 @@ class LocalVectorDenseBackend:
                 },
             )
         shutil.rmtree(index_path / _ROWS_DIRECTORY, ignore_errors=True)
-        self._loaded.pop(index_path.resolve(), None)
         self.validate_index(
             index_path,
             expected_count=expected_count,
@@ -264,6 +277,7 @@ class LocalVectorDenseBackend:
         *,
         expected_count: int | None = None,
         dimension: int | None = None,
+        remember: bool = False,
     ) -> _ExactIndex:
         root = self._generation_root(index_path)
         descriptor = _read_index_object(
@@ -285,6 +299,25 @@ class LocalVectorDenseBackend:
                 f"{dimension}"
             )
         documents_path = index_path / str(descriptor.get("documents") or "")
+        vectors_path = root / str(descriptor.get("vectors") or "")
+        if not vectors_path.is_file() or vectors_path.is_symlink():
+            raise ValueError(f"Exact dense index vectors are missing: {vectors_path}")
+        key = index_path.resolve()
+        stamps = (vectors_path.stat().st_mtime_ns, documents_path.stat().st_mtime_ns)
+        if self._loaded is not None and self._loaded[:2] == (key, stamps):
+            index = self._loaded[2]
+        else:
+            index = self._read_index(documents_path, vectors_path)
+        if expected_count is not None and len(index.chunk_ids) != expected_count:
+            raise RuntimeError(
+                f"Exact dense index expected {expected_count} rows, "
+                f"found {len(index.chunk_ids)}"
+            )
+        if remember:
+            self._loaded = (key, stamps, index)
+        return index
+
+    def _read_index(self, documents_path: Path, vectors_path: Path) -> _ExactIndex:
         documents = _read_index_object(
             documents_path,
             "exact dense index identity",
@@ -296,22 +329,9 @@ class LocalVectorDenseBackend:
         ):
             raise TypeError("Exact dense index identity lists are missing")
         chunk_ids = tuple(str(item) for item in raw_chunk_ids)
-        document_ids = tuple(str(item) for item in raw_document_ids)
+        document_ids = [str(item) for item in raw_document_ids]
         if not chunk_ids or len(chunk_ids) != len(document_ids):
             raise ValueError("Exact dense index identity lists are inconsistent")
-        if expected_count is not None and len(chunk_ids) != expected_count:
-            raise RuntimeError(
-                f"Exact dense index expected {expected_count} rows, "
-                f"found {len(chunk_ids)}"
-            )
-        vectors_path = root / str(descriptor.get("vectors") or "")
-        if not vectors_path.is_file() or vectors_path.is_symlink():
-            raise ValueError(f"Exact dense index vectors are missing: {vectors_path}")
-        key = index_path.resolve()
-        modified_ns = vectors_path.stat().st_mtime_ns
-        cached = self._loaded.get(key)
-        if cached is not None and cached[0] == modified_ns:
-            return cached[1]
         vectors = load_portable_vectors(
             vectors_path,
             self.embedding_facts.dimension,
@@ -321,14 +341,14 @@ class LocalVectorDenseBackend:
         norms = np.linalg.norm(vectors, axis=1).astype(np.float32)
         # A zero vector scores zero instead of dividing by zero.
         norms[norms == 0.0] = 1.0
-        index = _ExactIndex(
+        names, row_documents = np.unique(document_ids, return_inverse=True)
+        return _ExactIndex(
             vectors=vectors,
             chunk_ids=chunk_ids,
-            document_ids=document_ids,
             norms=norms,
+            row_documents=row_documents,
+            document_codes={str(name): code for code, name in enumerate(names)},
         )
-        self._loaded[key] = (modified_ns, index)
-        return index
 
     def validate_index(
         self,
@@ -356,7 +376,7 @@ class LocalVectorDenseBackend:
     ) -> list[DenseSearchHit]:
         if not index_path.is_dir():
             raise ValueError(f"Dense index is missing: {index_path}")
-        index = self._load_index(index_path)
+        index = self._load_index(index_path, remember=True)
         query_vectors = list(self.runtime._embedder().query_embed(query))
         if len(query_vectors) != 1:
             raise RuntimeError("FastEmbed did not return exactly one query vector")
@@ -371,30 +391,33 @@ class LocalVectorDenseBackend:
 
         allowed = np.ones(len(index.chunk_ids), dtype=bool)
         if document_ids:
-            wanted = set(document_ids)
-            allowed &= np.fromiter(
-                (item in wanted for item in index.document_ids),
-                dtype=bool,
-                count=len(index.document_ids),
-            )
+            allowed &= index.rows_for(document_ids)
         if excluded_document_ids:
-            blocked = set(excluded_document_ids)
-            allowed &= np.fromiter(
-                (item not in blocked for item in index.document_ids),
-                dtype=bool,
-                count=len(index.document_ids),
-            )
+            allowed &= ~index.rows_for(excluded_document_ids)
         rows = np.flatnonzero(allowed)
         if rows.size == 0 or top_k <= 0:
             return []
 
-        scores = (index.vectors @ query_vector) / (index.norms * query_norm)
-        candidate_scores = scores[rows]
-        # A stable sort keeps lower row order for equal scores.
-        order = np.argsort(-candidate_scores, kind="stable")
+        if rows.size * 4 < len(index.chunk_ids):
+            # A narrow filter scores its own rows; indexing the mapped matrix
+            # copies only those.
+            scores = (index.vectors[rows] @ query_vector) / (
+                index.norms[rows] * query_norm
+            )
+        else:
+            # The whole mapped matrix is scored in place, without a copy.
+            scores = ((index.vectors @ query_vector) / (index.norms * query_norm))[rows]
+        # The highest `top_k` scores in descending order, equal scores in row
+        # order, without sorting every candidate.
+        count = min(top_k, rows.size)
+        floor = np.partition(scores, rows.size - count)[rows.size - count]
+        above = np.flatnonzero(scores > floor)
+        level = np.flatnonzero(scores == floor)[: count - above.size]
+        chosen = np.concatenate([above, level])
+        order = chosen[np.lexsort((chosen, -scores[chosen]))]
         hits: list[DenseSearchHit] = []
-        for position in order[:top_k]:
-            score = float(candidate_scores[position])
+        for position in order:
+            score = float(scores[position])
             if not np.isfinite(score):
                 raise RuntimeError("Exact dense search produced a non-finite score")
             row = int(rows[position])
