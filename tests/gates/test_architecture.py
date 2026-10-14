@@ -1,7 +1,9 @@
-"""Nothing but this test keeps the package split at `surfaces/`.
+"""Nothing but this test keeps the package's folders in order.
 
-A surface that imported another would be a second copy of an operation. Imports are
-read with `ast` rather than executed, so an import that succeeds only in one
+The folders are layered, and a module imports from its own folder and the folders
+below it, so no folder can grow a dependency on one that builds on it. A surface
+that imported another would be a second copy of an operation. Imports are read
+with `ast` rather than executed, so an import that succeeds only in one
 environment cannot fool the test.
 """
 
@@ -15,7 +17,42 @@ from pathlib import Path
 import pytest
 
 PACKAGE = Path(__file__).resolve().parents[2] / "src" / "research_rag"
-SURFACES = PACKAGE / "surfaces"
+
+# The folders, lowest first. `gateway` holds the retired command shims, which
+# import nothing.
+LAYERS = (
+    "storage",
+    "project",
+    "corpus",
+    "retrieval",
+    "generations",
+    "core",
+    "runtime",
+    "surfaces",
+    "gateway",
+)
+
+# The imports that cross the order upward. `runtime/app.py` composes the one
+# application, so it mounts the surfaces it serves; `runtime/control.py` holds the
+# control API to the workspace's write guard, which imports nothing outside the
+# workspace, and reaching it loads the workspace package.
+UPWARD = {
+    "runtime/app.py": frozenset({"surfaces/mcp.py", "surfaces/ui.py"}),
+    "runtime/control.py": frozenset(
+        {"surfaces/workspace/__init__.py", "surfaces/workspace/write_guard.py"}
+    ),
+}
+
+# The surfaces, each a set of modules that may import only one another: the
+# command line, the agent surface and the stdio bridge that proxies it, and the
+# workspace with this app's adapter over it. The command line's `mcp` command runs
+# the bridge.
+SURFACES = {
+    "cli": ("surfaces/cli/",),
+    "agent": ("surfaces/mcp.py", "surfaces/bridge.py"),
+    "workspace": ("surfaces/ui.py", "surfaces/workspace/"),
+}
+CROSS_SURFACE = {"surfaces/cli/__init__.py": frozenset({"surfaces/bridge.py"})}
 
 # The modules allowed to import the web stack. `app.py` composes the one ASGI
 # application; `control.py` is the control API and the handle the command line
@@ -41,15 +78,6 @@ WEB_MODULES = frozenset(
     }
 )
 
-# The modules a surface may not import. The workspace, the agent tools, and the
-# command line each name their own arguments, so a shared table would be a
-# second place for an operation to be wrong.
-CROSS_SURFACE = {
-    "surfaces/cli.py": frozenset({"surfaces/mcp.py", "surfaces/ui.py"}),
-    "surfaces/mcp.py": frozenset({"surfaces/cli.py", "surfaces/ui.py"}),
-    "surfaces/ui.py": frozenset({"surfaces/cli.py", "surfaces/mcp.py"}),
-}
-
 # An engine module importing either MCP implementation crosses the surface boundary.
 WEB_IMPORTS = frozenset({"fastmcp", "mcp", "pydantic", "starlette", "uvicorn"})
 
@@ -62,8 +90,8 @@ def _modules() -> list[Path]:
     )
 
 
-def _relative(relative: str) -> str:
-    return relative.replace("\\", "/")
+def _relative(path: Path) -> str:
+    return path.relative_to(PACKAGE).as_posix()
 
 
 @cache
@@ -89,33 +117,114 @@ def _absolute_imports(path: Path) -> set[str]:
     return names
 
 
-def _package_imports(path: Path) -> set[str]:
-    """Both spellings of a relative import, reported as package-relative names.
+def _module_file(directory: Path, parts: list[str]) -> Path | None:
+    """The file a dotted name under `directory` names: a module or a package."""
 
-    A module under `surfaces/` names its siblings without the package prefix and its
-    engine modules with one.
+    target = directory.joinpath(*parts)
+    if target.with_suffix(".py").is_file():
+        return target.with_suffix(".py")
+    if (target / "__init__.py").is_file():
+        return target / "__init__.py"
+    return None
+
+
+def _package_imports(path: Path) -> set[str]:
+    """The package modules one module imports, as paths relative to the package.
+
+    A relative import is resolved from the module's own directory, `from . import
+    name` names a module, and an absolute import of `research_rag` is resolved from
+    the package root, so every spelling of one import resolves to one file.
     """
 
-    names: set[str] = set()
-    depth = len(path.relative_to(PACKAGE).parts) - 1
+    found: set[str] = set()
     for node in ast.walk(_parse(path)):
-        if not isinstance(node, ast.ImportFrom) or node.level == 0:
-            continue
-        if not node.module:
-            continue
-        if node.level == depth + 1 or node.level <= depth:
-            names.add(f"{node.module.split('.')[0]}.py")
+        if isinstance(node, ast.Import):
+            modules = [
+                alias.name.split(".")[1:]
+                for alias in node.names
+                if alias.name.split(".")[0] == PACKAGE.name
+            ]
+            targets = [_module_file(PACKAGE, parts) for parts in modules]
+        elif isinstance(node, ast.ImportFrom):
+            if node.level:
+                base = path.parent
+                for _ in range(node.level - 1):
+                    base = base.parent
+                parts = (node.module or "").split(".") if node.module else []
+            elif (node.module or "").split(".")[0] == PACKAGE.name:
+                base, parts = PACKAGE, node.module.split(".")[1:]
+            else:
+                continue
+            targets = [_module_file(base, parts) if parts else None]
+            # `from .package import module` imports the module too.
+            targets += [
+                _module_file(base, [*parts, alias.name]) for alias in node.names
+            ]
         else:
-            prefix = "/".join(path.relative_to(PACKAGE).parts[: node.level - 1])
-            names.add(f"{prefix}/{node.module.split('.')[0]}.py")
-    return names
+            continue
+        found.update(_relative(target) for target in targets if target is not None)
+    found.discard(_relative(path))
+    return found
+
+
+def _folder(relative: str) -> str:
+    return relative.split("/", 1)[0] if "/" in relative else ""
+
+
+def _surface(relative: str) -> str | None:
+    return next(
+        (
+            name
+            for name, members in SURFACES.items()
+            if any(
+                relative == member or relative.startswith(member) for member in members
+            )
+        ),
+        None,
+    )
+
+
+def test_the_gate_reads_imports() -> None:
+    """A resolver that found nothing would pass every rule below."""
+
+    imports = _package_imports(PACKAGE / "retrieval" / "search.py")
+    assert {"project/policy.py", "retrieval/documents.py"} <= imports, imports
+    assert "surfaces/bridge.py" in _package_imports(
+        PACKAGE / "surfaces" / "cli" / "__init__.py"
+    )
+
+
+def test_every_folder_has_a_layer() -> None:
+    folders = {
+        path.name
+        for path in PACKAGE.iterdir()
+        if path.is_dir() and any(path.glob("*.py"))
+    }
+    assert folders == set(LAYERS)
+
+
+def test_a_folder_imports_only_itself_and_the_folders_below() -> None:
+    offenders: dict[str, list[str]] = {}
+    for path in sorted(PACKAGE.rglob("*.py")):
+        relative = _relative(path)
+        folder = _folder(relative)
+        if not folder:
+            continue
+        upward = sorted(
+            imported
+            for imported in _package_imports(path)
+            if _folder(imported) != folder
+            and LAYERS.index(_folder(imported)) > LAYERS.index(folder)
+            and imported not in UPWARD.get(relative, ())
+        )
+        if upward:
+            offenders[relative] = upward
+    assert offenders == {}, f"modules importing a folder above their own: {offenders}"
 
 
 def test_only_a_surface_imports_the_web_stack() -> None:
     importers = {
-        _relative(path.relative_to(PACKAGE).as_posix())
-        for path in _modules()
-        if _absolute_imports(path) & WEB_IMPORTS
+        _relative(path) for path in _modules() if _absolute_imports(path) & WEB_IMPORTS
     }
     assert importers == set(WEB_MODULES), (
         "modules importing the web stack changed; the surface set is "
@@ -125,37 +234,42 @@ def test_only_a_surface_imports_the_web_stack() -> None:
 
 def test_no_module_imports_the_retired_ultrarag_library() -> None:
     offenders = [
-        path.relative_to(PACKAGE).as_posix()
+        _relative(path)
         for path in sorted(PACKAGE.rglob("*.py"))
         if "ultrarag" in _absolute_imports(path)
     ]
     assert offenders == [], f"modules still importing UltraRAG: {offenders}"
 
 
-def test_no_engine_module_imports_a_surface() -> None:
-    offenders: dict[str, list[str]] = {}
-    for path in _modules():
-        if path.is_relative_to(SURFACES):
-            continue
-        imported = [
-            name for name in _package_imports(path) if name.startswith("surfaces/")
-        ]
-        if imported:
-            offenders[_relative(path.relative_to(PACKAGE).as_posix())] = sorted(
-                imported
-            )
-    assert offenders == {}, f"engine modules importing a surface: {offenders}"
-
-
 def test_no_surface_imports_another_surface() -> None:
-    offenders = {
-        relative: sorted(_package_imports(path) & CROSS_SURFACE[relative])
-        for path in _modules()
-        if (relative := _relative(path.relative_to(PACKAGE).as_posix()))
-        in CROSS_SURFACE
-        and _package_imports(path) & CROSS_SURFACE[relative]
-    }
+    offenders: dict[str, list[str]] = {}
+    for path in sorted((PACKAGE / "surfaces").rglob("*.py")):
+        relative = _relative(path)
+        surface = _surface(relative)
+        crossing = sorted(
+            imported
+            for imported in _package_imports(path)
+            if (other := _surface(imported)) is not None
+            and other != surface
+            and imported not in CROSS_SURFACE.get(relative, ())
+        )
+        if crossing:
+            offenders[relative] = crossing
     assert offenders == {}, f"surfaces importing one another: {offenders}"
+
+
+def test_the_workspace_imports_nothing_outside_itself() -> None:
+    """A host that stores state in a shared package cannot say where it is."""
+
+    offenders = {
+        _relative(path): sorted(
+            imported
+            for imported in _package_imports(path)
+            if not imported.startswith("surfaces/workspace/")
+        )
+        for path in sorted((PACKAGE / "surfaces" / "workspace").rglob("*.py"))
+    }
+    assert {name: found for name, found in offenders.items() if found} == {}
 
 
 def test_the_agent_surface_is_declared_once() -> None:
@@ -185,7 +299,7 @@ def test_the_agent_surface_is_declared_once() -> None:
                 if parts[:1] == ["app"] and parts[1:2] in (["tool"], ["resource"]):
                     names.append(f"{'.'.join(parts)}:{node.name}")
         if names:
-            declaring[_relative(path.relative_to(PACKAGE).as_posix())] = names
+            declaring[_relative(path)] = names
     assert list(declaring) == ["surfaces/mcp.py"], declaring
 
     operations = [name.split(":", 1)[1] for name in declaring["surfaces/mcp.py"]]
@@ -214,7 +328,7 @@ def test_the_answer_projection_is_shared_by_the_two_bounded_readers() -> None:
     """
 
     callers = sorted(
-        _relative(path.relative_to(PACKAGE).as_posix())
+        _relative(path)
         for path in _modules()
         if "present_tool_response" in path.read_text(encoding="utf-8")
         and path.name != "tool_views.py"  # the module that defines it
@@ -224,7 +338,7 @@ def test_the_answer_projection_is_shared_by_the_two_bounded_readers() -> None:
     # configuration, and the account record reads the projection because reading
     # whether one project's app is up is part of reading the record.
     lean_callers = sorted(
-        _relative(path.relative_to(PACKAGE).as_posix())
+        _relative(path)
         for path in _modules()
         if "lean_status" in path.read_text(encoding="utf-8")
         and path.name != "tool_views.py"
