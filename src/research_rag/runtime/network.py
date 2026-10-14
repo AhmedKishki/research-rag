@@ -22,9 +22,6 @@ LOCAL_ONLY_PATHS = (
     "/api/updates",
     "/api/open-source",
     "/api/health",
-    "/api/sql",
-    "/api/memory",
-    "/api/bundles",
 )
 
 

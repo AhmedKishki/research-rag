@@ -1,8 +1,8 @@
-"""Stable adapter contract between the shared UI and an MCP implementation."""
+"""The adapter contract between the workspace host and this app's service."""
 
 from __future__ import annotations
 
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Mapping
 from contextlib import AbstractAsyncContextManager
 from dataclasses import asdict, dataclass
 from pathlib import Path
@@ -11,12 +11,7 @@ from typing import Any, Protocol, TypeAlias
 
 @dataclass(frozen=True, slots=True)
 class UICapabilities:
-    """Optional actions supported by one adapter, document and memory alike.
-
-    ``documents`` stays on for an adapter that serves a corpus and turns off for
-    one that serves something else — a memory-only server shows its own views
-    instead of a search console it cannot answer.
-    """
+    """Optional actions supported by one adapter."""
 
     documents: bool = True
     sources: bool = True
@@ -30,28 +25,16 @@ class UICapabilities:
     project_metadata: bool = False
     source_selection: bool = False
     category_partitions: bool = False
-    retrieval_modes: bool = True
-    reranking: bool = True
-    chunk_settings: bool = True
     force_recompute: bool = False
-    bundle_export: bool = False
-    bundle_import: bool = False
-    memory: bool = False
-    memory_writes: bool = False
     # Whether this adapter can list and end the MCP clients attached to the
     # process serving it. Off by default: the workspace cannot know whether the
-    # host is a server at all, and a memory-only server has no corpus clients.
+    # host is a server at all.
     clients: bool = False
     # Whether this adapter can list the generations it retains and delete one.
     # The listing arrives in the status payload and is rendered for free; only
     # the removal needs a route, so the flag gates a panel that would otherwise
     # be a set of chips and a button that cannot act.
     generations: bool = False
-    # Whether this adapter can run a statement against its own stored records.
-    # Off by default: the workspace cannot know which store an adapter keeps,
-    # and a panel that could change records must not appear beside one that only
-    # reads.
-    sql_console: bool = False
     # Whether this adapter can report its own settings and accept a change to
     # one. Off by default: the settings, their values, their origins, and the
     # cost of changing them are the server's facts, and a panel of invented
@@ -111,18 +94,6 @@ class UIProfile:
     footer_text: str = ""
     result_text_label: str = "Retrieved passage"
     copy_text_label: str = "Copy passage"
-    bundle_import_intro: str = (
-        "Place the archive in the server's project-local bundle directory, then "
-        "enter its filename."
-    )
-    bundle_export_warning: str = (
-        "Export this generation? The archive may contain complete original sources."
-    )
-    memory_label: str = "Memory"
-    memory_standing_label: str = "Standing memory"
-    memory_rounds_label: str = "Recorded rounds"
-    memory_add_label: str = "Add a round"
-    memory_note: str = ""
     capabilities: UICapabilities = UICapabilities()
     version_label: str = ""
 
@@ -158,7 +129,7 @@ class UIRequestError(Exception):
 
 
 class UIAdapter(Protocol):
-    """Normalize one MCP server to the shared document-workspace operations."""
+    """Normalize this app's service to the workspace operations."""
 
     async def health(self) -> Mapping[str, Any]: ...
 
@@ -169,39 +140,6 @@ class UIAdapter(Protocol):
     ) -> Mapping[str, Any]: ...
 
     async def source_file(self, source_path: str) -> SourceFile: ...
-
-
-class ClientControl(Protocol):
-    """The attached MCP clients of the process serving this workspace.
-
-    Separate from `UIAdapter` because a host may serve a workspace and still not
-    be a server: a stdio-only process has no other client to report. A route that
-    needs this checks for it at run time rather than making every adapter carry
-    two methods it cannot answer.
-    """
-
-    async def list_clients(self) -> Sequence[Mapping[str, Any]]: ...
-
-    async def disconnect_client(
-        self, session_id: str, reason: str | None = None
-    ) -> Mapping[str, Any]: ...
-
-
-class SqlConsole(Protocol):
-    """Reading and editing an adapter's own stored records.
-
-    Separate from `UIAdapter` because a statement is not a document operation:
-    the workspace names a scope the adapter reported and forwards a statement
-    unchanged, so a route that needs this checks for it at run time rather than
-    making every adapter carry two methods it cannot answer. Nothing here names
-    a store, resolves a path, or decides what a statement may say — the adapter
-    runs the statement against its own storage and refuses whatever it will not
-    do, and the refusal reaches the browser with its own status and reason.
-    """
-
-    async def sql_query(self, scope: str, statement: str) -> Mapping[str, Any]: ...
-
-    async def sql_execute(self, scope: str, statement: str) -> Mapping[str, Any]: ...
 
 
 AdapterContext: TypeAlias = AbstractAsyncContextManager[UIAdapter]
