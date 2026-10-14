@@ -24,14 +24,14 @@ DOCUMENTS = (
 
 
 def test_the_parser_no_longer_offers_ocr() -> None:
-    from research_rag.surfaces.cli import _parser
+    from research_rag.surfaces.cli.parser import _parser
 
     with pytest.raises(SystemExit):
         _parser().parse_args(["ocr", "scan.pdf"])
 
 
 def test_the_help_menu_no_longer_lists_ocr() -> None:
-    from research_rag.surfaces.cli import HELP_GROUPS
+    from research_rag.surfaces.cli.help import HELP_GROUPS
 
     listed = [name for _, entries in HELP_GROUPS for name, _ in entries]
     assert "ocr" not in listed

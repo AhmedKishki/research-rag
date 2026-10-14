@@ -30,18 +30,15 @@ from typing import Any
 
 import pytest
 
-from research_rag.surfaces.cli import (
-    _HELP_SUMMARIES,
-    CLI_NAME,
-    HELP_GROUPS,
-    HELP_TOPICS,
-    _metadata_body,
-    _parser,
-    _project_path,
-)
+from research_rag.project.config import CLI_COMMAND as CLI_NAME
+from research_rag.surfaces.cli import serving as cli_serving
+from research_rag.surfaces.cli.corpus import _metadata_body
 
 # Aliased on its own line because isort gives an aliased member its own statement.
-from research_rag.surfaces.cli import _operate as operate
+from research_rag.surfaces.cli.corpus import _operate as operate
+from research_rag.surfaces.cli.help import _HELP_SUMMARIES, HELP_GROUPS, HELP_TOPICS
+from research_rag.surfaces.cli.parser import _parser
+from research_rag.surfaces.cli.projects import _project_path
 
 ROOT = Path(__file__).resolve().parents[2]
 
@@ -55,17 +52,16 @@ def test_home_lan_is_explicit_and_start_only() -> None:
 
 
 def test_start_forwards_explicit_home_lan_mode(monkeypatch: pytest.MonkeyPatch) -> None:
-    from research_rag.surfaces import cli
 
     calls: list[dict[str, Any]] = []
 
-    async def serve(config: Any, **kwargs: Any) -> cli.CommandResult:
+    async def serve(config: Any, **kwargs: Any) -> cli_serving.CommandResult:
         calls.append(kwargs)
-        return cli.CommandResult()
+        return cli_serving.CommandResult()
 
-    monkeypatch.setattr(cli, "running_url", lambda _: None)
-    monkeypatch.setattr(cli, "_serve_attached", serve)
-    asyncio.run(cli._start(_parser().parse_args(["start", "--lan"]), object()))
+    monkeypatch.setattr(cli_serving, "running_url", lambda _: None)
+    monkeypatch.setattr(cli_serving, "_serve_attached", serve)
+    asyncio.run(cli_serving._start(_parser().parse_args(["start", "--lan"]), object()))
     assert calls == [{"port": None, "open_browser": False, "lan": True}]
 
 

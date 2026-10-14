@@ -24,7 +24,6 @@ An item is done when the harness has produced its measurement and the validation
 - [ ] **Let a command start the app when the corpus is not ready.** Decision. A command that touches the corpus goes to the running app. With no app up, it is answered in process, which opens a second service nobody serves. Starting an app instead makes `status` leave a process behind. App should be started explicitly for any process.
 - [ ] **Decide whether `search --method` and `--no-rerank` stay.** Decision. They reproduce a `MEASUREMENTS.md` row on demand, and no reader-facing surface offers either. Removing them is a deliberate simplification.
   - `Remote.call` drops both flags, so the running app returns hybrid, reranked results. Forward them through `diagnostics=True` if retained, or reject them explicitly. Test local and running-app behavior.
-- [ ] **Split `surfaces/cli.py`.** Refactor. One 3,352-line module holds the help text, the parser, the local and remote operations, attached serving, and `update`. Give each its own module behind the same `main`.
 
 ## agents
 

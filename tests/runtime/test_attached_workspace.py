@@ -21,7 +21,7 @@ import pytest
 import research_rag.runtime.app as app_module
 import research_rag.runtime.update as update_module
 from research_rag.project import registry, state_files
-from research_rag.project.config import ConfigurationError, resolve_config
+from research_rag.project.config import CLI_COMMAND, ConfigurationError, resolve_config
 from research_rag.project.policy import ResearchError
 from research_rag.project.state_files import recorded_pid
 from research_rag.runtime.app import (
@@ -32,7 +32,9 @@ from research_rag.runtime.app import (
     has_terminal,
     recorded_port,
 )
-from research_rag.surfaces import cli
+from research_rag.surfaces.cli import parser as cli_parser
+from research_rag.surfaces.cli import projects as cli_projects
+from research_rag.surfaces.cli import serving as cli_serving
 
 pytestmark = pytest.mark.anyio
 
@@ -59,7 +61,7 @@ def _a_free_port() -> int:
 def _no_arguments(*arguments: str) -> Any:
     """The namespace the real parser builds, so a test cannot invent an option."""
 
-    return cli._parser().parse_args(list(arguments))
+    return cli_parser._parser().parse_args(list(arguments))
 
 
 async def test_an_app_records_the_port_and_pid_it_serves(project: Path) -> None:
@@ -108,8 +110,8 @@ async def test_an_app_that_never_serves_would_stop_ends_when_the_closing_asks(
 
     config = _initialised(project, "Attached")
     app = App(config, port=_a_free_port())
-    closing = cli._Closing()
-    waiting = asyncio.ensure_future(cli._wait_until_stopped(app, closing))
+    closing = cli_serving._Closing()
+    waiting = asyncio.ensure_future(cli_serving._wait_until_stopped(app, closing))
     await asyncio.sleep(0)
 
     closing.request()
@@ -128,12 +130,14 @@ async def test_an_app_ends_when_its_terminal_goes_without_a_signal(
     """
 
     answers = iter([True, True, False])
-    monkeypatch.setattr(cli, "_terminal_attached", lambda: next(answers, False))
-    monkeypatch.setattr(cli, "_TERMINAL_CHECK_SECONDS", 0.01)
+    monkeypatch.setattr(cli_serving, "_terminal_attached", lambda: next(answers, False))
+    monkeypatch.setattr(cli_serving, "_TERMINAL_CHECK_SECONDS", 0.01)
     config = _initialised(project, "Disowned")
     app = App(config, port=_a_free_port())
 
-    await asyncio.wait_for(cli._wait_until_stopped(app, cli._Closing()), timeout=5)
+    await asyncio.wait_for(
+        cli_serving._wait_until_stopped(app, cli_serving._Closing()), timeout=5
+    )
 
 
 async def test_a_process_with_no_terminal_is_not_served(
@@ -148,17 +152,17 @@ async def test_a_process_with_no_terminal_is_not_served(
     def never(*_args: Any, **_kwargs: Any) -> None:
         raise AssertionError("no app may be built without a terminal")
 
-    monkeypatch.setattr(cli, "_terminal_attached", lambda: False)
-    monkeypatch.setattr(cli, "App", never)
+    monkeypatch.setattr(cli_serving, "_terminal_attached", lambda: False)
+    monkeypatch.setattr(cli_serving, "App", never)
     config = _initialised(project, "Terminalless")
 
     with pytest.raises(ResearchError, match="has no terminal"):
-        await cli._serve_attached(config, port=None, open_browser=False)
+        await cli_serving._serve_attached(config, port=None, open_browser=False)
     assert not (config.state_root / PID_FILE).exists()
 
 
 async def test_a_closing_asks_only_once() -> None:
-    closing = cli._Closing()
+    closing = cli_serving._Closing()
 
     closing.request()
     closing.request()
@@ -174,7 +178,7 @@ async def test_the_terminal_signals_are_handled_while_attached_and_released_afte
     before = {
         number: signal.getsignal(number) for number in (signal.SIGHUP, signal.SIGTERM)
     }
-    with cli._closing_with_the_terminal() as closing:
+    with cli_serving._closing_with_the_terminal() as closing:
         inside = {
             number: signal.getsignal(number)
             for number in (signal.SIGHUP, signal.SIGTERM)
@@ -229,8 +233,8 @@ def test_start_without_selector_resolves_registry_not_cwd(
 ) -> None:
     _initialised(project, "Chosen")
     monkeypatch.chdir(tmp_path)
-    monkeypatch.setattr(cli, "_only_project_or_ask", lambda: project)
-    assert cli._resolve(_no_arguments(*arguments)).project_root == project
+    monkeypatch.setattr(cli_projects, "_only_project_or_ask", lambda: project)
+    assert cli_projects._resolve(_no_arguments(*arguments)).project_root == project
 
 
 @pytest.mark.parametrize("selector", ["--project", "--project-root"])
@@ -242,9 +246,12 @@ def test_start_explicit_selector_bypasses_picker(
     def refuse() -> Path:
         raise AssertionError("explicit selectors must not prompt")
 
-    monkeypatch.setattr(cli, "_only_project_or_ask", refuse)
+    monkeypatch.setattr(cli_projects, "_only_project_or_ask", refuse)
     value = "Chosen" if selector == "--project" else str(project)
-    assert cli._resolve(_no_arguments(selector, value, "start")).project_root == project
+    assert (
+        cli_projects._resolve(_no_arguments(selector, value, "start")).project_root
+        == project
+    )
 
 
 @pytest.mark.parametrize(
@@ -269,13 +276,13 @@ def test_project_picker_reads_pty_keys_and_restores_terminal(
             ready.set()
 
     source = os.fdopen(os.dup(slave), "r")
-    monkeypatch.setattr(cli.sys, "stdin", source)
-    monkeypatch.setattr(cli.sys, "stdout", Output())
+    monkeypatch.setattr(cli_serving.sys, "stdin", source)
+    monkeypatch.setattr(cli_serving.sys, "stdout", Output())
 
     def pick() -> None:
         try:
             result.append(
-                cli._pick_registered_project(
+                cli_projects._pick_registered_project(
                     [{"project_name": "First"}, {"project_name": "Second"}]
                 )
             )
@@ -310,18 +317,18 @@ def test_a_bare_call_with_one_project_opens_it_in_a_browser(
     _initialised(project, "Only One")
     served: dict[str, Any] = {}
 
-    def _serve(config: Any, *, open_browser: bool) -> cli.CommandResult:
+    def _serve(config: Any, *, open_browser: bool) -> cli_serving.CommandResult:
         served["name"] = config.project_name
         served["open_browser"] = open_browser
-        return cli.CommandResult()
+        return cli_serving.CommandResult()
 
-    monkeypatch.setattr(cli, "_serve_attached_sync", _serve)
+    monkeypatch.setattr(cli_serving, "_serve_attached_sync", _serve)
 
-    monkeypatch.setattr(cli.sys.stdin, "isatty", lambda: True)
-    monkeypatch.setattr(cli.sys.stdout, "isatty", lambda: True)
-    monkeypatch.setattr(cli, "_pick_registered_project", lambda entries: 0)
+    monkeypatch.setattr(cli_serving.sys.stdin, "isatty", lambda: True)
+    monkeypatch.setattr(cli_serving.sys.stdout, "isatty", lambda: True)
+    monkeypatch.setattr(cli_projects, "_pick_registered_project", lambda entries: 0)
 
-    cli._bare_workspace(_no_arguments())
+    cli_serving._bare_workspace(_no_arguments())
 
     # Serving never opens a browser on its own: the command line is where this app is
     # worked from, so a browser appears only when `--start-ui` asks for one.
@@ -332,9 +339,9 @@ def test_noninteractive_single_project_requires_explicit_selector(
     project: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     _initialised(project, "Only One")
-    monkeypatch.setattr(cli.sys.stdin, "isatty", lambda: False)
+    monkeypatch.setattr(cli_serving.sys.stdin, "isatty", lambda: False)
     with pytest.raises(ConfigurationError, match="interactive terminal") as refusal:
-        cli._only_project_or_ask()
+        cli_projects._only_project_or_ask()
     assert "research-rag --project 'Only One' start" in str(refusal.value)
 
 
@@ -348,8 +355,8 @@ def test_picker_restores_terminal_after_read_failure(
     master, slave = pty.openpty()
     before = termios.tcgetattr(slave)
     source = os.fdopen(os.dup(slave), "r")
-    monkeypatch.setattr(cli.sys, "stdin", source)
-    monkeypatch.setattr(cli.sys, "stdout", io.StringIO())
+    monkeypatch.setattr(cli_serving.sys, "stdin", source)
+    monkeypatch.setattr(cli_serving.sys, "stdout", io.StringIO())
 
     def fail(fd: int, size: int) -> bytes:
         raise OSError("read failed")
@@ -357,7 +364,7 @@ def test_picker_restores_terminal_after_read_failure(
     monkeypatch.setattr(os, "read", fail)
     try:
         with pytest.raises(OSError, match="read failed"):
-            cli._pick_registered_project([{"project_name": "First"}])
+            cli_projects._pick_registered_project([{"project_name": "First"}])
         assert termios.tcgetattr(slave) == before
     finally:
         source.close()
@@ -374,16 +381,16 @@ def test_a_bare_call_with_several_projects_asks_which(
     _initialised(other, "Second")
     served: dict[str, str] = {}
 
-    def _serve(config: Any, *, open_browser: bool) -> cli.CommandResult:
+    def _serve(config: Any, *, open_browser: bool) -> cli_serving.CommandResult:
         served["name"] = config.project_name
-        return cli.CommandResult()
+        return cli_serving.CommandResult()
 
-    monkeypatch.setattr(cli, "_serve_attached_sync", _serve)
-    monkeypatch.setattr(cli.sys.stdin, "isatty", lambda: True, raising=False)
-    monkeypatch.setattr(cli.sys.stdout, "isatty", lambda: True)
-    monkeypatch.setattr(cli, "_pick_registered_project", lambda entries: 1)
+    monkeypatch.setattr(cli_serving, "_serve_attached_sync", _serve)
+    monkeypatch.setattr(cli_serving.sys.stdin, "isatty", lambda: True, raising=False)
+    monkeypatch.setattr(cli_serving.sys.stdout, "isatty", lambda: True)
+    monkeypatch.setattr(cli_projects, "_pick_registered_project", lambda entries: 1)
 
-    cli._bare_workspace(_no_arguments())
+    cli_serving._bare_workspace(_no_arguments())
 
     assert served["name"] == "Second"
 
@@ -397,10 +404,10 @@ def test_a_bare_call_that_cannot_ask_is_given_the_commands(
     other = tmp_path / "second"
     (other / "sources").mkdir(parents=True)
     _initialised(other, "Second")
-    monkeypatch.setattr(cli.sys.stdin, "isatty", lambda: False, raising=False)
+    monkeypatch.setattr(cli_serving.sys.stdin, "isatty", lambda: False, raising=False)
 
     with pytest.raises(ConfigurationError, match="interactive terminal") as refusal:
-        cli._bare_workspace(_no_arguments())
+        cli_serving._bare_workspace(_no_arguments())
 
     assert "Second" in str(refusal.value)
 
@@ -412,16 +419,16 @@ def test_a_bare_call_does_not_serve_after_picker_cancellation(
     other = tmp_path / "second"
     (other / "sources").mkdir(parents=True)
     _initialised(other, "Second")
-    monkeypatch.setattr(cli.sys.stdin, "isatty", lambda: True, raising=False)
-    monkeypatch.setattr(cli.sys.stdout, "isatty", lambda: True)
+    monkeypatch.setattr(cli_serving.sys.stdin, "isatty", lambda: True, raising=False)
+    monkeypatch.setattr(cli_serving.sys.stdout, "isatty", lambda: True)
 
     def cancel(entries: Any) -> int:
         raise ConfigurationError("No project chosen")
 
-    monkeypatch.setattr(cli, "_pick_registered_project", cancel)
+    monkeypatch.setattr(cli_projects, "_pick_registered_project", cancel)
 
     with pytest.raises(ConfigurationError, match="No project chosen"):
-        cli._bare_workspace(_no_arguments())
+        cli_serving._bare_workspace(_no_arguments())
 
 
 def test_a_bare_call_reports_an_app_already_up(
@@ -431,15 +438,17 @@ def test_a_bare_call_reports_an_app_already_up(
 
     _initialised(project, "Already")
     opened: list[str] = []
-    monkeypatch.setattr(cli, "running_url", lambda config: "http://127.0.0.1:5051")
-    monkeypatch.setattr(cli, "_open_browser", opened.append)
+    monkeypatch.setattr(
+        cli_serving, "running_url", lambda config: "http://127.0.0.1:5051"
+    )
+    monkeypatch.setattr(cli_serving, "_open_browser", opened.append)
 
-    def _refuse(config: Any, *, open_browser: bool) -> cli.CommandResult:
+    def _refuse(config: Any, *, open_browser: bool) -> cli_serving.CommandResult:
         raise AssertionError("a second app must not be started")
 
-    monkeypatch.setattr(cli, "_serve_attached_sync", _refuse)
+    monkeypatch.setattr(cli_serving, "_serve_attached_sync", _refuse)
 
-    cli._bare_workspace(_no_arguments("--project", "Already"))
+    cli_serving._bare_workspace(_no_arguments("--project", "Already"))
 
     out = capsys.readouterr().out
     # Reporting the app another terminal owns never opens a browser either.
@@ -460,13 +469,13 @@ def test_a_bare_call_honours_a_named_project(
     _initialised(other, "Second")
     served: dict[str, str] = {}
 
-    def _serve(config: Any, *, open_browser: bool) -> cli.CommandResult:
+    def _serve(config: Any, *, open_browser: bool) -> cli_serving.CommandResult:
         served["name"] = config.project_name
-        return cli.CommandResult()
+        return cli_serving.CommandResult()
 
-    monkeypatch.setattr(cli, "_serve_attached_sync", _serve)
-    monkeypatch.setattr(cli.sys.stdin, "isatty", lambda: True, raising=False)
-    cli._bare_workspace(_no_arguments("--project", "Second"))
+    monkeypatch.setattr(cli_serving, "_serve_attached_sync", _serve)
+    monkeypatch.setattr(cli_serving.sys.stdin, "isatty", lambda: True, raising=False)
+    cli_serving._bare_workspace(_no_arguments("--project", "Second"))
 
     assert served["name"] == "Second"
 
@@ -474,10 +483,10 @@ def test_a_bare_call_honours_a_named_project(
 def test_a_bare_call_with_no_project_says_how_to_make_one(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr(cli, "account_projects", lambda: {"projects": []})
+    monkeypatch.setattr(cli_projects, "account_projects", lambda: {"projects": []})
 
     with pytest.raises(ConfigurationError, match="init --project-root"):
-        cli._bare_workspace(_no_arguments())
+        cli_serving._bare_workspace(_no_arguments())
 
 
 # --- the detached app ----------------------------------------------------------
@@ -552,9 +561,11 @@ def test_no_app_at_all_is_not_detached(project: Path) -> None:
 
 
 def _served(config: Any, monkeypatch: pytest.MonkeyPatch, detached: bool) -> None:
-    monkeypatch.setattr(cli, "running_url", lambda _config: "http://127.0.0.1:5051")
     monkeypatch.setattr(
-        cli, "detached_from_terminal", lambda _config, _running: detached
+        cli_serving, "running_url", lambda _config: "http://127.0.0.1:5051"
+    )
+    monkeypatch.setattr(
+        cli_serving, "detached_from_terminal", lambda _config, _running: detached
     )
 
 
@@ -563,13 +574,13 @@ def test_a_bare_call_names_a_detached_app_and_its_remedy(
 ) -> None:
     _initialised(project, "Orphan")
     _served(resolve_config(project), monkeypatch, detached=True)
-    monkeypatch.setattr(cli, "_serve_attached_sync", lambda *_a, **_k: None)
+    monkeypatch.setattr(cli_serving, "_serve_attached_sync", lambda *_a, **_k: None)
 
-    cli._bare_workspace(_no_arguments("--project-root", str(project)))
+    cli_serving._bare_workspace(_no_arguments("--project-root", str(project)))
 
     out = capsys.readouterr().out
     assert "no terminal attached" in out
-    assert f"'{cli.CLI_NAME} stop'" in out
+    assert f"'{CLI_COMMAND} stop'" in out
 
 
 def test_a_bare_call_blames_another_terminal_only_when_one_owns_it(
@@ -578,7 +589,7 @@ def test_a_bare_call_blames_another_terminal_only_when_one_owns_it(
     _initialised(project, "Held")
     _served(resolve_config(project), monkeypatch, detached=False)
 
-    cli._bare_workspace(_no_arguments("--project-root", str(project)))
+    cli_serving._bare_workspace(_no_arguments("--project-root", str(project)))
 
     out = capsys.readouterr().out
     assert "this terminal does not own" in out
@@ -590,13 +601,15 @@ def test_stop_reports_a_detached_app_and_names_what_ends_it(
 ) -> None:
     config = _initialised(project, "Orphan")
     monkeypatch.setattr(
-        cli,
+        cli_serving,
         "project_app_state",
         lambda _root: {"app": {"running": True, "attached_to": None, "detached": True}},
     )
-    monkeypatch.setattr(cli, "recorded_pid", lambda _config: None)
+    monkeypatch.setattr(cli_serving, "recorded_pid", lambda _config: None)
 
-    report = cli._stop(_no_arguments("--project-root", str(project), "stop"), config)
+    report = cli_serving._stop(
+        _no_arguments("--project-root", str(project), "stop"), config
+    )
 
     assert report["detached"] is True
     assert any("no terminal attached" in note for note in report["notes"])
@@ -607,15 +620,17 @@ def test_stop_does_not_blame_a_terminal_that_owns_nothing(
 ) -> None:
     config = _initialised(project, "Held")
     monkeypatch.setattr(
-        cli,
+        cli_serving,
         "project_app_state",
         lambda _root: {
             "app": {"running": True, "attached_to": "/dev/pts/3", "detached": False}
         },
     )
-    monkeypatch.setattr(cli, "recorded_pid", lambda _config: None)
+    monkeypatch.setattr(cli_serving, "recorded_pid", lambda _config: None)
 
-    report = cli._stop(_no_arguments("--project-root", str(project), "stop"), config)
+    report = cli_serving._stop(
+        _no_arguments("--project-root", str(project), "stop"), config
+    )
 
     assert report["detached"] is False
     assert not any("no terminal attached" in note for note in report["notes"])
@@ -634,13 +649,15 @@ def test_a_pid_record_that_names_no_process_is_not_signed(
     config = _initialised(project, "Zero")
     config.state_root.mkdir(parents=True, exist_ok=True)
     sent: list[tuple[int, int]] = []
-    monkeypatch.setattr(cli, "project_app_state", lambda _root: {"app": {}})
-    monkeypatch.setattr(cli.os, "kill", lambda pid, number: sent.append((pid, number)))
+    monkeypatch.setattr(cli_serving, "project_app_state", lambda _root: {"app": {}})
+    monkeypatch.setattr(
+        cli_serving.os, "kill", lambda pid, number: sent.append((pid, number))
+    )
 
     for recorded in ("0", "-1", "", "not-a-pid"):
         (config.state_root / PID_FILE).write_text(f"{recorded}\n", encoding="utf-8")
         assert recorded_pid(config.state_root) is None, recorded
-        report = cli._stop(
+        report = cli_serving._stop(
             _no_arguments("--project-root", str(project), "stop"), config
         )
         assert report["running"] is False, recorded
@@ -667,9 +684,9 @@ def test_stop_will_not_signal_an_unrelated_live_process(
     )
     try:
         (config.state_root / PID_FILE).write_text(f"{reader.pid}\n", encoding="utf-8")
-        monkeypatch.setattr(cli, "project_app_state", lambda _root: {"app": {}})
+        monkeypatch.setattr(cli_serving, "project_app_state", lambda _root: {"app": {}})
 
-        report = cli._stop(
+        report = cli_serving._stop(
             _no_arguments("--project-root", str(project), "stop"), config
         )
 
@@ -707,9 +724,9 @@ def test_stop_ends_an_app_a_bare_call_started(
         port = int(app.stdout.readline())
         (config.state_root / PID_FILE).write_text(f"{app.pid}\n", encoding="utf-8")
         (config.state_root / PORT_FILE).write_text(f"{port}\n", encoding="utf-8")
-        monkeypatch.setattr(cli, "project_app_state", lambda _root: {"app": {}})
+        monkeypatch.setattr(cli_serving, "project_app_state", lambda _root: {"app": {}})
 
-        report = cli._stop(_no_arguments("--project", "Bare", "stop"), config)
+        report = cli_serving._stop(_no_arguments("--project", "Bare", "stop"), config)
 
         assert report["stopped"] is True, report["stop_refusal"]
         assert app.wait(timeout=30) == 0

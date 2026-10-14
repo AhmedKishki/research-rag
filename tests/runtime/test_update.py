@@ -38,7 +38,8 @@ from research_rag.runtime.release import (
     ReleaseSet,
 )
 from research_rag.runtime.version import version_block
-from research_rag.surfaces.cli import _parser
+from research_rag.surfaces.cli import installation as cli_installation
+from research_rag.surfaces.cli.parser import _parser
 
 CHECKOUT = update_module.CHECKOUT
 DISTRIBUTION = update_module.DISTRIBUTION
@@ -72,7 +73,7 @@ def _fetch(document: dict[str, Any]) -> Any:
 def no_network(monkeypatch: pytest.MonkeyPatch) -> None:
     """No test in this file reaches GitHub, whatever it asks for."""
 
-    monkeypatch.setattr(cli_module, "_fetch_published_release", _fetch(PUBLISHED))
+    monkeypatch.setattr(cli_installation, "_fetch_published_release", _fetch(PUBLISHED))
 
 
 class Question:
@@ -84,8 +85,8 @@ class Question:
 
     def __init__(self, monkeypatch: pytest.MonkeyPatch, answer: str) -> None:
         self.asked: list[tuple[str, tuple[str, ...]]] = []
-        monkeypatch.setattr(cli_module, "_interactive_terminal", lambda: True)
-        monkeypatch.setattr(cli_module, "_ask_to_install", self._ask(answer))
+        monkeypatch.setattr(cli_installation, "_interactive_terminal", lambda: True)
+        monkeypatch.setattr(cli_installation, "_ask_to_install", self._ask(answer))
 
     def _ask(self, answer: str) -> Any:
         def ask(
@@ -1231,7 +1232,7 @@ def test_the_changelog_is_shown_on_stderr_and_the_answer_comes_from_stdin(
 ) -> None:
     shown = io.StringIO()
 
-    asked = cli_module._ask_to_install(
+    asked = cli_installation._ask_to_install(
         _published_release(),
         ("What applying does.",),
         target="release 1.1.0, tagged v1.1.0",
@@ -1253,7 +1254,7 @@ def test_the_changelog_is_shown_on_stderr_and_the_answer_comes_from_stdin(
 def test_a_release_with_no_body_is_still_previewed_and_named() -> None:
     shown = io.StringIO()
 
-    cli_module._ask_to_install(
+    cli_installation._ask_to_install(
         _published_release(body=""),
         (),
         target="release 1.1.0, tagged v1.1.0",
@@ -1269,7 +1270,7 @@ def test_a_release_with_no_body_is_still_previewed_and_named() -> None:
 def test_a_changelog_that_was_not_read_is_said_so_rather_than_invented() -> None:
     shown = io.StringIO()
 
-    cli_module._ask_to_install(
+    cli_installation._ask_to_install(
         PublishedRelease(
             update_module.UNREADABLE_RELEASE,
             detail="the published release could not be read: timed out",
@@ -1286,7 +1287,7 @@ def test_a_changelog_that_was_not_read_is_said_so_rather_than_invented() -> None
 
 @pytest.mark.parametrize("answer", ["y\n", "Y\n", "yes\n", "  yes  \n"])
 def test_a_yes_installs_and_nothing_else_does(answer: str) -> None:
-    asked = cli_module._ask_to_install(
+    asked = cli_installation._ask_to_install(
         _published_release(),
         (),
         target="release 1.1.0, tagged v1.1.0",
@@ -1299,7 +1300,7 @@ def test_a_yes_installs_and_nothing_else_does(answer: str) -> None:
 
 @pytest.mark.parametrize("answer", ["\n", "n\n", "no\n", "sure\n", "", "yes please\n"])
 def test_every_other_answer_declines(answer: str) -> None:
-    asked = cli_module._ask_to_install(
+    asked = cli_installation._ask_to_install(
         _published_release(),
         (),
         target="release 1.1.0, tagged v1.1.0",
@@ -1315,7 +1316,7 @@ def test_ctrl_c_at_the_question_is_a_decline_and_not_a_failure() -> None:
         def readline(self) -> str:
             raise KeyboardInterrupt
 
-    asked = cli_module._ask_to_install(
+    asked = cli_installation._ask_to_install(
         _published_release(),
         (),
         target="release 1.1.0, tagged v1.1.0",

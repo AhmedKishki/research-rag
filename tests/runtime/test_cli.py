@@ -24,13 +24,13 @@ from research_rag.core.operations import run
 from research_rag.project import registry
 from research_rag.project.config import GATEWAY_EXECUTABLE, ConfigurationError
 from research_rag.project.policy import ResearchError
-from research_rag.surfaces.cli import (
-    _init,
-    _metadata_body,
-    _operate,
-    _parser,
-    _resolve,
-    _run,
+from research_rag.surfaces.cli import _run
+from research_rag.surfaces.cli import corpus as cli_corpus
+from research_rag.surfaces.cli import serving as cli_serving
+from research_rag.surfaces.cli.corpus import _metadata_body, _operate
+from research_rag.surfaces.cli.parser import _parser
+from research_rag.surfaces.cli.projects import _init, _resolve
+from research_rag.surfaces.cli.serving import (
     _service_processes,
     _start,
     _stop,
@@ -633,7 +633,7 @@ def test_a_reading_command_never_starts_a_child_process(
 
 def test_normal_service_scope_uses_direct_backend(project: Path) -> None:
     from research_rag.retrieval.direct import DirectRetrieval
-    from research_rag.surfaces.cli import _service
+    from research_rag.surfaces.cli.corpus import _service
 
     config = _resolve(_args("--project-root", str(project), "status"))
 
@@ -788,15 +788,15 @@ def test_stopping_asks_first_and_kills_only_the_survivors(
     asked: list[tuple[int, int]] = []
     still_running = {2}
 
-    monkeypatch.setattr(cli_module, "STOP_GRACE_SECONDS", 0)
+    monkeypatch.setattr(cli_serving, "STOP_GRACE_SECONDS", 0)
     monkeypatch.setattr(
-        cli_module.ownership,
+        cli_serving.ownership,
         "ask_to_stop",
         lambda pid, _root, number=signal.SIGTERM: (
             asked.append((pid, number)) or ownership_module.Outcome(True, "")
         ),
     )
-    monkeypatch.setattr(cli_module, "alive", lambda pid: pid in still_running)
+    monkeypatch.setattr(cli_serving, "alive", lambda pid: pid in still_running)
 
     forced = _terminate(tmp_path / "project", [1, 2])
 
@@ -815,10 +815,10 @@ def test_a_pid_the_proof_refuses_is_never_signalled_at_all(
     """
 
     attempted: list[tuple[int, int]] = []
-    monkeypatch.setattr(cli_module, "STOP_GRACE_SECONDS", 0)
-    monkeypatch.setattr(cli_module, "alive", lambda pid: True)
+    monkeypatch.setattr(cli_serving, "STOP_GRACE_SECONDS", 0)
+    monkeypatch.setattr(cli_serving, "alive", lambda pid: True)
     monkeypatch.setattr(
-        cli_module.ownership,
+        cli_serving.ownership,
         "ask_to_stop",
         lambda pid, _root, number=signal.SIGTERM: (
             attempted.append((pid, number))
@@ -858,9 +858,9 @@ def test_start_serves_in_this_terminal_and_records_the_port_it_chose(
 
     async def _serving(config: Any, *, port: int | None, open_browser: bool):
         served.append((config, port, open_browser))
-        return cli_module.CommandResult()
+        return cli_serving.CommandResult()
 
-    monkeypatch.setattr(cli_module, "_serve_attached", _serving)
+    monkeypatch.setattr(cli_serving, "_serve_attached", _serving)
     args = _args("--project-root", str(project), "start", "--port", "5099")
     config = _resolve(args)
 
@@ -880,10 +880,10 @@ def test_start_opens_a_browser_only_when_asked(
 
     async def _serving(config: Any, *, port: int | None, open_browser: bool):
         served.append((config, port, open_browser))
-        return cli_module.CommandResult()
+        return cli_serving.CommandResult()
 
-    monkeypatch.setattr(cli_module, "_open_browser", opened.append)
-    monkeypatch.setattr(cli_module, "_serve_attached", _serving)
+    monkeypatch.setattr(cli_serving, "_open_browser", opened.append)
+    monkeypatch.setattr(cli_serving, "_serve_attached", _serving)
     args = _args(
         "--project-root", str(project), "--start-ui", "start", "--port", "5099"
     )
@@ -906,9 +906,9 @@ def test_start_leaves_an_app_another_terminal_owns_alone(
 
     async def _serving(*_: Any, **__: Any):
         served.append(True)
-        return cli_module.CommandResult()
+        return cli_serving.CommandResult()
 
-    monkeypatch.setattr(cli_module, "_serve_attached", _serving)
+    monkeypatch.setattr(cli_serving, "_serve_attached", _serving)
     # The serving process is declared attached, because this test is about an app
     # another terminal owns and not about the case that one owns no terminal.
     monkeypatch.setattr(app_module, "has_terminal", lambda _pid: True)
@@ -939,9 +939,9 @@ def test_start_names_a_detached_app_and_its_remedy(
 
     async def _serving(*_: Any, **__: Any):
         served.append(True)
-        return cli_module.CommandResult()
+        return cli_serving.CommandResult()
 
-    monkeypatch.setattr(cli_module, "_serve_attached", _serving)
+    monkeypatch.setattr(cli_serving, "_serve_attached", _serving)
     monkeypatch.setattr(app_module, "has_terminal", lambda _pid: False)
     args = _args("--project-root", str(project), "start")
     config = _resolve(args)
@@ -1018,7 +1018,7 @@ def test_the_running_app_answers_in_a_thread_and_without_diagnostics() -> None:
             return {"name": name, "arguments": arguments}
 
     async def exercise() -> list[dict[str, Any]]:
-        remote = cli_module.Remote(Answering())  # type: ignore[arg-type]
+        remote = cli_corpus.Remote(Answering())  # type: ignore[arg-type]
         return [
             await remote.call("list_generations"),
             await remote.call("remove_generation", generation_id="g1", confirm="g1"),

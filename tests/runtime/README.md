@@ -17,6 +17,6 @@ Retrieval uses the direct backend without a gateway or framework runtime.
 - `test_version.py`: running and installed versions, the `--version` answer, and the declared version matching the installed distribution.
 - `test_update_script.py`: `scripts/update.sh` delegates every flag it keeps to `research-rag update` and rejects an unknown option.
 
-- `test_cli.py` and parts of `test_installation.py` and `test_update.py` exercise `surfaces/cli.py` here, because they hold the process the command reaches.
+- `test_cli.py` and parts of `test_installation.py` and `test_update.py` exercise `surfaces/cli/` here, because they hold the process the command reaches.
 - `install_entry.py` and `tool_ownership.py` are reached through `installation` and `update`, which re-export them.
 - A change to an answer shape belongs in `tests/core`.

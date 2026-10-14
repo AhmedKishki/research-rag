@@ -4,7 +4,7 @@ The three front ends, and the transport that reaches the app.
 
 | Module | Holds |
 |---|---|
-| `cli.py` | The command line: what commands exist, what each does, and how an answer is printed |
+| `cli/` | The command line: `__init__.py` runs a command and prints its answer; `help.py` and `parser.py` say what commands exist; `projects.py` resolves the project; `corpus.py` forwards an operation to the app or the local service; `serving.py` starts and stops the app; `installation.py` installs and updates |
 | `mcp.py` | The agent surface: the tools and the resource, declared once |
 | `ui.py` | This app's adapter over the workspace: the shared operations, and the few only the workspace serves |
 | `workspace/` | The browser workspace itself: the Starlette host, the contracts it and an adapter share, and its assets |
@@ -18,9 +18,9 @@ The three front ends, and the transport that reaches the app.
   re-declaring them, so an agent and a browser cannot disagree about one call.
 - A blocked surface declares `status` and nothing else, and the remedy it gives is
   a command a reader runs in a terminal.
-- `cli.py` combines parsing, command bodies, and output shaping; their split remains open.
-  - Retrieval imports are deferred until commands need them.
-  - Lightweight command coverage lives in `tests/gates/test_lightweight_imports.py`.
+- `cli/` imports retrieval only when a command needs it.
+  `tests/gates/test_lightweight_imports.py` covers the commands that must run
+  without it.
 - `workspace/` owns no project state and imports nothing outside itself. A host
   that stores a document in a shared package is a host that cannot say where its
   state is.
