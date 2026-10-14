@@ -332,3 +332,15 @@ def test_a_passage_window_skips_unretrievable_neighbours(tmp_path: Path) -> None
         "c1",
         "c3",
     ]
+
+
+def test_a_lookup_connection_is_closed_when_its_block_ends(tmp_path: Path) -> None:
+    """A sqlite3 connection's own context manager ends a transaction, not the file."""
+
+    chunks_path, units_path, lookup_path = _artifacts(tmp_path)
+    lookup = ensure_artifact_lookup(chunks_path, units_path, lookup_path)
+
+    with lookup._connect() as connection:
+        assert connection.execute("SELECT COUNT(*) FROM chunks").fetchone()[0] == 3
+    with pytest.raises(sqlite3.ProgrammingError):
+        connection.execute("SELECT 1")
