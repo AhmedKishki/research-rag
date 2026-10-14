@@ -9,6 +9,8 @@ import time
 import uuid
 from collections import Counter, defaultdict
 from collections.abc import Iterable, Iterator
+from dataclasses import dataclass, field
+from functools import cached_property
 from pathlib import Path
 from typing import Any
 
@@ -103,6 +105,7 @@ from ..storage.durable_io import (
     write_handoff_jsonl,
 )
 from .generation import (
+    ReuseSnapshot,
     generation_artifacts_are_valid,
     load_reuse_snapshot,
     source_set_matches,
@@ -173,6 +176,137 @@ class _BuildCannotResume(ResearchError):
 # next call resumes. The same failure in the same phase this many times running
 # discards it, so a deterministic fault cannot wedge every later call.
 MAXIMUM_REPEATED_FAILURES = 3
+
+
+#: What a source's chunking discarded, as its staged state records it.
+_DISCARDED_CHUNK_KEYS = (
+    "discarded_empty_chunks",
+    "discarded_symbol_only_chunks",
+    "discarded_corrupt_chunks",
+)
+_NO_DISCARDED_CHUNKS = dict.fromkeys(_DISCARDED_CHUNK_KEYS, 0)
+
+
+@dataclass
+class _Build:
+    """One ingest call's hold on a staged build.
+
+    The checkpoint is the durable state a later call resumes from. The reuse
+    snapshot, the units read for chunking, and the mapped vectors belong to this
+    call and are loaded again by the next one.
+    """
+
+    staging_root: Path
+    checkpoint: dict[str, Any]
+    scan: SourceScan
+    exclusions: dict[str, dict[str, str]]
+    current: tuple[Path, dict[str, Any]] | None
+    deadline: float
+    snapshot: ReuseSnapshot | None = None
+    # The reuse axes this call has loaded into the snapshot.
+    loaded_axes: set[str] = field(default_factory=set)
+    units_cache: dict[str, list[dict[str, Any]]] = field(default_factory=dict)
+    portable_vectors: np.ndarray[Any, np.dtype[np.float32]] | None = None
+
+    @property
+    def chunk_size(self) -> int:
+        return int(self.checkpoint["parameters"]["chunk_size"])
+
+    @property
+    def chunk_overlap(self) -> int:
+        return int(self.checkpoint["parameters"]["chunk_overlap"])
+
+    @property
+    def force_recompute(self) -> bool:
+        return bool(self.checkpoint["parameters"]["force_recompute"])
+
+    @cached_property
+    def sources_by_path(self) -> dict[str, SourceFile]:
+        return {source.source_relative_path: source for source in self.scan.selected}
+
+    @cached_property
+    def selected_paths(self) -> list[str]:
+        return [str(item) for item in self.checkpoint["selected_source_paths"]]
+
+    def budget_expired(self) -> bool:
+        return time.perf_counter() >= self.deadline
+
+    def add(self, key: str, amount: int = 1) -> None:
+        """Add to one of the checkpoint's running counts."""
+
+        self.checkpoint[key] = int(self.checkpoint.get(key) or 0) + amount
+
+    def add_time(self, phase: str, started: float) -> None:
+        timings = self.checkpoint.setdefault("phase_timings_seconds", {})
+        timings[phase] = float(timings.get(phase) or 0.0) + (
+            time.perf_counter() - started
+        )
+
+    def next_source(self, done: str) -> str | None:
+        """The first selected source the checkpoint's `done` list does not hold."""
+
+        completed = set(self.checkpoint[done])
+        return next(
+            (path for path in self.selected_paths if path not in completed), None
+        )
+
+    def source_records(self) -> list[dict[str, Any]]:
+        digests = self.checkpoint["source_digests"]
+        return [
+            {
+                **record,
+                "sha256": str(digests[record["source_relative_path"]]),
+                "included": record["source_relative_path"] not in self.exclusions,
+            }
+            for record in self.checkpoint["source_inventory"]
+        ]
+
+    def excluded_sources(self) -> list[dict[str, Any]]:
+        return [
+            {
+                "source_id": source.source_id,
+                "source_relative_path": source.source_relative_path,
+                "source_path": source.project_relative_path,
+                **self.exclusions[source.source_relative_path],
+            }
+            for source in self.scan.selected
+            if source.source_relative_path in self.exclusions
+        ]
+
+    def revalidation_stats_match(self, *, require_complete: bool = False) -> bool:
+        recorded = self.checkpoint.get("revalidation_stats") or {}
+        if not isinstance(recorded, dict):
+            return False
+        if require_complete and set(recorded) != set(self.sources_by_path):
+            return False
+        try:
+            return all(
+                file_identity(self.sources_by_path[relative].path) == identity
+                for relative, identity in recorded.items()
+                if relative in self.sources_by_path
+            ) and set(recorded).issubset(self.sources_by_path)
+        except OSError:
+            return False
+
+
+@dataclass
+class _StagedSource:
+    """One source on its way through extraction, and where its artifacts are staged."""
+
+    relative: str
+    source: SourceFile
+    root: Path
+    digest: str
+    started: float
+    state: dict[str, Any] | None = None
+
+    @property
+    def state_path(self) -> Path:
+        return self.root / "state.json"
+
+    @property
+    def document_path(self) -> Path:
+        return self.root / "document.json"
 
 
 class IngestionWorkflow:
@@ -1142,15 +1276,6 @@ class IngestionWorkflow:
             or "Ingestion checkpoint saved; call ingest again with the same settings.",
         }
 
-    @staticmethod
-    def _add_phase_time(
-        checkpoint: dict[str, Any],
-        phase: str,
-        elapsed: float,
-    ) -> None:
-        timings = checkpoint.setdefault("phase_timings_seconds", {})
-        timings[phase] = float(timings.get(phase) or 0.0) + elapsed
-
     def _assemble_staged_corpus(
         self, staging_root: Path, checkpoint: dict[str, Any]
     ) -> None:
@@ -1177,11 +1302,7 @@ class IngestionWorkflow:
             if not isinstance(document, dict) or not isinstance(state, dict):
                 raise _BuildCannotResume("Invalid staged source artifacts")
             documents.append(document)
-            for key in (
-                "discarded_empty_chunks",
-                "discarded_symbol_only_chunks",
-                "discarded_corrupt_chunks",
-            ):
+            for key in _DISCARDED_CHUNK_KEYS:
                 discarded[key] += int(state.get(key) or 0)
         if not documents:
             raise _BuildCannotResume(
@@ -1239,7 +1360,110 @@ class IngestionWorkflow:
             for document in documents
         )
 
-    async def _advance_ingestion(  # noqa: C901 — split is tracked in TODO.md
+    async def _save(self, build: _Build) -> None:
+        await _atomic_to_thread(
+            self._write_checkpoint, build.staging_root, build.checkpoint
+        )
+
+    def _pause_if_due(self, build: _Build) -> dict[str, Any] | None:
+        """The in-progress answer once the call's budget is spent, else None."""
+
+        return (
+            self._in_progress_result(build.checkpoint)
+            if build.budget_expired()
+            else None
+        )
+
+    async def _commit(self, build: _Build) -> dict[str, Any] | None:
+        """Save the step just taken, then stop if the budget is spent."""
+
+        await self._save(build)
+        return self._pause_if_due(build)
+
+    async def _enter_phase(self, build: _Build, phase: str) -> None:
+        build.checkpoint["phase"] = phase
+        await self._save(build)
+
+    async def _reuse_snapshot(self, build: _Build, *axes: str) -> ReuseSnapshot:
+        """The selected generation as reuse reads it, with the named axes loaded."""
+
+        settings = self.config.settings
+        return await _atomic_to_thread(
+            load_reuse_snapshot,
+            build.current,
+            schema_version=SCHEMA_VERSION,
+            extraction_policy_version=EXTRACTION_POLICY_VERSION,
+            cleaning_policy_version=CLEANING_POLICY_VERSION,
+            artifact_policy_version=ARTIFACT_POLICY_VERSION,
+            project_id=self.config.project_id,
+            chunk_size=build.chunk_size,
+            chunk_overlap=build.chunk_overlap,
+            chunk_headers=settings.chunk_headers,
+            maximum_unclean_percent=settings.maximum_unclean_percent,
+            load_units="units" in axes,
+            load_chunks="chunks" in axes,
+            load_vectors="vectors" in axes,
+            embedding=settings.embedding_facts,
+        )
+
+    async def _load_axes(self, build: _Build, *axes: str) -> None:
+        """Load the reuse axes a phase reads, once per call."""
+
+        if build.snapshot is not None and not build.loaded_axes.issuperset(axes):
+            build.snapshot = await self._reuse_snapshot(build, *axes)
+            build.loaded_axes.update(axes)
+
+    async def _record_skip(self, build: _Build, record: dict[str, str]) -> None:
+        relative = record["source_relative_path"]
+        skipped = build.checkpoint.setdefault("skipped_sources", [])
+        if not any(item["source_relative_path"] == relative for item in skipped):
+            skipped.append(record)
+        for key in ("extracted_source_paths", "chunked_source_paths"):
+            if relative not in build.checkpoint[key]:
+                build.checkpoint[key].append(relative)
+        await self._save(build)
+
+    async def _extract_or_skip(
+        self,
+        build: _Build,
+        staged: _StagedSource,
+        operation: Any,
+        *args: Any,
+        **kwargs: Any,
+    ) -> Any:
+        """Run one source-local extraction step, or omit the source when it fails.
+
+        Only typed failures from the source-local extractor are omissions. Artifact
+        writes, hashing, chunking and index failures remain fatal. None means the
+        source was omitted and the omission is already saved.
+        """
+
+        try:
+            return await _atomic_to_thread(operation, *args, **kwargs)
+        except ExtractionError as exc:
+            record = {
+                "source_relative_path": staged.relative,
+                "reason": str(exc),
+                # OCR is performed outside this app, so the remedy is the same
+                # for every source-local failure: repair or replace the file.
+                "remedy": "Repair or replace this source, then run research-rag ingest.",
+            }
+            # Commit the source decision first so a lost checkpoint write can
+            # recover it without repeating partially extracted work.
+            await _atomic_to_thread(
+                atomic_write_json,
+                staged.state_path,
+                {
+                    **(staged.state or {}),
+                    "extraction_stage": "skipped",
+                    "skipped_source": record,
+                },
+            )
+            build.add_time("extraction", staged.started)
+            await self._record_skip(build, record)
+            return None
+
+    async def _advance_ingestion(
         self,
         *,
         staging_root: Path,
@@ -1249,117 +1473,37 @@ class IngestionWorkflow:
         current: tuple[Path, dict[str, Any]] | None,
         deadline: float,
     ) -> dict[str, Any]:
-        parameters = checkpoint["parameters"]
-        chunk_size = int(parameters["chunk_size"])
-        chunk_overlap = int(parameters["chunk_overlap"])
-        force_recompute = bool(parameters["force_recompute"])
-        sources_by_path: dict[str, SourceFile] = {
-            source.source_relative_path: source for source in scan.selected
-        }
-        selected_paths = [str(item) for item in checkpoint["selected_source_paths"]]
+        """Advance the build from its checkpoint until it ends or the budget is spent.
 
-        async def io(function: Any, /, *args: Any, **kwargs: Any) -> Any:
-            # Staged reads, writes, and fsyncs leave the event loop the
-            # workspace, MCP, and control API share.
-            return await _atomic_to_thread(function, *args, **kwargs)
+        Each phase handler takes one durable step and returns the call's answer, or
+        None to take the next step.
+        """
 
-        snapshot = None
-        # The reuse axes this call has loaded into the snapshot.
-        loaded_axes: set[str] = set()
-        if not force_recompute:
-            snapshot = await io(
-                load_reuse_snapshot,
-                current,
-                schema_version=SCHEMA_VERSION,
-                extraction_policy_version=EXTRACTION_POLICY_VERSION,
-                cleaning_policy_version=CLEANING_POLICY_VERSION,
-                artifact_policy_version=ARTIFACT_POLICY_VERSION,
-                project_id=self.config.project_id,
-                chunk_size=chunk_size,
-                chunk_overlap=chunk_overlap,
-                chunk_headers=self.config.settings.chunk_headers,
-                maximum_unclean_percent=self.config.settings.maximum_unclean_percent,
-                load_units=False,
-                load_chunks=False,
-                load_vectors=False,
-                embedding=self.config.settings.embedding_facts,
-            )
-        else:
+        build = _Build(staging_root, checkpoint, scan, exclusions, current, deadline)
+        if build.force_recompute:
             LOGGER.debug("ingest: force_recompute disables every reuse axis")
-        units_cache: dict[str, list[dict[str, Any]]] = {}
-        portable_vectors: np.ndarray[Any, np.dtype[np.float32]] | None = None
-
-        def budget_expired() -> bool:
-            return time.perf_counter() >= deadline
-
-        async def record_skip(record: dict[str, str]) -> None:
-            relative = record["source_relative_path"]
-            skipped = checkpoint.setdefault("skipped_sources", [])
-            if not any(item["source_relative_path"] == relative for item in skipped):
-                skipped.append(record)
-            for key in ("extracted_source_paths", "chunked_source_paths"):
-                if relative not in checkpoint[key]:
-                    checkpoint[key].append(relative)
-            await io(self._write_checkpoint, staging_root, checkpoint)
-
-        async def extract_source(operation: Any, *args: Any, **kwargs: Any) -> Any:
-            # Only typed failures from the source-local extractor are omissions.
-            # Artifact writes, hashing, chunking and index failures remain fatal.
-            try:
-                return await _atomic_to_thread(operation, *args, **kwargs)
-            except ExtractionError as exc:
-                record = {
-                    "source_relative_path": relative,
-                    "reason": str(exc),
-                    # OCR is performed outside this app, so the remedy is the same
-                    # for every source-local failure: repair or replace the file.
-                    "remedy": "Repair or replace this source, then run research-rag ingest.",
-                }
-                skipped_state = {
-                    **(state or {}),
-                    "extraction_stage": "skipped",
-                    "skipped_source": record,
-                }
-                # Commit the source decision first so a lost checkpoint write
-                # can recover it without repeating partially extracted work.
-                await io(atomic_write_json, state_path, skipped_state)
-                self._add_phase_time(
-                    checkpoint, "extraction", time.perf_counter() - started
-                )
-                await record_skip(record)
-                return None
-
-        def source_records() -> list[dict[str, Any]]:
-            digests = checkpoint["source_digests"]
-            return [
-                {
-                    **record,
-                    "sha256": str(digests[record["source_relative_path"]]),
-                    "included": record["source_relative_path"] not in exclusions,
-                }
-                for record in checkpoint["source_inventory"]
-            ]
-
-        def revalidation_stats_match(*, require_complete: bool = False) -> bool:
-            recorded = checkpoint.get("revalidation_stats") or {}
-            if not isinstance(recorded, dict):
-                return False
-            if require_complete and set(recorded) != set(sources_by_path):
-                return False
-            try:
-                return all(
-                    file_identity(sources_by_path[relative].path) == identity
-                    for relative, identity in recorded.items()
-                    if relative in sources_by_path
-                ) and set(recorded).issubset(sources_by_path)
-            except OSError:
-                return False
-
-        if checkpoint.get("revalidation_stats") and not revalidation_stats_match():
+        else:
+            build.snapshot = await self._reuse_snapshot(build)
+        if (
+            checkpoint.get("revalidation_stats")
+            and not build.revalidation_stats_match()
+        ):
             raise _SourceChangedDuringIngest(
                 "A source changed after its final ingestion hash"
             )
-
+        handlers = {
+            "source_hashing": self._hash_next_source,
+            "extraction": self._extract_next_source,
+            "chunking": self._chunk_next_source,
+            "assembly": self._assemble_corpus,
+            "embedding": self._embed_next_batch,
+            "vector_assembly": self._assemble_vectors,
+            "bm25_indexing": self._index_bm25,
+            "dense_indexing": self._index_next_dense_batch,
+            "qdrant_indexing": self._index_next_dense_batch,
+            "source_revalidation": self._revalidate_next_source,
+            "finalizing": self._finalize_build,
+        }
         logged_phase: str | None = None
         while True:
             phase = str(checkpoint["phase"])
@@ -1367,1446 +1511,1228 @@ class IngestionWorkflow:
             # source or passage text is included.
             if phase != logged_phase:
                 LOGGER.debug(
-                    "ingest: build %s phase %s",
-                    checkpoint.get("build_id"),
-                    phase,
+                    "ingest: build %s phase %s", checkpoint.get("build_id"), phase
                 )
                 logged_phase = phase
-            if phase == "source_hashing":
-                digests = checkpoint["source_digests"]
-                pending = [
-                    record
-                    for record in checkpoint["source_inventory"]
-                    if record["source_relative_path"] not in digests
-                ]
-                if pending:
-                    record = pending[0]
-                    source = sources_by_path[str(record["source_relative_path"])]
-                    started = time.perf_counter()
-                    try:
-                        digest = await _atomic_to_thread(sha256_file, source.path)
-                    except OSError as exc:
-                        raise _SourceChangedDuringIngest(
-                            "A source became unavailable during hashing"
-                        ) from exc
-                    self._add_phase_time(
-                        checkpoint,
-                        "source_hashing",
-                        time.perf_counter() - started,
-                    )
-                    digests[source.source_relative_path] = digest
-                    await io(self._write_checkpoint, staging_root, checkpoint)
-                    if budget_expired():
-                        return self._in_progress_result(checkpoint)
-                    continue
+            handler = handlers.get(phase)
+            if handler is None:
+                raise _BuildCannotResume(
+                    f"Unsupported ingestion checkpoint phase: {phase}"
+                )
+            result = await handler(build)
+            if result is not None:
+                return result
 
-                records = source_records()
-                # A no-op means every reuse axis is compatible: extraction units,
-                # chunk text, and vectors. A model change or a processing-policy
-                # change is a genuine incompatibility even when the sources are
-                # byte-identical, because the new generation must store something
-                # the old one does not. Ranking policy is deliberately absent: it
-                # is a runtime decision and never rewrites a generation.
-                reflowable_current = bool(
-                    snapshot is not None
-                    and all(
-                        reflowable_document_is_current(document)
-                        for document in snapshot.documents.values()
-                    )
-                )
-                reuse_axes_match = bool(
-                    snapshot is not None
-                    and snapshot.units_reusable
-                    and snapshot.chunks_reusable
-                    and snapshot.vectors_reusable
-                    and reflowable_current
-                )
-                if snapshot is not None and not reuse_axes_match:
-                    LOGGER.debug(
-                        "ingest: building because a reuse axis moved "
-                        "(units_reusable=%s chunks_reusable=%s vectors_reusable=%s "
-                        "reflowable_current=%s)",
-                        snapshot.units_reusable,
-                        snapshot.chunks_reusable,
-                        snapshot.vectors_reusable,
-                        reflowable_current,
-                    )
-                if (
-                    reuse_axes_match
-                    and not snapshot.manifest.get("build_metrics", {}).get(
-                        "skipped_sources"
-                    )
-                    # A backend switch or adapter drift alone changes how a *new*
-                    # PDF would be read, never the evidence already stored for an
-                    # unchanged source. An incremental build passes an unchanged
-                    # legacy PDF through whole, preserving its provenance, so the
-                    # backend is not part of this gate; only the source bytes,
-                    # exclusions, and storage policy are.
-                    and source_set_matches(
-                        snapshot,
-                        records,
-                        exclusion_revision=str(checkpoint["source_exclusion_revision"]),
-                        metadata_storage_policy=METADATA_STORAGE_POLICY,
-                    )
-                ):
-                    manifest = snapshot.manifest
-                    try:
-                        await self._validate_generation_for_activation(
-                            snapshot.root,
-                            manifest,
-                        )
-                    except ResearchError as exc:
-                        # Validation failed, so this generation cannot be served
-                        # as-is and a build is needed. Its per-axis reuse verdict
-                        # still holds: keep the snapshot so the extraction and
-                        # chunk text survive, and only the failing axis (usually a
-                        # corrupt vector file) is recomputed.
-                        checkpoint["reuse_rejection_reason"] = str(exc)
-                        LOGGER.debug(
-                            "ingest: selected generation failed validation; "
-                            "rebuilding while reusing its valid axes: %s",
-                            exc,
-                        )
-                    else:
-                        self._loaded_generation = str(manifest["generation_id"])
-                        await io(shutil.rmtree, staging_root, ignore_errors=True)
-                        LOGGER.debug(
-                            "ingest: build %s no-op; selected generation unchanged",
-                            checkpoint.get("build_id"),
-                        )
-                        return {
-                            "status": "unchanged",
-                            "skipped_sources": manifest.get("build_metrics", {}).get(
-                                "skipped_sources", []
-                            ),
-                            "generation_changed": False,
-                            "generation_id": manifest["generation_id"],
-                            "generation_root": str(snapshot.root),
-                            "source_file_count": len(scan.selected),
-                            "excluded_source_count": len(exclusions),
-                            "document_count": manifest["document_count"],
-                            "extraction_unit_count": manifest["extraction_unit_count"],
-                            "chunk_count": manifest["chunk_count"],
-                            "reused_document_count": manifest["document_count"],
-                            "rebuilt_document_count": 0,
-                            "reused_chunk_count": manifest["chunk_count"],
-                            "rebuilt_chunk_count": 0,
-                            "reused_vector_count": manifest["chunk_count"],
-                            "created_vector_count": 0,
-                            "phase_timings_seconds": checkpoint[
-                                "phase_timings_seconds"
-                            ],
-                            "message": (
-                                "Inputs match the selected generation; no build "
-                                "was needed."
-                            ),
-                        }
-                checkpoint["phase"] = "extraction"
-                await io(self._write_checkpoint, staging_root, checkpoint)
-                continue
+    async def _hash_next_source(self, build: _Build) -> dict[str, Any] | None:
+        """Hash the next source; once all are hashed, answer a no-op or start a build."""
 
-            if phase == "extraction":
-                if snapshot is not None and "units" not in loaded_axes:
-                    snapshot = await io(
-                        load_reuse_snapshot,
-                        current,
-                        schema_version=SCHEMA_VERSION,
-                        extraction_policy_version=EXTRACTION_POLICY_VERSION,
-                        cleaning_policy_version=CLEANING_POLICY_VERSION,
-                        artifact_policy_version=ARTIFACT_POLICY_VERSION,
-                        project_id=self.config.project_id,
-                        chunk_size=chunk_size,
-                        chunk_overlap=chunk_overlap,
-                        chunk_headers=self.config.settings.chunk_headers,
-                        maximum_unclean_percent=self.config.settings.maximum_unclean_percent,
-                        load_units=True,
-                        load_chunks=True,
-                        load_vectors=False,
-                        embedding=self.config.settings.embedding_facts,
-                    )
-                    loaded_axes.update({"units", "chunks"})
-                completed = set(checkpoint["extracted_source_paths"])
-                relative = next(
-                    (path for path in selected_paths if path not in completed),
-                    None,
-                )
-                if relative is None:
-                    checkpoint["phase"] = "chunking"
-                    await io(self._write_checkpoint, staging_root, checkpoint)
-                    continue
-                source = sources_by_path[relative]
-                source_digest = str(checkpoint["source_digests"][relative])
-                artifact_root = self._source_artifact_root(staging_root, relative)
-                artifact_root.mkdir(parents=True, exist_ok=True)
-                started = time.perf_counter()
-                state_path = artifact_root / "state.json"
-                state = await io(read_json, state_path) if state_path.exists() else None
-                if state is None:
-                    previous_source = (
-                        snapshot.source_files.get(relative)
-                        if snapshot is not None
-                        else None
-                    )
-                    previous_document = (
-                        snapshot.documents.get(relative)
-                        if snapshot is not None
-                        else None
-                    )
-                    document_id = str(
-                        (previous_document or {}).get("document_id") or ""
-                    )
-                    reusable_units = bool(
-                        snapshot is not None
-                        and snapshot.units_reusable
-                        and previous_source is not None
-                        and previous_document is not None
-                        and previous_source.get("sha256")
-                        == checkpoint["source_digests"][relative]
-                        and snapshot.manifest.get("metadata_storage_policy")
-                        == METADATA_STORAGE_POLICY
-                        and document_id in snapshot.units_by_document
-                        # An EPUB or MOBI read under earlier HTML rules is read
-                        # again; a PDF is unaffected by those rules.
-                        and reflowable_document_is_current(previous_document)
-                    )
-                    # Units and chunks reuse independently. A header or chunk-size
-                    # change keeps the units but forces the chunks to be derived
-                    # again from them.
-                    reusable_chunks = bool(
-                        reusable_units
-                        and snapshot is not None
-                        and snapshot.chunks_reusable
-                        and document_id in snapshot.chunks_by_document
-                    )
-                    if (
-                        reusable_units
-                        and snapshot is not None
-                        and previous_document is not None
-                    ):
-                        document = dict(previous_document)
-                        document["size"] = source.size
-                        document["mtime_ns"] = source.mtime_ns
-                        # Byte-identical bytes keep the whole artifact, including a
-                        # PDF's original extraction backend. A backend or adapter
-                        # policy change alters only how a *new* PDF would be read,
-                        # so an unchanged legacy PDF is passed through as legacy
-                        # rather than re-extracted or relabelled as Docling.
-                        document = self._document_with_provenance(document, source)
-                        # Each lookup reads fresh records, so they need no copy.
-                        units = await io(
-                            snapshot.units_by_document.__getitem__, document_id
-                        )
-                        await io(
-                            atomic_write_json, artifact_root / "document.json", document
-                        )
-                        await io(
-                            atomic_write_jsonl, artifact_root / "units.jsonl", units
-                        )
-                        state = {
-                            "reused": True,
-                            "reuse_chunks": reusable_chunks,
-                            "extraction_stage": "complete",
-                            "discarded_empty_chunks": 0,
-                            "discarded_symbol_only_chunks": 0,
-                            "discarded_corrupt_chunks": 0,
-                        }
-                        await io(atomic_write_json, state_path, state)
-                        checkpoint["extracted_source_paths"].append(relative)
-                        checkpoint["reused_document_count"] = (
-                            int(checkpoint.get("reused_document_count") or 0) + 1
-                        )
-                    elif source.extension == ".pdf":
-                        total = await extract_source(pdf_page_count, source)
-                        if total is None:
-                            if budget_expired():
-                                return self._in_progress_result(checkpoint)
-                            continue
-                        # Docling is the sole PDF reader. Its environment is
-                        # resolved lazily, only when a PDF actually extracts.
-                        state = {
-                            "reused": False,
-                            "extraction_stage": "docling_pages",
-                            "next_index": 0,
-                            "total": total,
-                            "page_batch_size": self.config.settings.pdf_page_batch_size,
-                            "removals": empty_removal_counts(),
-                            "empty_units": 0,
-                            "discarded_empty_chunks": 0,
-                            "discarded_symbol_only_chunks": 0,
-                            "discarded_corrupt_chunks": 0,
-                        }
-                        checkpoint["extraction_work_total"] = (
-                            int(checkpoint.get("extraction_work_total") or 0)
-                            + _pdf_batch_count(
-                                total, self.config.settings.pdf_page_batch_size
-                            )
-                            + 2
-                        )
-                        await io(atomic_write_json, state_path, state)
-                    elif source.extension == ".mobi":
-                        prepared = await extract_source(
-                            extract_mobi, source, checkpoint["source_digests"][relative]
-                        )
-                        if prepared is None:
-                            if budget_expired():
-                                return self._in_progress_result(checkpoint)
-                            continue
-                        document, units = prepared
-                        document["reflowable_extraction_policy_version"] = (
-                            REFLOWABLE_EXTRACTION_POLICY_VERSION
-                        )
-                        await io(
-                            atomic_write_json, artifact_root / "document.json", document
-                        )
-                        await io(
-                            atomic_write_jsonl,
-                            artifact_root / "unit-batches" / "00000000.jsonl",
-                            units,
-                        )
-                        state = {
-                            "reused": False,
-                            "extraction_stage": "finalize",
-                            "total": 1,
-                            "removals": {
-                                key: int(document.get(key) or 0)
-                                for key in REMOVAL_FIELDS
-                            },
-                            "empty_units": document["empty_units"],
-                            "discarded_empty_chunks": 0,
-                            "discarded_symbol_only_chunks": 0,
-                            "discarded_corrupt_chunks": 0,
-                        }
-                        checkpoint["extraction_work_total"] = (
-                            int(checkpoint.get("extraction_work_total") or 0) + 2
-                        )
-                        checkpoint["extraction_work_completed"] = (
-                            int(checkpoint.get("extraction_work_completed") or 0) + 1
-                        )
-                        await io(atomic_write_json, state_path, state)
-                    else:
-                        prepared = await extract_source(
-                            prepare_epub_extraction,
-                            source,
-                            checkpoint["source_digests"][relative],
-                        )
-                        if prepared is None:
-                            if budget_expired():
-                                return self._in_progress_result(checkpoint)
-                            continue
-                        document, total = prepared
-                        document["reflowable_extraction_policy_version"] = (
-                            REFLOWABLE_EXTRACTION_POLICY_VERSION
-                        )
-                        await io(
-                            atomic_write_json, artifact_root / "document.json", document
-                        )
-                        state = {
-                            "reused": False,
-                            "extraction_stage": "epub_items",
-                            "next_index": 0,
-                            "total": total,
-                            "removals": empty_removal_counts(),
-                            "empty_units": 0,
-                            "discarded_empty_chunks": 0,
-                            "discarded_symbol_only_chunks": 0,
-                            "discarded_corrupt_chunks": 0,
-                        }
-                        checkpoint["extraction_work_total"] = (
-                            int(checkpoint.get("extraction_work_total") or 0)
-                            + total
-                            + 2
-                        )
-                        checkpoint["extraction_work_completed"] = (
-                            int(checkpoint.get("extraction_work_completed") or 0) + 1
-                        )
-                        await io(atomic_write_json, state_path, state)
-                    self._add_phase_time(
-                        checkpoint,
-                        "extraction",
-                        time.perf_counter() - started,
-                    )
-                    await io(self._write_checkpoint, staging_root, checkpoint)
-                    if budget_expired():
-                        return self._in_progress_result(checkpoint)
-                    continue
+        digests = build.checkpoint["source_digests"]
+        record = next(
+            (
+                record
+                for record in build.checkpoint["source_inventory"]
+                if record["source_relative_path"] not in digests
+            ),
+            None,
+        )
+        if record is None:
+            unchanged = await self._unchanged_generation(build)
+            if unchanged is None:
+                await self._enter_phase(build, "extraction")
+            return unchanged
+        source = build.sources_by_path[str(record["source_relative_path"])]
+        started = time.perf_counter()
+        try:
+            digest = await _atomic_to_thread(sha256_file, source.path)
+        except OSError as exc:
+            raise _SourceChangedDuringIngest(
+                "A source became unavailable during hashing"
+            ) from exc
+        build.add_time("source_hashing", started)
+        digests[source.source_relative_path] = digest
+        return await self._commit(build)
 
-                extraction_stage = str(state["extraction_stage"])
-                if extraction_stage == "skipped":
-                    await record_skip(state["skipped_source"])
-                    if budget_expired():
-                        return self._in_progress_result(checkpoint)
-                    continue
-                if extraction_stage == "complete":
-                    document = await io(read_json, artifact_root / "document.json")
-                    units = await io(read_jsonl, artifact_root / "units.jsonl")
-                    if (
-                        not isinstance(document, dict)
-                        or not units
-                        or any(
-                            unit.get("document_id") != document.get("document_id")
-                            or unit.get("source_id") != document.get("source_id")
-                            for unit in units
-                        )
-                    ):
-                        raise _BuildCannotResume(
-                            f"Completed extraction artifacts are invalid: {relative}"
-                        )
-                    checkpoint["extracted_source_paths"].append(relative)
-                    count_field = (
-                        "reused_document_count"
-                        if state.get("reused")
-                        else "rebuilt_document_count"
-                    )
-                    checkpoint[count_field] = int(checkpoint.get(count_field) or 0) + 1
-                    if not state.get("reused"):
-                        checkpoint["extraction_work_completed"] = (
-                            int(checkpoint.get("extraction_work_completed") or 0) + 1
-                        )
-                elif extraction_stage == "docling_pages":
-                    total = int(state["total"])
-                    page_batch_size = int(state.get("page_batch_size") or 1)
-                    document_path = artifact_root / "document.json"
-                    existing_document = (
-                        await io(read_json, document_path)
-                        if document_path.exists()
-                        else None
-                    )
-                    docling_env = await self._ensure_docling_environment()
-                    current_backend = docling_backend_record_from_env(docling_env)
-                    if existing_document is not None:
-                        recorded_backend = existing_document.get("extraction_backend")
-                        if not (
-                            isinstance(recorded_backend, dict)
-                            and recorded_backend.get("fingerprint")
-                            == current_backend.get("fingerprint")
-                        ):
-                            # The staged pages came from a different actual
-                            # environment (or name no environment at all). Do not
-                            # append this environment's output onto them: discard
-                            # only this source's unfinished work and convert it
-                            # again from the first page.
-                            await io(
-                                self._rescope_pdf_pages_for_environment,
-                                artifact_root,
-                                state,
-                                state_path,
-                                checkpoint,
-                            )
-                            existing_document = None
-                    index = int(state["next_index"])
-                    end_index = min(index + page_batch_size, total)
-                    prepared_batch = await extract_source(
-                        docling_pdf_batch,
-                        source,
-                        existing_document,
-                        index,
-                        end_index,
-                        digest=source_digest,
-                        offline=self.config.offline,
-                        model_cache_root=self.config.model_cache_root,
-                        docling_env=docling_env,
-                        total_pages=total,
-                    )
-                    if prepared_batch is None:
-                        if budget_expired():
-                            return self._in_progress_result(checkpoint)
-                        continue
-                    pages, document, batch_empty, batch_removals, batch_diagnostics = (
-                        prepared_batch
-                    )
-                    if not document_path.exists():
-                        await io(atomic_write_json, document_path, document)
-                    accumulated_diagnostics = {
-                        str(key): int(value)
-                        for key, value in (
-                            state.get("docling_diagnostics") or {}
-                        ).items()
-                    }
-                    for key, value in batch_diagnostics.items():
-                        accumulated_diagnostics[key] = int(
-                            accumulated_diagnostics.get(key) or 0
-                        ) + int(value)
-                    state["docling_diagnostics"] = accumulated_diagnostics
-                    # Write one batch file per page in the range, empty included,
-                    # so finalize reads a complete sequence whatever the worker
-                    # emitted for a blank page.
-                    for page_index in range(index, end_index):
-                        await io(
-                            atomic_write_jsonl,
-                            artifact_root / "unit-batches" / f"{page_index:08d}.jsonl",
-                            pages.get(page_index, []),
-                            fsync_parent=False,
-                        )
-                    await io(fsync_directories, [artifact_root / "unit-batches"])
-                    state["removals"] = merge_removal_counts(
-                        state.get("removals"), batch_removals
-                    )
-                    state["empty_units"] = int(state.get("empty_units") or 0) + int(
-                        batch_empty
-                    )
-                    state["next_index"] = end_index
-                    checkpoint["extraction_work_completed"] = (
-                        int(checkpoint.get("extraction_work_completed") or 0) + 1
-                    )
-                    if end_index >= total:
-                        state["extraction_stage"] = "finalize"
-                        state["next_index"] = 0
-                    await io(atomic_write_json, state_path, state)
-                elif extraction_stage == "epub_items":
-                    index = int(state["next_index"])
-                    total = int(state["total"])
-                    if index >= total:
-                        state["extraction_stage"] = "finalize"
-                        await io(atomic_write_json, state_path, state)
-                        continue
-                    document = await io(read_json, artifact_root / "document.json")
-                    extracted = await extract_source(
-                        extract_epub_spine_item,
-                        source,
-                        document,
-                        index,
-                    )
-                    if extracted is None:
-                        if budget_expired():
-                            return self._in_progress_result(checkpoint)
-                        continue
-                    batch, empty, removed = extracted
-                    page_batches = [(index, batch, empty, removed)]
-                    for page_index, batch, empty, removed in page_batches:
-                        state["removals"] = merge_removal_counts(
-                            state.get("removals"),
-                            removed,
-                        )
-                        await io(
-                            atomic_write_jsonl,
-                            artifact_root / "unit-batches" / f"{page_index:08d}.jsonl",
-                            batch,
-                            fsync_parent=False,
-                        )
-                        state["empty_units"] = int(state.get("empty_units") or 0) + int(
-                            empty
-                        )
-                    state["next_index"] = index + 1
-                    checkpoint["extraction_work_completed"] = (
-                        int(checkpoint.get("extraction_work_completed") or 0) + 1
-                    )
-                    await io(atomic_write_json, state_path, state, fsync_parent=False)
-                    await io(
-                        fsync_directories,
-                        [artifact_root / "unit-batches", artifact_root],
-                    )
-                elif extraction_stage == "finalize":
-                    units = []
-                    for index in range(int(state["total"])):
-                        units.extend(
-                            await io(
-                                read_jsonl,
-                                artifact_root / "unit-batches" / f"{index:08d}.jsonl",
-                            )
-                        )
-                    document = await io(read_json, artifact_root / "document.json")
-                    document["empty_units"] = int(state.get("empty_units") or 0)
-                    if state.get("docling_diagnostics"):
-                        document["docling_diagnostics"] = {
-                            str(key): int(value)
-                            for key, value in state["docling_diagnostics"].items()
-                        }
-                    removals = {
-                        key: int(value)
-                        for key, value in (state.get("removals") or {}).items()
-                        if key in REMOVAL_FIELDS
-                    }
-                    retained = await extract_source(
-                        screen_source_units,
-                        source,
-                        document,
-                        units,
-                        removals=removals,
-                        maximum_unclean_percent=self._effective_pdf_loss_limit(),
-                    )
-                    if retained is None:
-                        if budget_expired():
-                            return self._in_progress_result(checkpoint)
-                        continue
-                    await io(
-                        atomic_write_json, artifact_root / "document.json", document
-                    )
-                    await io(
-                        atomic_write_jsonl, artifact_root / "units.jsonl", retained
-                    )
-                    units = retained
-                    state["extraction_stage"] = "complete"
-                    await io(atomic_write_json, state_path, state)
-                    checkpoint["extracted_source_paths"].append(relative)
-                    checkpoint["rebuilt_document_count"] = (
-                        int(checkpoint.get("rebuilt_document_count") or 0) + 1
-                    )
-                    checkpoint["extraction_work_completed"] = (
-                        int(checkpoint.get("extraction_work_completed") or 0) + 1
-                    )
-                else:
-                    raise _BuildCannotResume(
-                        f"Unsupported staged extraction phase: {extraction_stage}"
-                    )
-                self._add_phase_time(
-                    checkpoint,
-                    "extraction",
-                    time.perf_counter() - started,
-                )
-                await io(self._write_checkpoint, staging_root, checkpoint)
-                if budget_expired():
-                    return self._in_progress_result(checkpoint)
-                continue
+    async def _unchanged_generation(self, build: _Build) -> dict[str, Any] | None:
+        """The no-op answer when the selected generation already holds these inputs.
 
-            if phase == "chunking":
-                if snapshot is not None and "chunks" not in loaded_axes:
-                    snapshot = await io(
-                        load_reuse_snapshot,
-                        current,
-                        schema_version=SCHEMA_VERSION,
-                        extraction_policy_version=EXTRACTION_POLICY_VERSION,
-                        cleaning_policy_version=CLEANING_POLICY_VERSION,
-                        artifact_policy_version=ARTIFACT_POLICY_VERSION,
-                        project_id=self.config.project_id,
-                        chunk_size=chunk_size,
-                        chunk_overlap=chunk_overlap,
-                        chunk_headers=self.config.settings.chunk_headers,
-                        maximum_unclean_percent=self.config.settings.maximum_unclean_percent,
-                        load_units=True,
-                        load_chunks=True,
-                        load_vectors=False,
-                        embedding=self.config.settings.embedding_facts,
-                    )
-                    loaded_axes.update({"units", "chunks"})
-                completed = set(checkpoint["chunked_source_paths"])
-                relative = next(
-                    (path for path in selected_paths if path not in completed),
-                    None,
-                )
-                if relative is None:
-                    checkpoint["phase"] = "assembly"
-                    await io(self._write_checkpoint, staging_root, checkpoint)
-                    continue
-                artifact_root = self._source_artifact_root(staging_root, relative)
-                state = await io(read_json, artifact_root / "state.json")
-                document = await io(read_json, artifact_root / "document.json")
-                units = units_cache.get(relative)
-                if units is None:
-                    units = await io(read_jsonl, artifact_root / "units.jsonl")
-                    units_cache[relative] = units
-                started = time.perf_counter()
-                if (
-                    bool(state.get("reused"))
-                    # A resumed checkpoint from before the units/chunk split has
-                    # no flag and reused both, which is the default.
-                    and state.get("reuse_chunks", True)
-                    and snapshot is not None
-                ):
-                    chunks = await io(
-                        snapshot.chunks_by_document.__getitem__,
-                        str(document["document_id"]),
-                    )
-                    if not snapshot.vectors_reusable:
-                        # Reused chunks keep their text, but the token count and
-                        # truncation flag are specific to the model they were
-                        # counted with. This build embeds them with a different
-                        # model, so drop the old model's audit and recount with the
-                        # model now in use rather than carry stale numbers.
-                        for chunk in chunks:
-                            chunk.pop("embedding_token_count", None)
-                            chunk.pop("dense_truncated", None)
-                        await _atomic_to_thread(
-                            _record_embedding_token_counts,
-                            chunks,
-                            self.dense.embedding_token_counts,
-                            maximum_tokens=(
-                                self.config.settings.embedding_maximum_tokens
-                            ),
-                        )
-                    discarded_empty = 0
-                    discarded_symbol_only = 0
-                    discarded_corrupt = 0
-                    checkpoint["reused_chunk_count"] = int(
-                        checkpoint.get("reused_chunk_count") or 0
-                    ) + len(chunks)
-                    state["chunking_stage"] = "complete"
-                else:
-                    chunked_count = int(state.get("chunked_unit_count") or 0)
-                    if "chunking_work_total" not in state:
-                        state["chunking_work_total"] = len(units)
-                        checkpoint["chunking_work_total"] = int(
-                            checkpoint.get("chunking_work_total") or 0
-                        ) + len(units)
-                        await io(atomic_write_json, artifact_root / "state.json", state)
-                        await io(self._write_checkpoint, staging_root, checkpoint)
-                        if budget_expired():
-                            return self._in_progress_result(checkpoint)
-                        continue
-                    if chunked_count < len(units):
-                        batch_units = units[
-                            chunked_count : chunked_count
-                            + self.config.settings.chunk_batch_units
-                        ]
-                        requested_ids = {str(unit["id"]) for unit in batch_units}
-                        chunking_root = artifact_root / "chunking"
-                        input_path = chunking_root / "unit.jsonl"
-                        working_path = artifact_root / "raw-chunks.jsonl"
-                        # A handoff file is rewritten before every call and
-                        # deleted afterwards, so it needs visibility, not
-                        # durability.
-                        await io(write_handoff_jsonl, input_path, batch_units)
-                        working_path.unlink(missing_ok=True)
-                        await self.lexical.chunk(
-                            input_path,
-                            working_path,
-                            chunk_size=chunk_size,
-                            chunk_overlap=chunk_overlap,
-                        )
-                        raw_by_unit: defaultdict[str, list[dict[str, Any]]] = (
-                            defaultdict(list)
-                        )
-                        for raw in await io(read_jsonl, working_path):
-                            raw_by_unit[str(raw.get("doc_id") or "")].append(raw)
-                        working_path.unlink(missing_ok=True)
-                        input_path.unlink(missing_ok=True)
-                        unknown = [
-                            unit_id
-                            for unit_id in raw_by_unit
-                            if unit_id not in requested_ids
-                        ]
-                        if unknown:
-                            raise _BuildCannotResume(
-                                "Chunker returned an unknown extraction unit: "
-                                f"{unknown[0]}"
-                            )
-                        # Every unit keeps its own durable output file and its own
-                        # index, written in unit order, so the ordinal assignment
-                        # in `_enrich_chunks` and the resume boundary per unit are
-                        # the same as when each unit had its own call.
-                        for position, unit in enumerate(batch_units):
-                            await io(
-                                atomic_write_jsonl,
-                                chunking_root / f"{chunked_count + position:08d}.jsonl",
-                                raw_by_unit.get(str(unit["id"]), []),
-                                fsync_parent=False,
-                            )
-                        state["chunked_unit_count"] = chunked_count + len(batch_units)
-                        checkpoint["chunking_work_completed"] = int(
-                            checkpoint.get("chunking_work_completed") or 0
-                        ) + len(batch_units)
-                        await io(
-                            atomic_write_json,
-                            artifact_root / "state.json",
-                            state,
-                            fsync_parent=False,
-                        )
-                        # The whole batch is on disk before the checkpoint that
-                        # claims it is complete.
-                        await io(fsync_directories, [chunking_root, artifact_root])
-                        self._add_phase_time(
-                            checkpoint,
-                            "chunking",
-                            time.perf_counter() - started,
-                        )
-                        await io(self._write_checkpoint, staging_root, checkpoint)
-                        if budget_expired():
-                            return self._in_progress_result(checkpoint)
-                        continue
-                    raw_chunks: list[dict[str, Any]] = []
-                    for index in range(len(units)):
-                        raw_chunks.extend(
-                            await io(
-                                read_jsonl,
-                                artifact_root / "chunking" / f"{index:08d}.jsonl",
-                            )
-                        )
-                    (
-                        chunks,
-                        discarded_empty,
-                        discarded_symbol_only,
-                        discarded_corrupt,
-                    ) = await io(
-                        _enrich_chunks,
-                        raw_chunks,
-                        units,
-                        [document],
-                        headers=self.config.settings.chunk_headers,
-                    )
-                    audited = await _atomic_to_thread(
-                        _record_embedding_token_counts,
-                        chunks,
-                        self.dense.embedding_token_counts,
-                        maximum_tokens=(self.config.settings.embedding_maximum_tokens),
-                    )
-                    checkpoint["dense_token_audit"] = (
-                        "counted" if audited else "unavailable"
-                    )
-                    checkpoint["rebuilt_chunk_count"] = int(
-                        checkpoint.get("rebuilt_chunk_count") or 0
-                    ) + len(chunks)
-                    state["chunking_stage"] = "complete"
-                await io(atomic_write_jsonl, artifact_root / "chunks.jsonl", chunks)
-                state["discarded_empty_chunks"] = discarded_empty
-                state["discarded_symbol_only_chunks"] = discarded_symbol_only
-                state["discarded_corrupt_chunks"] = discarded_corrupt
-                await io(atomic_write_json, artifact_root / "state.json", state)
-                self._add_phase_time(
-                    checkpoint,
-                    "chunking",
-                    time.perf_counter() - started,
-                )
-                checkpoint["chunked_source_paths"].append(relative)
-                units_cache.pop(relative, None)
-                await io(self._write_checkpoint, staging_root, checkpoint)
-                if budget_expired():
-                    return self._in_progress_result(checkpoint)
-                continue
+        A no-op means every reuse axis is compatible: extraction units, chunk text,
+        and vectors. A model change or a processing-policy change is a genuine
+        incompatibility even when the sources are byte-identical, because the new
+        generation must store something the old one does not. Ranking policy is
+        deliberately absent: it is a runtime decision and never rewrites a
+        generation.
+        """
 
-            if phase == "assembly":
-                started = time.perf_counter()
-                await io(self._assemble_staged_corpus, staging_root, checkpoint)
-                self._add_phase_time(
-                    checkpoint,
-                    "assembly",
-                    time.perf_counter() - started,
-                )
-                checkpoint["phase"] = "embedding"
-                await io(self._write_checkpoint, staging_root, checkpoint)
-                if budget_expired():
-                    return self._in_progress_result(checkpoint)
-                continue
+        snapshot = build.snapshot
+        if snapshot is None:
+            return None
+        reflowable_current = all(
+            reflowable_document_is_current(document)
+            for document in snapshot.documents.values()
+        )
+        if not (
+            snapshot.units_reusable
+            and snapshot.chunks_reusable
+            and snapshot.vectors_reusable
+            and reflowable_current
+        ):
+            LOGGER.debug(
+                "ingest: building because a reuse axis moved "
+                "(units_reusable=%s chunks_reusable=%s vectors_reusable=%s "
+                "reflowable_current=%s)",
+                snapshot.units_reusable,
+                snapshot.chunks_reusable,
+                snapshot.vectors_reusable,
+                reflowable_current,
+            )
+            return None
+        manifest = snapshot.manifest
+        if manifest.get("build_metrics", {}).get(
+            "skipped_sources"
+        ) or not source_set_matches(
+            snapshot,
+            build.source_records(),
+            exclusion_revision=str(build.checkpoint["source_exclusion_revision"]),
+            metadata_storage_policy=METADATA_STORAGE_POLICY,
+        ):
+            # A backend switch or adapter drift alone changes how a *new* PDF
+            # would be read, never the evidence already stored for an unchanged
+            # source. An incremental build passes an unchanged legacy PDF through
+            # whole, preserving its provenance, so the backend is not part of this
+            # gate; only the source bytes, exclusions, and storage policy are.
+            return None
+        try:
+            await self._validate_generation_for_activation(snapshot.root, manifest)
+        except ResearchError as exc:
+            # Validation failed, so this generation cannot be served as-is and a
+            # build is needed. Its per-axis reuse verdict still holds: keep the
+            # snapshot so the extraction and chunk text survive, and only the
+            # failing axis (usually a corrupt vector file) is recomputed.
+            build.checkpoint["reuse_rejection_reason"] = str(exc)
+            LOGGER.debug(
+                "ingest: selected generation failed validation; "
+                "rebuilding while reusing its valid axes: %s",
+                exc,
+            )
+            return None
+        self._loaded_generation = str(manifest["generation_id"])
+        await _atomic_to_thread(shutil.rmtree, build.staging_root, ignore_errors=True)
+        LOGGER.debug(
+            "ingest: build %s no-op; selected generation unchanged",
+            build.checkpoint.get("build_id"),
+        )
+        return {
+            "status": "unchanged",
+            "skipped_sources": manifest.get("build_metrics", {}).get(
+                "skipped_sources", []
+            ),
+            "generation_changed": False,
+            "generation_id": manifest["generation_id"],
+            "generation_root": str(snapshot.root),
+            "source_file_count": len(build.scan.selected),
+            "excluded_source_count": len(build.exclusions),
+            "document_count": manifest["document_count"],
+            "extraction_unit_count": manifest["extraction_unit_count"],
+            "chunk_count": manifest["chunk_count"],
+            "reused_document_count": manifest["document_count"],
+            "rebuilt_document_count": 0,
+            "reused_chunk_count": manifest["chunk_count"],
+            "rebuilt_chunk_count": 0,
+            "reused_vector_count": manifest["chunk_count"],
+            "created_vector_count": 0,
+            "phase_timings_seconds": build.checkpoint["phase_timings_seconds"],
+            "message": "Inputs match the selected generation; no build was needed.",
+        }
 
-            if phase == "embedding":
-                if snapshot is not None and "vectors" not in loaded_axes:
-                    snapshot = await io(
-                        load_reuse_snapshot,
-                        current,
-                        schema_version=SCHEMA_VERSION,
-                        extraction_policy_version=EXTRACTION_POLICY_VERSION,
-                        cleaning_policy_version=CLEANING_POLICY_VERSION,
-                        artifact_policy_version=ARTIFACT_POLICY_VERSION,
-                        project_id=self.config.project_id,
-                        chunk_size=chunk_size,
-                        chunk_overlap=chunk_overlap,
-                        chunk_headers=self.config.settings.chunk_headers,
-                        maximum_unclean_percent=self.config.settings.maximum_unclean_percent,
-                        load_units=False,
-                        load_chunks=True,
-                        load_vectors=True,
-                        embedding=self.config.settings.embedding_facts,
-                    )
-                    loaded_axes.update({"chunks", "vectors"})
-                offset = int(checkpoint.get("embedded_chunk_count") or 0)
-                total = int(checkpoint["chunk_count"])
-                if offset >= total:
-                    checkpoint["phase"] = "vector_assembly"
-                    await io(self._write_checkpoint, staging_root, checkpoint)
-                    continue
-                batch = await io(
-                    read_jsonl,
-                    staging_root / "work" / "chunk-batches" / f"{offset:012d}.jsonl",
-                )
-                vectors = np.empty(
-                    (len(batch), self.config.settings.embedding_dimension),
-                    dtype=np.float32,
-                )
-                missing_positions: list[int] = []
-                missing_texts: list[str] = []
-                # What is embedded is the chunk's own text, header included. Vector
-                # reuse is keyed on the canonical passage, and a header cannot be
-                # reconstructed from that key, so reuse suspends when the two
-                # differ: recomputing a vector is always correct, while reusing
-                # another chunk's vector is not.
-                batch_texts = [_embedding_text(chunk) for chunk in batch]
-                reuse_keys = [chunk_text(chunk) for chunk in batch]
-                reusable_vectors = (
-                    await _atomic_to_thread(
-                        snapshot.vectors_for_texts,
-                        reuse_keys,
-                    )
-                    if snapshot is not None
-                    and not force_recompute
-                    and reuse_keys == batch_texts
-                    else {}
-                )
-                reused_count = 0
-                for index, text in enumerate(batch_texts):
-                    reusable_vector = reusable_vectors.get(text)
-                    if reusable_vector is None:
-                        missing_positions.append(index)
-                        missing_texts.append(text)
-                    else:
-                        vectors[index] = reusable_vector
-                        reused_count += 1
-                started = time.perf_counter()
-                if missing_texts:
-                    created = await _atomic_to_thread(
-                        self.dense.embed_texts,
-                        missing_texts,
-                    )
-                    if created.shape != (
-                        len(missing_positions),
-                        self.config.settings.embedding_dimension,
-                    ):
-                        raise ResearchError(
-                            "Dense backend returned an invalid embedding matrix"
-                        )
-                    for position, vector in zip(
-                        missing_positions,
-                        created,
-                        strict=True,
-                    ):
-                        vectors[position] = vector
-                batch_path = (
-                    staging_root / "work" / "vector-batches" / f"{offset:012d}.npy"
-                )
-                await io(self._save_vector_batch, batch_path, vectors)
-                self._add_phase_time(
-                    checkpoint,
-                    "embedding",
-                    time.perf_counter() - started,
-                )
-                checkpoint["embedded_chunk_count"] = offset + len(batch)
-                checkpoint["reused_vector_count"] = (
-                    int(checkpoint.get("reused_vector_count") or 0) + reused_count
-                )
-                checkpoint["created_vector_count"] = int(
-                    checkpoint.get("created_vector_count") or 0
-                ) + len(missing_positions)
-                await io(self._write_checkpoint, staging_root, checkpoint)
-                if budget_expired():
-                    return self._in_progress_result(checkpoint)
-                continue
+    async def _extract_next_source(self, build: _Build) -> dict[str, Any] | None:
+        """Take the next source one durable step through extraction."""
 
-            if phase == "vector_assembly":
-                started = time.perf_counter()
-                total = int(checkpoint["chunk_count"])
-                vectors_path = staging_root / "portable" / "embeddings.npy"
+        await self._load_axes(build, "units", "chunks")
+        relative = build.next_source("extracted_source_paths")
+        if relative is None:
+            return await self._enter_phase(build, "chunking")
+        root = self._source_artifact_root(build.staging_root, relative)
+        root.mkdir(parents=True, exist_ok=True)
+        staged = _StagedSource(
+            relative=relative,
+            source=build.sources_by_path[relative],
+            root=root,
+            digest=str(build.checkpoint["source_digests"][relative]),
+            started=time.perf_counter(),
+        )
+        if staged.state_path.exists():
+            staged.state = await _atomic_to_thread(read_json, staged.state_path)
+        if staged.state is None:
+            return await self._start_extraction(build, staged)
+        stage = str(staged.state["extraction_stage"])
+        if stage == "skipped":
+            await self._record_skip(build, staged.state["skipped_source"])
+            return self._pause_if_due(build)
+        step = {
+            "complete": self._accept_extraction,
+            "docling_pages": self._extract_pdf_pages,
+            "epub_items": self._extract_epub_item,
+            "finalize": self._finalize_extraction,
+        }.get(stage)
+        if step is None:
+            raise _BuildCannotResume(f"Unsupported staged extraction phase: {stage}")
+        return await step(build, staged)
+
+    async def _end_extraction_step(
+        self, build: _Build, staged: _StagedSource
+    ) -> dict[str, Any] | None:
+        build.add_time("extraction", staged.started)
+        return await self._commit(build)
+
+    async def _start_extraction(
+        self, build: _Build, staged: _StagedSource
+    ) -> dict[str, Any] | None:
+        """Pass an unchanged source through whole, or stage its first read."""
+
+        snapshot = build.snapshot
+        previous_source = (
+            snapshot.source_files.get(staged.relative) if snapshot is not None else None
+        )
+        previous_document = (
+            snapshot.documents.get(staged.relative) if snapshot is not None else None
+        )
+        document_id = str((previous_document or {}).get("document_id") or "")
+        reusable_units = bool(
+            snapshot is not None
+            and snapshot.units_reusable
+            and previous_source is not None
+            and previous_document is not None
+            and previous_source.get("sha256")
+            == build.checkpoint["source_digests"][staged.relative]
+            and snapshot.manifest.get("metadata_storage_policy")
+            == METADATA_STORAGE_POLICY
+            and document_id in snapshot.units_by_document
+            # An EPUB or MOBI read under earlier HTML rules is read again; a PDF
+            # is unaffected by those rules.
+            and reflowable_document_is_current(previous_document)
+        )
+        if reusable_units and snapshot is not None and previous_document is not None:
+            # Units and chunks reuse independently. A header or chunk-size change
+            # keeps the units but forces the chunks to be derived again from them.
+            await self._reuse_extraction(
+                build,
+                staged,
+                snapshot,
+                previous_document,
+                reuse_chunks=snapshot.chunks_reusable
+                and document_id in snapshot.chunks_by_document,
+            )
+        else:
+            start = {
+                ".pdf": self._start_pdf,
+                ".mobi": self._start_mobi,
+            }.get(staged.source.extension, self._start_epub)
+            if not await start(build, staged):
+                return self._pause_if_due(build)
+        return await self._end_extraction_step(build, staged)
+
+    async def _reuse_extraction(
+        self,
+        build: _Build,
+        staged: _StagedSource,
+        snapshot: ReuseSnapshot,
+        previous_document: dict[str, Any],
+        *,
+        reuse_chunks: bool,
+    ) -> None:
+        """Carry an unchanged source's extraction forward from the selected generation.
+
+        Byte-identical bytes keep the whole artifact, including a PDF's original
+        extraction backend. A backend or adapter policy change alters only how a
+        *new* PDF would be read, so an unchanged legacy PDF is passed through as
+        legacy rather than re-extracted or relabelled as Docling.
+        """
+
+        document = self._document_with_provenance(
+            {
+                **previous_document,
+                "size": staged.source.size,
+                "mtime_ns": staged.source.mtime_ns,
+            },
+            staged.source,
+        )
+        # Each lookup reads fresh records, so they need no copy.
+        units = await _atomic_to_thread(
+            snapshot.units_by_document.__getitem__,
+            str(previous_document.get("document_id") or ""),
+        )
+        await _atomic_to_thread(atomic_write_json, staged.document_path, document)
+        await _atomic_to_thread(atomic_write_jsonl, staged.root / "units.jsonl", units)
+        await _atomic_to_thread(
+            atomic_write_json,
+            staged.state_path,
+            {
+                "reused": True,
+                "reuse_chunks": reuse_chunks,
+                "extraction_stage": "complete",
+                **_NO_DISCARDED_CHUNKS,
+            },
+        )
+        build.checkpoint["extracted_source_paths"].append(staged.relative)
+        build.add("reused_document_count")
+
+    async def _start_pdf(self, build: _Build, staged: _StagedSource) -> bool:
+        total = await self._extract_or_skip(
+            build, staged, pdf_page_count, staged.source
+        )
+        if total is None:
+            return False
+        # Docling is the sole PDF reader. Its environment is resolved lazily, only
+        # when a PDF actually extracts.
+        batch_size = self.config.settings.pdf_page_batch_size
+        state = {
+            "reused": False,
+            "extraction_stage": "docling_pages",
+            "next_index": 0,
+            "total": total,
+            "page_batch_size": batch_size,
+            "removals": empty_removal_counts(),
+            "empty_units": 0,
+            **_NO_DISCARDED_CHUNKS,
+        }
+        build.add("extraction_work_total", _pdf_batch_count(total, batch_size) + 2)
+        await _atomic_to_thread(atomic_write_json, staged.state_path, state)
+        return True
+
+    async def _start_mobi(self, build: _Build, staged: _StagedSource) -> bool:
+        prepared = await self._extract_or_skip(
+            build, staged, extract_mobi, staged.source, staged.digest
+        )
+        if prepared is None:
+            return False
+        document, units = prepared
+        document["reflowable_extraction_policy_version"] = (
+            REFLOWABLE_EXTRACTION_POLICY_VERSION
+        )
+        await _atomic_to_thread(atomic_write_json, staged.document_path, document)
+        await _atomic_to_thread(
+            atomic_write_jsonl, staged.root / "unit-batches" / "00000000.jsonl", units
+        )
+        state = {
+            "reused": False,
+            "extraction_stage": "finalize",
+            "total": 1,
+            "removals": {key: int(document.get(key) or 0) for key in REMOVAL_FIELDS},
+            "empty_units": document["empty_units"],
+            **_NO_DISCARDED_CHUNKS,
+        }
+        build.add("extraction_work_total", 2)
+        build.add("extraction_work_completed")
+        await _atomic_to_thread(atomic_write_json, staged.state_path, state)
+        return True
+
+    async def _start_epub(self, build: _Build, staged: _StagedSource) -> bool:
+        prepared = await self._extract_or_skip(
+            build, staged, prepare_epub_extraction, staged.source, staged.digest
+        )
+        if prepared is None:
+            return False
+        document, total = prepared
+        document["reflowable_extraction_policy_version"] = (
+            REFLOWABLE_EXTRACTION_POLICY_VERSION
+        )
+        await _atomic_to_thread(atomic_write_json, staged.document_path, document)
+        state = {
+            "reused": False,
+            "extraction_stage": "epub_items",
+            "next_index": 0,
+            "total": total,
+            "removals": empty_removal_counts(),
+            "empty_units": 0,
+            **_NO_DISCARDED_CHUNKS,
+        }
+        build.add("extraction_work_total", total + 2)
+        build.add("extraction_work_completed")
+        await _atomic_to_thread(atomic_write_json, staged.state_path, state)
+        return True
+
+    async def _accept_extraction(
+        self, build: _Build, staged: _StagedSource
+    ) -> dict[str, Any] | None:
+        """Count a source whose extraction a previous call completed."""
+
+        document = await _atomic_to_thread(read_json, staged.document_path)
+        units = await _atomic_to_thread(read_jsonl, staged.root / "units.jsonl")
+        if (
+            not isinstance(document, dict)
+            or not units
+            or any(
+                unit.get("document_id") != document.get("document_id")
+                or unit.get("source_id") != document.get("source_id")
+                for unit in units
+            )
+        ):
+            raise _BuildCannotResume(
+                f"Completed extraction artifacts are invalid: {staged.relative}"
+            )
+        build.checkpoint["extracted_source_paths"].append(staged.relative)
+        reused = bool(staged.state and staged.state.get("reused"))
+        build.add("reused_document_count" if reused else "rebuilt_document_count")
+        if not reused:
+            build.add("extraction_work_completed")
+        return await self._end_extraction_step(build, staged)
+
+    async def _extract_pdf_pages(
+        self, build: _Build, staged: _StagedSource
+    ) -> dict[str, Any] | None:
+        """Convert the next batch of a PDF's pages with Docling."""
+
+        state = staged.state or {}
+        total = int(state["total"])
+        page_batch_size = int(state.get("page_batch_size") or 1)
+        existing_document = (
+            await _atomic_to_thread(read_json, staged.document_path)
+            if staged.document_path.exists()
+            else None
+        )
+        docling_env = await self._ensure_docling_environment()
+        current_backend = docling_backend_record_from_env(docling_env)
+        if existing_document is not None:
+            recorded_backend = existing_document.get("extraction_backend")
+            if not (
+                isinstance(recorded_backend, dict)
+                and recorded_backend.get("fingerprint")
+                == current_backend.get("fingerprint")
+            ):
+                # The staged pages came from a different actual environment (or
+                # name no environment at all). Do not append this environment's
+                # output onto them: discard only this source's unfinished work
+                # and convert it again from the first page.
                 await _atomic_to_thread(
-                    self._assemble_vector_batches,
-                    vectors_path,
-                    staging_root / "work" / "vector-batches",
-                    total,
-                    self.config.settings.embedding_dimension,
+                    self._rescope_pdf_pages_for_environment,
+                    staged.root,
+                    state,
+                    staged.state_path,
+                    build.checkpoint,
                 )
-                self._add_phase_time(
-                    checkpoint,
-                    "vector_assembly",
-                    time.perf_counter() - started,
-                )
-                checkpoint["phase"] = "bm25_indexing"
-                await io(self._write_checkpoint, staging_root, checkpoint)
-                if budget_expired():
-                    return self._in_progress_result(checkpoint)
-                continue
+                existing_document = None
+        index = int(state["next_index"])
+        end_index = min(index + page_batch_size, total)
+        prepared_batch = await self._extract_or_skip(
+            build,
+            staged,
+            docling_pdf_batch,
+            staged.source,
+            existing_document,
+            index,
+            end_index,
+            digest=staged.digest,
+            offline=self.config.offline,
+            model_cache_root=self.config.model_cache_root,
+            docling_env=docling_env,
+            total_pages=total,
+        )
+        if prepared_batch is None:
+            return self._pause_if_due(build)
+        pages, document, batch_empty, batch_removals, batch_diagnostics = prepared_batch
+        if not staged.document_path.exists():
+            await _atomic_to_thread(atomic_write_json, staged.document_path, document)
+        diagnostics = {
+            str(key): int(value)
+            for key, value in (state.get("docling_diagnostics") or {}).items()
+        }
+        for key, value in batch_diagnostics.items():
+            diagnostics[key] = int(diagnostics.get(key) or 0) + int(value)
+        state["docling_diagnostics"] = diagnostics
+        # Write one batch file per page in the range, empty included, so finalize
+        # reads a complete sequence whatever the worker emitted for a blank page.
+        for page_index in range(index, end_index):
+            await _atomic_to_thread(
+                atomic_write_jsonl,
+                staged.root / "unit-batches" / f"{page_index:08d}.jsonl",
+                pages.get(page_index, []),
+                fsync_parent=False,
+            )
+        await _atomic_to_thread(fsync_directories, [staged.root / "unit-batches"])
+        state["removals"] = merge_removal_counts(state.get("removals"), batch_removals)
+        state["empty_units"] = int(state.get("empty_units") or 0) + int(batch_empty)
+        state["next_index"] = end_index
+        build.add("extraction_work_completed")
+        if end_index >= total:
+            state["extraction_stage"] = "finalize"
+            state["next_index"] = 0
+        await _atomic_to_thread(atomic_write_json, staged.state_path, state)
+        return await self._end_extraction_step(build, staged)
 
-            if phase == "bm25_indexing":
-                bm25_index_path = staging_root / "indexes" / "bm25"
-                await io(shutil.rmtree, bm25_index_path, ignore_errors=True)
-                started = time.perf_counter()
-                # The build points the lexical backend's one retriever at the
-                # staging index, so a search beside it waits and reloads its own.
-                async with self._retriever_lock:
-                    self._loaded_generation = None
-                    await self.lexical.build_bm25(
-                        staging_root / "chunks" / "chunks.jsonl",
-                        bm25_index_path,
-                        language=self.config.settings.bm25_stopwords_language,
-                    )
-                self._add_phase_time(
-                    checkpoint,
-                    "bm25_indexing",
-                    time.perf_counter() - started,
-                )
-                checkpoint["phase"] = "dense_indexing"
-                checkpoint["dense_indexed_count"] = 0
-                await io(self._write_checkpoint, staging_root, checkpoint)
-                if budget_expired():
-                    return self._in_progress_result(checkpoint)
-                continue
+    async def _extract_epub_item(
+        self, build: _Build, staged: _StagedSource
+    ) -> dict[str, Any] | None:
+        """Read the next item of an EPUB's spine."""
 
-            if phase in {"dense_indexing", "qdrant_indexing"}:
-                if portable_vectors is None:
-                    portable_vectors = np.load(
-                        staging_root / "portable" / "embeddings.npy",
-                        allow_pickle=False,
-                        mmap_mode="r",
-                    )
-                total = int(checkpoint["chunk_count"])
-                backend_name = str(checkpoint.get("dense_backend") or "")
-                if backend_name not in DENSE_INDEX_PATHS:
-                    # A checkpoint resumed from before the backend was recorded
-                    # restarts this phase cleanly with the selected backend.
-                    backend_name = self._select_build_dense_backend()
-                    checkpoint["dense_backend"] = backend_name
-                    checkpoint["dense_index_relative"] = DENSE_INDEX_PATHS[backend_name]
-                    checkpoint["dense_indexed_count"] = 0
-                    await io(self._write_checkpoint, staging_root, checkpoint)
-                backend = self._dense_backends[backend_name]
-                dense_index_path = staging_root / DENSE_INDEX_PATHS[backend_name]
-                offset = int(checkpoint.get("dense_indexed_count") or 0)
-                if offset == 0:
-                    await io(shutil.rmtree, dense_index_path, ignore_errors=True)
-                    await _atomic_to_thread(
-                        backend.initialize_index,
-                        dense_index_path,
-                        self.config.settings.embedding_dimension,
-                    )
-                if offset < total:
-                    batch = await io(
-                        read_jsonl,
-                        staging_root
-                        / "work"
-                        / "chunk-batches"
-                        / f"{offset:012d}.jsonl",
-                    )
-                    started = time.perf_counter()
-                    await _atomic_to_thread(
-                        backend.upload_index_batch,
-                        batch,
-                        dense_index_path,
-                        portable_vectors[offset : offset + len(batch)],
-                        offset=offset,
-                    )
-                    self._add_phase_time(
-                        checkpoint,
-                        "dense_indexing",
-                        time.perf_counter() - started,
-                    )
-                    checkpoint["dense_indexed_count"] = offset + len(batch)
-                    await io(self._write_checkpoint, staging_root, checkpoint)
-                    if budget_expired():
-                        return self._in_progress_result(checkpoint)
-                    continue
-                dense_metadata = await _atomic_to_thread(
-                    backend.finalize_index,
-                    dense_index_path,
-                    expected_count=total,
-                    dimension=self.config.settings.embedding_dimension,
-                )
-                checkpoint["dense_metadata"] = dense_metadata
-                checkpoint["phase"] = "source_revalidation"
-                await io(self._write_checkpoint, staging_root, checkpoint)
-                continue
+        state = staged.state or {}
+        index = int(state["next_index"])
+        if index >= int(state["total"]):
+            state["extraction_stage"] = "finalize"
+            await _atomic_to_thread(atomic_write_json, staged.state_path, state)
+            return None
+        document = await _atomic_to_thread(read_json, staged.document_path)
+        extracted = await self._extract_or_skip(
+            build, staged, extract_epub_spine_item, staged.source, document, index
+        )
+        if extracted is None:
+            return self._pause_if_due(build)
+        batch, empty, removed = extracted
+        state["removals"] = merge_removal_counts(state.get("removals"), removed)
+        await _atomic_to_thread(
+            atomic_write_jsonl,
+            staged.root / "unit-batches" / f"{index:08d}.jsonl",
+            batch,
+            fsync_parent=False,
+        )
+        state["empty_units"] = int(state.get("empty_units") or 0) + int(empty)
+        state["next_index"] = index + 1
+        build.add("extraction_work_completed")
+        await _atomic_to_thread(
+            atomic_write_json, staged.state_path, state, fsync_parent=False
+        )
+        await _atomic_to_thread(
+            fsync_directories, [staged.root / "unit-batches", staged.root]
+        )
+        return await self._end_extraction_step(build, staged)
 
-            if phase == "source_revalidation":
-                revalidated = checkpoint["revalidation_digests"]
-                pending = [
-                    record
-                    for record in checkpoint["source_inventory"]
-                    if record["source_relative_path"] not in revalidated
-                ]
-                if pending:
-                    record = pending[0]
-                    source = sources_by_path[str(record["source_relative_path"])]
-                    started = time.perf_counter()
-                    try:
-                        digest, stat_identity = await _atomic_to_thread(
-                            _hash_with_stable_stat,
-                            source.path,
-                        )
-                    except OSError as exc:
-                        raise _SourceChangedDuringIngest(
-                            "A source became unavailable during final validation"
-                        ) from exc
-                    revalidated[source.source_relative_path] = digest
-                    checkpoint["revalidation_stats"][source.source_relative_path] = (
-                        stat_identity
-                    )
-                    self._add_phase_time(
-                        checkpoint,
-                        "source_revalidation",
-                        time.perf_counter() - started,
-                    )
-                    await io(self._write_checkpoint, staging_root, checkpoint)
-                    if budget_expired():
-                        return self._in_progress_result(checkpoint)
-                    continue
-                if revalidated != checkpoint["source_digests"]:
-                    raise _SourceChangedDuringIngest(
-                        "Source bytes changed while ingestion was in progress"
-                    )
-                try:
-                    final_scan = await io(scan_sources, self.config)
-                except SourcePolicyError as exc:
-                    raise _SourceChangedDuringIngest(str(exc)) from exc
-                if _source_inventory(final_scan) != checkpoint["source_inventory"]:
-                    raise _SourceChangedDuringIngest(
-                        "The source collection changed while ingestion was in progress"
-                    )
-                if value_fingerprint(self._source_exclusions()) != checkpoint.get(
-                    "source_exclusion_revision"
-                ):
-                    raise _SourceChangedDuringIngest(
-                        "Source exclusions changed while ingestion was in progress"
-                    )
-                selected_now = self._load_current_optional()
-                selected_generation_id = (
-                    str(selected_now[1]["generation_id"])
-                    if selected_now is not None
-                    else None
-                )
-                if selected_generation_id != checkpoint.get("baseline_generation_id"):
-                    raise _SourceChangedDuringIngest(
-                        "The selected generation changed while ingestion was in progress"
-                    )
-                checkpoint["phase"] = "finalizing"
-                await io(self._write_checkpoint, staging_root, checkpoint)
-                continue
+    async def _finalize_extraction(
+        self, build: _Build, staged: _StagedSource
+    ) -> dict[str, Any] | None:
+        """Screen a source's staged units and keep the ones that pass."""
 
-            if phase == "finalizing":
-                if not revalidation_stats_match(require_complete=True):
-                    raise _SourceChangedDuringIngest(
-                        "A source changed after its final ingestion hash"
-                    )
-                skipped_paths = {
-                    item["source_relative_path"]
-                    for item in checkpoint.get("skipped_sources", [])
-                }
-                document_paths = [
-                    self._source_artifact_root(staging_root, relative) / "document.json"
-                    for relative in selected_paths
+        state = staged.state or {}
+        units = []
+        for index in range(int(state["total"])):
+            units.extend(
+                await _atomic_to_thread(
+                    read_jsonl, staged.root / "unit-batches" / f"{index:08d}.jsonl"
+                )
+            )
+        document = await _atomic_to_thread(read_json, staged.document_path)
+        document["empty_units"] = int(state.get("empty_units") or 0)
+        if state.get("docling_diagnostics"):
+            document["docling_diagnostics"] = {
+                str(key): int(value)
+                for key, value in state["docling_diagnostics"].items()
+            }
+        retained = await self._extract_or_skip(
+            build,
+            staged,
+            screen_source_units,
+            staged.source,
+            document,
+            units,
+            removals={
+                key: int(value)
+                for key, value in (state.get("removals") or {}).items()
+                if key in REMOVAL_FIELDS
+            },
+            maximum_unclean_percent=self._effective_pdf_loss_limit(),
+        )
+        if retained is None:
+            return self._pause_if_due(build)
+        await _atomic_to_thread(atomic_write_json, staged.document_path, document)
+        await _atomic_to_thread(
+            atomic_write_jsonl, staged.root / "units.jsonl", retained
+        )
+        state["extraction_stage"] = "complete"
+        await _atomic_to_thread(atomic_write_json, staged.state_path, state)
+        build.checkpoint["extracted_source_paths"].append(staged.relative)
+        build.add("rebuilt_document_count")
+        build.add("extraction_work_completed")
+        return await self._end_extraction_step(build, staged)
+
+    async def _chunk_next_source(self, build: _Build) -> dict[str, Any] | None:
+        """Take the next extracted source one durable step through chunking."""
+
+        await self._load_axes(build, "units", "chunks")
+        relative = build.next_source("chunked_source_paths")
+        if relative is None:
+            return await self._enter_phase(build, "assembly")
+        root = self._source_artifact_root(build.staging_root, relative)
+        state = await _atomic_to_thread(read_json, root / "state.json")
+        document = await _atomic_to_thread(read_json, root / "document.json")
+        units = build.units_cache.get(relative)
+        if units is None:
+            units = build.units_cache[relative] = await _atomic_to_thread(
+                read_jsonl, root / "units.jsonl"
+            )
+        started = time.perf_counter()
+        if (
+            bool(state.get("reused"))
+            # A resumed checkpoint from before the units/chunk split has no flag
+            # and reused both, which is the default.
+            and state.get("reuse_chunks", True)
+            and build.snapshot is not None
+        ):
+            chunks = await _atomic_to_thread(
+                build.snapshot.chunks_by_document.__getitem__,
+                str(document["document_id"]),
+            )
+            if not build.snapshot.vectors_reusable:
+                # Reused chunks keep their text, but the token count and truncation
+                # flag are specific to the model they were counted with. This build
+                # embeds them with a different model, so drop the old model's audit
+                # and recount with the model now in use rather than carry stale
+                # numbers.
+                for chunk in chunks:
+                    chunk.pop("embedding_token_count", None)
+                    chunk.pop("dense_truncated", None)
+                await _atomic_to_thread(
+                    _record_embedding_token_counts,
+                    chunks,
+                    self.dense.embedding_token_counts,
+                    maximum_tokens=self.config.settings.embedding_maximum_tokens,
+                )
+            discarded = [0, 0, 0]
+            build.add("reused_chunk_count", len(chunks))
+        elif "chunking_work_total" not in state:
+            state["chunking_work_total"] = len(units)
+            build.add("chunking_work_total", len(units))
+            await _atomic_to_thread(atomic_write_json, root / "state.json", state)
+            return await self._commit(build)
+        elif int(state.get("chunked_unit_count") or 0) < len(units):
+            return await self._chunk_unit_batch(build, root, state, units, started)
+        else:
+            chunks, *discarded = await self._chunks_from_units(
+                build, root, units, document
+            )
+        state["chunking_stage"] = "complete"
+        await _atomic_to_thread(atomic_write_jsonl, root / "chunks.jsonl", chunks)
+        state.update(zip(_DISCARDED_CHUNK_KEYS, discarded, strict=True))
+        await _atomic_to_thread(atomic_write_json, root / "state.json", state)
+        build.add_time("chunking", started)
+        build.checkpoint["chunked_source_paths"].append(relative)
+        build.units_cache.pop(relative, None)
+        return await self._commit(build)
+
+    async def _chunk_unit_batch(
+        self,
+        build: _Build,
+        root: Path,
+        state: dict[str, Any],
+        units: list[dict[str, Any]],
+        started: float,
+    ) -> dict[str, Any] | None:
+        """Chunk the source's next batch of units and keep each unit's output."""
+
+        chunked_count = int(state.get("chunked_unit_count") or 0)
+        batch_units = units[
+            chunked_count : chunked_count + self.config.settings.chunk_batch_units
+        ]
+        requested_ids = {str(unit["id"]) for unit in batch_units}
+        chunking_root = root / "chunking"
+        input_path = chunking_root / "unit.jsonl"
+        working_path = root / "raw-chunks.jsonl"
+        # A handoff file is rewritten before every call and deleted afterwards, so
+        # it needs visibility, not durability.
+        await _atomic_to_thread(write_handoff_jsonl, input_path, batch_units)
+        working_path.unlink(missing_ok=True)
+        await self.lexical.chunk(
+            input_path,
+            working_path,
+            chunk_size=build.chunk_size,
+            chunk_overlap=build.chunk_overlap,
+        )
+        raw_by_unit: defaultdict[str, list[dict[str, Any]]] = defaultdict(list)
+        for raw in await _atomic_to_thread(read_jsonl, working_path):
+            raw_by_unit[str(raw.get("doc_id") or "")].append(raw)
+        working_path.unlink(missing_ok=True)
+        input_path.unlink(missing_ok=True)
+        unknown = [unit_id for unit_id in raw_by_unit if unit_id not in requested_ids]
+        if unknown:
+            raise _BuildCannotResume(
+                f"Chunker returned an unknown extraction unit: {unknown[0]}"
+            )
+        # Every unit keeps its own durable output file and its own index, written
+        # in unit order, so the ordinal assignment in `_enrich_chunks` and the
+        # resume boundary per unit are the same as when each unit had its own call.
+        for position, unit in enumerate(batch_units):
+            await _atomic_to_thread(
+                atomic_write_jsonl,
+                chunking_root / f"{chunked_count + position:08d}.jsonl",
+                raw_by_unit.get(str(unit["id"]), []),
+                fsync_parent=False,
+            )
+        state["chunked_unit_count"] = chunked_count + len(batch_units)
+        build.add("chunking_work_completed", len(batch_units))
+        await _atomic_to_thread(
+            atomic_write_json, root / "state.json", state, fsync_parent=False
+        )
+        # The whole batch is on disk before the checkpoint that claims it is
+        # complete.
+        await _atomic_to_thread(fsync_directories, [chunking_root, root])
+        build.add_time("chunking", started)
+        return await self._commit(build)
+
+    async def _chunks_from_units(
+        self,
+        build: _Build,
+        root: Path,
+        units: list[dict[str, Any]],
+        document: dict[str, Any],
+    ) -> tuple[list[dict[str, Any]], int, int, int]:
+        """A source's chunks, enriched from its units' chunker output and audited."""
+
+        raw_chunks: list[dict[str, Any]] = []
+        for index in range(len(units)):
+            raw_chunks.extend(
+                await _atomic_to_thread(
+                    read_jsonl, root / "chunking" / f"{index:08d}.jsonl"
+                )
+            )
+        enriched = await _atomic_to_thread(
+            _enrich_chunks,
+            raw_chunks,
+            units,
+            [document],
+            headers=self.config.settings.chunk_headers,
+        )
+        chunks = enriched[0]
+        audited = await _atomic_to_thread(
+            _record_embedding_token_counts,
+            chunks,
+            self.dense.embedding_token_counts,
+            maximum_tokens=self.config.settings.embedding_maximum_tokens,
+        )
+        build.checkpoint["dense_token_audit"] = "counted" if audited else "unavailable"
+        build.add("rebuilt_chunk_count", len(chunks))
+        return enriched
+
+    async def _assemble_corpus(self, build: _Build) -> dict[str, Any] | None:
+        started = time.perf_counter()
+        await _atomic_to_thread(
+            self._assemble_staged_corpus, build.staging_root, build.checkpoint
+        )
+        build.add_time("assembly", started)
+        build.checkpoint["phase"] = "embedding"
+        return await self._commit(build)
+
+    async def _embed_next_batch(self, build: _Build) -> dict[str, Any] | None:
+        """Embed the next batch of chunks, reusing every vector the snapshot holds."""
+
+        await self._load_axes(build, "chunks", "vectors")
+        offset = int(build.checkpoint.get("embedded_chunk_count") or 0)
+        if offset >= int(build.checkpoint["chunk_count"]):
+            return await self._enter_phase(build, "vector_assembly")
+        work = build.staging_root / "work"
+        batch = await _atomic_to_thread(
+            read_jsonl, work / "chunk-batches" / f"{offset:012d}.jsonl"
+        )
+        dimension = self.config.settings.embedding_dimension
+        vectors = np.empty((len(batch), dimension), dtype=np.float32)
+        # What is embedded is the chunk's own text, header included. Vector reuse
+        # is keyed on the canonical passage, and a header cannot be reconstructed
+        # from that key, so reuse suspends when the two differ: recomputing a
+        # vector is always correct, while reusing another chunk's vector is not.
+        batch_texts = [_embedding_text(chunk) for chunk in batch]
+        reuse_keys = [chunk_text(chunk) for chunk in batch]
+        reusable_vectors = (
+            await _atomic_to_thread(build.snapshot.vectors_for_texts, reuse_keys)
+            if build.snapshot is not None
+            and not build.force_recompute
+            and reuse_keys == batch_texts
+            else {}
+        )
+        missing_positions: list[int] = []
+        for index, text in enumerate(batch_texts):
+            reusable_vector = reusable_vectors.get(text)
+            if reusable_vector is None:
+                missing_positions.append(index)
+            else:
+                vectors[index] = reusable_vector
+        started = time.perf_counter()
+        if missing_positions:
+            created = await _atomic_to_thread(
+                self.dense.embed_texts,
+                [batch_texts[index] for index in missing_positions],
+            )
+            if created.shape != (len(missing_positions), dimension):
+                raise ResearchError(
+                    "Dense backend returned an invalid embedding matrix"
+                )
+            for position, vector in zip(missing_positions, created, strict=True):
+                vectors[position] = vector
+        await _atomic_to_thread(
+            self._save_vector_batch,
+            work / "vector-batches" / f"{offset:012d}.npy",
+            vectors,
+        )
+        build.add_time("embedding", started)
+        build.checkpoint["embedded_chunk_count"] = offset + len(batch)
+        build.add("reused_vector_count", len(batch) - len(missing_positions))
+        build.add("created_vector_count", len(missing_positions))
+        return await self._commit(build)
+
+    async def _assemble_vectors(self, build: _Build) -> dict[str, Any] | None:
+        started = time.perf_counter()
+        await _atomic_to_thread(
+            self._assemble_vector_batches,
+            build.staging_root / "portable" / "embeddings.npy",
+            build.staging_root / "work" / "vector-batches",
+            int(build.checkpoint["chunk_count"]),
+            self.config.settings.embedding_dimension,
+        )
+        build.add_time("vector_assembly", started)
+        build.checkpoint["phase"] = "bm25_indexing"
+        return await self._commit(build)
+
+    async def _index_bm25(self, build: _Build) -> dict[str, Any] | None:
+        bm25_index_path = build.staging_root / "indexes" / "bm25"
+        await _atomic_to_thread(shutil.rmtree, bm25_index_path, ignore_errors=True)
+        started = time.perf_counter()
+        # The build points the lexical backend's one retriever at the staging
+        # index, so a search beside it waits and reloads its own.
+        async with self._retriever_lock:
+            self._loaded_generation = None
+            await self.lexical.build_bm25(
+                build.staging_root / "chunks" / "chunks.jsonl",
+                bm25_index_path,
+                language=self.config.settings.bm25_stopwords_language,
+            )
+        build.add_time("bm25_indexing", started)
+        build.checkpoint["phase"] = "dense_indexing"
+        build.checkpoint["dense_indexed_count"] = 0
+        return await self._commit(build)
+
+    async def _index_next_dense_batch(self, build: _Build) -> dict[str, Any] | None:
+        """Upload the next batch of vectors to the dense index, then finalize it."""
+
+        checkpoint = build.checkpoint
+        if build.portable_vectors is None:
+            build.portable_vectors = np.load(
+                build.staging_root / "portable" / "embeddings.npy",
+                allow_pickle=False,
+                mmap_mode="r",
+            )
+        total = int(checkpoint["chunk_count"])
+        backend_name = str(checkpoint.get("dense_backend") or "")
+        if backend_name not in DENSE_INDEX_PATHS:
+            # A checkpoint resumed from before the backend was recorded restarts
+            # this phase cleanly with the selected backend.
+            backend_name = self._select_build_dense_backend()
+            checkpoint["dense_backend"] = backend_name
+            checkpoint["dense_index_relative"] = DENSE_INDEX_PATHS[backend_name]
+            checkpoint["dense_indexed_count"] = 0
+            await self._save(build)
+        backend = self._dense_backends[backend_name]
+        dense_index_path = build.staging_root / DENSE_INDEX_PATHS[backend_name]
+        dimension = self.config.settings.embedding_dimension
+        offset = int(checkpoint.get("dense_indexed_count") or 0)
+        if offset == 0:
+            await _atomic_to_thread(shutil.rmtree, dense_index_path, ignore_errors=True)
+            await _atomic_to_thread(
+                backend.initialize_index, dense_index_path, dimension
+            )
+        if offset < total:
+            batch = await _atomic_to_thread(
+                read_jsonl,
+                build.staging_root / "work" / "chunk-batches" / f"{offset:012d}.jsonl",
+            )
+            started = time.perf_counter()
+            await _atomic_to_thread(
+                backend.upload_index_batch,
+                batch,
+                dense_index_path,
+                build.portable_vectors[offset : offset + len(batch)],
+                offset=offset,
+            )
+            build.add_time("dense_indexing", started)
+            checkpoint["dense_indexed_count"] = offset + len(batch)
+            return await self._commit(build)
+        checkpoint["dense_metadata"] = await _atomic_to_thread(
+            backend.finalize_index,
+            dense_index_path,
+            expected_count=total,
+            dimension=dimension,
+        )
+        return await self._enter_phase(build, "source_revalidation")
+
+    async def _revalidate_next_source(self, build: _Build) -> dict[str, Any] | None:
+        """Hash the next source again; once all are, confirm no input moved."""
+
+        checkpoint = build.checkpoint
+        revalidated = checkpoint["revalidation_digests"]
+        record = next(
+            (
+                record
+                for record in checkpoint["source_inventory"]
+                if record["source_relative_path"] not in revalidated
+            ),
+            None,
+        )
+        if record is not None:
+            source = build.sources_by_path[str(record["source_relative_path"])]
+            started = time.perf_counter()
+            try:
+                digest, stat_identity = await _atomic_to_thread(
+                    _hash_with_stable_stat, source.path
+                )
+            except OSError as exc:
+                raise _SourceChangedDuringIngest(
+                    "A source became unavailable during final validation"
+                ) from exc
+            revalidated[source.source_relative_path] = digest
+            checkpoint["revalidation_stats"][source.source_relative_path] = (
+                stat_identity
+            )
+            build.add_time("source_revalidation", started)
+            return await self._commit(build)
+        if revalidated != checkpoint["source_digests"]:
+            raise _SourceChangedDuringIngest(
+                "Source bytes changed while ingestion was in progress"
+            )
+        try:
+            final_scan = await _atomic_to_thread(scan_sources, self.config)
+        except SourcePolicyError as exc:
+            raise _SourceChangedDuringIngest(str(exc)) from exc
+        if _source_inventory(final_scan) != checkpoint["source_inventory"]:
+            raise _SourceChangedDuringIngest(
+                "The source collection changed while ingestion was in progress"
+            )
+        if value_fingerprint(self._source_exclusions()) != checkpoint.get(
+            "source_exclusion_revision"
+        ):
+            raise _SourceChangedDuringIngest(
+                "Source exclusions changed while ingestion was in progress"
+            )
+        selected_now = self._load_current_optional()
+        selected_generation_id = (
+            str(selected_now[1]["generation_id"]) if selected_now is not None else None
+        )
+        if selected_generation_id != checkpoint.get("baseline_generation_id"):
+            raise _SourceChangedDuringIngest(
+                "The selected generation changed while ingestion was in progress"
+            )
+        return await self._enter_phase(build, "finalizing")
+
+    async def _finalize_build(self, build: _Build) -> dict[str, Any]:
+        """Write the manifest, validate the build, and activate it as a generation."""
+
+        checkpoint = build.checkpoint
+        if not build.revalidation_stats_match(require_complete=True):
+            raise _SourceChangedDuringIngest(
+                "A source changed after its final ingestion hash"
+            )
+        skipped_paths = {
+            item["source_relative_path"]
+            for item in checkpoint.get("skipped_sources", [])
+        }
+        documents = await _atomic_to_thread(
+            list,
+            map(
+                read_json,
+                [
+                    self._source_artifact_root(build.staging_root, relative)
+                    / "document.json"
+                    for relative in build.selected_paths
                     if relative not in skipped_paths
-                ]
-                documents = await io(list, map(read_json, document_paths))
-                census = await io(
-                    _staged_chunk_census, staging_root / "chunks" / "chunks.jsonl"
+                ],
+            ),
+        )
+        census = await _atomic_to_thread(
+            _staged_chunk_census, build.staging_root / "chunks" / "chunks.jsonl"
+        )
+        build_metrics = self._build_metrics(build, documents, census)
+        counts = {
+            "extraction_unit_count": int(checkpoint["extraction_unit_count"]),
+            "chunk_count": int(checkpoint["chunk_count"]),
+            "content_kind_counts": census["content_kind_counts"],
+            **{
+                key: int(checkpoint.get(key) or 0)
+                for key in (
+                    "discarded_empty_chunk_count",
+                    "discarded_symbol_only_chunk_count",
+                    "discarded_corrupt_chunk_count",
+                    "excluded_corrupt_unit_count",
                 )
-                content_kind_counts = census["content_kind_counts"]
-                withheld_chunk_count = census["withheld_chunk_count"]
-                withheld_chunk_reasons = census["withheld_chunk_reasons"]
-                audited_chunk_count = census["audited_chunk_count"]
-                dense_truncated_chunk_count = census["dense_truncated_chunk_count"]
-                maximum_embedding_token_count = census["maximum_embedding_token_count"]
-                extraction_unit_count = int(checkpoint["extraction_unit_count"])
-                chunk_count = int(checkpoint["chunk_count"])
-                phase_timings = {
-                    key: round(float(value), 6)
-                    for key, value in checkpoint["phase_timings_seconds"].items()
-                }
-                loss_totals = _document_loss_totals(documents)
-                substantive_characters = loss_totals["substantive_character_count"]
-                build_metrics = {
-                    "skipped_sources": checkpoint.get("skipped_sources", []),
-                    "skipped_source_count": len(checkpoint.get("skipped_sources", [])),
-                    "forced": force_recompute,
-                    "resumed": bool(checkpoint.get("resume_count")),
-                    "reused_document_count": int(
-                        checkpoint.get("reused_document_count") or 0
-                    ),
-                    "rebuilt_document_count": int(
-                        checkpoint.get("rebuilt_document_count") or 0
-                    ),
-                    "reused_chunk_count": int(
-                        checkpoint.get("reused_chunk_count") or 0
-                    ),
-                    "rebuilt_chunk_count": int(
-                        checkpoint.get("rebuilt_chunk_count") or 0
-                    ),
-                    "reused_vector_count": int(
-                        checkpoint.get("reused_vector_count") or 0
-                    ),
-                    "created_vector_count": int(
-                        checkpoint.get("created_vector_count") or 0
-                    ),
-                    "excluded_corrupt_unit_count": int(
-                        checkpoint.get("excluded_corrupt_unit_count") or 0
-                    ),
-                    **{
-                        key: sum(int(document.get(key) or 0) for document in documents)
-                        for key in (
-                            "excluded_corrupt_passage_count",
-                            "excluded_symbol_only_unit_count",
-                            "excluded_symbol_only_passage_count",
-                            "cleaned_passage_count",
-                            "pdf_text_recovery_pages",
-                            "recovered_pdf_blocks",
-                        )
-                    },
-                    **loss_totals,
-                    "unclean_character_rate": (
-                        round(
-                            loss_totals["discarded_corrupt_character_count"]
-                            / substantive_characters,
-                            6,
-                        )
-                        if substantive_characters
-                        else 0.0
-                    ),
-                    "discarded_symbol_only_chunk_count": int(
-                        checkpoint.get("discarded_symbol_only_chunk_count") or 0
-                    ),
-                    "discarded_corrupt_chunk_count": int(
-                        checkpoint.get("discarded_corrupt_chunk_count") or 0
-                    ),
-                    "withheld_chunk_count": withheld_chunk_count,
-                    "withheld_chunk_reasons": withheld_chunk_reasons,
-                    "dense_token_audit": (
-                        "counted"
-                        if audited_chunk_count == chunk_count
-                        else ("partial" if audited_chunk_count else "unavailable")
-                    ),
-                    "dense_audited_chunk_count": audited_chunk_count,
-                    "dense_truncated_chunk_count": dense_truncated_chunk_count,
-                    "embedding_maximum_tokens": self.config.settings.embedding_maximum_tokens,
-                    "maximum_embedding_token_count": maximum_embedding_token_count,
-                    "phase_timings_seconds": phase_timings,
-                }
-                records = source_records()
-                dense_metadata = dict(checkpoint["dense_metadata"])
-                manifest = {
-                    "schema_version": SCHEMA_VERSION,
-                    "extraction_policy_version": EXTRACTION_POLICY_VERSION,
-                    "cleaning_policy_version": CLEANING_POLICY_VERSION,
-                    "artifact_policy_version": ARTIFACT_POLICY_VERSION,
-                    "generation_id": checkpoint["build_id"],
-                    "project_id": self.config.project_id,
-                    "project_name": self.config.project_name,
-                    "created_at": _utc_now(),
-                    "source_directory": self.config.source_root.relative_to(
-                        self.config.project_root
-                    ).as_posix(),
-                    "allowed_formats": sorted(ALLOWED_SOURCE_EXTENSIONS),
-                    "ignored_extensions": scan.ignored_extensions,
-                    # Reviewed metadata is a portable read-time overlay. This
-                    # revision is observational and never fingerprints derived
-                    # index contents or checkpoint compatibility.
-                    "metadata_revision": value_fingerprint(self._metadata()),
-                    "metadata_storage_policy": METADATA_STORAGE_POLICY,
-                    "source_exclusion_revision": checkpoint[
-                        "source_exclusion_revision"
-                    ],
-                    "retrieval_policy_fingerprint": (self.retrieval_policy_fingerprint),
-                    "source_file_count": len(scan.selected),
-                    "excluded_source_count": len(exclusions),
-                    "document_count": len(documents),
-                    "extraction_unit_count": extraction_unit_count,
-                    "chunk_count": chunk_count,
-                    "content_kind_counts": content_kind_counts,
-                    "discarded_empty_chunk_count": int(
-                        checkpoint.get("discarded_empty_chunk_count") or 0
-                    ),
-                    "discarded_symbol_only_chunk_count": int(
-                        checkpoint.get("discarded_symbol_only_chunk_count") or 0
-                    ),
-                    "discarded_corrupt_chunk_count": int(
-                        checkpoint.get("discarded_corrupt_chunk_count") or 0
-                    ),
-                    "excluded_corrupt_unit_count": int(
-                        checkpoint.get("excluded_corrupt_unit_count") or 0
-                    ),
-                    "passage_cleaning": {
-                        # The configured budget is the identity a rebuild reads;
-                        # the effective budget is what the shared gate actually
-                        # applied for the selected backend. Both readers use the
-                        # project budget. Reuse compares the configured value, so a
-                        # legacy manifest with only that key stays compatible.
-                        "maximum_unclean_percent": self.config.settings.maximum_unclean_percent,
-                        "effective_maximum_unclean_percent": (
-                            self._effective_pdf_loss_limit()
-                        ),
-                        "pdf_backend": self._pdf_backend,
-                    },
-                    "extraction_backend": pdf_backend_record(
-                        self.config.settings.pdf_backend, self.config
-                    ),
-                    "chunking": {
-                        "backend": "Chonkie token chunker (UltraRAG-compatible)",
-                        "tokenizer": "gpt2",
-                        "unit": "tokens",
-                        "chunk_size": chunk_size,
-                        "chunk_overlap": chunk_overlap,
-                        "headers": self.config.settings.chunk_headers,
-                    },
-                    "retrieval": {
-                        "default_method": DEFAULT_RETRIEVAL_METHOD,
-                        "available_methods": sorted(RETRIEVAL_METHODS),
-                        "bm25": {
-                            "backend": "bm25s (UltraRAG-compatible)",
-                            # The setting the index was built with, not a constant.
-                            "language": self.config.settings.bm25_stopwords_language,
-                            "tokenizer": "default",
-                        },
-                        "dense": dense_metadata,
-                        "fusion": {
-                            "method": "weighted_reciprocal_rank_fusion",
-                            "rrf_k": self.config.settings.rrf_k,
-                            "bm25_weight": self.config.settings.bm25_weight,
-                            "dense_weight": self.config.settings.dense_weight,
-                            "minimum_candidates": self.config.settings.minimum_candidates,
-                            "maximum_candidates": self.config.settings.maximum_candidates,
-                        },
-                        "relevance_gates": {
-                            "bm25_requires_query_token_overlap": True,
-                            "dense_minimum_cosine_similarity": (
-                                self.config.settings.dense_minimum_cosine_similarity
-                            ),
-                        },
-                        "reranker": {
-                            "optional": True,
-                            "runtime": "FastEmbed ONNX Runtime (CPU)",
-                            "model": self.config.reranker_model,
-                            "model_revision": _reranker_revision(
-                                self.config.reranker_model
-                            ),
-                            "maximum_candidates": self.config.settings.rerank_max_candidates,
-                        },
-                    },
-                    "documents": documents,
-                    "source_files": records,
-                    "excluded_sources": [
-                        {
-                            "source_id": source.source_id,
-                            "source_relative_path": source.source_relative_path,
-                            "source_path": source.project_relative_path,
-                            **exclusions[source.source_relative_path],
-                        }
-                        for source in scan.selected
-                        if source.source_relative_path in exclusions
-                    ],
-                    "files": {
-                        "extracted_units": "corpus/extracted-units.jsonl",
-                        "chunks": "chunks/chunks.jsonl",
-                        "bm25_index": "indexes/bm25",
-                        "dense_index": str(
-                            checkpoint.get("dense_index_relative")
-                            or DENSE_INDEX_PATHS[QDRANT_BACKEND_NAME]
-                        ),
-                        "portable_embeddings": "portable/embeddings.npy",
-                    },
-                    "build_metrics": build_metrics,
-                }
-                generation_root = self.config.generations_root / str(
-                    checkpoint["build_id"]
-                )
-                if not revalidation_stats_match(require_complete=True):
-                    raise _SourceChangedDuringIngest(
-                        "A source changed while final artifacts were assembled"
+            },
+        }
+        manifest = self._generation_manifest(build, documents, counts, build_metrics)
+        if not build.revalidation_stats_match(require_complete=True):
+            raise _SourceChangedDuringIngest(
+                "A source changed while final artifacts were assembled"
+            )
+        await _atomic_to_thread(
+            atomic_write_json, build.staging_root / "manifest.json", manifest
+        )
+        try:
+            await self._validate_generation_for_activation(build.staging_root, manifest)
+        except ResearchError as exc:
+            raise _BuildCannotResume(str(exc)) from exc
+        if not build.revalidation_stats_match(require_complete=True):
+            raise _SourceChangedDuringIngest(
+                "A source changed while final indexes were validated"
+            )
+        select_generation = not build_metrics.get("skipped_sources")
+        generation_root = await self._activate_build(build, select=select_generation)
+        build_id = checkpoint["build_id"]
+        LOGGER.debug(
+            "ingest: build %s complete status=%s selected=%s documents=%s chunks=%s",
+            build_id,
+            "ready" if select_generation else "partial",
+            select_generation,
+            len(documents),
+            counts["chunk_count"],
+        )
+        return {
+            "status": "ready" if select_generation else "partial",
+            "generation_changed": select_generation,
+            "current_generation_id": (
+                build_id
+                if select_generation
+                else checkpoint.get("baseline_generation_id")
+            ),
+            **(
+                {}
+                if select_generation
+                else {
+                    "manual_selection_command": project_command(
+                        self.config.project_root, "generations", "--use", str(build_id)
                     )
-                await io(atomic_write_json, staging_root / "manifest.json", manifest)
-                try:
-                    await self._validate_generation_for_activation(
-                        staging_root,
-                        manifest,
-                    )
-                except ResearchError as exc:
-                    raise _BuildCannotResume(str(exc)) from exc
-                if not revalidation_stats_match(require_complete=True):
-                    raise _SourceChangedDuringIngest(
-                        "A source changed while final indexes were validated"
-                    )
-                select_generation = not build_metrics.get("skipped_sources")
-                await io(
-                    atomic_write_json,
-                    self._pending_activation_path,
-                    {
-                        "schema_version": PENDING_ACTIVATION_VERSION,
-                        "project_id": self.config.project_id,
-                        "build_id": checkpoint["build_id"],
-                        "select": select_generation,
-                        "identity": checkpoint["identity"],
-                        "baseline_generation_id": checkpoint.get(
-                            "baseline_generation_id"
-                        ),
-                        "source_inventory": checkpoint["source_inventory"],
-                        "source_digests": checkpoint["source_digests"],
-                        "revalidation_stats": checkpoint["revalidation_stats"],
-                        "source_exclusion_revision": checkpoint[
-                            "source_exclusion_revision"
-                        ],
-                        "created_at": _utc_now(),
-                    },
-                )
-                await io(shutil.rmtree, staging_root / "work", ignore_errors=True)
-                await io(os.replace, staging_root, generation_root)
-                await io(fsync_directory, self.config.generations_root)
-                await io(fsync_directory, self.config.staging_root)
-                if select_generation:
-                    await io(
-                        atomic_write_json,
-                        self.config.current_path,
-                        {
-                            "schema_version": 1,
-                            "generation_id": checkpoint["build_id"],
-                        },
-                    )
-                (generation_root / "checkpoint.json").unlink()
-                await io(fsync_directory, generation_root)
-                self._pending_activation_path.unlink(missing_ok=True)
-                await io(fsync_directory, self._pending_activation_path.parent)
-                self._loaded_generation = None
-                LOGGER.debug(
-                    "ingest: build %s complete status=%s selected=%s "
-                    "documents=%s chunks=%s",
-                    checkpoint["build_id"],
-                    "ready" if select_generation else "partial",
-                    select_generation,
-                    len(documents),
-                    chunk_count,
-                )
-                return {
-                    "status": "ready" if select_generation else "partial",
-                    "generation_changed": select_generation,
-                    "current_generation_id": (
-                        checkpoint["build_id"]
-                        if select_generation
-                        else checkpoint.get("baseline_generation_id")
-                    ),
-                    **(
-                        {
-                            "manual_selection_command": project_command(
-                                self.config.project_root,
-                                "generations",
-                                "--use",
-                                str(checkpoint["build_id"]),
-                            )
-                        }
-                        if not select_generation
-                        else {}
-                    ),
-                    "generation_id": checkpoint["build_id"],
-                    "generation_root": str(generation_root),
-                    "source_file_count": len(scan.selected),
-                    "excluded_source_count": len(exclusions),
-                    "excluded_sources": [
-                        {
-                            "source_id": source.source_id,
-                            "source_relative_path": source.source_relative_path,
-                            "source_path": source.project_relative_path,
-                            **exclusions[source.source_relative_path],
-                        }
-                        for source in scan.selected
-                        if source.source_relative_path in exclusions
-                    ],
-                    "document_count": len(documents),
-                    "pdf_count": sum(item["format"] == "pdf" for item in documents),
-                    "epub_count": sum(item["format"] == "epub" for item in documents),
-                    "mobi_count": sum(item["format"] == "mobi" for item in documents),
-                    "extraction_unit_count": extraction_unit_count,
-                    "chunk_count": chunk_count,
-                    "content_kind_counts": content_kind_counts,
-                    "discarded_empty_chunk_count": int(
-                        checkpoint.get("discarded_empty_chunk_count") or 0
-                    ),
-                    "discarded_symbol_only_chunk_count": int(
-                        checkpoint.get("discarded_symbol_only_chunk_count") or 0
-                    ),
-                    "discarded_corrupt_chunk_count": int(
-                        checkpoint.get("discarded_corrupt_chunk_count") or 0
-                    ),
-                    "excluded_corrupt_unit_count": int(
-                        checkpoint.get("excluded_corrupt_unit_count") or 0
-                    ),
-                    "ignored_extensions": scan.ignored_extensions,
-                    "empty_units": sum(int(item["empty_units"]) for item in documents),
-                    "default_retrieval_method": DEFAULT_RETRIEVAL_METHOD,
-                    "available_retrieval_methods": sorted(RETRIEVAL_METHODS),
-                    "embedding_model": self.config.settings.embedding_model,
-                    "embedding_model_revision": self.config.settings.embedding_model_revision,
-                    **build_metrics,
                 }
+            ),
+            "generation_id": build_id,
+            "generation_root": str(generation_root),
+            "source_file_count": len(build.scan.selected),
+            "excluded_source_count": len(build.exclusions),
+            "excluded_sources": build.excluded_sources(),
+            "document_count": len(documents),
+            "pdf_count": sum(item["format"] == "pdf" for item in documents),
+            "epub_count": sum(item["format"] == "epub" for item in documents),
+            "mobi_count": sum(item["format"] == "mobi" for item in documents),
+            **counts,
+            "ignored_extensions": build.scan.ignored_extensions,
+            "empty_units": sum(int(item["empty_units"]) for item in documents),
+            "default_retrieval_method": DEFAULT_RETRIEVAL_METHOD,
+            "available_retrieval_methods": sorted(RETRIEVAL_METHODS),
+            "embedding_model": self.config.settings.embedding_model,
+            "embedding_model_revision": self.config.settings.embedding_model_revision,
+            **build_metrics,
+        }
 
-            raise _BuildCannotResume(f"Unsupported ingestion checkpoint phase: {phase}")
+    def _build_metrics(
+        self,
+        build: _Build,
+        documents: list[dict[str, Any]],
+        census: dict[str, Any],
+    ) -> dict[str, Any]:
+        """What the build reused, rebuilt, discarded, and withheld, and how long it took."""
+
+        checkpoint = build.checkpoint
+        loss_totals = _document_loss_totals(documents)
+        substantive_characters = loss_totals["substantive_character_count"]
+        audited_chunk_count = census["audited_chunk_count"]
+
+        def count(key: str) -> int:
+            return int(checkpoint.get(key) or 0)
+
+        return {
+            "skipped_sources": checkpoint.get("skipped_sources", []),
+            "skipped_source_count": len(checkpoint.get("skipped_sources", [])),
+            "forced": build.force_recompute,
+            "resumed": bool(checkpoint.get("resume_count")),
+            **{
+                key: count(key)
+                for key in (
+                    "reused_document_count",
+                    "rebuilt_document_count",
+                    "reused_chunk_count",
+                    "rebuilt_chunk_count",
+                    "reused_vector_count",
+                    "created_vector_count",
+                    "excluded_corrupt_unit_count",
+                )
+            },
+            **{
+                key: sum(int(document.get(key) or 0) for document in documents)
+                for key in (
+                    "excluded_corrupt_passage_count",
+                    "excluded_symbol_only_unit_count",
+                    "excluded_symbol_only_passage_count",
+                    "cleaned_passage_count",
+                    "pdf_text_recovery_pages",
+                    "recovered_pdf_blocks",
+                )
+            },
+            **loss_totals,
+            "unclean_character_rate": (
+                round(
+                    loss_totals["discarded_corrupt_character_count"]
+                    / substantive_characters,
+                    6,
+                )
+                if substantive_characters
+                else 0.0
+            ),
+            "discarded_symbol_only_chunk_count": count(
+                "discarded_symbol_only_chunk_count"
+            ),
+            "discarded_corrupt_chunk_count": count("discarded_corrupt_chunk_count"),
+            "withheld_chunk_count": census["withheld_chunk_count"],
+            "withheld_chunk_reasons": census["withheld_chunk_reasons"],
+            "dense_token_audit": (
+                "counted"
+                if audited_chunk_count == int(checkpoint["chunk_count"])
+                else ("partial" if audited_chunk_count else "unavailable")
+            ),
+            "dense_audited_chunk_count": audited_chunk_count,
+            "dense_truncated_chunk_count": census["dense_truncated_chunk_count"],
+            "embedding_maximum_tokens": self.config.settings.embedding_maximum_tokens,
+            "maximum_embedding_token_count": census["maximum_embedding_token_count"],
+            "phase_timings_seconds": {
+                key: round(float(value), 6)
+                for key, value in checkpoint["phase_timings_seconds"].items()
+            },
+        }
+
+    def _generation_manifest(
+        self,
+        build: _Build,
+        documents: list[dict[str, Any]],
+        counts: dict[str, Any],
+        build_metrics: dict[str, Any],
+    ) -> dict[str, Any]:
+        """The manifest that names every artifact of the build and how it was made."""
+
+        checkpoint = build.checkpoint
+        settings = self.config.settings
+        return {
+            "schema_version": SCHEMA_VERSION,
+            "extraction_policy_version": EXTRACTION_POLICY_VERSION,
+            "cleaning_policy_version": CLEANING_POLICY_VERSION,
+            "artifact_policy_version": ARTIFACT_POLICY_VERSION,
+            "generation_id": checkpoint["build_id"],
+            "project_id": self.config.project_id,
+            "project_name": self.config.project_name,
+            "created_at": _utc_now(),
+            "source_directory": self.config.source_root.relative_to(
+                self.config.project_root
+            ).as_posix(),
+            "allowed_formats": sorted(ALLOWED_SOURCE_EXTENSIONS),
+            "ignored_extensions": build.scan.ignored_extensions,
+            # Reviewed metadata is a portable read-time overlay. This revision is
+            # observational and never fingerprints derived index contents or
+            # checkpoint compatibility.
+            "metadata_revision": value_fingerprint(self._metadata()),
+            "metadata_storage_policy": METADATA_STORAGE_POLICY,
+            "source_exclusion_revision": checkpoint["source_exclusion_revision"],
+            "retrieval_policy_fingerprint": self.retrieval_policy_fingerprint,
+            "source_file_count": len(build.scan.selected),
+            "excluded_source_count": len(build.exclusions),
+            "document_count": len(documents),
+            **counts,
+            "passage_cleaning": {
+                # The configured budget is the identity a rebuild reads; the
+                # effective budget is what the shared gate actually applied for the
+                # selected backend. Both readers use the project budget. Reuse
+                # compares the configured value, so a legacy manifest with only
+                # that key stays compatible.
+                "maximum_unclean_percent": settings.maximum_unclean_percent,
+                "effective_maximum_unclean_percent": self._effective_pdf_loss_limit(),
+                "pdf_backend": self._pdf_backend,
+            },
+            "extraction_backend": pdf_backend_record(settings.pdf_backend, self.config),
+            "chunking": {
+                "backend": "Chonkie token chunker (UltraRAG-compatible)",
+                "tokenizer": "gpt2",
+                "unit": "tokens",
+                "chunk_size": build.chunk_size,
+                "chunk_overlap": build.chunk_overlap,
+                "headers": settings.chunk_headers,
+            },
+            "retrieval": {
+                "default_method": DEFAULT_RETRIEVAL_METHOD,
+                "available_methods": sorted(RETRIEVAL_METHODS),
+                "bm25": {
+                    "backend": "bm25s (UltraRAG-compatible)",
+                    # The setting the index was built with, not a constant.
+                    "language": settings.bm25_stopwords_language,
+                    "tokenizer": "default",
+                },
+                "dense": dict(checkpoint["dense_metadata"]),
+                "fusion": {
+                    "method": "weighted_reciprocal_rank_fusion",
+                    "rrf_k": settings.rrf_k,
+                    "bm25_weight": settings.bm25_weight,
+                    "dense_weight": settings.dense_weight,
+                    "minimum_candidates": settings.minimum_candidates,
+                    "maximum_candidates": settings.maximum_candidates,
+                },
+                "relevance_gates": {
+                    "bm25_requires_query_token_overlap": True,
+                    "dense_minimum_cosine_similarity": (
+                        settings.dense_minimum_cosine_similarity
+                    ),
+                },
+                "reranker": {
+                    "optional": True,
+                    "runtime": "FastEmbed ONNX Runtime (CPU)",
+                    "model": self.config.reranker_model,
+                    "model_revision": _reranker_revision(self.config.reranker_model),
+                    "maximum_candidates": settings.rerank_max_candidates,
+                },
+            },
+            "documents": documents,
+            "source_files": build.source_records(),
+            "excluded_sources": build.excluded_sources(),
+            "files": {
+                "extracted_units": "corpus/extracted-units.jsonl",
+                "chunks": "chunks/chunks.jsonl",
+                "bm25_index": "indexes/bm25",
+                "dense_index": str(
+                    checkpoint.get("dense_index_relative")
+                    or DENSE_INDEX_PATHS[QDRANT_BACKEND_NAME]
+                ),
+                "portable_embeddings": "portable/embeddings.npy",
+            },
+            "build_metrics": build_metrics,
+        }
+
+    async def _activate_build(self, build: _Build, *, select: bool) -> Path:
+        """Move the validated build into place as a generation, and select it if asked.
+
+        The activation journal is written first, so a crash at any point after it
+        is finished by the next call rather than leaving a half-moved build.
+        """
+
+        checkpoint = build.checkpoint
+        generation_root = self.config.generations_root / str(checkpoint["build_id"])
+        await _atomic_to_thread(
+            atomic_write_json,
+            self._pending_activation_path,
+            {
+                "schema_version": PENDING_ACTIVATION_VERSION,
+                "project_id": self.config.project_id,
+                "build_id": checkpoint["build_id"],
+                "select": select,
+                "identity": checkpoint["identity"],
+                "baseline_generation_id": checkpoint.get("baseline_generation_id"),
+                "source_inventory": checkpoint["source_inventory"],
+                "source_digests": checkpoint["source_digests"],
+                "revalidation_stats": checkpoint["revalidation_stats"],
+                "source_exclusion_revision": checkpoint["source_exclusion_revision"],
+                "created_at": _utc_now(),
+            },
+        )
+        await _atomic_to_thread(
+            shutil.rmtree, build.staging_root / "work", ignore_errors=True
+        )
+        await _atomic_to_thread(os.replace, build.staging_root, generation_root)
+        await _atomic_to_thread(fsync_directory, self.config.generations_root)
+        await _atomic_to_thread(fsync_directory, self.config.staging_root)
+        if select:
+            await _atomic_to_thread(
+                atomic_write_json,
+                self.config.current_path,
+                {"schema_version": 1, "generation_id": checkpoint["build_id"]},
+            )
+        (generation_root / "checkpoint.json").unlink()
+        await _atomic_to_thread(fsync_directory, generation_root)
+        self._pending_activation_path.unlink(missing_ok=True)
+        await _atomic_to_thread(fsync_directory, self._pending_activation_path.parent)
+        self._loaded_generation = None
+        return generation_root
 
     def _generation_root(self, generation_id: str) -> Path:
         """Resolve one generation directory by name, refusing any other name.
