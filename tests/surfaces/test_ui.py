@@ -17,7 +17,7 @@ from starlette.testclient import TestClient
 
 from research_rag.project.config import resolve_config
 from research_rag.runtime.app import ClientRegistry
-from research_rag.surfaces.ui import RESEARCH_UI_PROFILE, create_ui_app
+from research_rag.surfaces.ui import create_ui_app
 
 LOOPBACK_BASE_URL = "http://127.0.0.1"
 # The test transport reports itself as `testclient`, and its Host is
@@ -267,16 +267,9 @@ def test_the_workspace_serves_the_page_and_read_apis(project: Path) -> None:
         context = client.get("/api/passages/chunk-1?context_chunks=2")
 
     assert health.json()["project_root"] == str(project)
-    assert profile.json()["application_name"] == "Research RAG"
-    assert profile.json()["capabilities"]["metadata"] is True
-    assert profile.json()["capabilities"]["force_recompute"] is True
-    assert profile.json()["capabilities"]["source_selection"] is True
-    assert profile.json()["capabilities"]["category_partitions"] is True
-    assert profile.json()["capabilities"]["project_metadata"] is True
-    assert profile.json()["capabilities"]["metadata_filters"] is True
-    assert profile.json()["capabilities"]["bibliographic_filters"] is True
-    for removed in ("retrieval_modes", "reranking", "chunk_settings", "memory"):
-        assert removed not in profile.json()["capabilities"]
+    assert profile.json()["capabilities"] == dict.fromkeys(
+        ("clients", "projects", "agent_entry", "updates"), True
+    )
     # The quote rule is stated once in the README, not on every passage a browser renders.
     assert "not for direct quotation" not in json.dumps(profile.json()).lower()
     assert status.json()["generation_id"] == "generation-1"
@@ -415,8 +408,6 @@ def test_the_workspace_carries_a_chunk_decision_and_lists_the_ones_on_file(
     and never see them again.
     """
 
-    from research_rag.surfaces.ui import RESEARCH_UI_PROFILE
-
     client, fake = _client(project)
     with client:
         excluded = client.post(
@@ -452,7 +443,6 @@ def test_the_workspace_carries_a_chunk_decision_and_lists_the_ones_on_file(
         {"chunk_id": "chunk-1", "included": True, "reason": None},
     ) in fake.calls
     assert ("list_chunk_exclusions", {}) in fake.calls
-    assert RESEARCH_UI_PROFILE.capabilities.chunk_exclusion is True
 
 
 def test_the_workspace_refuses_a_chunk_decision_it_cannot_act_on(
@@ -736,7 +726,6 @@ def test_the_clients_panel_is_offered_because_the_app_is_a_server(
     ) as client:  # type: ignore[arg-type]
         profile = client.get("/api/ui").json()
     assert profile["capabilities"]["clients"] is True
-    assert RESEARCH_UI_PROFILE.capabilities.clients is True
 
 
 def test_a_workspace_with_no_process_behind_it_refuses_rather_than_lying(
@@ -864,13 +853,6 @@ def test_the_workspace_loads_a_generation_only_from_a_nonblank_id(
         with pytest.raises(UIRequestError):
             asyncio.run(adapter.call("use_generation", body))
     assert [name for name, _ in service.calls] == ["use_generation"]
-
-
-def test_the_workspace_serves_the_generation_panel(project: Path) -> None:
-    from research_rag.surfaces.ui import RESEARCH_UI_PROFILE
-
-    assert RESEARCH_UI_PROFILE.capabilities.generations is True
-    assert RESEARCH_UI_PROFILE.capabilities.clients is True
 
 
 def test_the_workspace_forwards_a_settings_write_whole(project: Path) -> None:

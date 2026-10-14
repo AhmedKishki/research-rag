@@ -6,7 +6,7 @@ The three front ends, and the transport that reaches the app.
 |---|---|
 | `cli.py` | The command line: what commands exist, what each does, and how an answer is printed |
 | `mcp.py` | The agent surface: the tools and the resource, declared once |
-| `ui.py` | This app's adapter over the workspace, and the capability profile that says what a browser may do |
+| `ui.py` | This app's adapter over the workspace: what each browser operation may carry to the service |
 | `workspace/` | The browser workspace itself: the Starlette host, the contracts it and an adapter share, and its assets |
 | `bridge.py` | `research-rag mcp`: resolve a project by name on every call, proxy stdio to the app when it answers, and answer with the start command when it does not |
 

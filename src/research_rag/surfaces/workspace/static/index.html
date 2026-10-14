@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <meta name="color-scheme" content="light dark">
     <meta name="description" content="Local evidence retrieval for an UltraRAG MCP knowledge base.">
-    <title>UltraRAG MCP</title>
+    <title>Research RAG</title>
     <link rel="stylesheet" href="/assets/app.css">
     <script src="/assets/app.js" defer></script>
   </head>
@@ -32,7 +32,7 @@
           <path d="M14.5 4.5V9H19"></path>
           <path d="M8.5 13h7M8.5 16.5h4.5"></path>
         </svg>
-        <div id="application-name" class="brand-name"></div>
+        <div id="application-name" class="brand-name">Research RAG</div>
       </div>
 
       <div class="project-identity">
@@ -53,14 +53,14 @@
         <button id="refresh-button" class="button button-quiet" type="button">
           Refresh
         </button>
-        <button id="ingest-button" class="button button-primary" type="button" data-capability="ingestion" hidden>
+        <button id="ingest-button" class="button button-primary" type="button" hidden>
           Ingest changes
         </button>
       </div>
     </header>
 
     <div class="app-body">
-      <nav id="workspace-nav" class="workspace-sidebar" aria-label="Knowledge base views">
+      <nav id="workspace-nav" class="workspace-sidebar" aria-label="Research views">
         <div id="project-selector" class="project-selector" data-capability="projects" hidden>
           <label class="project-selector-field" for="project-select">
             <span class="field-label">Projects</span>
@@ -70,19 +70,15 @@
             Opening another project opens its own workspace in a new tab.
           </p>
           <p id="project-selector-message" class="form-note" hidden></p>
-          <p id="project-start-command" class="project-start-command" hidden></p>
           <div class="project-actions">
             <button id="project-open" class="button button-primary" type="button" hidden>
               Open workspace
-            </button>
-            <button id="project-copy-command" class="text-button" type="button" hidden>
-              Copy start command
             </button>
           </div>
         </div>
 
         <ul class="sidebar-list">
-          <li class="sidebar-item is-active" data-view="search" data-capability="documents" hidden>
+          <li class="sidebar-item is-active" data-view="search">
             <button class="nav-item is-active" type="button" aria-current="page">
               <svg class="nav-item-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
                 <circle cx="11" cy="11" r="6.5"></circle>
@@ -91,7 +87,7 @@
               <span class="nav-item-name">Search</span>
             </button>
           </li>
-          <li class="sidebar-item" data-view="sources" data-capability="sources" hidden>
+          <li class="sidebar-item" data-view="sources">
             <button class="nav-item" type="button">
               <svg class="nav-item-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
                 <path d="M4 6.5h16M4 12h16M4 17.5h10"></path>
@@ -101,7 +97,7 @@
               </span>
             </button>
           </li>
-          <li class="sidebar-item" data-view="status" data-capability="documents" hidden>
+          <li class="sidebar-item" data-view="status">
             <button class="nav-item" type="button">
               <svg class="nav-item-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
                 <path d="M3.5 12.5h3.5l2.5-6.5 4.5 12 2-5.5h4.5"></path>
@@ -109,7 +105,7 @@
               <span class="nav-item-name">Status</span>
             </button>
           </li>
-          <li class="sidebar-item" data-view="stats" data-capability="stats" hidden>
+          <li class="sidebar-item" data-view="stats">
             <button class="nav-item" type="button">
               <svg class="nav-item-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
                 <path d="M5 20v-7M12 20V5M19 20v-10"></path>
@@ -117,7 +113,7 @@
               <span class="nav-item-name">Stats</span>
             </button>
           </li>
-          <li class="sidebar-item" data-view="config" data-capability="settings" hidden>
+          <li class="sidebar-item" data-view="config">
             <button class="nav-item" type="button">
               <svg class="nav-item-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
                 <path d="M4 8h9M17.5 8H20"></path>
@@ -157,7 +153,7 @@
       <div id="nav-scrim" class="nav-scrim" hidden></div>
 
       <main id="workspace" class="workspace">
-        <section id="search-view" class="view-panel is-active" data-panel="search" data-capability="documents" hidden>
+        <section id="search-view" class="view-panel is-active" data-panel="search" hidden>
           <form id="search-form" class="search-console">
             <label class="query-field" for="query">
               <span class="field-label">Query</span>
@@ -195,7 +191,7 @@
                 Separate values with commas; an empty field matches everything.
               </p>
               <div class="filter-groups">
-                <fieldset class="filter-group" data-capability="metadata_filters" hidden>
+                <fieldset class="filter-group">
                   <legend>Reviewed metadata</legend>
                   <p class="filter-note">
                     Every value must match: a passage is returned only when its
@@ -211,7 +207,7 @@
                   </label>
                 </fieldset>
 
-                <fieldset class="filter-group" data-capability="category_partitions" hidden>
+                <fieldset class="filter-group">
                   <legend>Corpus partitions</legend>
                   <p class="filter-note">
                     At least one value must match: a passage is returned when its
@@ -224,7 +220,7 @@
                   </label>
                 </fieldset>
 
-                <fieldset class="filter-group" data-capability="project_metadata" hidden>
+                <fieldset class="filter-group">
                   <legend>Projects</legend>
                   <p class="filter-note">
                     At least one value must match: a passage is returned when its
@@ -237,7 +233,7 @@
                   </label>
                 </fieldset>
 
-                <fieldset class="filter-group" data-capability="bibliographic_filters" hidden>
+                <fieldset class="filter-group">
                   <legend>Author, work, or language</legend>
                   <p class="filter-note">
                     In each field you fill, at least one value must match. A
@@ -259,7 +255,7 @@
                   </label>
                 </fieldset>
 
-                <fieldset class="filter-group" data-capability="source_selection" hidden>
+                <fieldset class="filter-group">
                   <legend>Named sources</legend>
                   <p class="filter-note">
                     Stable source identifiers, chosen from the Sources view.
@@ -283,7 +279,7 @@
                   searchable sources carrying it.
                 </p>
 
-                <details id="partition-summary" class="pick-group fold" data-capability="category_partitions" hidden>
+                <details id="partition-summary" class="pick-group fold" hidden>
                   <summary class="fold-summary">
                     <h3>Corpus partitions</h3>
                     <span class="count-badge">0</span>
@@ -291,7 +287,7 @@
                   <div id="partition-chips" class="pick-list"></div>
                 </details>
 
-                <details id="project-summary" class="pick-group fold" data-capability="project_metadata" hidden>
+                <details id="project-summary" class="pick-group fold" hidden>
                   <summary class="fold-summary">
                     <h3>Projects</h3>
                     <span class="count-badge">0</span>
@@ -299,7 +295,7 @@
                   <div id="project-chips" class="pick-list"></div>
                 </details>
 
-                <details id="language-summary" class="pick-group fold" data-capability="bibliographic_filters" hidden>
+                <details id="language-summary" class="pick-group fold" hidden>
                   <summary class="fold-summary">
                     <h3>Languages</h3>
                     <span class="count-badge">0</span>
@@ -324,7 +320,7 @@
           <div id="results" class="results-list" aria-live="polite"></div>
         </section>
 
-        <section id="sources-view" class="view-panel" data-panel="sources" data-capability="sources" hidden>
+        <section id="sources-view" class="view-panel" data-panel="sources" hidden>
           <div class="sources-toolbar">
             <h2 id="source-list-heading">Indexed sources</h2>
             <label class="source-filter" for="source-filter">
@@ -357,7 +353,7 @@
           </section>
         </section>
 
-        <section id="status-view" class="view-panel system-summary" data-panel="status" data-capability="documents" aria-labelledby="status-view-title" hidden>
+        <section id="status-view" class="view-panel system-summary" data-panel="status" aria-labelledby="status-view-title" hidden>
           <h2 id="status-view-title">Knowledge base status</h2>
 
           <div id="status-notice" class="notice" hidden>
@@ -416,7 +412,7 @@
             <dl id="status-facts" class="fact-list"></dl>
           </details>
 
-          <div id="generation-summary" class="panel-section" data-capability="generations" hidden>
+          <div id="generation-summary" class="panel-section">
             <details id="generation-fold" class="fold">
               <summary class="fold-summary">
                 <h3>Generations</h3>
@@ -426,7 +422,7 @@
                 Removing a build frees its space and cannot be undone; the sources
                 are not touched.
               </p>
-              <div class="rebuild-row" data-capability="force_recompute" hidden>
+              <div class="rebuild-row">
                 <button id="rebuild-button" class="button button-quiet" type="button" hidden>
                   Rebuild from scratch…
                 </button>
@@ -435,7 +431,7 @@
             </details>
           </div>
 
-          <div id="chunk-exclusion-summary" class="panel-section" data-capability="chunk_exclusion" hidden>
+          <div id="chunk-exclusion-summary" class="panel-section">
             <details id="chunk-exclusion-fold" class="fold">
               <summary class="fold-summary">
                 <h3>Passage exclusions</h3>
@@ -452,7 +448,7 @@
 
         </section>
 
-        <section id="stats-view" class="view-panel" data-panel="stats" data-capability="stats" hidden>
+        <section id="stats-view" class="view-panel" data-panel="stats" hidden>
           <h2>Stats</h2>
           <p class="form-note measure">
             What searches returned on this machine and what the corpus holds, one
@@ -461,7 +457,7 @@
           <div id="stats-board" class="stats-board" aria-live="polite"></div>
         </section>
 
-        <section id="source-view" class="view-panel" data-panel="source" data-capability="sources" hidden>
+        <section id="source-view" class="view-panel" data-panel="source" hidden>
           <p class="back-row">
             <a class="entity-link" href="#/sources">← All sources</a>
           </p>
@@ -477,7 +473,7 @@
           <nav id="source-chunk-pager" class="pager" aria-label="Passage pages" hidden></nav>
         </section>
 
-        <section id="config-view" class="view-panel" data-panel="config" data-capability="settings" hidden>
+        <section id="config-view" class="view-panel" data-panel="config" hidden>
           <div id="settings-panel" class="settings-panel">
             <h2>Settings</h2>
             <p class="form-note measure">
@@ -509,7 +505,7 @@
               Disconnecting a client ends its session; the client decides whether
               to reconnect.
             </p>
-            <p id="client-naming" class="form-note measure" hidden></p>
+            <p id="client-naming" class="form-note measure">Set RESEARCH_RAG_CLIENT_NAME in the client entry to name an agent.</p>
             <details id="client-details" class="client-drawer">
               <summary>
                 <span class="drawer-title">Clients</span>
@@ -575,7 +571,7 @@
         </section>
       </main>
 
-      <footer id="footer-text" class="site-footer" hidden></footer>
+      <footer id="footer-text" class="site-footer">Passages are cleaned text, not verified quotations. Open the original for exact wording.</footer>
     </div>
 
     <dialog id="ingest-dialog" class="dialog">
@@ -585,10 +581,12 @@
           <button class="icon-button dialog-close" type="button" aria-label="Close">×</button>
         </div>
         <p id="ingest-intro" class="dialog-intro">
-          Included documents will be extracted and indexed. The current generation
-          remains active unless the complete build succeeds.
+          Build indexes from included PDFs, EPUBs and MOBIs. The selected generation
+          is replaced only after a complete build succeeds.
         </p>
-        <p id="ingest-note" class="form-note dialog-note" hidden></p>
+        <p id="ingest-note" class="form-note dialog-note">
+          If a build runs out of time, run it again to resume from its checkpoint.
+        </p>
         <p id="ingest-cost" class="notice-inline" hidden></p>
         <div class="dialog-actions">
           <button class="button button-quiet dialog-close" type="button">Cancel</button>
@@ -629,7 +627,7 @@
             <span class="field-label">Keywords</span>
             <input id="metadata-keywords" type="text" placeholder="labour, automation">
           </label>
-          <label for="metadata-project" data-capability="project_metadata" hidden>
+          <label for="metadata-project">
             <span class="field-label">Projects</span>
             <input id="metadata-project" type="text" placeholder="first project, second project">
           </label>

@@ -1,4 +1,4 @@
-"""Research workspace labels, capabilities, and operation argument boundaries."""
+"""The workspace adapter: what each browser operation may carry to the service."""
 
 from __future__ import annotations
 
@@ -6,11 +6,10 @@ import asyncio
 import logging
 import time
 from collections.abc import Callable, Mapping, Sequence
-from dataclasses import replace
 from typing import TYPE_CHECKING, Any
 
-from .workspace import SourceFile, UICapabilities, UIProfile, UIRequestError
-from .workspace import create_ui_app as create_shared_ui_app
+from .workspace import SourceFile, UIRequestError
+from .workspace import create_ui_app as create_workspace_app
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
     from starlette.applications import Starlette
@@ -25,7 +24,7 @@ from ..project.config import (
 )
 from ..project.policy import ResearchError
 from ..project.registry import account_projects
-from ..runtime.app import CLIENT_NAME_ENV, ClientError, ClientRegistry
+from ..runtime.app import ClientError, ClientRegistry
 from ..runtime.doctor import mcp_entry_block
 from ..runtime.version import version_label
 
@@ -37,67 +36,7 @@ MAX_ERROR_LENGTH = 1200
 MAXIMUM_TOP_K = 50
 MAXIMUM_CONTEXT_CHUNKS = 5
 
-RESEARCH_UI_PROFILE = UIProfile(
-    application_name="Research RAG",
-    version_label=version_label(),
-    project_label="Project",
-    project_fallback_name="Research project",
-    navigation_label="Research views",
-    source_types_label="PDF + EPUB + MOBI sources",
-    # A client entry carries a command and a project, so the app cannot tell one
-    # agent from another and the reader is told how to name it instead. The
-    # variable is the bridge's, so this sentence is written where it is declared.
-    client_naming_hint=f"Set {CLIENT_NAME_ENV} in the client entry to name an agent.",
-    ingest_intro=(
-        "Build indexes from included PDFs, EPUBs and MOBIs. The selected generation "
-        "is replaced only after a complete build succeeds."
-    ),
-    ingest_busy_message=("Building indexes. Large collections may take a while…"),
-    ingest_resume_note="If a build runs out of time, run it again to resume from its checkpoint.",
-    result_text_label="Cleaned passage",
-    copy_text_label="Copy cleaned text",
-    footer_text="Passages are cleaned text, not verified quotations. Open the original for exact wording.",
-    capabilities=UICapabilities(
-        metadata=True,
-        force_recompute=True,
-        source_selection=True,
-        category_partitions=True,
-        project_metadata=True,
-        metadata_filters=True,
-        bibliographic_filters=True,
-        # The app is a server, so a person in the workspace can see which agents
-        # are attached to it and end one. A host that is not a server leaves this
-        # off and the panel and its routes stay absent.
-        clients=True,
-        # A build leaves its predecessor on disk, so a reader in the workspace
-        # can see what those builds cost and reclaim one. The listing is already
-        # in the status payload. The removal asks for the id twice, which the
-        # workspace host insists on before it calls here.
-        generations=True,
-        # A reader tunes this project in the browser, and the cost of a change is
-        # named before anything is written, because a generation records most of
-        # these keys and a search would otherwise answer stale with no reason.
-        settings=True,
-        # A reader who objects to one passage rather than to a whole file records
-        # that beside the source decision it is an alternative to, and the panel
-        # lists what has been decided so the decision can be reversed.
-        chunk_exclusion=True,
-        # One installation serves several projects, so the workspace says which
-        # one it is and can reach another. The listing is the account's own
-        # record, read through the same code `research-rag projects` uses.
-        projects=True,
-        # A reader configuring an agent in the browser is handed the same entry
-        # `research-rag doctor --mcp-entry` prints, rather than a second copy of
-        # it written for a browser.
-        agent_entry=True,
-        updates=True,
-        # Every search counts its first five ranks on this machine, without the
-        # query, so the workspace can show which sources and passages answer.
-        stats=True,
-    ),
-)
-
-# The arguments each workspace operation accepts, by name. The shared UI sends
+# The arguments each workspace operation accepts, by name. The page sends
 # its full optional set for every route, so an argument absent here is one this
 # app does not serve and must not forward.
 #
@@ -679,7 +618,7 @@ def create_ui_app(
     app_state: Callable[[], Mapping[str, Any]] | None = None,
     network_access: Any = None,
 ) -> Starlette:
-    """Create the shared workspace over the app's one service.
+    """Create the workspace over the app's one service.
 
     The adapter is handed the service rather than a factory, because the app
     process owns the retrieval backend and there is exactly one of it. The client
@@ -688,14 +627,10 @@ def create_ui_app(
     carries it beside the service's.
     """
 
-    # More than one project can be served at the same time, so each one names the
-    # project it serves instead of showing a generic label. A browser window must
-    # be able to say which knowledge base it belongs to.
-    profile = replace(RESEARCH_UI_PROFILE, project_fallback_name=config.project_name)
-    return create_shared_ui_app(
-        profile=profile,
+    return create_workspace_app(
         adapter=ResearchUIAdapter(
             config, service, clients=clients, app_state=app_state
         ),
+        version_label=version_label(),
         network_access=network_access,
     )

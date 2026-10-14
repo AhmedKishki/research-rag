@@ -249,7 +249,7 @@ async def test_the_workspace_answers_on_the_same_port(project: Path) -> None:
         assert body["project_root"] == str(project)
         code, body = await asyncio.to_thread(get, app.url, "/api/ui")
         assert code == 200
-        assert body["application_name"] == "Research RAG"
+        assert body["capabilities"]["clients"] is True
     finally:
         await app.stop()
 

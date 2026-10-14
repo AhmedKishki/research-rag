@@ -47,60 +47,23 @@ function hasCapability(name) {
   return Boolean(state.profile?.capabilities?.[name]);
 }
 
+// The panels that act on this machine stay hidden until the profile says this
+// viewer is local; a LAN viewer is never shown them.
 function applyProfile(profile) {
   state.profile = profile;
-  document.title = profile.application_name;
-  byId("application-name").textContent = profile.application_name;
-  byId("project-label").textContent = profile.project_label;
-  byId("workspace-nav").setAttribute("aria-label", profile.navigation_label);
-  byId("ingest-intro").textContent = profile.ingest_intro;
-  // Whether a build can be continued is the host's own fact about its own
-  // pipeline, so the sentence that says so arrives with the rest of its wording
-  // and a host that makes no claim shows none.
-  const ingestNote = byId("ingest-note");
-  ingestNote.textContent = profile.ingest_resume_note || "";
-  ingestNote.hidden = !profile.ingest_resume_note;
-  // An empty footer removes the element rather than leaving an empty band: the
-  // quotation rule belongs in the documentation, not in every view.
-  const footer = byId("footer-text");
-  footer.textContent = profile.footer_text || "";
-  footer.hidden = !profile.footer_text;
   const versionLabel = byId("version-label");
   versionLabel.textContent = profile.version_label || "";
   versionLabel.hidden = !profile.version_label;
-  // Only a host that serves MCP clients knows how one of them is named, so the
-  // note arrives with the rest of this host's wording.
-  const clientNaming = byId("client-naming");
-  clientNaming.textContent = profile.client_naming_hint || "";
-  clientNaming.hidden = !profile.client_naming_hint;
   document.querySelectorAll("[data-capability]").forEach((element) => {
     element.hidden = !hasCapability(element.dataset.capability);
   });
-  // The build button names the build the corpus needs, so it waits for the
-  // status that says which one that is.
-  byId("ingest-button").hidden = true;
-  const visibleNavItems = [...document.querySelectorAll(".sidebar-item")].filter(
-    (item) => !item.hidden,
-  );
-  // The filter section is a group of capability-gated fields, so it goes when
-  // the last of them goes: a heading over nothing is a heading a reader stops on.
-  const filterSection = byId("filter-section");
-  filterSection.hidden = !filterSection.querySelector(
-    "[data-capability]:not([hidden])",
-  );
-  byId("filter-fields").hidden = filterSection.hidden;
-  // A nav item is one panel's way in, so a sidebar holding none is a rule above
-  // nothing and goes with them. The active view is chosen from the items that
-  // survived the profile, and a profile that leaves none shows no panel at all
-  // rather than the panel of an item that is gone.
-  byId("workspace-nav").hidden = !visibleNavItems.length;
-  byId("nav-toggle").hidden = !visibleNavItems.length;
   // The view a link or a reload names is drawn first, so the page does not show
   // the search for a moment before the route is applied.
   const routed = parseRoute(window.location.hash).view;
-  const activeItem = visibleNavItems.find((item) => item.dataset.view === routed)
-    || visibleNavItems.find((item) => item.classList.contains("is-active"));
-  switchView(activeItem ? activeItem.dataset.view : null);
+  const available = navItems();
+  const activeItem = available.find((item) => item.dataset.view === routed)
+    || available.find((item) => item.classList.contains("is-active"));
+  switchView(activeItem.dataset.view);
 }
 
 function node(tag, className, text) {
@@ -276,8 +239,8 @@ function setBusy(active, message = "Working…") {
     element.disabled = active;
   });
   byId("refresh-button").disabled = active;
-  byId("ingest-button").disabled = active || !hasCapability("ingestion");
-  byId("rebuild-button").disabled = active || !hasCapability("force_recompute");
+  byId("ingest-button").disabled = active;
+  byId("rebuild-button").disabled = active;
   // A generation's Load and Remove are ordinary buttons rather than gated
   // submits, so the loop above does not reach them. They are held here, where
   // the busy state is decided, so one operation cannot start while another is
@@ -484,18 +447,6 @@ function showProjectActions() {
   // The project on screen is this page, so opening it would only open a second
   // tab of the same workspace.
   open.hidden = !url || project.project_name === state.currentProject;
-  // The command is the host's own, supplied through the profile, because a
-  // project with no app has no address and an invented one would be a command
-  // the reader pastes and fails on.
-  const template = state.profile?.project_start_command || "";
-  const command = template && project
-    ? template.replace("{project}", project.project_name)
-    : "";
-  byId("project-start-command").hidden = !command;
-  byId("project-start-command").textContent = command;
-  const copy = byId("project-copy-command");
-  copy.hidden = !command;
-  copy.disabled = !command;
 }
 
 function renderProjects(payload) {
@@ -741,8 +692,7 @@ function renderStatus(status) {
   state.status = status;
   const projectPath = status.project_root || "";
   const projectName = status.project_name || projectPath.split(/[\\/]/).filter(Boolean).pop()
-    || state.profile?.project_fallback_name
-    || "Knowledge base";
+    || "Research project";
   byId("project-name").textContent = projectName;
   byId("project-path").textContent = projectPath;
   byId("project-path").title = projectPath;
@@ -764,12 +714,12 @@ function renderStatus(status) {
   const plan = ingestPlan(status);
   state.ingestPlan = plan;
   const ingestButton = byId("ingest-button");
-  ingestButton.hidden = !hasCapability("ingestion") || !plan;
+  ingestButton.hidden = !plan;
   ingestButton.textContent = plan ? plan.label : "";
   // A rebuild replaces a generation, so there is none to offer before the first
   // build, nor while a checkpointed build is waiting to be resumed.
   byId("rebuild-button").hidden =
-    !hasCapability("force_recompute") || !status.ready || Boolean(status.ingestion_progress);
+    !status.ready || Boolean(status.ingestion_progress);
 
   let indexState = "Not built";
   if (status.ready && status.stale) indexState = "Stale";
@@ -778,13 +728,13 @@ function renderStatus(status) {
   byId("index-state").textContent = indexState;
   byId("retrieval-detail").textContent = status.ready
     ? methodLabels(status).join(" · ") || "No method available"
-    : state.profile?.source_types_label || "document sources";
+    : "PDF + EPUB + MOBI sources";
 
   const notice = byId("status-notice");
   const noticeAction = byId("notice-action");
   // Every notice that asks for a build offers the build the header offers, so
   // the two controls cannot name different work.
-  noticeAction.hidden = !hasCapability("ingestion") || !plan;
+  noticeAction.hidden = !plan;
   noticeAction.textContent = plan ? plan.label : "";
   noticeAction.dataset.action = "ingest";
   if (status.ingestion_progress) {
@@ -824,7 +774,7 @@ function renderStatus(status) {
   renderLanguages(status);
   syncFilterPicks();
   renderAgentEndpoint(status);
-  if (hasCapability("generations")) renderGenerations(status.generations || []);
+  renderGenerations(status.generations || []);
 }
 
 function tagList(values, className = "tag") {
@@ -904,7 +854,7 @@ function renderInventory(containerId, entries, key, action) {
   container.replaceChildren();
   const group = container.closest(".pick-group");
   if (group) {
-    group.hidden = !hasCapability(group.dataset.capability) || !inventoryNarrows(entries);
+    group.hidden = !inventoryNarrows(entries);
     group.querySelector(".count-badge").textContent = formatNumber(entries.length);
     foldList(group, entries.length);
   }
@@ -963,7 +913,7 @@ function sourceCard(source) {
   const title = inlineText(source.title) || source.source_relative_path;
   titleRow.append(node("span", "format-badge", source.format || "source"));
   const name = node("span", "source-title");
-  name.append(source.source_id && hasCapability("sources") ? entityLink(title, sourceHref(source.source_id)) : title);
+  name.append(source.source_id ? entityLink(title, sourceHref(source.source_id)) : title);
   titleRow.append(name);
   body.append(titleRow);
   body.append(node("p", "source-byline", authorLine(source)));
@@ -997,32 +947,17 @@ function sourceCard(source) {
   body.append(identifiers);
   card.append(body);
 
-  const actions = [];
-  if (hasCapability("source_files")) {
-    actions.push(button("Open original", "open-source", source.source_relative_path));
-  }
-  if (hasCapability("metadata")) {
-    actions.push(button("Edit metadata", "edit-metadata", source.document_id));
-  }
   // Two different decisions sit here, and their names keep them apart. The
   // search pair fills a filter for the next query and opens the search; the
   // project exclusion is recorded, read by every surface and agent, and kept
   // until it is restored, so it is named for its reach and coloured for it.
-  if (hasCapability("source_selection")) {
-    actions.push(button("Search only this source", "only-source", source.source_id));
-    actions.push(button("Search without this source", "exclude-from-search", source.source_id));
-  }
-  if (hasCapability("source_inclusion")) {
-    actions.push(
-      button(
-        "Exclude from project…",
-        "exclude-source",
-        source.document_id,
-        "action-button action-button-danger",
-      ),
-    );
-  }
-  if (actions.length) titleRow.append(actionMenu(title, actions));
+  titleRow.append(actionMenu(title, [
+    button("Open original", "open-source", source.source_relative_path),
+    button("Edit metadata", "edit-metadata", source.document_id),
+    button("Search only this source", "only-source", source.source_id),
+    button("Search without this source", "exclude-from-search", source.source_id),
+    button("Exclude from project…", "exclude-source", source.document_id, "action-button action-button-danger"),
+  ]));
   return card;
 }
 
@@ -1038,9 +973,7 @@ function excludedCard(source) {
       : "Not in current index";
   body.append(node("span", "state-badge state-badge-blocked", status));
   card.append(body);
-  if (hasCapability("source_inclusion")) {
-    card.append(button("Restore source", "restore-source", source.source_relative_path));
-  }
+  card.append(button("Restore source", "restore-source", source.source_relative_path));
   return card;
 }
 
@@ -1197,9 +1130,7 @@ async function loadWorkspace({ announce = false } = {}) {
     await loadClients();
     const [status, sources] = await Promise.all([
       api("/api/status"),
-      hasCapability("sources")
-        ? api("/api/sources")
-        : Promise.resolve({ ready: false, sources: [], excluded_sources: [] }),
+      api("/api/sources"),
     ]);
     renderStatus(status);
     renderSources(sources);
@@ -1217,19 +1148,15 @@ async function loadWorkspace({ announce = false } = {}) {
         toast(error.message, true);
       }
     }
-    if (hasCapability("chunk_exclusion")) {
-      try {
-        await loadChunkExclusions();
-      } catch (error) {
-        toast(error.message, true);
-      }
+    try {
+      await loadChunkExclusions();
+    } catch (error) {
+      toast(error.message, true);
     }
-    if (hasCapability("settings")) {
-      try {
-        await loadSettings();
-      } catch (error) {
-        toast(error.message, true);
-      }
+    try {
+      await loadSettings();
+    } catch (error) {
+      toast(error.message, true);
     }
     setConnection(...connectionHealth(state.status));
     // The update check runs once per page, after the workspace has drawn, and is
@@ -1240,7 +1167,7 @@ async function loadWorkspace({ announce = false } = {}) {
       state.updates.checked = true;
       void checkUpdates();
     }
-    if (hasCapability("stats") && activeView() === "stats") void loadStats();
+    if (activeView() === "stats") void loadStats();
     if (announce) toast("Workspace refreshed.");
   } catch (error) {
     setConnection("error", "Not answered", error.message);
@@ -1880,7 +1807,7 @@ function statPanel(card) {
   if (card.scopes.includes("time")) controls.append(scopeSelect(card, "days", card.timeScopes || STAT_TIME_SCOPES));
   if (card.scopes.includes("size")) controls.append(scopeSelect(card, "top", STAT_SIZES));
   if (card.scopes.includes("by")) controls.append(scopeSelect(card, "by", STAT_LARGEST_BY));
-  if (card.clearable && hasCapability("stats")) {
+  if (card.clearable) {
     controls.append(button("Clear", "clear-history", "", "text-button"));
   }
   head.append(controls);
@@ -1984,11 +1911,9 @@ function chunkCard(chunk) {
   if (chunk.content_kind && chunk.content_kind !== "prose") facts.push(chunk.content_kind);
   (chunk.quality_flags || []).forEach((flag) => facts.push(String(flag).replaceAll("_", " ")));
   card.append(node("p", "result-meta", facts.join(" · ")));
-  if (hasCapability("passage_context")) {
-    const actions = node("div", "result-actions");
-    actions.append(button("Read in context", "show-context", chunk.chunk_id));
-    card.append(actions);
-  }
+  const actions = node("div", "result-actions");
+  actions.append(button("Read in context", "show-context", chunk.chunk_id));
+  card.append(actions);
   return card;
 }
 
@@ -2011,17 +1936,15 @@ function renderSourceView(payload) {
     summary.append(tags);
   }
   const actions = node("div", "result-actions");
-  if (hasCapability("source_files") && source.source_relative_path) {
+  if (source.source_relative_path) {
     actions.append(button("Open original", "open-source", source.source_relative_path));
   }
   const listed = state.sources.find((entry) => entry.source_id === source.source_id);
-  if (hasCapability("metadata") && listed) {
+  if (listed) {
     actions.append(button("Edit metadata", "edit-metadata", listed.document_id));
   }
-  if (hasCapability("source_selection")) {
-    actions.append(button("Search only this source", "only-source", source.source_id));
-  }
-  if (actions.childElementCount) summary.append(actions);
+  actions.append(button("Search only this source", "only-source", source.source_id));
+  summary.append(actions);
   const facts = [
     ["Path", source.source_relative_path || ""],
     ["Identifier", source.source_id || ""],
@@ -2138,8 +2061,8 @@ function navItems() {
 // parent item stays marked, so a source read from the Sources list is still "in"
 // Sources, and a passage opened from a result is still "in" Search.
 const DETAIL_VIEWS = {
-  source: { panel: "source", nav: "sources", capability: "sources" },
-  passage: { panel: "search", nav: "search", capability: "passage_context" },
+  source: { panel: "source", nav: "sources" },
+  passage: { panel: "search", nav: "search" },
 };
 
 function activeView() {
@@ -2176,7 +2099,7 @@ function routeHash(view = activeView()) {
 // The page title names the view, the query, or the page of sources, so the
 // browser's history list tells its entries apart.
 function routeTitle(view) {
-  const name = state.profile?.application_name || document.title;
+  const name = "Research RAG";
   const item = navItems().find((entry) => entry.dataset.view === view);
   const label = [...(item?.querySelector(".nav-item-name")?.childNodes || [])]
     .map((child) => child.textContent.trim())
@@ -2223,7 +2146,7 @@ async function applyRoute() {
   const available = navItems();
   const detail = DETAIL_VIEWS[view];
   const detailId = params.get("id") || "";
-  const wantsDetail = Boolean(detail && detailId && hasCapability(detail.capability));
+  const wantsDetail = Boolean(detail && detailId);
   // A detail view named without what it shows falls back to the list it belongs to.
   const named = detail && !wantsDetail ? detail.nav : view;
   const target = wantsDetail
@@ -2335,7 +2258,7 @@ function switchView(name, { moveFocus = false } = {}) {
   if (opened) opened.focus({ preventScroll: true });
   closeNav();
   // The counts change with every search, so the view reads them when it opens.
-  if (name === "stats" && hasCapability("stats")) void loadStats();
+  if (name === "stats") void loadStats();
 }
 
 // Below 992px the sidebar is a drawer behind the header button. It traps
@@ -2387,27 +2310,21 @@ function resultCard(hit) {
   // The title names the source and goes to all of its passages; the place in it
   // names this passage and goes to the text around it.
   const heading = node("h3", "result-title");
-  heading.append(hit.source_id && hasCapability("sources") ? entityLink(title, sourceHref(hit.source_id)) : title);
+  heading.append(hit.source_id ? entityLink(title, sourceHref(hit.source_id)) : title);
   header.append(heading);
   header.append(
-    hit.chunk_id && hasCapability("passage_context")
+    hit.chunk_id
       ? entityLink(locatorLabel(hit.locator), passageHref(hit.chunk_id), "locator-badge")
       : node("span", "locator-badge", locatorLabel(hit.locator)),
   );
-  const actions = [
-    button(state.profile?.copy_text_label || "Copy passage", "copy-passage", hit.chunk_id),
-    button("Copy citation", "copy-citation", hit.chunk_id),
-  ];
-  if (hasCapability("passage_context")) {
-    actions.push(button("Nearby context", "show-context", hit.chunk_id));
-  }
   const source = sourceForDocument(hit.document_id);
-  if (source && hasCapability("source_files")) {
-    actions.push(button("Open original", "open-source", source.source_relative_path));
-  }
-  if (hasCapability("chunk_exclusion")) {
-    actions.push(chunkAction(hit));
-  }
+  const actions = [
+    button("Copy cleaned text", "copy-passage", hit.chunk_id),
+    button("Copy citation", "copy-citation", hit.chunk_id),
+    button("Nearby context", "show-context", hit.chunk_id),
+    ...(source ? [button("Open original", "open-source", source.source_relative_path)] : []),
+    chunkAction(hit),
+  ];
   header.append(actionMenu(title, actions));
   card.append(header);
   card.append(node("div", "result-byline", authorLine(hit)));
@@ -2462,7 +2379,7 @@ function renderResults(payload) {
   // The label is a property of the whole results view, not of a passage, so it
   // is written once above the list rather than repeated on every card.
   const notice = byId("results-notice");
-  notice.textContent = state.profile?.result_text_label || "Retrieved passage";
+  notice.textContent = "Cleaned passage";
   notice.hidden = !count;
   if (!count) {
     results.append(node("div", "no-records", "No passages matched. Broaden the query or remove metadata filters."));
@@ -2508,17 +2425,17 @@ async function runSearch() {
     top_k: Number(byId("top-k").value),
   };
   const optional = {
-    categories: hasCapability("metadata_filters") ? listValue(byId("category-filter").value) : null,
-    categories_any: hasCapability("category_partitions") ? listValue(byId("category-any-filter").value) : null,
-    projects_any: hasCapability("project_metadata") ? listValue(byId("project-any-filter").value) : null,
-    keywords: hasCapability("metadata_filters") ? listValue(byId("keyword-filter").value) : null,
-    authors_any: hasCapability("bibliographic_filters") ? listValue(byId("author-filter").value) : null,
-    titles_any: hasCapability("bibliographic_filters") ? listValue(byId("title-filter").value) : null,
-    languages_any: hasCapability("bibliographic_filters") ? listValue(byId("language-filter").value) : null,
-    source_ids: hasCapability("source_selection") ? listValue(byId("include-source-filter").value) : null,
-    exclude_source_ids: hasCapability("source_selection") ? listValue(byId("exclude-source-filter").value) : null,
+    categories: listValue(byId("category-filter").value),
+    categories_any: listValue(byId("category-any-filter").value),
+    projects_any: listValue(byId("project-any-filter").value),
+    keywords: listValue(byId("keyword-filter").value),
+    authors_any: listValue(byId("author-filter").value),
+    titles_any: listValue(byId("title-filter").value),
+    languages_any: listValue(byId("language-filter").value),
+    source_ids: listValue(byId("include-source-filter").value),
+    exclude_source_ids: listValue(byId("exclude-source-filter").value),
   };
-  // Send a filter only when the server supports it and the user selected one.
+  // Send a filter only when the user selected one.
   for (const [field, value] of Object.entries(optional)) {
     if (value?.length) payload[field] = value;
   }
@@ -2632,7 +2549,7 @@ async function showContext(chunkId) {
         );
       }
       item.append(node("p", "", readableText(passage.text)));
-      if (hasCapability("chunk_exclusion") && !excluded) {
+      if (!excluded) {
         // Changing what a search reads stays a deliberate step taken in the
         // dialog. A passage already excluded is offered nothing here, because
         // restoring it belongs to the list that owns the exclusions.
@@ -2648,7 +2565,7 @@ async function showContext(chunkId) {
     const heading = requestedPassage?.title || "Passage context";
     // The dialog names the source, and the name goes to all of its passages.
     contextTitle.replaceChildren(
-      requestedPassage?.source_id && hasCapability("sources")
+      requestedPassage?.source_id
         ? entityLink(heading, sourceHref(requestedPassage.source_id))
         : document.createTextNode(heading),
     );
@@ -3472,12 +3389,10 @@ async function confirmSettings(event) {
 }
 
 async function loadSettings() {
-  if (!hasCapability("settings")) return;
   renderSettings(await api("/api/settings"));
 }
 
 async function reloadSettings() {
-  if (!hasCapability("settings")) return;
   setBusy(true, "Reading the settings…");
   try {
     await loadSettings();
@@ -3609,7 +3524,6 @@ function renderChunkExclusions(payload) {
 }
 
 async function loadChunkExclusions() {
-  if (!hasCapability("chunk_exclusion")) return;
   renderChunkExclusions(await api("/api/chunk-exclusions"));
 }
 
@@ -3623,10 +3537,8 @@ async function saveMetadata(event) {
     doi: byId("metadata-doi").value.trim(),
     categories: listValue(byId("metadata-categories").value),
     keywords: listValue(byId("metadata-keywords").value),
+    project: listValue(byId("metadata-project").value),
   };
-  if (hasCapability("project_metadata")) {
-    metadata.project = listValue(byId("metadata-project").value);
-  }
   const payload = {
     source_path: byId("metadata-source-path").value,
     metadata,
@@ -3848,14 +3760,12 @@ function pollIngestionProgress() {
 async function ingest(event) {
   event.preventDefault();
   if (state.busy) return;
-  setBusy(true, state.profile?.ingest_busy_message || "Building the indexes. This can take several minutes…");
+  setBusy(true, "Building indexes. Large collections may take a while…");
   const stopProgress = pollIngestionProgress();
   try {
-    const request = {};
-    if (hasCapability("force_recompute")) request.force_recompute = state.forceRecompute;
     const result = await api("/api/ingest", {
       method: "POST",
-      body: JSON.stringify(request),
+      body: JSON.stringify({ force_recompute: state.forceRecompute }),
     });
     stopProgress();
     byId("ingest-dialog").close();
@@ -4040,9 +3950,6 @@ function initialize() {
   byId("project-open").addEventListener("click", () => {
     const project = selectedProject();
     if (project?.url) window.open(project.url, "_blank", "noopener");
-  });
-  byId("project-copy-command").addEventListener("click", () => {
-    copyText(byId("project-start-command").textContent, "Start command copied.");
   });
   byId("agent-url-copy").addEventListener("click", () => {
     copyText(byId("agent-url").textContent, "Endpoint copied.");

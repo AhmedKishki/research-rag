@@ -140,7 +140,7 @@
 - Keep the engine free of Starlette, FastMCP, and surface imports. Surfaces must not import or redeclare one another.
   - `tests/gates/test_architecture.py` enforces the split.
 - Ship the workspace in `surfaces/workspace/` with its adapter, source authorization, and host.
-  - Hide unsupported capabilities. `ResearchUIAdapter._arguments` removes unsupported arguments.
+  - A LAN viewer is not shown the panels that act on this machine. `ResearchUIAdapter._arguments` removes unsupported arguments.
   - Call `ResearchService`. Never read generation artifacts directly. Allowlisted originals are the sole file-serving exception.
 - Browser and control writes must be same-origin and JSON-only, with no caller-selected output paths. Control and MCP remain loopback-only.
   - Explicit home-LAN mode accepts private IPv4 peers and detected local-interface hosts. Remote browser writes require an exact validated HTTP origin; cross-site writes are refused.
