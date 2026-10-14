@@ -150,7 +150,6 @@ An item is done when the harness has produced its measurement and the validation
 
 ## project
 
-- [ ] **Split the remaining concerns in `project/support.py`.** Metadata overlays, chunk records, IR statistics, citations, source identity, and tokenizer caching need separate owners. `project/policy.py` owns lightweight errors and policy primitives. Acceptance: shared definitions have one owner, and `tests/gates/test_lightweight_imports.py` keeps diagnostic commands from loading retrieval dependencies.
 - [ ] **Assess settings layers before removing supported overrides.** Decision. Compare retaining the current stack with a smaller stack and an explicit deprecation path. Measure actual use and ambiguity; retain validation, effective-value provenance, rebuild-cost calculation, and protection against ineffective writes. A single user can still need several projects and machine-specific overrides.
 - [ ] **Type-check in CI.** Refactor. `ResearchService` combines six workflow mixins that share undeclared attributes, and no checker reads the type hints. Declare the shared state as a `Protocol` and add pyright or mypy to CI.
 - [ ] **Decide whether the dense gate's `conserved` flag stays.** Decision. `retrieval/search.py` derives `admitted_above_floor` from the other two counts, so `conserved` cannot be false, and `scripts/evaluate_retrieval.py` reports it as `dense_conserved`. Removing it changes the measurement protocol.

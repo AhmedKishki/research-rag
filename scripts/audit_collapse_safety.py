@@ -42,7 +42,7 @@ from typing import Any
 
 import numpy as np
 
-from research_rag.project.support import _passage_equality_key
+from research_rag.retrieval.ranking import _passage_equality_key
 from research_rag.retrieval.search import SearchWorkflow, _collapse_repetitions
 
 #: Report shape version. Version 1 is the first report this script has written.
@@ -666,7 +666,7 @@ def engine_identity() -> dict[str, Any]:
     files: dict[str, Any] = {}
     for label, target in (
         ("research_rag.retrieval.search._collapse_repetitions", _collapse_repetitions),
-        ("research_rag.project.support._passage_equality_key", _passage_equality_key),
+        ("research_rag.retrieval.ranking._passage_equality_key", _passage_equality_key),
         (
             "research_rag.retrieval.search.SearchWorkflow._matches_filters",
             SearchWorkflow._matches_filters,

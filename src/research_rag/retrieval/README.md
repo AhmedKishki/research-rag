@@ -5,6 +5,8 @@ Answering a query against a built generation.
 | Module | Holds |
 |---|---|
 | `search.py` | `SearchWorkflow`: the filter layers, the BM25 and dense candidates, the fusion, and the reranking |
+| `documents.py` | A generation's documents as a reader sees them: reviewed metadata overlaid, the shared filter predicate, and a passage's public form and citation |
+| `ranking.py` | Lexical tokens and frequencies, feedback terms, the token floor, the repetition key, and source-diverse selection |
 | `dense.py` | The `DenseBackend` protocol and the façade both backends are reached through |
 | `dense_backends/` | `LocalQdrantDenseBackend`, `LocalVectorDenseBackend`, and the one portable-vector validation both call |
 | `model_runtime.py` | The embedder, the cross-encoder, and the audit tokenizer, loaded once per process |

@@ -15,6 +15,7 @@ must satisfy is in `normalized_paths.py`.
 
 from __future__ import annotations
 
+import asyncio
 import errno
 import json
 import os
@@ -23,6 +24,17 @@ from collections.abc import Iterable, Iterator
 from contextlib import contextmanager
 from pathlib import Path
 from typing import IO, Any
+
+
+async def _atomic_to_thread(function: Any, /, *args: Any, **kwargs: Any) -> Any:
+    """Let a write-side thread finish its atomic unit before propagating cancel."""
+
+    task = asyncio.create_task(asyncio.to_thread(function, *args, **kwargs))
+    try:
+        return await asyncio.shield(task)
+    except asyncio.CancelledError:
+        await asyncio.gather(task, return_exceptions=True)
+        raise
 
 
 class StorageError(RuntimeError):

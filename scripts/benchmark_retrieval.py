@@ -73,7 +73,7 @@ from research_rag.project.config import (
     configured_source_directory,
     resolve_config,
 )
-from research_rag.project.support import ResearchError
+from research_rag.project.policy import ResearchError
 from research_rag.retrieval.direct import DirectRetrieval
 
 #: The protocol this harness speaks. A worker report and the summary over worker

@@ -5,6 +5,7 @@ Building a generation, and what is inside the one in use.
 | Module | Holds |
 |---|---|
 | `ingestion.py` | The resumable build: scan, extract, chunk, embed, index, and the activation that makes a new generation current |
+| `staging.py` | What a build derives before activation: its resume identity, its source inventory, and its chunk records |
 | `generation.py` | One generation's artifacts on disk, and whether they are a complete build |
 | `generation_inventory.py` | Retained generations' disk costs and recorded build configuration, read by a status reader |
 

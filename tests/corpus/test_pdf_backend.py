@@ -26,7 +26,7 @@ from research_rag.corpus.pdf_backend import (
     recorded_pdf_backend_fingerprint,
     run_docling_batch,
 )
-from research_rag.project.support import DEFAULT_PDF_BACKEND_FINGERPRINT
+from research_rag.project.policy import DEFAULT_PDF_BACKEND_FINGERPRINT
 
 _FAKE_ENV = DoclingEnv(
     root=Path("/nonexistent/docling-env"),

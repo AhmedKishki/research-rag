@@ -25,11 +25,8 @@ from ..corpus.text_normalization import normalize_reading_text
 from ..generations.generation_inventory import generation_inventory
 from ..project.policy import ResearchError
 from ..project.state_files import SEARCH_STATS_FILE
-from ..project.support import (
-    _effective_documents,
-    _public_document,
-)
 from ..retrieval.artifact_lookup import chunk_text
+from ..retrieval.documents import _effective_documents, _public_document
 from ..storage.search_stats import (
     TRACKED_RANKS,
     SearchStatsError,

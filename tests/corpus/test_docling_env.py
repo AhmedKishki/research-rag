@@ -331,7 +331,7 @@ def test_identity_is_stable_across_first_use_and_reuse(
     project: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     from research_rag.corpus import pdf_backend
-    from research_rag.project.support import _checkpoint_identity
+    from research_rag.generations.staging import _checkpoint_identity
     from research_rag.retrieval.embeddings import resolve_embedding_model
 
     calls: list[str] = []

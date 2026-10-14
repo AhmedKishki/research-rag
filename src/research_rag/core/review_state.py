@@ -21,7 +21,7 @@ from typing import Any
 from ..corpus.sources import SourcePolicyError, normalize_metadata
 from ..project.config import ResearchConfig
 from ..project.policy import ResearchError, _utc_now
-from ..project.support import (
+from ..retrieval.documents import (
     _document_for_chunk,
     _effective_documents,
     _locator_place,

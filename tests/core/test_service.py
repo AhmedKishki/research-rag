@@ -19,10 +19,14 @@ from filelock import AsyncFileLock
 import research_rag.core.service as service_module
 import research_rag.core.status as status_module
 import research_rag.generations.ingestion as ingestion_module
-import research_rag.project.support as support_module
+import research_rag.project.policy as policy_module
 import research_rag.retrieval.artifact_lookup as artifact_lookup_module
+import research_rag.retrieval.documents as documents_module
+import research_rag.retrieval.ranking as ranking_module
+import research_rag.retrieval.search as search_module
 from research_rag.core.service import ResearchError, ResearchService
 from research_rag.corpus.extraction import ExtractionError
+from research_rag.generations.staging import _enrich_chunks
 from research_rag.project.config import (
     ConfigurationError,
     ResearchConfig,
@@ -31,16 +35,15 @@ from research_rag.project.config import (
 )
 from research_rag.project.policy import DEFAULT_RETRIEVAL_METHOD, value_fingerprint
 from research_rag.project.settings import resolve_gate_stopwords
-from research_rag.project.support import (
-    _citation,
-    _effective_document_metadata,
-    _enrich_chunks,
-    _public_document,
-)
 from research_rag.retrieval.dense import (
     DenseSearchHit,
     DenseTokenAuditUnavailable,
     RerankerUnavailable,
+)
+from research_rag.retrieval.documents import (
+    _citation,
+    _effective_document_metadata,
+    _public_document,
 )
 from research_rag.retrieval.embeddings import (
     DEFAULT_EMBEDDING_MODEL,
@@ -1637,13 +1640,15 @@ def test_provenance_free_legacy_metadata_falls_back_only_after_snapshot_change()
         "documents": [legacy_document],
     }
 
-    matching = support_module._effective_documents(matching_manifest, {})["doc_legacy"]
+    matching = documents_module._effective_documents(matching_manifest, {})[
+        "doc_legacy"
+    ]
     assert matching["title"] == "Valid Automatic Title"
     assert matching["authors"] == ["Automatic Author"]
     assert matching["year"] == 2020
     assert matching["doi"] == "10.1000/automatic"
 
-    changed = support_module._effective_documents(
+    changed = documents_module._effective_documents(
         matching_manifest,
         {"legacy.pdf": {"categories": ["corrected"]}},
     )["doc_legacy"]
@@ -2652,12 +2657,12 @@ def test_the_length_floor_is_counted_in_the_chunkers_tokens() -> None:
         "table around them, and the extraction feeding it leaves trails of its own "
         "across the regions that host the servers."
     )
-    assert support_module.passage_token_count(index_line, "gpt2") == 7
-    assert support_module.passage_token_count(prose, "gpt2") > 30
-    assert support_module.passage_token_count("", "gpt2") == 0
-    assert support_module.TOKENIZER_REPOSITORIES["gpt2"] == "openai-community/gpt2"
-    with pytest.raises(support_module.ResearchError, match="unknown chunker tokenizer"):
-        support_module.passage_token_count(prose, "not-a-tokenizer")
+    assert ranking_module.passage_token_count(index_line, "gpt2") == 7
+    assert ranking_module.passage_token_count(prose, "gpt2") > 30
+    assert ranking_module.passage_token_count("", "gpt2") == 0
+    assert ranking_module.TOKENIZER_REPOSITORIES["gpt2"] == "openai-community/gpt2"
+    with pytest.raises(policy_module.ResearchError, match="unknown chunker tokenizer"):
+        ranking_module.passage_token_count(prose, "not-a-tokenizer")
 
 
 async def _assert_no_change_ingest_is_noop_and_force_rebuilds(project: Path) -> None:
@@ -3176,7 +3181,7 @@ async def _assert_ordinary_ingest_migrates_legacy_metadata_storage(
         )
     )
     assert migrated_manifest["metadata_storage_policy"] == (
-        support_module.METADATA_STORAGE_POLICY
+        policy_module.METADATA_STORAGE_POLICY
     )
     assert migrated_manifest["documents"][0]["title"] == "Automatic Title"
 
@@ -3214,8 +3219,7 @@ async def _assert_processing_policy_drift_preserves_generation(
     manifest_path = Path(first["generation_root"]) / "manifest.json"
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     assert (
-        manifest["extraction_policy_version"]
-        == support_module.EXTRACTION_POLICY_VERSION
+        manifest["extraction_policy_version"] == policy_module.EXTRACTION_POLICY_VERSION
     )
 
     # The generation built under the shipped policy is not itself out of date.
@@ -3226,7 +3230,7 @@ async def _assert_processing_policy_drift_preserves_generation(
 
     # A generation recorded under an earlier extraction policy is reported, named,
     # and still answers, rather than being discarded.
-    manifest["extraction_policy_version"] = support_module.EXTRACTION_POLICY_VERSION - 1
+    manifest["extraction_policy_version"] = policy_module.EXTRACTION_POLICY_VERSION - 1
     manifest_path.write_text(
         json.dumps(manifest, ensure_ascii=False, indent=2) + "\n",
         encoding="utf-8",
@@ -3248,7 +3252,7 @@ async def _assert_processing_policy_drift_preserves_generation(
 
     # The two policies are reported separately, because a generation can be behind
     # one and not the other and a reader is told which.
-    manifest["cleaning_policy_version"] = support_module.CLEANING_POLICY_VERSION - 1
+    manifest["cleaning_policy_version"] = policy_module.CLEANING_POLICY_VERSION - 1
     manifest_path.write_text(
         json.dumps(manifest, ensure_ascii=False, indent=2) + "\n",
         encoding="utf-8",
@@ -3275,7 +3279,7 @@ async def _assert_processing_policy_drift_preserves_generation(
     )
     assert (
         rebuilt_manifest["extraction_policy_version"]
-        == support_module.EXTRACTION_POLICY_VERSION
+        == policy_module.EXTRACTION_POLICY_VERSION
     )
     assert (await service.status())["generation_upgrade_required"] is False
 
@@ -3847,7 +3851,7 @@ def test_query_gate_uses_the_stored_chunk_verdict(
 
         # Only the retrieval fallback is intercepted; the document-title health
         # check reaches text_corruption_reasons through a different caller.
-        monkeypatch.setattr(support_module, "chunk_health_flags", explode)
+        monkeypatch.setattr(search_module, "chunk_health_flags", explode)
         result = await service.search("cobalt heron", top_k=1)
 
         assert result["hits"]
@@ -3874,16 +3878,16 @@ def test_query_gate_falls_back_without_a_stored_verdict(
         first = await service.search("cobalt heron", top_k=1)
 
         calls: list[str] = []
-        real_flags = support_module.chunk_health_flags
+        real_flags = search_module.chunk_health_flags
 
         def counting_flags(_text: str, *, quality_flags: object = None) -> int:
             calls.append(_text)
             return real_flags(_text, quality_flags=quality_flags)
 
-        monkeypatch.setattr(support_module, "chunk_health_flags", counting_flags)
+        monkeypatch.setattr(search_module, "chunk_health_flags", counting_flags)
         # Model a lookup that predates the stored verdict: the query path has to
         # recompute the same flags from the text, with identical results.
-        monkeypatch.setattr(support_module, "LOOKUP_HEALTH_FLAGS_KEY", "_absent_key")
+        monkeypatch.setattr(search_module, "LOOKUP_HEALTH_FLAGS_KEY", "_absent_key")
         second = await service.search("cobalt heron", top_k=1)
 
         assert calls, "the guard must recompute the verdict when none is stored"
@@ -4113,7 +4117,7 @@ async def _assert_metadata_edit_preserves_ingestion_checkpoint(
         (Path(result["generation_root"]) / "manifest.json").read_text(encoding="utf-8")
     )
     assert manifest["metadata_storage_policy"] == (
-        support_module.METADATA_STORAGE_POLICY
+        policy_module.METADATA_STORAGE_POLICY
     )
     assert manifest["documents"][0]["title"] == "Automatic Title"
     listed = await service.list_sources()
@@ -5565,7 +5569,7 @@ def test_pseudo_relevance_feedback_expands_the_lexical_query(project: Path) -> N
 def test_document_frequencies_count_a_term_once_per_text() -> None:
     """A passage repeating a word must not make it look common."""
 
-    frequencies = support_module.document_frequencies(
+    frequencies = ranking_module.document_frequencies(
         ["alpha alpha alpha beta", "beta gamma"],
         ENGLISH_GATE_STOPWORDS,
     )
@@ -5576,7 +5580,7 @@ def test_document_frequencies_count_a_term_once_per_text() -> None:
 def test_feedback_ranks_a_rare_term_above_one_every_passage_uses() -> None:
     """Leader support alone mines the words the leaders share, not the ones that matter."""
 
-    ranked = support_module._pseudo_relevance_terms(
+    ranked = ranking_module._pseudo_relevance_terms(
         query="fetishism",
         texts=[
             "commodity fetishism and the data centre",
@@ -5603,7 +5607,7 @@ def test_feedback_ranks_a_rare_term_above_one_every_passage_uses() -> None:
 
 
 def test_feedback_without_a_table_ranks_by_leader_support() -> None:
-    ranked = support_module._pseudo_relevance_terms(
+    ranked = ranking_module._pseudo_relevance_terms(
         query="question",
         texts=["alpha beta beta", "beta gamma"],
         maximum_terms=2,
@@ -5623,15 +5627,15 @@ def test_feedback_is_reproducible_for_the_same_input() -> None:
         "corpus_size": 40,
     }
 
-    assert support_module._pseudo_relevance_terms(
+    assert ranking_module._pseudo_relevance_terms(
         **arguments
-    ) == support_module._pseudo_relevance_terms(**arguments)  # type: ignore[arg-type]
+    ) == ranking_module._pseudo_relevance_terms(**arguments)  # type: ignore[arg-type]
 
 
 def test_diversity_relevance_normalizes_the_scored_band() -> None:
     """The charge is a share of this ranking's own confidence, not of the pool."""
 
-    relevance = support_module._selection_relevance(
+    relevance = ranking_module._selection_relevance(
         ["a1", "a2", "tail"],
         {"a1": 4.0, "a2": 2.0},
     )
@@ -5644,7 +5648,7 @@ def test_diversity_relevance_normalizes_the_scored_band() -> None:
 def test_diversity_relevance_treats_a_flat_band_as_equal() -> None:
     """Equal scores say nothing about relative order, so the order must stand."""
 
-    relevance = support_module._selection_relevance(
+    relevance = ranking_module._selection_relevance(
         ["a1", "b1"], {"a1": 0.5, "b1": 0.5}
     )
 
@@ -5652,7 +5656,7 @@ def test_diversity_relevance_treats_a_flat_band_as_equal() -> None:
 
 
 def test_diversity_relevance_without_a_score_is_zero() -> None:
-    relevance = support_module._selection_relevance(["a1", "b1"], {})
+    relevance = ranking_module._selection_relevance(["a1", "b1"], {})
 
     assert relevance == {"a1": 0.0, "b1": 0.0}
 
@@ -5665,7 +5669,7 @@ def test_an_unscored_ranking_keeps_its_own_order() -> None:
     search rather than a reordering of this one.
     """
 
-    selected = support_module._source_diverse_selection(
+    selected = ranking_module._source_diverse_selection(
         ["a1", "a2", "b1"],
         source_id_by_chunk={"a1": "a", "a2": "a", "b1": "b"},
         scores={},
@@ -5679,7 +5683,7 @@ def test_an_unscored_ranking_keeps_its_own_order() -> None:
 def test_source_diversity_brings_another_source_forward() -> None:
     """A second passage from one source loses to a first from another."""
 
-    selected = support_module._source_diverse_selection(
+    selected = ranking_module._source_diverse_selection(
         ["a1", "a2", "b1", "b2"],
         source_id_by_chunk={"a1": "a", "a2": "a", "b1": "b", "b2": "b"},
         scores={"a1": 1.0, "a2": 1.0, "b1": 1.0, "b2": 1.0},
@@ -5701,7 +5705,7 @@ def test_zero_diversity_penalty_keeps_the_ranked_order() -> None:
     }
 
     for penalty in (0.0, -0.5):
-        assert support_module._source_diverse_selection(
+        assert ranking_module._source_diverse_selection(
             **arguments,
             penalty=penalty,  # type: ignore[arg-type]
         ) == ["a1", "a2", "b1"]
@@ -5710,7 +5714,7 @@ def test_zero_diversity_penalty_keeps_the_ranked_order() -> None:
 def test_a_pool_no_deeper_than_the_request_is_returned_as_ranked() -> None:
     """Nothing can be swapped for anything, so the ranked order is the answer."""
 
-    selected = support_module._source_diverse_selection(
+    selected = ranking_module._source_diverse_selection(
         ["a1", "a2"],
         source_id_by_chunk={"a1": "a", "a2": "a"},
         scores={"a1": 1.0, "a2": 0.0},
@@ -5724,7 +5728,7 @@ def test_a_pool_no_deeper_than_the_request_is_returned_as_ranked() -> None:
 def test_a_single_source_pool_still_fills_the_answer() -> None:
     """A project whose relevant material is one source is not answered around."""
 
-    selected = support_module._source_diverse_selection(
+    selected = ranking_module._source_diverse_selection(
         ["a1", "a2", "a3"],
         source_id_by_chunk={"a1": "a", "a2": "a", "a3": "a"},
         scores={"a1": 3.0, "a2": 2.0, "a3": 1.0},
@@ -5738,7 +5742,7 @@ def test_a_single_source_pool_still_fills_the_answer() -> None:
 def test_an_unranked_tail_yields_to_a_charged_repeat() -> None:
     """The appended tail is 0.0, so a full charge is what pushes a repeat below it."""
 
-    selected = support_module._source_diverse_selection(
+    selected = ranking_module._source_diverse_selection(
         ["a1", "a2", "tail"],
         source_id_by_chunk={"a1": "a", "a2": "a", "tail": "b"},
         scores={"a1": 2.0, "a2": 0.0},
@@ -5764,8 +5768,8 @@ def test_diversity_selection_is_reproducible_for_the_same_input() -> None:
         "penalty": 0.25,
     }
 
-    first = support_module._source_diverse_selection(**arguments)  # type: ignore[arg-type]
-    second = support_module._source_diverse_selection(**arguments)  # type: ignore[arg-type]
+    first = ranking_module._source_diverse_selection(**arguments)  # type: ignore[arg-type]
+    second = ranking_module._source_diverse_selection(**arguments)  # type: ignore[arg-type]
 
     assert first == second
 

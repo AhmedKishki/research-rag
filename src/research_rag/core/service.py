@@ -15,7 +15,6 @@ from ..project.config import ResearchConfig
 from ..project.policy import ResearchError, retrieval_policy_fingerprint
 from ..project.settings_document import SettingsWorkflow
 from ..project.state_files import LOCK_FILE
-from ..project.support import _canonical_metadata_override
 from ..retrieval.dense import (
     DENSE_INDEX_PATHS,
     EXACT_BACKEND_NAME,
@@ -24,6 +23,7 @@ from ..retrieval.dense import (
     LocalQdrantDenseBackend,
     LocalVectorDenseBackend,
 )
+from ..retrieval.documents import _canonical_metadata_override
 from ..retrieval.lexical import LexicalBackend
 from ..retrieval.search import SearchWorkflow
 from ..storage.durable_io import StorageError, read_json
