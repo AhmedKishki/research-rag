@@ -1,209 +1,61 @@
-# Defaults for research-rag.
+# Defaults for research-rag: every key this app reads, at its packaged value.
 #
-# This file ships inside the package and holds every tunable this app reads.
-# A layer above it names only what it changes; layers win per key, lowest first:
-#
-#   this file  <  ~/.config/research-rag/config.toml
-#              <  <project>/.research-rag/config.toml
-#              <  --config PATH
-#              <  RESEARCH_RAG_* environment variables
-#              <  --set key=value
-#
-# `research-rag config` prints the merged result and the layer that supplied
-# each value. A key not declared here is refused in every layer, so a typo is an
-# error rather than a silent default.
-#
-# A setting whose class is `identity` decides what a generation contains: its
-# value is recorded in the generation (the retrieval-policy fingerprint for
-# ranking, the chunk settings for chunking), and changing it means the next
-# ingestion builds a new generation instead of mixing two. `AGENTS.md` records
-# the constants that stay in code: schema and policy versions, and the names and
-# paths that make up the project boundary.
+# This file ships inside the package. A layer above it names only what it
+# changes, and a key not declared here is refused in every layer, so a typo is an
+# error rather than a silent default. `research-rag help settings` names the
+# layers; `research-rag config` prints each effective value, the layer it came
+# from, what the key does, and what a change to it costs.
 
 [language]
-# The languages the corpus is written in, as ISO 639-1 codes (en, de, fr, ...):
-# one code, or several separated by commas for a mixed-language corpus,
-# most-used-first. Every language named decides whether the embedding
-# model below covers the text, and a mismatch is reported by `status` rather than
-# silently embedded. Only a language BM25 can tokenize is accepted, because
-# the stopword list comes from it. (identity: part of the ranking policy.)
 corpus = "en"
-# Which language's stopword list BM25 filters with. Empty means the first
-# language named above: BM25 takes a single list, and a corpus in several
-# languages has to point it at one of them. Set it to choose another.
-# (identity: part of the ranking policy.)
 bm25_stopwords = ""
 
 [runtime]
-# Use only already-cached models, tokenizers, and the Docling environment; fetch
-# nothing.
 offline = false
-# Keep each search's question and filters on this machine so the Stats view can list
-# recent searches and run one again. false keeps only the counts.
 search_history = true
-# debug, info, warn, or error.
 log_level = "warn"
-# Detail of the answers an agent's tool calls receive: 'lean' is what an agent
-# acts on, 'full' is the complete payload. The workspace and command line
-# always print the complete one.
 tool_detail = "lean"
-# ONNX Runtime threads for the embedding model; 0 leaves the choice to the runtime.
 embedding_threads = 0
-# CPU niceness for this process and its children. 10 keeps a desktop responsive
-# while a build saturates every core and costs a build no throughput on an idle
-# machine; 0 leaves priority unchanged.
 nice = 10
-# Searches that run at once. More only slows each one while it reranks; the rest
-# wait their turn, one caller after another in rounds.
 search_concurrency = 2
-# Shared FastEmbed model cache; empty means this user's cache.
 model_cache_root = ""
 
 [retrieval]
-# How alike two passages may be before one search answer shows only the
-# better-ranked of them. Two sources can hold the same text — an essay on its own
-# and the same essay inside a book — and a search that answers the same question
-# twice with two copies of one passage is not an answer. Words are compared
-# first and cost nothing; this number decides the part cosine decides, and a
-# number no cosine can reach decides that nothing is close enough rather than
-# turning the check off. (runtime)
 duplicate_cosine = 0.99
-# Reciprocal-rank-fusion constant: higher flattens the rank curve. (identity)
 rrf_k = 60
-# Weight of each rank in the fusion. (identity)
 bm25_weight = 1.25
 dense_weight = 1.0
-# Fewest and most fused candidates a search considers. (identity)
 minimum_candidates = 20
 maximum_candidates = 200
-# A dense candidate below this cosine similarity is withheld, not ranked.
-# Measured: 0.72 is inside the band a fused ranking cannot distinguish, and the
-# value above it starts dropping relevant passages; a dense-only ranking wants a
-# much lower value. (identity)
 dense_minimum_cosine_similarity = 0.72
-# Most candidates the cross-encoder reorders by score; the unranked tail of the
-# fused order is appended after them, so a reference group stays reachable. (identity)
 rerank_max_candidates = 50
-# Depth of the reranked window as a multiple of the requested top_k, and the
-# fewest candidates reordered whatever top_k asks for: the window is
-# max(top_k * rerank_window_multiple, rerank_window_floor), capped by
-# rerank_max_candidates and the fused candidate count. Measured: 20 is the
-# shallowest window that reaches the plateau, and ten more candidates cost about
-# 0.7 s. (identity)
 rerank_window_multiple = 2
 rerank_window_floor = 10
-# Pseudo-relevance feedback: search once, mine terms from the top lexical
-# results, search again with them. Off by default until measured. (identity)
 prf = false
-# How many leaders the terms are mined from, and how many terms are added.
 prf_documents = 5
 prf_terms = 8
-# Withheld candidates quoted per gate reason in a search answer. (identity)
 maximum_withheld_examples = 5
-# Share of a candidate's normalized relevance charged for each candidate
-# already selected from the same source. The charge is taken once per repeat at
-# the final top_k pick, over candidates fusion and reranking already ranked, so
-# it can reorder a result but never add or drop a candidate: 0 keeps the ranked
-# order exactly, and 1 takes every other source before it repeats one. Without
-# reranking a BM25 or dense ranking carries no score to charge a repeat against,
-# so it keeps its own order too. On the reference corpus 0.15, 0.25, and 0.4
-# score identically on success, MRR, nDCG, and document success, each costing one
-# query's target a slide from rank 4 to 5, and differ only in spread: mean
-# distinct sources in a top-10 rise from 3.9 to 7.4 at the default, 8.0 at 0.4,
-# and 8.4 at 0.6, where that target slides to rank 9. The default is the middle
-# of those three identical values: 0.4 spreads further, and 0.6 is where the
-# first quality column moves. (runtime)
 source_diversity_penalty = 0.25
-# How far below a query's own best dense similarity a candidate may score and
-# still be admitted when it misses the cosine floor. A one-word query's whole
-# candidate list can sit in a 0.06-wide band under 0.72, where the absolute floor
-# slices arbitrarily: on the reference corpus "waste" kept 6 of 200 candidates and
-# 4 sources, and 0.10 kept 50 candidates over 11 sources. The rescue needs one
-# candidate that cleared the floor, so a query the corpus cannot support still
-# abstains, and it changes no artifact. 0 applies the floor to every candidate.
-# (runtime)
 dense_relative_similarity_margin = 0.10
-# Words a candidate needs before it counts as evidence. Chunks never span
-# extraction units, so a short unit — a five-word index line ("value production
-# chain, 70-71"), a heading, a copyright line — becomes a short chunk that
-# matches a query about its own words while carrying no prose to cite: 16.6% of
-# the reference corpus's chunks are under 12 words and 2.7% of the passages its
-# searches returned were. The reference project sets 12 and no judged target is
-# under 30 words, so the value costs that measured set nothing; 20 also removes
-# 12-to-19-word captions and copyright lines. Off by default, because a corpus
-# of deliberately short passages is legitimate and this drops them.
-# (runtime)
 minimum_passage_words = 0
-# The same floor in the unit a chunk is built in: a fraction of the generation's
-# recorded `chunking.size`, counted with the tokenizer the generation was chunked
-# by and over the returned text only, so a contextual header cannot enlarge a
-# fragment. A tenth of the packaged 384 tokens is 38, and on the reference corpus
-# that drops 23.6% of the chunks while removing 1.9% of its text; every judged
-# target there is above 168 tokens, so the rule costs the measured set nothing.
-# It is a corpus judgement rather than an improvement, so the packaged value is
-# off. (runtime)
 minimum_passage_token_fraction = 0.0
 
 [chunking]
-# Target chunk length in GPT-2 tokens, and the tokens neighbours share. (identity:
-# both are recorded in the generation and decide chunk boundaries.)
 size = 384
 overlap = 64
-# Prepend the source title and the section to the text a chunk is embedded from,
-# never to the text a search returns, so returned text stays quote-clean. A
-# re-ingest with it on recomputes every vector, because vector reuse is keyed on
-# the passage. Measured neutral on the reference corpus, so the default is off and
-# a project opts in. (identity: recorded in the generation.)
 headers = false
-# Extraction units sent to one chunker call. Throughput only: each unit keeps its
-# own durable output file and its own redo boundary.
 batch_units = 16
 
 [ingestion]
-# Soft time budget for one ingest call; exhausting it returns a checkpointed
-# in_progress result rather than losing work. A build larger than one budget needs
-# one call per slice, so a client that stops repeating identical calls needs this
-# below its own request timeout, high enough that one call carries the build.
 work_budget_seconds = 1800
-# Maximum share of substantive text one PDF may lose to unrecoverable corruption.
-# Lost characters are measured against the substantive characters the document keeps
-# after known furniture and symbol-only non-evidence are removed. A PDF over this
-# share is omitted from the generation; readable errors below it are cleaned and
-# reported. 100 accepts any PDF that keeps readable text and never a PDF with none.
-# (identity: recorded in the generation, so a change rebuilds extraction.) EPUB keeps
-# its source-level limit.
 maximum_unclean_percent = 1.0
-# Chunks per embedding batch and PDF pages per conversion batch. Throughput only.
 embedding_batch_size = 64
 pdf_page_batch_size = 8
-# Which reader turns a PDF into extraction units. "docling" is the only
-# operational reader: it converts through a separate, resource-bounded Docling
-# worker with OCR, VLM, and every enrichment disabled. Docling is not part of the
-# app install: an online first use builds a pinned managed environment and
-# fetches models lazily, inside the verified worker, and an offline run needs
-# that environment or fails closed. Extracted text still reaches the
-# text-quality gate with this project's own loss budget. The retired value
-# "custom" (the old bundled reader) is accepted so an existing config keeps
-# resolving, and reads as "docling". (identity: recorded in the generation.)
 pdf_backend = "docling"
 
 [dense]
-# Embedding model for the dense half of retrieval. Every supported name is pinned to
-# a revision in embeddings.py, which also declares its dimension, its token limit,
-# the languages it covers, and any query/passage prefix it requires. (engine choice,
-# recorded in every generation it builds.)
 embedding_model = "BAAI/bge-small-en-v1.5"
-# Dense index backend for new generations: auto, exact, or qdrant. auto builds
-# the exact scan; Qdrant local mode reloads every point per search and scores by
-# brute force, so it is built only when named. (engine choice, recorded in every
-# generation it builds.)
 backend = "auto"
-# CPU cross-encoder that reranks every search. Every supported name is pinned to a
-# revision in rerankers.py. (engine choice, recorded in the answer and the manifest.)
 reranker_model = "Xenova/ms-marco-MiniLM-L-6-v2"
-# Sequences per embedding inference. Throughput only: one sequence per inference
-# returns exactly the same floats as a large batch does (MEASUREMENTS.md).
 embedding_inference_batch_size = 1
-# Retired: `auto` builds the exact scan at every size. Accepted so an existing
-# config keeps resolving; it has no effect.
 exact_backend_chunk_limit = 200000

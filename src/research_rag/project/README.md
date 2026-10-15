@@ -21,6 +21,8 @@ What one project is, how it is configured, and the names its state is found by.
 
 - A name in `state_files.py` is found by other modules, so a rename strands every
   project on disk. Nothing else may spell a state name as a literal.
+- `Setting.doc` is the one description of a key. `default.toml` holds values only,
+  and `research-rag config` and the workspace print the description.
 - `settings.py` declares this app's keys; `settings_layers/` holds no key, no
   default file, and no directory name of its own. `tests/project/` fails a change
   that moves either.
