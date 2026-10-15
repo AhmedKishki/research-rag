@@ -149,7 +149,7 @@ class Operations:
                 "retained_generation_bytes": 1024,
                 "current_generation_id": "20260930T191235Z-45608dc5",
             }
-        return await run(self.service, name, arguments, diagnostics=True)  # type: ignore[arg-type]
+        return await run(self.service, name, arguments, command_line=True)  # type: ignore[arg-type]
 
 
 def test_init_creates_a_project_and_records_the_name_it_was_given(

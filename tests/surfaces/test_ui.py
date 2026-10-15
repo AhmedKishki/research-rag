@@ -329,6 +329,9 @@ def test_the_workspace_forwards_search_and_the_surviving_mutations(
             },
         )
         ingestion = client.post("/api/ingest", json={"force_recompute": True})
+        # The workspace builds every source; naming the ones to read is the
+        # command line's.
+        named_ingestion = client.post("/api/ingest", json={"sources": ["a.pdf"]})
         saved_metadata = client.post(
             "/api/source-metadata",
             json={
@@ -348,6 +351,8 @@ def test_the_workspace_forwards_search_and_the_surviving_mutations(
     assert search.json()["hits"][0]["citation"].endswith("p. 1")
     assert inclusion.json()["included"] is False
     assert ingestion.json()["generation_id"] == "generation-2"
+    assert named_ingestion.status_code == 400
+    assert "does not take: sources" in named_ingestion.json()["error"]
     assert saved_metadata.status_code == 200
     assert saved_metadata.json()["message"] == "Reviewed metadata saved."
     assert retired_export.status_code == 404

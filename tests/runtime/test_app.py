@@ -162,8 +162,11 @@ class FakeService:
     async def status(self) -> dict[str, Any]:
         return self._record("status", {})
 
-    async def ingest(self, *, force_recompute: bool = False) -> dict[str, Any]:
-        return self._record("ingest", {"force_recompute": force_recompute})
+    async def ingest(self, **arguments: Any) -> dict[str, Any]:
+        return self._record("ingest", arguments)
+
+    async def uningest(self, **arguments: Any) -> dict[str, Any]:
+        return self._record("uningest", arguments)
 
     async def search(self, query: str, **arguments: Any) -> dict[str, Any]:
         return self._record("search", {"query": query, **arguments})
@@ -331,6 +334,32 @@ async def test_the_control_api_and_the_agent_surface_share_one_service(
             assert optional not in through_tool or through_tool[optional] is None
         assert through_tool["query"] == through_control["query"]
         assert through_tool["top_k"] == through_control["top_k"]
+    finally:
+        await app.stop()
+
+
+async def test_the_control_api_takes_what_only_the_command_line_asks_for(
+    project: Path,
+) -> None:
+    """The command line names sources to ingest, and uningests, through the app."""
+
+    config = resolve_config(project, vanilla_executable=sys.executable)
+    app = App(config, port=free_port())
+    fake = FakeService()
+    app.service = fake  # type: ignore[assignment]
+    await app.start()
+    try:
+        await wait_until_ready(app)
+        for path, payload in (
+            ("/control/operations/ingest", {"sources": ["a.pdf"]}),
+            ("/control/operations/uningest", {"sources": ["b.pdf"]}),
+        ):
+            code, _body = await asyncio.to_thread(post, app.url, path, payload)
+            assert code == 200
+        assert fake.calls == [
+            ("ingest", {"force_recompute": False, "sources": ["a.pdf"]}),
+            ("uningest", {"sources": ["b.pdf"]}),
+        ]
     finally:
         await app.stop()
 

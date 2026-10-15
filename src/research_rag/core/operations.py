@@ -3,7 +3,9 @@
 An entry names an operation's arguments, their kinds and bounds, and the
 `ResearchService` call it makes. The control API, the command line, the
 workspace adapter, and the agent's search call `run`, so an argument is checked
-in one place and no surface accepts what another refuses.
+in one place and no surface accepts what another refuses. The command line
+reaches some operations and arguments no other surface does: in process, or
+through the control API, which answers it alone.
 
 A query string carries every value as text, so a number, a flag, or a comma
 list written as text is read as its kind.
@@ -32,9 +34,9 @@ class Argument:
 
     `kind` is `str`, `bool`, `int`, `float` (a positive number), `list` (of
     non-empty strings), or `dict`. A required `str` must not be blank, and a
-    required `dict` with `minimum=1` must name something. A `diagnostic`
-    argument is accepted only from the command line in process, and reaches the
-    service only when that caller gives it.
+    required `dict` with `minimum=1` must name something. A `command_line`
+    argument is accepted only from the command line, and reaches the service only
+    when that caller gives it.
     """
 
     name: str
@@ -43,7 +45,7 @@ class Argument:
     default: Any = None
     minimum: int | None = None
     maximum: int | None = None
-    diagnostic: bool = False
+    command_line: bool = False
 
     def read(self, value: Any) -> Any:
         if value is None:
@@ -131,6 +133,7 @@ Call = Callable[["ResearchService", dict[str, Any]], Awaitable[dict[str, Any]]]
 class Operation:
     arguments: tuple[Argument, ...]
     call: Call
+    command_line: bool = False
 
 
 def _texts(*names: str) -> tuple[Argument, ...]:
@@ -164,20 +167,30 @@ async def _generations(service: ResearchService, _: dict[str, Any]) -> dict[str,
 
 OPERATIONS: dict[str, Operation] = {
     "status": Operation((), lambda service, _: service.status()),
+    # An agent and the workspace build every source; the command line may name
+    # the ones to read, and may take sources out of the generation.
     "ingest": Operation(
-        (Argument("force_recompute", bool, default=False),),
+        (
+            Argument("force_recompute", bool, default=False),
+            Argument("sources", list, command_line=True),
+        ),
         lambda service, a: service.ingest(**a),
     ),
+    "uningest": Operation(
+        (Argument("sources", list, required=True),),
+        lambda service, a: service.uningest(**a),
+        command_line=True,
+    ),
     # The engine chooses the method the generation can serve and always
-    # reranks. Only the command line in process may name either, to reproduce
-    # a measurement.
+    # reranks. Only the command line may name either, to reproduce a
+    # measurement.
     "search": Operation(
         (
             Argument("query", str, required=True),
             Argument("top_k", int, default=10, minimum=1, maximum=MAXIMUM_TOP_K),
             *_texts(*_SEARCH_FILTERS),
-            Argument("retrieval_method", str, diagnostic=True),
-            Argument("rerank", bool, diagnostic=True),
+            Argument("retrieval_method", str, command_line=True),
+            Argument("rerank", bool, command_line=True),
         ),
         lambda service, a: service.search(
             a.pop("query"), **{"rerank": True, **a}, include_staleness=True
@@ -288,17 +301,19 @@ OPERATIONS: dict[str, Operation] = {
 
 
 def arguments(
-    name: str, payload: Mapping[str, Any], *, diagnostics: bool = False
+    name: str, payload: Mapping[str, Any], *, command_line: bool = False
 ) -> dict[str, Any]:
     """Every argument of `name`, read from `payload` and checked, or a refusal."""
 
     operation = OPERATIONS.get(name)
     if operation is None:
         raise ResearchError(f"Unknown operation: {name}")
+    if operation.command_line and not command_line:
+        raise ResearchError(f"{name} is available from the command line only")
     accepted = {
         argument.name: argument
         for argument in operation.arguments
-        if diagnostics or not argument.diagnostic
+        if command_line or not argument.command_line
     }
     unknown = sorted(set(payload) - set(accepted))
     if unknown:
@@ -306,7 +321,7 @@ def arguments(
     return {
         argument.name: argument.read(payload.get(argument.name))
         for argument in accepted.values()
-        if not argument.diagnostic or argument.name in payload
+        if not argument.command_line or argument.name in payload
     }
 
 
@@ -315,9 +330,9 @@ async def run(
     name: str,
     payload: Mapping[str, Any],
     *,
-    diagnostics: bool = False,
+    command_line: bool = False,
 ) -> dict[str, Any]:
     """Check `payload` against operation `name` and make its service call."""
 
-    checked = arguments(name, payload, diagnostics=diagnostics)
+    checked = arguments(name, payload, command_line=command_line)
     return await OPERATIONS[name].call(service, checked)

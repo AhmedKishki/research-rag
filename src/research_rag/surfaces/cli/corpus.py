@@ -93,8 +93,7 @@ class Local:
     async def call(self, name: str, **arguments: Any) -> dict[str, Any]:
         if self.service is None:
             raise ResearchError("The local service is not open")
-        # Only a search in process may name a diagnostic method or rerank choice.
-        return await run(self.service, name, arguments, diagnostics=True)
+        return await run(self.service, name, arguments, command_line=True)
 
 
 class Remote:
@@ -370,12 +369,10 @@ def _ingestion_progress_frame(status: dict[str, Any], line: str, columns: int) -
 
 
 async def _ingest_with_progress(
-    operations: Local | Remote, *, force_recompute: bool
+    operations: Local | Remote, operation: str, **arguments: Any
 ) -> dict[str, Any]:
-    """Poll read-only status while the single ingestion request is outstanding."""
-    ingest = asyncio.create_task(
-        operations.call("ingest", force_recompute=force_recompute)
-    )
+    """Poll read-only status while the single build request is outstanding."""
+    ingest = asyncio.create_task(operations.call(operation, **arguments))
     status_task: asyncio.Task[dict[str, Any]] | None = None
     estimator = _PhaseETA()
     previous_key: tuple[Any, ...] | None = None
@@ -469,8 +466,13 @@ async def _operate(
         return dict(payload) if args.verbose else lean_status(payload)
     if command == "ingest":
         return await _ingest_with_progress(
-            operations, force_recompute=args.force_recompute
+            operations,
+            "ingest",
+            force_recompute=args.force_recompute,
+            **({"sources": args.sources} if args.sources else {}),
         )
+    if command == "uningest":
+        return await _ingest_with_progress(operations, "uningest", sources=args.sources)
     if command == "search":
         search: dict[str, Any] = {
             "top_k": args.top_k,

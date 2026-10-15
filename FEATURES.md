@@ -113,7 +113,8 @@
 | One project per process | A `--project-root` defines the boundary. All state lives under `<project>/.research-rag`. |
 | Many projects per install | `init` records each project's id, name, and root in an account-wide register. `projects` lists them with app state. `--project <name-or-id>` selects one in place of a path. |
 | Portable and derived state | Reviewed decisions are portable. Generations, staging, logs, and locks are derived and rebuildable. |
-| Source inclusion and exclusion | A source can be excluded as a duplicate and restored. The original is never deleted or modified. |
+| Source inclusion and exclusion | A source can be excluded as a duplicate and restored. The original is never deleted or modified. An exclusion is a filter: the generation keeps the source's data and stays current, so restoring it takes effect at once. |
+| Granular ingestion | `ingest SOURCE...` reads only the named sources and carries every other one as the selected generation holds it. `uningest SOURCE...` builds a generation without the named sources. Both are command-line only; an agent's `ingest` builds every source. |
 | Passage exclusions | One passage is excluded by the `chunk_id` a search returned, and restored later. Both halves of a search apply it. The decision holds at once, with no ingestion. |
 | Immutable generations | Each build produces a new generation. The active pointer moves only after both indexes validate. |
 | Relocatable derived state | `--runtime-root` puts indexes, staging, and logs on a chosen disk, claimed by a marker naming the owning project. A copy cannot silently share it. |

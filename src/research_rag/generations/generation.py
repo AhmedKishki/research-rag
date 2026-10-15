@@ -484,25 +484,22 @@ def load_reuse_snapshot(
     )
 
 
-def source_set_matches(
+def selection_matches(
     snapshot: ReuseSnapshot,
-    source_records: list[dict[str, Any]],
     *,
-    exclusion_revision: str,
+    selected: Sequence[str],
+    digests: Mapping[str, str],
     metadata_storage_policy: str,
 ) -> bool:
-    """Compare source bytes and generation-affecting portable state.
+    """Whether the selected generation already holds what a build would make.
 
-    Reviewed metadata does not affect extraction text, chunk identity,
-    embeddings, or either retrieval index, so a metadata-only correction must not
-    force a new immutable generation. The ranking policy is a runtime decision
-    that changes what a search returns, not what a generation stores, so a
-    ranking edit never forces a new generation either.
+    `selected` is every source the new generation would hold, and `digests` the
+    bytes of the ones the build reads; a carried source is kept as it is, so its
+    bytes are not compared. Reviewed metadata, exclusions, and the ranking policy
+    are applied when a search reads, so none of them forces a new generation.
     """
 
     if snapshot.manifest.get("metadata_storage_policy") != metadata_storage_policy:
-        return False
-    if snapshot.manifest.get("source_exclusion_revision") != exclusion_revision:
         return False
     files = snapshot.manifest.get("files")
     if not isinstance(files, dict):
@@ -511,18 +508,12 @@ def source_set_matches(
         relative = normalized_relative_path(files.get(field))
         if relative is None or not snapshot.root.joinpath(*relative.parts).is_dir():
             return False
-    expected = {
-        str(item["source_relative_path"]): (
-            str(item["sha256"]),
-            bool(item["included"]),
-        )
-        for item in source_records
-    }
-    existing = {
-        path: (str(item.get("sha256") or ""), bool(item.get("included")))
-        for path, item in snapshot.source_files.items()
-    }
-    return expected == existing
+    if set(selected) != set(snapshot.documents):
+        return False
+    return all(
+        str(snapshot.source_files.get(path, {}).get("sha256") or "") == digest
+        for path, digest in digests.items()
+    )
 
 
 def generation_artifacts_are_valid(

@@ -26,16 +26,33 @@ def test_a_search_takes_its_defaults_and_no_diagnostic_choice() -> None:
             arguments("search", {"query": "labour", **diagnostic})
 
 
-def test_only_the_command_line_in_process_names_a_diagnostic_choice() -> None:
+def test_only_the_command_line_names_a_diagnostic_choice() -> None:
     checked = arguments(
         "search",
         {"query": "labour", "rerank": False, "retrieval_method": "bm25"},
-        diagnostics=True,
+        command_line=True,
     )
     assert checked["rerank"] is False
     assert checked["retrieval_method"] == "bm25"
     # An unnamed diagnostic is not passed, so the engine's own default holds.
-    assert "rerank" not in arguments("search", {"query": "q"}, diagnostics=True)
+    assert "rerank" not in arguments("search", {"query": "q"}, command_line=True)
+
+
+def test_only_the_command_line_names_sources_to_ingest_or_uningest() -> None:
+    """An agent and the workspace build every source; neither takes one out."""
+
+    with pytest.raises(ResearchError, match="does not take: sources"):
+        arguments("ingest", {"sources": ["a.pdf"]})
+    with pytest.raises(ResearchError, match="command line only"):
+        arguments("uningest", {"sources": ["a.pdf"]})
+    assert arguments("ingest", {}) == {"force_recompute": False}
+    assert arguments("ingest", {"sources": ["a.pdf"]}, command_line=True) == {
+        "force_recompute": False,
+        "sources": ["a.pdf"],
+    }
+    assert arguments("uningest", {"sources": "a.pdf,b.pdf"}, command_line=True) == {
+        "sources": ["a.pdf", "b.pdf"]
+    }
 
 
 def test_a_query_string_is_read_as_each_arguments_kind() -> None:

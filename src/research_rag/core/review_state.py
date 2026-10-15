@@ -138,15 +138,12 @@ def set_source_inclusion(
             "search because it is absent from the current generation."
         )
     elif included:
-        message = (
-            "Source inclusion saved and restored for current retrieval. "
-            "Run ingest to record the change in a new generation."
-        )
+        message = "Source inclusion saved and restored for current retrieval."
     else:
         message = (
-            "Source exclusion saved and enforced for current retrieval. "
-            "The original file was not changed. Run ingest to rebuild the "
-            "indexes without it."
+            "Source exclusion saved and enforced for current retrieval. The "
+            "original file was not changed, and its data stays in the generation "
+            "until it is uningested from the command line."
         )
     return {
         "status": "changed" if changed else "unchanged",
@@ -157,7 +154,9 @@ def set_source_inclusion(
         "reason": None if included else exclusions[relative]["reason"],
         "source_file_changed": False,
         "effective_immediately": effective_immediately,
-        "generation_rebuild_recommended": changed,
+        # Only an included source the generation lacks needs an ingest; an
+        # exclusion filters at query time and never asks for a build.
+        "generation_rebuild_recommended": changed and included and not indexed,
         "message": message,
     }
 

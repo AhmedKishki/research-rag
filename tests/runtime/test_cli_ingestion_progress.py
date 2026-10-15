@@ -246,7 +246,7 @@ def test_ingest_progress_is_concurrent_and_stderr_only(monkeypatch, capsys):
 
     operations = Operations()
     result = asyncio.run(
-        cli_corpus._ingest_with_progress(operations, force_recompute=True)
+        cli_corpus._ingest_with_progress(operations, "ingest", force_recompute=True)
     )
     assert result == {"result": "unchanged"}
     assert operations.calls == 1
@@ -307,7 +307,7 @@ def test_tty_progress_replaces_one_line_and_finishes_with_newline(monkeypatch):
                 return {"ingestion_progress": _phase(self.reads, source="书.pdf")}
 
         return await cli_corpus._ingest_with_progress(
-            Operations(), force_recompute=False
+            Operations(), "ingest", force_recompute=False
         )
 
     assert asyncio.run(run()) == {"status": "unchanged"}
@@ -364,11 +364,15 @@ def test_immediate_ingest_does_not_poll(fail):
     if fail:
         with pytest.raises(ValueError, match="build failed"):
             asyncio.run(
-                cli_corpus._ingest_with_progress(Operations(), force_recompute=False)
+                cli_corpus._ingest_with_progress(
+                    Operations(), "ingest", force_recompute=False
+                )
             )
     else:
         assert asyncio.run(
-            cli_corpus._ingest_with_progress(Operations(), force_recompute=False)
+            cli_corpus._ingest_with_progress(
+                Operations(), "ingest", force_recompute=False
+            )
         ) == {"ok": True}
 
 
@@ -392,7 +396,7 @@ def test_failed_progress_read_does_not_fail_ingestion(monkeypatch):
                 raise RuntimeError("status unavailable")
 
         return await cli_corpus._ingest_with_progress(
-            Operations(), force_recompute=False
+            Operations(), "ingest", force_recompute=False
         )
 
     assert asyncio.run(run()) == {"ok": True}

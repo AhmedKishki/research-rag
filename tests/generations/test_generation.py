@@ -10,7 +10,7 @@ from research_rag.generations.generation import (
     ReuseSnapshot,
     chunks_are_reusable,
     load_reuse_snapshot,
-    source_set_matches,
+    selection_matches,
     units_are_reusable,
     vectors_are_reusable,
 )
@@ -221,95 +221,77 @@ def _snapshot(
                 "included": True,
             }
         },
-        documents={},
+        documents={
+            "article.pdf": {
+                "source_relative_path": "article.pdf",
+                "sha256": "source-digest",
+            }
+        },
         units_by_document={},
         chunks_by_document={},
         vectors_by_text={},
     )
 
 
-def test_source_set_match_ignores_reviewed_metadata_revision(tmp_path: Path) -> None:
-    snapshot = _snapshot(tmp_path / "generation", metadata_revision="stale-value")
-
-    assert source_set_matches(
+def _matches(
+    snapshot: ReuseSnapshot,
+    *,
+    selected: tuple[str, ...] = ("article.pdf",),
+    digests: dict[str, str] | None = None,
+    metadata_storage_policy: str = "automatic-only-v1",
+) -> bool:
+    return selection_matches(
         snapshot,
-        [
-            {
-                "source_relative_path": "article.pdf",
-                "sha256": "source-digest",
-                "included": True,
-            }
-        ],
-        exclusion_revision="exclusions-v1",
-        metadata_storage_policy="automatic-only-v1",
+        selected=selected,
+        digests={"article.pdf": "source-digest"} if digests is None else digests,
+        metadata_storage_policy=metadata_storage_policy,
     )
 
 
-def test_source_set_match_ignores_ranking_policy_drift(tmp_path: Path) -> None:
+def test_selection_match_ignores_reviewed_metadata_revision(tmp_path: Path) -> None:
+    snapshot = _snapshot(tmp_path / "generation", metadata_revision="stale-value")
+
+    assert _matches(snapshot)
+
+
+def test_selection_match_ignores_ranking_policy_drift(tmp_path: Path) -> None:
     """A ranking edit changes what a search returns, not what a generation stores."""
 
     snapshot = _snapshot(tmp_path / "generation")
     snapshot.manifest["retrieval_policy_fingerprint"] = "an-older-ranking-policy"
 
-    assert source_set_matches(
-        snapshot,
-        [
-            {
-                "source_relative_path": "article.pdf",
-                "sha256": "source-digest",
-                "included": True,
-            }
-        ],
-        exclusion_revision="exclusions-v1",
-        metadata_storage_policy="automatic-only-v1",
-    )
+    assert _matches(snapshot)
 
 
-def test_source_set_match_still_rejects_generation_affecting_changes(
+def test_selection_match_ignores_exclusions_and_carried_bytes(tmp_path: Path) -> None:
+    """An exclusion filters at query time, and a carried source is kept as it is."""
+
+    snapshot = _snapshot(tmp_path / "generation")
+    snapshot.manifest["source_exclusion_revision"] = "exclusions-v2"
+
+    assert _matches(snapshot)
+    # A carried source's bytes are not among the ones the build reads.
+    assert _matches(snapshot, digests={})
+
+
+def test_selection_match_still_rejects_generation_affecting_changes(
     tmp_path: Path,
 ) -> None:
     snapshot = _snapshot(tmp_path / "generation")
-    records = [
-        {
-            "source_relative_path": "article.pdf",
-            "sha256": "source-digest",
-            "included": True,
-        }
-    ]
 
-    assert not source_set_matches(
-        snapshot,
-        records,
-        exclusion_revision="exclusions-v2",
-        metadata_storage_policy="automatic-only-v1",
-    )
-    assert not source_set_matches(
-        snapshot,
-        [{**records[0], "sha256": "changed-source"}],
-        exclusion_revision="exclusions-v1",
-        metadata_storage_policy="automatic-only-v1",
-    )
+    assert not _matches(snapshot, digests={"article.pdf": "changed-source"})
+    assert not _matches(snapshot, selected=("article.pdf", "added.pdf"))
+    assert not _matches(snapshot, selected=())
 
 
-def test_source_set_match_requires_both_index_directories(tmp_path: Path) -> None:
+def test_selection_match_requires_both_index_directories(tmp_path: Path) -> None:
     snapshot = _snapshot(tmp_path / "generation")
     (snapshot.root / "indexes" / "qdrant").rmdir()
 
-    assert not source_set_matches(
-        snapshot,
-        [
-            {
-                "source_relative_path": "article.pdf",
-                "sha256": "source-digest",
-                "included": True,
-            }
-        ],
-        exclusion_revision="exclusions-v1",
-        metadata_storage_policy="automatic-only-v1",
-    )
+    assert not _matches(snapshot)
 
 
-def test_source_set_match_rejects_legacy_metadata_storage_policy(
+def test_selection_match_rejects_legacy_metadata_storage_policy(
     tmp_path: Path,
 ) -> None:
     snapshot = _snapshot(
@@ -317,18 +299,7 @@ def test_source_set_match_rejects_legacy_metadata_storage_policy(
         metadata_storage_policy="reviewed-metadata-baked-into-generation",
     )
 
-    assert not source_set_matches(
-        snapshot,
-        [
-            {
-                "source_relative_path": "article.pdf",
-                "sha256": "source-digest",
-                "included": True,
-            }
-        ],
-        exclusion_revision="exclusions-v1",
-        metadata_storage_policy="automatic-only-v1",
-    )
+    assert not _matches(snapshot)
 
 
 def test_generation_is_reusable_requires_matching_dense_identity() -> None:
@@ -533,24 +504,13 @@ def test_escaping_artifact_path_loads_no_snapshot(tmp_path: Path, escape: str) -
     assert _load(root, manifest) is None
 
 
-def test_escaping_index_path_refuses_source_set_match(tmp_path: Path) -> None:
+def test_escaping_index_path_refuses_a_selection_match(tmp_path: Path) -> None:
     """A recorded index path that leaves the generation root fails closed."""
 
     snapshot = _snapshot(tmp_path / "generation")
     snapshot.manifest["files"]["dense_index"] = "../outside"
 
-    assert not source_set_matches(
-        snapshot,
-        [
-            {
-                "source_relative_path": "article.pdf",
-                "sha256": "source-digest",
-                "included": True,
-            }
-        ],
-        exclusion_revision="exclusions-v1",
-        metadata_storage_policy="automatic-only-v1",
-    )
+    assert not _matches(snapshot)
 
 
 def test_older_artifact_policy_missing_unit_locator_drops_processing(

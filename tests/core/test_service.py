@@ -2284,11 +2284,14 @@ async def _assert_agent_reviewed_source_exclusion(project: Path) -> None:
         reason="Agent-reviewed duplicate; preferred.pdf is the retained copy.",
     )
     assert excluded["effective_immediately"] is True
+    assert excluded["generation_rebuild_recommended"] is False
     assert excluded["source_file_changed"] is False
     assert duplicate.is_file()
 
+    # An exclusion filters what a search returns and never makes the generation
+    # stale.
     status = await service.status()
-    assert status["stale"] is True
+    assert status["stale"] is False
     assert status["excluded_source_count"] == 1
     assert status["searchable_source_count"] == 1
     assert status["changes"]["source_exclusions_changed"] is True
@@ -2303,16 +2306,34 @@ async def _assert_agent_reviewed_source_exclusion(project: Path) -> None:
     with pytest.raises(ResearchError, match="currently excluded"):
         await service.get_passage(duplicate_hit["chunk_id"])
 
-    rebuilt = await service.ingest(chunk_size=50, chunk_overlap=10)
-    assert rebuilt["source_file_count"] == 2
-    assert rebuilt["excluded_source_count"] == 1
-    assert rebuilt["document_count"] == 1
-    assert rebuilt["reused_document_count"] == 1
-    assert rebuilt["rebuilt_document_count"] == 0
-    rebuilt_status = await service.status()
-    assert rebuilt_status["stale"] is False
+    # An ingest of every source keeps the excluded source's data as it is, so
+    # including it again restores it at once.
+    kept = await service.ingest(chunk_size=50, chunk_overlap=10)
+    assert kept["status"] == "unchanged"
+    restored_at_once = await service.set_source_inclusion(
+        "duplicate.pdf", included=True
+    )
+    assert restored_at_once["effective_immediately"] is True
+    assert restored_at_once["generation_rebuild_recommended"] is False
+    assert (await service.status())["stale"] is False
+
+    # Only an uningest takes a source's data out of the generation.
+    await service.set_source_inclusion(
+        "duplicate.pdf",
+        included=False,
+        reason="Agent-reviewed duplicate; preferred.pdf is the retained copy.",
+    )
+    removed = await service.uningest(sources=["duplicate.pdf"])
+    assert removed["source_file_count"] == 2
+    assert removed["excluded_source_count"] == 1
+    assert removed["document_count"] == 1
+    assert removed["reused_document_count"] == 1
+    assert removed["rebuilt_document_count"] == 0
+    assert removed["reused_chunk_count"] == removed["chunk_count"]
+    removed_status = await service.status()
+    assert removed_status["stale"] is False
     assert (
-        rebuilt_status["excluded_sources"][0]["indexed_in_current_generation"] is False
+        removed_status["excluded_sources"][0]["indexed_in_current_generation"] is False
     )
 
     included = await service.set_source_inclusion(
@@ -2329,6 +2350,120 @@ async def _assert_agent_reviewed_source_exclusion(project: Path) -> None:
     assert restored["excluded_source_count"] == 0
     assert restored["reused_document_count"] == 1
     assert restored["rebuilt_document_count"] == 1
+
+
+async def _assert_named_ingest_reads_only_the_named_sources(project: Path) -> None:
+    sources = project / "sources"
+    write_pdf(sources / "a.pdf", ["Amber evidence about cobalt mining."])
+    write_pdf(sources / "b.pdf", ["Basalt evidence about copper trade."])
+    config = resolve_config(project, vanilla_executable=sys.executable)
+    service = ResearchService(  # type: ignore[arg-type]
+        config, FakeUltraRAG(), dense=FakeDenseBackend()
+    )
+    await service.ingest(chunk_size=50, chunk_overlap=10)
+
+    write_pdf(sources / "b.pdf", ["Birch evidence about timber, rewritten."])
+    write_pdf(sources / "c.pdf", ["Cedar evidence about lithium refining."])
+    write_pdf(sources / "d.pdf", ["Dune evidence about silicon wafers."])
+
+    named = await service.ingest(sources=["c.pdf"])
+    assert named["status"] == "ready"
+    assert named["document_count"] == 3
+    assert named["rebuilt_document_count"] == 1
+    assert named["source_selection"] == {"mode": "ingest", "source_paths": ["c.pdf"]}
+    # The changed file was not named, so the generation keeps what it read before,
+    # and both pending changes are still reported.
+    found = await service.search("basalt copper", top_k=5)
+    assert any(hit["source_path"] == "sources/b.pdf" for hit in found["hits"])
+    status = await service.status()
+    assert status["stale"] is True
+    assert status["changes"]["added"] == ["d.pdf"]
+    assert status["changes"]["modified"] == ["b.pdf"]
+
+    assert (await service.ingest(sources=["c.pdf"]))["status"] == "unchanged"
+
+    forced = await service.ingest(sources=["a.pdf"], force_recompute=True)
+    assert forced["rebuilt_document_count"] == 1
+    assert forced["reused_document_count"] == 2
+    assert forced["created_vector_count"] > 0
+    assert forced["reused_vector_count"] > 0
+
+    with pytest.raises(ResearchError, match="No source matches"):
+        await service.ingest(sources=["missing.pdf"])
+    await service.set_source_inclusion("d.pdf", included=False, reason="Not needed.")
+    with pytest.raises(ResearchError, match="is excluded"):
+        await service.ingest(sources=["d.pdf"])
+    with pytest.raises(ResearchError, match="does not hold"):
+        await service.uningest(sources=["d.pdf"])
+    with pytest.raises(ResearchError, match="leave the generation empty"):
+        await service.uningest(sources=["a.pdf", "b.pdf", "c.pdf"])
+
+    # A source is named by its stable id as well as its path.
+    listed = await service.list_sources()
+    cedar = next(
+        item["source_id"]
+        for item in listed["sources"]
+        if item["source_path"] == "sources/c.pdf"
+    )
+    taken_out = await service.uningest(sources=[cedar])
+    assert taken_out["document_count"] == 2
+    assert (await service.status())["changes"]["added"] == ["c.pdf"]
+
+    everything = await service.ingest()
+    assert everything["document_count"] == 3
+    assert everything["excluded_source_count"] == 1
+    assert (await service.status())["stale"] is False
+
+
+async def _assert_an_excluded_source_is_never_read(
+    project: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    sources = project / "sources"
+    write_pdf(sources / "kept.pdf", ["Kept evidence about cobalt."])
+    write_pdf(sources / "excluded.pdf", ["Excluded evidence about copper."])
+    config = resolve_config(project, vanilla_executable=sys.executable)
+    service = ResearchService(  # type: ignore[arg-type]
+        config, FakeUltraRAG(), dense=FakeDenseBackend()
+    )
+    await service.ingest(chunk_size=50, chunk_overlap=10)
+    await service.set_source_inclusion(
+        "excluded.pdf", included=False, reason="Reviewed duplicate."
+    )
+
+    read: list[str] = []
+    page_count = ingestion_module.pdf_page_count
+
+    def counting(source: Any) -> int:
+        read.append(source.source_relative_path)
+        return page_count(source)
+
+    monkeypatch.setattr(ingestion_module, "pdf_page_count", counting)
+    # A new cleaning budget means no stored extraction can be kept, so every
+    # source a build may read is read again, and an excluded one is not read.
+    rebudgeted = ResearchService(  # type: ignore[arg-type]
+        resolve_config(
+            project,
+            vanilla_executable=sys.executable,
+            settings_overrides=["ingestion.maximum_unclean_percent=2.0"],
+        ),
+        FakeUltraRAG(),
+        dense=FakeDenseBackend(),
+    )
+    rebuilt = await rebudgeted.ingest(chunk_size=50, chunk_overlap=10)
+    assert read == ["kept.pdf"]
+    assert rebuilt["status"] == "ready"
+    assert rebuilt["document_count"] == 1
+    assert rebuilt["dropped_excluded_sources"] == ["excluded.pdf"]
+
+
+def test_an_excluded_source_is_never_read(
+    project: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    asyncio.run(_assert_an_excluded_source_is_never_read(project, monkeypatch))
+
+
+def test_named_ingest_reads_only_the_named_sources(project: Path) -> None:
+    asyncio.run(_assert_named_ingest_reads_only_the_named_sources(project))
 
 
 def test_agent_reviewed_source_exclusion_is_immediate_and_reversible(
