@@ -6,6 +6,7 @@ What enters an index: source selection, locators, text cleanup, and the health g
 - `test_docling_adapter.py` and `test_docling_routing.py`: retained structural labels and provenance, furniture/index exclusion, protected captions/formulas/notes, legacy setting aliases, and the shared gate's configured budget.
 - `test_mobi.py`: real-parser uncompressed, PalmDOC, HUFF/CDIC, KF8, and dual-rendition containers; metadata and logical-part anchors; DRM, malformed-container, resource-limit, and symlink refusals. Synthetic containers come from `tests/mobi_fixtures.py`, not private books.
 - `test_ocr.py`: OCR is gone: the parser, help menu, module, and package extra offer none, and no shipped document names the removed command.
+- `test_apparatus.py`: the apparatus verdict, each kind it names by structure, and the argument, mixed passage, table, and quoted-language prose it keeps.
 - `test_extraction_health_gate.py`: pre-chunk cleanup and the source health gate, including the share of unreadable text a source may lose before it is refused.
   - Each removal rule against the text it must keep.
   - A section continued across unit boundaries, and one that stops at the next argument heading.

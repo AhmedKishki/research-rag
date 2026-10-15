@@ -613,6 +613,22 @@ SETTINGS: tuple[Setting, ...] = (
         maximum=1.0,
         env="RESEARCH_RAG_RETRIEVAL_MINIMUM_PASSAGE_TOKEN_FRACTION",
     ),
+    Setting(
+        key="retrieval.exclude_apparatus",
+        field="exclude_apparatus",
+        kind=bool,
+        layer="runtime",
+        doc=(
+            "Leave out passages that are scholarly apparatus rather than "
+            "argument: reference lists, citation-only notes, back-of-book "
+            "indexes, and copyright pages. They carry the names, titles, and "
+            "years a query asks about without an argument to cite, so they win "
+            "searches the corpus cannot answer. A passage holding twenty words "
+            "of argument sentences or a table of measurements is kept. Runtime: "
+            "it filters a query and changes no artifact."
+        ),
+        env="RESEARCH_RAG_RETRIEVAL_EXCLUDE_APPARATUS",
+    ),
     # --- Chunking: what a chunk is. Recorded per generation. ---
     Setting(
         key="chunking.size",
@@ -882,6 +898,7 @@ class EffectiveSettings:
     dense_relative_similarity_margin: float
     minimum_passage_words: int
     minimum_passage_token_fraction: float
+    exclude_apparatus: bool
     duplicate_cosine: float
     chunk_size: int
     chunk_overlap: int

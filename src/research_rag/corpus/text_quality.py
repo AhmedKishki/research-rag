@@ -268,12 +268,16 @@ def passage_health_reasons(
     return list(dict.fromkeys(reasons))
 
 
-# Retrieval rejects a candidate for exactly two reasons, and both are properties
-# of the chunk text plus its stored quality flags rather than of the query. They
-# are computed once when the artifact lookup is built and stored as a bitmask,
-# which removes the per-query text scans from the candidate gate.
+# Retrieval always rejects a candidate for two reasons, and rejects an apparatus
+# passage when a project asks it to. All three are properties of the chunk text
+# plus its stored quality flags rather than of the query. They are computed once
+# when the artifact lookup is built and stored as a bitmask, which removes the
+# per-query text scans from the candidate gate.
 CHUNK_FLAG_CORRUPT_TEXT = 1
 CHUNK_FLAG_EXTRACTION_ARTIFACT = 2
+CHUNK_FLAG_APPARATUS = 4
+# The flags no reader is ever shown, whatever a project's settings say.
+CHUNK_FLAGS_UNREADABLE = CHUNK_FLAG_CORRUPT_TEXT | CHUNK_FLAG_EXTRACTION_ARTIFACT
 
 # The token `extraction` stores against a chunk it could not read as prose. It is
 # written by one module and read by this one, so it is named here and nowhere else.
@@ -605,9 +609,360 @@ def source_health_reasons(
     return reasons
 
 
+# ---------------------------------------------------------------------------
+# Recognising the scholarly apparatus a search may leave out
+# ---------------------------------------------------------------------------
+#
+# Removal at ingestion stops where a section loses its shape, so a reference list
+# that spells given names out, a run of citation-only notes, a back-of-book index
+# and a copyright page reach the index whole. Each carries the names, titles and
+# years a query asks about and no argument to cite, so it wins exactly the search
+# the corpus cannot answer. `apparatus_kind` names one passage's kind from its own
+# text, and a project decides whether search leaves that kind out.
+#
+# Argument is told apart by grammar rather than topic. The pronouns, auxiliaries
+# and conjunctions an argument cannot do without are about a sixth of its words
+# and almost none of a reference list's, so only a passage nearly without them is
+# judged, and then only by structure: citation markers among mostly capitalised
+# words, page lists, or a copyright page's boilerplate. Two guards keep what is
+# still evidence: twenty words of argument sentences anywhere in the passage, which
+# is how a conclusion running into its references survives, and a table of
+# measurements. A few function words of the languages a corpus quotes keep their
+# prose out of the rule; a foreign reference list is still recognised.
+
+APPARATUS_BIBLIOGRAPHY = "bibliography"
+APPARATUS_INDEX = "index"
+APPARATUS_FRONT_MATTER = "front_matter"
+
+_WORD = re.compile(r"[^\W\d_]+(?:['’][^\W\d_]+)?", re.UNICODE)
+_ARGUMENT_WORDS = frozenset(
+    {
+        "is",
+        "are",
+        "was",
+        "were",
+        "be",
+        "been",
+        "being",
+        "am",
+        "that",
+        "which",
+        "who",
+        "whom",
+        "whose",
+        "this",
+        "these",
+        "those",
+        "it",
+        "its",
+        "we",
+        "our",
+        "us",
+        "they",
+        "them",
+        "their",
+        "he",
+        "him",
+        "his",
+        "she",
+        "her",
+        "not",
+        "no",
+        "but",
+        "however",
+        "because",
+        "since",
+        "although",
+        "though",
+        "while",
+        "whereas",
+        "if",
+        "then",
+        "than",
+        "also",
+        "only",
+        "even",
+        "can",
+        "could",
+        "would",
+        "should",
+        "must",
+        "may",
+        "might",
+        "will",
+        "shall",
+        "do",
+        "does",
+        "did",
+        "has",
+        "have",
+        "had",
+        "there",
+        "here",
+        "what",
+        "when",
+        "where",
+        "why",
+        "how",
+        "such",
+        "so",
+        "thus",
+        "therefore",
+        "hence",
+        "yet",
+        "very",
+        "more",
+        "most",
+        "less",
+        "much",
+        "many",
+        "all",
+        "any",
+        "each",
+        "every",
+        "both",
+        "either",
+        "neither",
+        "one",
+        "i",
+        "you",
+        "your",
+        "my",
+        "me",
+        "ist",
+        "sind",
+        "war",
+        "wird",
+        "werden",
+        "wurde",
+        "hat",
+        "haben",
+        "dass",
+        "nicht",
+        "auch",
+        "wir",
+        "sie",
+        "es",
+        "ich",
+        "est",
+        "sont",
+        "était",
+        "nous",
+        "ils",
+        "elle",
+        "pas",
+        "qui",
+        "son",
+        "fue",
+        "era",
+        "está",
+    }
+)
+# A sentence of argument is also built from articles and prepositions, which a
+# title shares, so they count only toward recognising a sentence.
+_FUNCTION_WORDS = _ARGUMENT_WORDS | frozenset(
+    {
+        "the",
+        "of",
+        "and",
+        "to",
+        "in",
+        "a",
+        "an",
+        "for",
+        "on",
+        "with",
+        "by",
+        "as",
+        "or",
+        "from",
+        "at",
+        "into",
+        "between",
+        "within",
+        "through",
+        "about",
+        "over",
+        "under",
+        "der",
+        "die",
+        "das",
+        "und",
+        "mit",
+        "von",
+        "zu",
+        "den",
+        "dem",
+        "le",
+        "la",
+        "les",
+        "et",
+        "dans",
+        "pour",
+        "que",
+        "une",
+        "des",
+        "du",
+        "el",
+        "los",
+        "las",
+        "y",
+        "del",
+        "en",
+        "por",
+        "con",
+        "para",
+        "una",
+    }
+)
+# Argument words a passage must stay at or under for its structure to be judged.
+_APPARATUS_MAXIMUM_ARGUMENT_SHARE = 0.06
+# A copyright page sets legal sentences, so it is judged with more of them.
+_FRONT_MATTER_MAXIMUM_ARGUMENT_SHARE = 0.12
+
+_CITATION_YEAR = re.compile(r"(?<![\d.])(?:1[5-9]|20)\d{2}[a-z]?(?!\d)")
+_SURNAME_INITIALS = re.compile(r"\b[A-Z][a-zà-ÿ'’\-]+,\s(?:[A-Z]\.\s?){1,3}")
+_INITIALS_SURNAME = re.compile(r"\b(?:[A-Z]\.\s?){1,3}\s?[A-Z][a-zà-ÿ'’\-]{2,}")
+_SURNAME_GIVEN = re.compile(
+    r"\b[A-Z][a-zà-ÿ'’\-]+,\s[A-Z][a-zà-ÿ'’\-]+(?:\s[A-Z]\.)?[.,]"
+)
+_CITATION_PAGES = re.compile(r"\bpp?\.\s?\d+", re.IGNORECASE)
+_CITATION_LOCATOR = re.compile(
+    r"(?:\b10\.\d{4,9}/|\bdoi\b|https?://|www\.|arxiv)", re.IGNORECASE
+)
+_CITATION_VENUE = re.compile(
+    r"\b(?:Press|Journal|Proceedings|Review|Quarterly|Conference|Publishers?|"
+    r"Verlag|Editions?|eds?\.|vol\.|no\.|Vol\.|No\.|Trans\.|trans\.)"
+)
+_CITATION_NOTE = re.compile(r"\b(?:Ibid|ibid|op\.\s?cit|Cf\.|cf\.|See also|see also)\b")
+# An entry opens with a surname, a comma, and given names or initials, and reaches
+# its year within the line.
+_CITATION_ENTRY = re.compile(
+    r"(?:^|(?<=[.\n”\"’)])\s*)"
+    r"[A-Z][\w'’\-]+,\s(?:[A-Z][\w'’\-]*\.?\s?){1,4}"
+    r"[^\n]{0,120}?[(\s](?:1[5-9]|20)\d{2}[a-z]?[).,:]"
+)
+_CITATION_MINIMUM_CAPITAL_SHARE = 0.25
+_CITATION_MINIMUM_DENSITY = 0.06
+_CITATION_MINIMUM_ENTRIES = 2
+
+_INDEX_ENTRY = re.compile(
+    r"[^\W\d_][^,\n]{0,40},\s\d{1,4}(?:[–-]\d{1,4})?(?:,\s\d{1,4}(?:[–-]\d{1,4})?)+"
+)
+_LOCATOR_NUMBER = re.compile(r"(?<![\w.])\d{1,4}(?:[–-]\d{1,4})?(?!\w)")
+
+_FRONT_MATTER = re.compile(
+    r"(?:ISBN|All rights reserved|Library of Congress|Cataloging|Cataloguing|"
+    r"British Library|Printed (?:and bound )?in|First published|Typeset|"
+    r"retrieval system|without (?:the )?prior (?:written )?permission|"
+    r"Article reuse guidelines|Downloaded from|Terms and Conditions|"
+    r"This content downloaded|All use subject to|Creative Commons|eBookstore)"
+)
+_FRONT_MATTER_MINIMUM_MARKERS = 2
+
+# A sentence ends after a word of two or more letters, so initials hold together.
+_ARGUMENT_SENTENCE_BREAK = re.compile(
+    r"(?<=[^\W\d_]{2}[.!?])[\"'”’)]*\s+(?=[A-Z0-9“‘\"'(])"
+)
+_ARGUMENT_SENTENCE_MINIMUM_WORDS = 10
+_ARGUMENT_GUARD_WORDS = 20
+_ARGUMENT_GUARD_SHARE = 0.2
+
+# A measurement is a thousands-grouped or decimal number, a signed value, or a
+# percentage; a year, a page and a page range are not, and a link's digits are
+# read away first.
+_LINK = re.compile(r"(?:https?://|www\.|doi\.org/|\b10\.\d{4,9}/)\S+", re.IGNORECASE)
+_MEASUREMENT = re.compile(
+    r"(?<![\w.,])\d{1,3}(?:,\d{3})+(?![\d,])"
+    r"|(?<![\w.])\d+\.\d+(?![\d.])"
+    r"|(?<!\w)[−-]\d+(?:\.\d+)?"
+    r"|(?<![\w.])\d+(?:\.\d+)?\s?%"
+)
+_TABLE_GUARD_MEASUREMENTS = 6
+
+
+def _citation_density(value: str, words: int) -> float:
+    markers = sum(
+        len(pattern.findall(value))
+        for pattern in (
+            _CITATION_YEAR,
+            _SURNAME_INITIALS,
+            _INITIALS_SURNAME,
+            _SURNAME_GIVEN,
+            _CITATION_PAGES,
+            _CITATION_LOCATOR,
+            _CITATION_VENUE,
+            _CITATION_NOTE,
+        )
+    )
+    return markers / words
+
+
+def _apparatus_shape(value: str, words: list[str], argument_share: float) -> str | None:
+    count = max(len(words), 1)
+    if argument_share <= _APPARATUS_MAXIMUM_ARGUMENT_SHARE:
+        numbers = len(_LOCATOR_NUMBER.findall(value)) / count
+        entries = len(_INDEX_ENTRY.findall(value))
+        if (entries >= 3 and numbers >= 0.25) or (entries >= 1 and numbers >= 0.5):
+            return APPARATUS_INDEX
+        capitals = sum(word[:1].isupper() for word in words) / count
+        if capitals >= _CITATION_MINIMUM_CAPITAL_SHARE and (
+            _citation_density(value, count) >= _CITATION_MINIMUM_DENSITY
+            or len(_CITATION_ENTRY.findall(value)) >= _CITATION_MINIMUM_ENTRIES
+        ):
+            return APPARATUS_BIBLIOGRAPHY
+    if len(_FRONT_MATTER.findall(value)) >= _FRONT_MATTER_MINIMUM_MARKERS:
+        return APPARATUS_FRONT_MATTER
+    return None
+
+
+def _is_argument_sentence(sentence: str, words: list[str]) -> bool:
+    count = len(words)
+    if count < _ARGUMENT_SENTENCE_MINIMUM_WORDS:
+        return False
+    capitals = sum(word[:1].isupper() for word in words)
+    function_words = sum(word.casefold() in _FUNCTION_WORDS for word in words)
+    numbers = len(_LOCATOR_NUMBER.findall(sentence))
+    return capitals <= 0.3 * count and numbers < 0.2 * count and function_words >= 2
+
+
+def _holds_evidence(value: str) -> bool:
+    """Whether an apparatus-shaped passage still carries argument or data."""
+
+    if len(_MEASUREMENT.findall(_LINK.sub(" ", value))) >= _TABLE_GUARD_MEASUREMENTS:
+        return True
+    total = argument = 0
+    for sentence in _ARGUMENT_SENTENCE_BREAK.split(value.replace("\n", " ")):
+        words = _WORD.findall(sentence)
+        total += len(words)
+        if _is_argument_sentence(sentence, words):
+            argument += len(words)
+    return argument >= _ARGUMENT_GUARD_WORDS or argument > _ARGUMENT_GUARD_SHARE * total
+
+
+def apparatus_kind(value: str) -> str | None:
+    """The kind of scholarly apparatus a passage is, or `None` for evidence.
+
+    Returns `"bibliography"` for reference entries and citation-only notes,
+    `"index"` for a back-of-book index, or `"front_matter"` for a copyright page.
+    """
+
+    words = _WORD.findall(value)
+    argument_share = sum(word.casefold() in _ARGUMENT_WORDS for word in words) / max(
+        len(words), 1
+    )
+    if argument_share > _FRONT_MATTER_MAXIMUM_ARGUMENT_SHARE:
+        return None
+    kind = _apparatus_shape(value, words, argument_share)
+    if kind is None or _holds_evidence(value):
+        return None
+    return kind
+
+
 def chunk_health_flags(text: str, *, quality_flags: object = None) -> int:
-    """A precomputed verdict: an extraction artifact, or has no searchable
-    alphanumeric content. Mirrors the query-time check, so counters cannot change.
+    """A precomputed verdict: an extraction artifact, no searchable alphanumeric
+    content, or scholarly apparatus. Mirrors the query-time check, so counters
+    cannot change.
     """
     flags = 0
     if text_corruption_reasons(text):
@@ -617,4 +972,6 @@ def chunk_health_flags(text: str, *, quality_flags: object = None) -> int:
         text
     ):
         flags |= CHUNK_FLAG_EXTRACTION_ARTIFACT
+    if apparatus_kind(text) is not None:
+        flags |= CHUNK_FLAG_APPARATUS
     return flags

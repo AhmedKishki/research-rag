@@ -11,6 +11,7 @@ from typing import Any
 import numpy as np
 
 from ..corpus.text_quality import (
+    CHUNK_FLAG_APPARATUS,
     CHUNK_FLAG_CORRUPT_TEXT,
     CHUNK_FLAG_EXTRACTION_ARTIFACT,
     chunk_health_flags,
@@ -203,6 +204,7 @@ _LEXICAL_REJECTIONS = (
     "extraction_artifact",
     "corrupt_text",
     "too_short",
+    "apparatus",
 )
 
 
@@ -312,6 +314,7 @@ class _DenseGate:
     extraction_artifact: int = 0
     corrupt_text: int = 0
     too_short: int = 0
+    apparatus: int = 0
     filtered_out: int = 0
     examples: dict[str, list[dict[str, Any]]] = field(default_factory=dict)
 
@@ -336,6 +339,7 @@ class _DenseGate:
                 "extraction_artifact": self.extraction_artifact,
                 "corrupt_text": self.corrupt_text,
                 "too_short": self.too_short,
+                "apparatus": self.apparatus,
                 "filtered_out": self.filtered_out,
             },
         }
@@ -689,6 +693,9 @@ class SearchWorkflow:
                             limit=settings.maximum_withheld_examples,
                         )
                         continue
+                    if flags & CHUNK_FLAG_APPARATUS and settings.exclude_apparatus:
+                        result.rejected["apparatus"] += 1
+                        continue
                     tokens = tokens_cache.get(chunk_id)
                     if tokens is None:
                         tokens = tokens_cache[chunk_id] = frozenset(
@@ -917,6 +924,10 @@ class SearchWorkflow:
                     text_corruption_reasons(chunk_text(chunk)),
                     limit=self.config.settings.maximum_withheld_examples,
                 )
+            elif (
+                flags & CHUNK_FLAG_APPARATUS and self.config.settings.exclude_apparatus
+            ):
+                gate.apparatus += 1
             elif not self._matches_filters(
                 chunk, context.documents_by_id, **context.filters
             ):
@@ -1441,6 +1452,18 @@ class SearchWorkflow:
                         "fragment look long."
                     ),
                 },
+                "apparatus_policy": {
+                    "exclude_apparatus": settings.exclude_apparatus,
+                    "note": (
+                        "With exclude_apparatus on, a candidate whose text is a "
+                        "reference list, citation-only notes, a back-of-book index, "
+                        "or a copyright page is dropped before fusion, and each half "
+                        "counts it in rejected_candidates. The verdict is read from "
+                        "the passage's own text when the artifact lookup is built. "
+                        "Nothing is deleted, and turning the setting off returns "
+                        "every passage."
+                    ),
+                },
                 "rejected_candidates": {
                     **{
                         f"bm25_{reason}": count
@@ -1450,6 +1473,7 @@ class SearchWorkflow:
                     "dense_extraction_artifact": gate.extraction_artifact,
                     "dense_corrupt_text": gate.corrupt_text,
                     "dense_too_short": gate.too_short,
+                    "dense_apparatus": gate.apparatus,
                 },
                 "withheld_candidates": {
                     "policy": "corruption_evidence_only",

@@ -1836,6 +1836,8 @@ def test_status_payload_is_one_vocabulary_with_or_without_a_generation(
         "excluded_chunk_count",
         "chunk_exclusion_other_generation_count",
         "chunk_count",
+        "exclude_apparatus",
+        "apparatus_chunk_count",
         "categories",
         "projects",
         "languages",
@@ -1869,6 +1871,8 @@ def test_status_payload_is_one_vocabulary_with_or_without_a_generation(
         "searchable_source_count",
         "chunk_exclusion_other_generation_count",
         "chunk_count",
+        "exclude_apparatus",
+        "apparatus_chunk_count",
         "languages",
         "hybrid_ready",
         "hybrid_upgrade_required",
@@ -2579,10 +2583,12 @@ async def _assert_relevance_gates_allow_abstention(project: Path) -> None:
         "bm25_extraction_artifact": 0,
         "bm25_corrupt_text": 0,
         "bm25_too_short": 0,
+        "bm25_apparatus": 0,
         "dense_below_threshold": 1,
         "dense_extraction_artifact": 0,
         "dense_corrupt_text": 0,
         "dense_too_short": 0,
+        "dense_apparatus": 0,
     }
 
     relevant = await service.search("Lenovo", top_k=8)
@@ -2801,6 +2807,76 @@ async def _assert_a_short_fragment_is_not_evidence(project: Path) -> None:
 
 def test_a_short_fragment_is_not_evidence(project: Path) -> None:
     asyncio.run(_assert_a_short_fragment_is_not_evidence(project))
+
+
+async def _assert_apparatus_is_left_out_only_when_asked(project: Path) -> None:
+    """A reference list holds a query's names and titles and no argument to cite.
+
+    It is long enough for every length rule and shares the query's words, so only
+    the apparatus verdict separates it from a passage. The rule ships off, and
+    turning it on removes nothing: the same generation answers both searches.
+    """
+
+    write_pdf(
+        project / "sources" / "references.pdf",
+        [
+            (
+                "Gidwani, Vinay. 2013. Six Theses on Waste, Value, and Commons. Social "
+                "and Cultural Geography 14 (7): 773–83. Liboiron, Max, and Josh "
+                "Lepawsky. 2022. Discard Studies: Wasting, Systems, and Power. "
+                "Cambridge, MA: MIT Press. Moore, Jason W. 2015. Capitalism in the Web "
+                "of Life. London: Verso. Thompson, Michael. 2017. Rubbish Theory: The "
+                "Creation and Destruction of Value. London: Pluto Press."
+            )
+        ],
+        title="References",
+    )
+    write_pdf(
+        project / "sources" / "prose.pdf",
+        [
+            (
+                "Waste from data infrastructure accumulates in landfills and in the "
+                "water table around them, and the extraction feeding it leaves "
+                "trails of its own across the regions that host the servers."
+            )
+        ],
+        title="Prose",
+    )
+
+    async def search_with(exclude: bool) -> tuple[dict, dict]:
+        service = ResearchService(  # type: ignore[arg-type]
+            resolve_config(
+                project,
+                vanilla_executable=sys.executable,
+                settings_overrides=[
+                    f"retrieval.exclude_apparatus={str(exclude).lower()}"
+                ],
+            ),
+            FakeUltraRAG(),
+            dense=FakeDenseBackend(),
+        )
+        await service.ingest(chunk_size=200, chunk_overlap=20, force_recompute=True)
+        return await service.search("waste", top_k=5), await service.status()
+
+    everything, status = await search_with(exclude=False)
+    assert everything["result_count"] == 2
+    assert everything["apparatus_policy"]["exclude_apparatus"] is False
+    assert everything["rejected_candidates"]["bm25_apparatus"] == 0
+    assert everything["rejected_candidates"]["dense_apparatus"] == 0
+    assert status["exclude_apparatus"] is False
+    assert status["apparatus_chunk_count"] == 1
+
+    evidence_only, status = await search_with(exclude=True)
+    assert [hit["title"] for hit in evidence_only["hits"]] == ["prose"]
+    assert evidence_only["apparatus_policy"]["exclude_apparatus"] is True
+    assert evidence_only["rejected_candidates"]["bm25_apparatus"] == 1
+    assert evidence_only["rejected_candidates"]["dense_apparatus"] == 1
+    assert status["exclude_apparatus"] is True
+    assert status["apparatus_chunk_count"] == 1
+
+
+def test_apparatus_is_left_out_only_when_asked(project: Path) -> None:
+    asyncio.run(_assert_apparatus_is_left_out_only_when_asked(project))
 
 
 def test_the_length_floor_is_counted_in_the_chunkers_tokens() -> None:
