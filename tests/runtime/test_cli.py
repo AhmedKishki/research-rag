@@ -1036,3 +1036,44 @@ def test_the_running_app_answers_in_a_thread_and_without_diagnostics() -> None:
         },
         {"name": "search", "arguments": {"query": "q"}},
     ]
+
+
+def test_config_writes_the_project_file_through_the_workspace_check(
+    project: Path,
+) -> None:
+    """Every setting the workspace writes, the command line writes the same way.
+
+    The values go through the service call the workspace makes, so they are coerced,
+    refused, and costed alike, and a change that alters what the next build records
+    waits for `--confirm`.
+    """
+
+    def config(*arguments: str) -> Any:
+        return asyncio.run(
+            _run(_args("--project-root", str(project), "config", *arguments))
+        )
+
+    written = config(
+        "--write",
+        "retrieval.exclude_apparatus=true",
+        "--write",
+        "retrieval.minimum_passage_words=12",
+    )
+    assert written.payload["changed"] == [
+        "retrieval.exclude_apparatus",
+        "retrieval.minimum_passage_words",
+    ]
+    stored = (project / ".research-rag" / "config.toml").read_text(encoding="utf-8")
+    assert "exclude_apparatus = true" in stored
+    settings = _resolve(_args("--project-root", str(project), "status")).settings
+    assert settings.exclude_apparatus is True
+    assert settings.minimum_passage_words == 12
+
+    with pytest.raises(ResearchError, match="KEY=VALUE"):
+        config("--write", "retrieval.exclude_apparatus")
+
+    with pytest.raises(ResearchError, match=r"chunking\.size"):
+        config("--write", "chunking.size=200")
+    assert config("--write", "chunking.size=200", "--confirm").payload["changed"] == [
+        "chunking.size"
+    ]

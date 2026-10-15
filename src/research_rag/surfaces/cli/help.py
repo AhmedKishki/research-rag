@@ -176,8 +176,9 @@ HELP_GROUPS: tuple[tuple[str, tuple[tuple[str, str], ...]], ...] = (
             (
                 "config",
                 (
-                    "Every effective setting and the layer it came from. It never "
-                    "writes. `help settings` names the layers and what a change costs."
+                    "Every effective setting and the layer it came from, and "
+                    "--write to change this project's config.toml. `help settings` "
+                    "names the layers and what a change costs."
                 ),
             ),
         ),
@@ -243,9 +244,10 @@ A project's settings resolve in four layers, each overriding the one above it, a
   3. the project file, <project>/.research-rag/config.toml
   4. an extra file named by --config PATH
 
-`config` never writes. The browser workspace writes the project file, refusing a
-change it cannot validate and naming what the change costs. The two global options
-below are per-call and are recorded nowhere:
+`config --write key=value` writes the project file, and so does the browser
+workspace: both refuse a change they cannot validate and name what it costs, and a
+running app takes the value at once. A hand edit to the file is read when the app
+starts. The two global options below are per-call and are recorded nowhere:
 
   --set key=value    override one value for this command, repeatable
   --config PATH      add one more layer for this command

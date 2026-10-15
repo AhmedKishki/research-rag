@@ -153,7 +153,8 @@
 - Do not import or install UltraRAG, acquire its source runtime, or expose upstream stage operations. Preserve its attribution and historical artifact identifiers without a runtime dependency.
   - Retired gateway/runtime console names provide side-effect-free migration guidance. They never start a server, download, validate, delete, or quarantine an upstream cache.
 - Preserve CLI access to every workspace capability.
-  - Settings writes belong to the workspace, not agents. `research-rag config` is read-only.
+  - Nothing is configurable in the workspace that the command line and `config.toml` cannot also configure.
+  - Settings writes belong to the workspace and the command line, never agents. `research-rag config --write` takes the workspace's path through the service.
   - Open a browser only with `--start-ui`.
 - Use `child_process_environment()`, never `dict(os.environ)`, for subprocesses.
 - Never point the app at a second copy of itself.
