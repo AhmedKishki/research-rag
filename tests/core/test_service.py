@@ -3732,9 +3732,11 @@ async def _assert_partial_pdf_batch_is_replayed_after_hard_crash(
     assert [unit["locator"]["page"] for unit in units] == list(range(1, 10))
 
 
+@pytest.mark.parametrize("staged_layout", ["one_file_per_batch", "one_file_per_unit"])
 def test_hard_crash_mid_chunking_redoes_at_most_one_batch(
     project: Path,
     monkeypatch: pytest.MonkeyPatch,
+    staged_layout: str,
 ) -> None:
     async def exercise() -> None:
         write_pdf(
@@ -3776,6 +3778,23 @@ def test_hard_crash_mid_chunking_redoes_at_most_one_batch(
         failed_ids = set(crashing.requested_unit_ids[1])
         assert len(committed_ids) == 2
         assert committed_ids.isdisjoint(failed_ids)
+
+        if staged_layout == "one_file_per_unit":
+            # A build staged before batches shared a file holds one per unit, and
+            # may hold a later unit's output its crash never committed.
+            chunking = next((staging_root / "work" / "sources").glob("*/chunking"))
+            [batch_file] = chunking.glob("*-*.jsonl")
+            raws = read_jsonl(batch_file)
+            batch_file.unlink()
+            for index, unit_id in enumerate(crashing.requested_unit_ids[0]):
+                write_jsonl(
+                    chunking / f"{index:08d}.jsonl",
+                    [raw for raw in raws if raw["doc_id"] == unit_id],
+                )
+            write_jsonl(
+                chunking / "00000002.jsonl",
+                [{"doc_id": "never-committed", "contents": "Stale output."}],
+            )
 
         resumed_ultrarag = CrashDuringChunkUltraRAG()
         resumed = ResearchService(  # type: ignore[arg-type]

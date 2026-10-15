@@ -28,7 +28,8 @@ uv run python scripts/evaluate_retrieval.py --project /path/to/project --offline
 - **Grouped writes.** Cost follows the number of durability operations, not payload size.
   - A unit's artifacts are written together and committed with one directory fsync before the checkpoint that marks the unit complete.
   - A file handed to a peer process and rewritten before every use may skip the write barrier, because no later read can observe an earlier one.
-- **Bounded chunking batches.** Several extraction units share one chunker call, and each keeps its own durable output and index. Chunk identities are identical either way. A crash redoes at most one batch.
+- **Bounded chunking batches.** Several extraction units share one chunker call, and the batch's output is one durable file in unit order. Chunk identities are identical either way. A crash redoes at most one batch.
+  - Durability operations, not the chunker, set the cost of small batches: a file per unit spent most of the phase on fsyncs.
 - **Embedding batch size.** FastEmbed pads every sequence to the longest in its batch, and the runtime computes the padded positions.
   - One sequence per inference returns the same vectors as a large batch.
   - `dense.embedding_inference_batch_size` ships at one and is a throughput setting only.

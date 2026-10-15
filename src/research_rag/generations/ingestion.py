@@ -164,6 +164,22 @@ def _staged_chunk_census(chunks_path: Path) -> dict[str, Any]:
     }
 
 
+def _chunking_outputs(directory: Path) -> list[tuple[int, int, Path]]:
+    """A source's staged chunker outputs, as (first unit, end unit, path), in order.
+
+    A batch writes one file named for the units it covers. A build staged before
+    batches shared a file holds one per unit, named for that unit alone, and
+    resumes from the same listing.
+    """
+
+    outputs: list[tuple[int, int, Path]] = []
+    for path in directory.glob("*.jsonl") if directory.is_dir() else ():
+        start, _, end = path.stem.partition("-")
+        if start.isdigit() and (end.isdigit() or not end):
+            outputs.append((int(start), int(end) if end else int(start) + 1, path))
+    return sorted(outputs)
+
+
 class _SourceChangedDuringIngest(RuntimeError):
     pass
 
@@ -2114,7 +2130,7 @@ class IngestionWorkflow:
         units: list[dict[str, Any]],
         started: float,
     ) -> dict[str, Any] | None:
-        """Chunk the source's next batch of units and keep each unit's output."""
+        """Chunk the source's next batch of units and keep its output as one file."""
 
         chunked_count = int(state.get("chunked_unit_count") or 0)
         batch_units = units[
@@ -2124,6 +2140,13 @@ class IngestionWorkflow:
         chunking_root = root / "chunking"
         input_path = chunking_root / "unit.jsonl"
         working_path = root / "raw-chunks.jsonl"
+        # An attempt at this batch that never committed may have left its output,
+        # or a later unit's, behind; the listing must hold committed batches only.
+        for start, _end, path in await _atomic_to_thread(
+            _chunking_outputs, chunking_root
+        ):
+            if start >= chunked_count:
+                path.unlink(missing_ok=True)
         # A handoff file is rewritten before every call and deleted afterwards, so
         # it needs visibility, not durability.
         await _atomic_to_thread(write_handoff_jsonl, input_path, batch_units)
@@ -2144,17 +2167,21 @@ class IngestionWorkflow:
             raise _BuildCannotResume(
                 f"Chunker returned an unknown extraction unit: {unknown[0]}"
             )
-        # Every unit keeps its own durable output file and its own index, written
-        # in unit order, so the ordinal assignment in `_enrich_chunks` and the
-        # resume boundary per unit are the same as when each unit had its own call.
-        for position, unit in enumerate(batch_units):
-            await _atomic_to_thread(
-                atomic_write_jsonl,
-                chunking_root / f"{chunked_count + position:08d}.jsonl",
-                raw_by_unit.get(str(unit["id"]), []),
-                fsync_parent=False,
-            )
-        state["chunked_unit_count"] = chunked_count + len(batch_units)
+        # The batch's output is written in unit order, so the ordinal assignment in
+        # `_enrich_chunks` is the same as when each unit had its own call. The
+        # batch is the redo boundary, and one file is one durability operation.
+        end = chunked_count + len(batch_units)
+        await _atomic_to_thread(
+            atomic_write_jsonl,
+            chunking_root / f"{chunked_count:08d}-{end:08d}.jsonl",
+            [
+                raw
+                for unit in batch_units
+                for raw in raw_by_unit.get(str(unit["id"]), [])
+            ],
+            fsync_parent=False,
+        )
+        state["chunked_unit_count"] = end
         build.add("chunking_work_completed", len(batch_units))
         await _atomic_to_thread(
             atomic_write_json, root / "state.json", state, fsync_parent=False
@@ -2174,12 +2201,21 @@ class IngestionWorkflow:
     ) -> tuple[list[dict[str, Any]], int, int, int]:
         """A source's chunks, enriched from its units' chunker output and audited."""
 
+        # The committed outputs cover every unit once, in one run from the first.
         raw_chunks: list[dict[str, Any]] = []
-        for index in range(len(units)):
-            raw_chunks.extend(
-                await _atomic_to_thread(
-                    read_jsonl, root / "chunking" / f"{index:08d}.jsonl"
-                )
+        covered = 0
+        for start, end, path in await _atomic_to_thread(
+            _chunking_outputs, root / "chunking"
+        ):
+            if start != covered:
+                covered = -1
+                break
+            raw_chunks.extend(await _atomic_to_thread(read_jsonl, path))
+            covered = end
+        if covered != len(units):
+            raise _BuildCannotResume(
+                f"Staged chunker output does not cover units 0 to {len(units)} "
+                f"once each: {document.get('source_relative_path')}"
             )
         enriched = await _atomic_to_thread(
             _enrich_chunks,

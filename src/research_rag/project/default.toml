@@ -44,7 +44,7 @@ minimum_passage_token_fraction = 0.0
 size = 384
 overlap = 64
 headers = false
-batch_units = 16
+batch_units = 128
 
 [ingestion]
 work_budget_seconds = 1800

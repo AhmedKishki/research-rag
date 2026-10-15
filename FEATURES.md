@@ -11,7 +11,7 @@
 
 | UltraRAG capability | Used | What this app does |
 |---|---|---|
-| GPT-2 token chunking (`corpus_chunk_documents`) | Compatible direct implementation | Splits extraction units through Chonkie with the same token windows and overlap. Each unit keeps its own durable output. |
+| GPT-2 token chunking (`corpus_chunk_documents`) | Compatible direct implementation | Splits extraction units through Chonkie with the same token windows and overlap. Each batch of units keeps one durable output, in unit order. |
 | BM25 index and search (`retriever_retriever_init`, `retriever_bm25_index`, `retriever_bm25_search`) | Compatible direct implementation | Supplies the lexical half on CPU through the pinned bm25s fork, with the same saved index layout and stopword semantics. |
 | FAISS, Qdrant, Milvus backends (`retriever_init(index_backend=...)`) | No | Replaced by FastEmbed CPU embeddings with an exact scan of portable vectors, or an embedded Qdrant collection. |
 | Reranking (`reranker_init`, `reranker_rerank`) | No | Replaced by a FastEmbed CPU cross-encoder. |
