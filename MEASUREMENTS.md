@@ -172,6 +172,14 @@ uv run python scripts/evaluate_retrieval.py --project /mnt/data/my-project \
 - Both are runtime settings and apply at the next search.
 - Neither is a back-matter filter. An index line is as short as a one-line paragraph, and only the query tells them apart. A corpus whose answers are table rows, catalogue entries, or bibliography lines would lose evidence a judged set cannot detect. Both ship off, and the value belongs in a project's own configuration.
 
+### The apparatus filter
+
+- A reference list, citation-only notes, a back-of-book index, and a copyright page hold the names, titles, and years a query asks about and no argument to cite. They win most often when the corpus holds no answer. The reranker scores them as relevant whenever a title matches, so it cannot separate them from argument.
+- `retrieval.exclude_apparatus` drops a candidate whose lookup verdict carries the apparatus bit, before fusion, in both halves. It is a runtime setting and applies at the next search.
+- `src/research_rag/corpus/text_quality.py::apparatus_kind` reads the passage's own text. A passage nearly without argument grammar is judged by structure: citation markers among mostly capitalised words, page lists, or copyright boilerplate. Twenty words of argument sentences or six measurements keep it.
+- The verdict judges form, not meaning. A note that makes its claim inside a citation is filtered with the citation. A known-item score cannot detect that loss, because only the designated passage is judged.
+- The filter ships off, and the value belongs in a project's own configuration.
+
 ### The lexical abstention gate
 
 - The gate drops a lexical candidate that shares no query token outside the corpus language's function-word set. `how?`, `why not?`, and `what does it do?` abstain instead of matching a passage that contains the word they asked with.
@@ -370,3 +378,29 @@ Counts and MRR credit only the designated target chunk in the final top ten, wit
 - The separate blinded page-fidelity model review inspected all 17 supplied full-page renders and saved `preprocessing-fidelity-judgments.json` before reading the per-page arm mapping. Preferences are custom four, Docling two, mixed eight and tie three; these are ordinal model judgments, not human annotations or retrieval scores.
 - Custom shows advantages in visible opening coverage, title order and a causal contrast. Docling shows advantages in footnote qualifications, author attribution and column order. Both have diagram-structure defects, a footnote-interrupted sentence and a chemical-formula letter-to-digit substitution. Central negations survive; no differential negation reversal was observed.
 - Findings concern serialized page packets, not proven exclusion from retrievable evidence. Off-page unit continuations remain unverified except across the supplied consecutive Gorski pages; no exhaustive character transcription was performed. These qualitative mechanism tradeoffs establish no overall source-quality winner.
+
+## Apparatus filter check (2026-10-15)
+
+- Protocol: `evaluation/README.md`; offline schema-3 reports with `retrieval.exclude_apparatus` off and on, set through `RESEARCH_RAG_RETRIEVAL_EXCLUDE_APPARATUS`, harness revision `eedf889bdb29cf3c3e3674e96fe4321a47781300`. Private reports remain outside Git.
+- Generation `20261015T115252Z-844e93b9` holds 151 documents and 56,193 chunks. The project profile sets word floor 12, token fraction 0.1, and source-diversity penalty 0.25, with the pinned BGE-small-en-v1.5 embedder and MiniLM-L-6-v2 reranker.
+- 10,012 passages carry the apparatus verdict. The length floors already drop 5,147 of them, so the filter newly removes 4,865 of the 39,479 returnable passages (12.3%): 3,911 bibliography, 944 index, and 10 front matter.
+- One annotator hand-checked 193 flagged passages on the preceding generation, stratified by verdict and by distance from the thresholds. None was argument text. Three were borderline: a note quoting its source, photo captions, and a note cut off mid-sentence. A uniform sample of 30 flags was correct in all 30.
+- Thirty known-item queries cover 18 targets with `--skip-targets t12`. No designated target carries the verdict. With the filter on, the run rejected 366 lexical and 381 dense candidates as apparatus.
+
+| Mode, top-k 10 | Filter | Success@1 | Success@10 | Document@10 | MRR | nDCG@10 |
+|---|---|---:|---:|---:|---:|---:|
+| BM25 | off | 56.7% | 80.0% | 86.7% | 0.643 | 0.681 |
+| BM25 | on | 56.7% | 83.3% | 90.0% | 0.646 | 0.691 |
+| Dense | off | 33.3% | 56.7% | 63.3% | 0.401 | 0.441 |
+| Dense | on | 33.3% | 56.7% | 63.3% | 0.401 | 0.441 |
+| Hybrid | off | 60.0% | 76.7% | 86.7% | 0.643 | 0.672 |
+| Hybrid | on | 60.0% | 80.0% | 90.0% | 0.647 | 0.682 |
+| Hybrid + rerank | off | 76.7% | 83.3% | 90.0% | 0.788 | 0.799 |
+| Hybrid + rerank | on | 76.7% | 83.3% | 90.0% | 0.788 | 0.799 |
+
+- The hybrid top-k 50 pass reached 93.3% designated-passage success either way; its MRR moved from 0.676 to 0.678.
+- Sixty questions kept in the project's search history and 25 off-topic questions ran at top-k 10 with reranking, uncounted, with the filter off and on.
+  - Apparatus fell from 3.5% of the kept questions' hits to none, and from 7.2% of the off-topic hits to none.
+  - For the kept questions, 21 flagged passages left the top ten and 30 passages entered. Three first hits changed, each from a reference entry to argument; one now opens on the cited article itself rather than another book's entry for it.
+  - Nine unflagged passages left. Two had no reranker score because they sat beyond the scored window. The other seven scored a median of −4.2 against the entrants' median of −0.9; one of them, a second passage from a source still ranked first, left through the diversity rule.
+- This shows no loss on the judged targets and no reference entries in the measured results. A known-item set cannot see a filtered passage that carried a claim of its own, so it does not establish that nothing of value was lost. The setting stays off by default.
