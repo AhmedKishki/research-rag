@@ -39,6 +39,7 @@ source_diversity_penalty = 0.25
 dense_relative_similarity_margin = 0.10
 minimum_passage_words = 0
 minimum_passage_token_fraction = 0.0
+exclude_apparatus = false
 
 [chunking]
 size = 384

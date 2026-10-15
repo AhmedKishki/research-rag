@@ -18,12 +18,17 @@ from pathlib import Path
 from typing import Any
 
 from ..corpus.sources import sha256_file
-from ..corpus.text_quality import chunk_health_flags
+from ..corpus.text_quality import (
+    CHUNK_FLAG_APPARATUS,
+    CHUNK_FLAGS_UNREADABLE,
+    chunk_health_flags,
+)
 from ..storage.durable_io import file_identity, fsync_file, replace_durably
 
 # Key under which a loaded chunk record carries its stored rejection verdict.
 LOOKUP_HEALTH_FLAGS_KEY = "_lookup_health_flags"
-LOOKUP_SCHEMA_VERSION = 3
+# Version 4 stores the apparatus bit, so a lookup built before it is rebuilt.
+LOOKUP_SCHEMA_VERSION = 4
 LOOKUP_RELATIVE_PATH = Path("indexes") / "artifact-lookup.sqlite3"
 _SQL_BATCH_SIZE = 500
 
@@ -351,6 +356,31 @@ def _lookup_is_current(
         return False
 
 
+def current_apparatus_chunk_count(
+    generation_root: Path, files: Mapping[str, Any]
+) -> int | None:
+    """How many passages carry the apparatus verdict, or `None` without a lookup.
+
+    A status read must not build a lookup, so a missing or stale sidecar answers
+    nothing here; the next search builds it.
+    """
+
+    try:
+        chunks_path = generation_root / str(files["chunks"])
+        units_path = generation_root / str(files["extracted_units"])
+    except KeyError:
+        return None
+    lookup_path = generation_root / LOOKUP_RELATIVE_PATH
+    if not _lookup_is_current(chunks_path, units_path, lookup_path):
+        return None
+    try:
+        return ArtifactLookup(
+            chunks_path, units_path, lookup_path
+        ).apparatus_chunk_count()
+    except (ArtifactLookupError, sqlite3.DatabaseError):
+        return None
+
+
 def ensure_artifact_lookup(
     chunks_path: Path,
     units_path: Path,
@@ -452,6 +482,17 @@ class ArtifactLookup:
                     "SELECT document_id, SUM(byte_length) FROM units GROUP BY document_id"
                 )
             }
+
+    def apparatus_chunk_count(self) -> int:
+        """How many passages carry the apparatus verdict, read from the index alone."""
+
+        with self._connect() as connection:
+            return int(
+                connection.execute(
+                    "SELECT COUNT(*) FROM chunks "
+                    f"WHERE (health_flags & {CHUNK_FLAG_APPARATUS}) != 0"
+                ).fetchone()[0]
+            )
 
     def chunk_counts_by_document(self) -> dict[str, int]:
         """How many passages each document holds, read from the index alone."""
@@ -580,12 +621,15 @@ class ArtifactLookup:
     ) -> list[dict[str, Any]]:
         """One passage and up to `radius` retrievable neighbours on each side.
 
-        A neighbour is retrievable when its stored verdict carries no flag, so
-        the window is read from the index without scanning the document.
+        A neighbour is readable when its stored verdict carries no unreadable
+        flag, so the window is read from the index without scanning the document.
+        An apparatus neighbour is readable: the filter decides what a search
+        returns, not what a reader sees around a passage.
         """
 
         query = (
-            "SELECT * FROM chunks WHERE document_id = ? AND health_flags = 0 "
+            "SELECT * FROM chunks WHERE document_id = ? "
+            f"AND (health_flags & {CHUNK_FLAGS_UNREADABLE}) = 0 "
             "AND document_chunk_index {} ? ORDER BY document_chunk_index {} LIMIT ?"
         )
         with self._connect() as connection:

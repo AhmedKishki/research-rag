@@ -103,7 +103,8 @@
 | Pseudo-relevance feedback | `retrieval.prf` mines terms from the lexical leaders of a first pass and searches again with them, weighted by rarity across the generation. Off by default. |
 | Relevance gates with abstention | Weak candidates are dropped, so a search can return fewer than `top_k` results, including none. A dense candidate below the cosine floor is still admitted when the query's best candidate cleared the floor and this one is within `retrieval.dense_relative_similarity_margin` of it. The full-detail payload reports each gate's rejected count, the best similarity, and the sources the floor dropped. |
 | Minimum passage length | `retrieval.minimum_passage_words` and `retrieval.minimum_passage_token_fraction` drop short candidates before fusion in each half. Both are off by default. The full-detail payload reports the rules, counts, and dropped sources. |
-| Precomputed usability verdict | Whether a candidate is structurally unusable is computed once when the lookup is built and stored per chunk. |
+| Apparatus filter | `retrieval.exclude_apparatus` drops reference lists, citation-only notes, back-of-book indexes, and copyright pages before fusion in each half. Each passage is judged from its own text; one holding twenty words of argument sentences or a table of measurements is kept. Off by default. The full-detail payload reports the counts per half, and `status` reports how many passages carry the verdict. |
+| Precomputed usability verdict | Whether a candidate is structurally unusable or scholarly apparatus is computed once when the lookup is built and stored per chunk. |
 | Evaluation harnesses | A judged query set and a harness that measures each retrieval mode through the engine the tools call. Build and latency harnesses use the same direct backend, models, and service. Historical gateway measurements do not establish direct-backend performance or retrieval quality. |
 
 ### Project model, review, and durability

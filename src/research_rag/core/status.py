@@ -49,6 +49,7 @@ from ..project.policy import (
     reflowable_document_is_current,
     value_fingerprint,
 )
+from ..retrieval.artifact_lookup import current_apparatus_chunk_count
 from ..retrieval.documents import (
     _metadata_snapshot_changed,
     _normalized_filter,
@@ -645,6 +646,10 @@ class StatusWorkflow:
             "excluded_chunk_count": len(chunk_exclusions),
             "chunk_exclusion_other_generation_count": absent_chunk_exclusions,
             "chunk_count": manifest["chunk_count"],
+            "exclude_apparatus": self.config.settings.exclude_apparatus,
+            "apparatus_chunk_count": current_apparatus_chunk_count(
+                generation_root, manifest.get("files") or {}
+            ),
             "categories": _metadata_inventory(
                 effective_documents,
                 excluded_document_ids,
