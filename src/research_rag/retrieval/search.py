@@ -29,7 +29,6 @@ from .dense import DenseSearchHit, RerankerUnavailable
 from .documents import (
     _document_for_chunk,
     _document_matches_metadata,
-    _effective_documents,
     _normalized_filter,
     _public_document,
     _public_passage,
@@ -1097,7 +1096,7 @@ class SearchWorkflow:
             total_chunk_count = await asyncio.to_thread(lookup.chunk_count)
             if not total_chunk_count:
                 raise ResearchError("The current generation has no chunks")
-            documents_by_id = _effective_documents(manifest, self._metadata())
+            documents_by_id = self._reviewed_documents(manifest)
             exclusions = self._source_exclusions()
             excluded_document_ids = self._excluded_document_ids(manifest, exclusions)
             # A chunk id is derived from content, so the same passage keeps it
@@ -1630,7 +1629,7 @@ class SearchWorkflow:
             generation_root, manifest = current
             lease.hold(str(manifest["generation_id"]))
             lookup = await self._ensure_artifact_lookup(generation_root, manifest)
-            documents_by_id = _effective_documents(manifest, self._metadata())
+            documents_by_id = self._reviewed_documents(manifest)
             target = (await asyncio.to_thread(lookup.chunks_by_ids, [chunk_id])).get(
                 chunk_id
             )

@@ -22,8 +22,7 @@ from pathlib import Path
 from typing import Any
 
 from ..corpus.pdf_backend import (
-    pdf_backend_available,
-    pdf_backend_fingerprint,
+    available_pdf_backend_record,
     recorded_pdf_backend_fingerprint,
 )
 from ..corpus.sources import (
@@ -51,7 +50,6 @@ from ..project.policy import (
     value_fingerprint,
 )
 from ..retrieval.documents import (
-    _effective_documents,
     _metadata_snapshot_changed,
     _normalized_filter,
 )
@@ -60,6 +58,32 @@ from .source_inventory import exclusion_records
 from .version import version_block
 
 LOGGER = logging.getLogger(__name__)
+
+
+def _foreign_project(config: ResearchConfig, manifest: dict[str, Any]) -> bool:
+    return manifest.get("project_id") != config.project_id
+
+
+def _embedding_mismatch(config: ResearchConfig, manifest: dict[str, Any]) -> bool:
+    """Whether the generation's vectors cannot be scored with the current model.
+
+    Legacy BM25-only generations have no embedding identity. A generation that
+    advertises dense retrieval must record a matching identity before queries can
+    be embedded against its vectors, including when that block is missing.
+    """
+
+    retrieval = manifest.get("retrieval", {})
+    dense_policy = retrieval.get("dense")
+    has_dense = bool(
+        {"dense", "hybrid"} & set(retrieval.get("available_methods") or [])
+    )
+    return bool(
+        (dense_policy or has_dense)
+        and (
+            not isinstance(dense_policy, dict)
+            or not config.settings.embedding_facts.matches_dense_metadata(dense_policy)
+        )
+    )
 
 
 def generation_policy_differences(
@@ -76,7 +100,6 @@ def generation_policy_differences(
     """
 
     retrieval = manifest.get("retrieval", {})
-    dense_policy = retrieval.get("dense")
     fusion_policy = retrieval.get("fusion", {})
     relevance_policy = retrieval.get("relevance_gates", {})
     reasons: list[str] = []
@@ -99,8 +122,10 @@ def generation_policy_differences(
         for item in source_files
         if isinstance(item, dict)
     )
-    if has_pdf and pdf_backend_available(config.settings.pdf_backend, config):
-        current_backend = pdf_backend_fingerprint(config.settings.pdf_backend, config)
+    if has_pdf and (
+        record := available_pdf_backend_record(config.settings.pdf_backend, config)
+    ):
+        current_backend = record["fingerprint"]
         documents = manifest.get("documents")
         pdf_documents = (
             [
@@ -132,18 +157,9 @@ def generation_policy_differences(
         reasons.append("generation_artifacts")
     if manifest.get("metadata_storage_policy") != METADATA_STORAGE_POLICY:
         reasons.append("metadata_storage")
-    if manifest.get("project_id") != config.project_id:
+    if _foreign_project(config, manifest):
         reasons.append("project_identity")
-    # Legacy BM25-only generations have no embedding identity. A generation that
-    # advertises dense retrieval must record a matching identity before queries
-    # can be embedded against its vectors, including when that block is missing.
-    has_dense = bool(
-        {"dense", "hybrid"} & set(retrieval.get("available_methods") or [])
-    )
-    if (dense_policy or has_dense) and (
-        not isinstance(dense_policy, dict)
-        or not config.settings.embedding_facts.matches_dense_metadata(dense_policy)
-    ):
+    if _embedding_mismatch(config, manifest):
         reasons.append("embedding_model")
     if (
         manifest.get("retrieval_policy_fingerprint") != policy_fingerprint
@@ -169,13 +185,21 @@ def generation_upgrade_reasons(
     A recorded policy describes how immutable evidence was built. A newer policy
     does not make that evidence unreadable. Query vectors, however, must match
     the stored embedding identity; incompatible dense retrieval is never served.
+
+    Every search asks this, so it checks the two serving facts alone, and the
+    whole comparison is made only for the DEBUG line that reports it.
     """
-    differences = generation_policy_differences(config, manifest, policy_fingerprint)
     required = [
         reason
-        for reason in differences
-        if reason in {"embedding_model", "project_identity"}
+        for reason, applies in (
+            ("project_identity", _foreign_project(config, manifest)),
+            ("embedding_model", _embedding_mismatch(config, manifest)),
+        )
+        if applies
     ]
+    if not LOGGER.isEnabledFor(logging.DEBUG):
+        return required
+    differences = generation_policy_differences(config, manifest, policy_fingerprint)
     LOGGER.debug(
         "Generation %s compatibility: recorded_schema=%s current_schema=%s "
         "recorded_extraction=%s current_extraction=%s recorded_cleaning=%s "
@@ -586,7 +610,7 @@ class StatusWorkflow:
                 "derived from content, so read each one against the current search "
                 "before relying on it, and no ingestion restores a removed chunk."
             )
-        effective_documents = _effective_documents(manifest, metadata)
+        effective_documents = self._reviewed_documents(manifest)
         if skipped_count:
             status_message += (
                 f" The selected generation is partial: {skipped_count} sources were "

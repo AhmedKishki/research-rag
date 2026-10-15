@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
+import logging
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -23,7 +25,7 @@ from ..retrieval.dense import (
     LocalQdrantDenseBackend,
     LocalVectorDenseBackend,
 )
-from ..retrieval.documents import _canonical_metadata_override
+from ..retrieval.documents import _canonical_metadata_override, _effective_documents
 from ..retrieval.lexical import LexicalBackend
 from ..retrieval.search import SearchWorkflow
 from ..storage.durable_io import StorageError, read_json
@@ -38,6 +40,8 @@ from .records import (
 from .review import ReviewWorkflow
 from .stats import StatsWorkflow
 from .status import StatusWorkflow
+
+LOGGER = logging.getLogger(__name__)
 
 # How long a caller waits for another process's project lock before it is told the
 # project is busy. Waiting longer does not help: an MCP client gives up long before
@@ -154,6 +158,14 @@ class ResearchService(
         # Digests of sources whose mtime drifted, keyed by path and file identity,
         # so `status` hashes a drifted source once rather than on every search.
         self._drift_digests: dict[Path, tuple[tuple[int, int, int, int], str]] = {}
+        # The reviewed metadata as (file digest, normalized entries), and a
+        # generation's documents with it overlaid as ((generation id, digest),
+        # documents). Both are rebuilt when the file's bytes change, so a hand edit
+        # reaches the next read.
+        self._metadata_cache: tuple[str, dict[str, dict[str, Any]]] | None = None
+        self._documents_cache: (
+            tuple[tuple[str, str], dict[str, dict[str, Any]]] | None
+        ) = None
 
     @asynccontextmanager
     async def _operation(self, *, busy_command: str = "") -> AsyncIterator[None]:
@@ -328,16 +340,85 @@ class ResearchService(
     def _dense_for(self, manifest: dict[str, Any] | None) -> DenseBackend:
         return self._dense_backends[self._dense_backend_name(manifest)]
 
-    def _metadata(self) -> dict[str, dict[str, Any]]:
+    def _metadata_digest(self) -> str:
+        try:
+            return hashlib.sha256(self.config.metadata_path.read_bytes()).hexdigest()
+        except FileNotFoundError:
+            return ""
+
+    def _metadata_entries(self) -> tuple[str | None, dict[str, dict[str, Any]]]:
+        """The reviewed metadata, normalized, and the digest it is kept against.
+
+        Normalizing every entry costs more than a search's lexical half, and the
+        file changes only when a source is reviewed, so the entries are kept
+        against the digest of the bytes they were read from. A file replaced while
+        it was read has no digest and is not kept. The entries are shared.
+        """
+
+        digest = self._metadata_digest()
+        if self._metadata_cache is not None and self._metadata_cache[0] == digest:
+            return self._metadata_cache
         try:
             values = load_metadata_overrides(self.config.metadata_path)
             normalized = {
                 key: _canonical_metadata_override(value)
                 for key, value in values.items()
             }
-            return {key: value for key, value in normalized.items() if value}
         except (StorageError, SourcePolicyError) as exc:
             raise ResearchError(str(exc)) from exc
+        entries = {key: value for key, value in normalized.items() if value}
+        if self._metadata_digest() != digest:
+            return None, entries
+        self._metadata_cache = (digest, entries)
+        return self._metadata_cache
+
+    def _metadata(self) -> dict[str, dict[str, Any]]:
+        """The reviewed metadata, normalized, as a copy the caller may edit."""
+
+        return {
+            key: {
+                field: list(value) if isinstance(value, list) else value
+                for field, value in entry.items()
+            }
+            for key, entry in self._metadata_entries()[1].items()
+        }
+
+    def _reviewed_documents(
+        self, manifest: dict[str, Any]
+    ) -> dict[str, dict[str, Any]]:
+        """A generation's documents with the current reviewed metadata overlaid.
+
+        Kept per generation and metadata digest, and shared between callers, so a
+        caller reads the documents and never edits one.
+        """
+
+        digest, metadata = self._metadata_entries()
+        if digest is None:
+            return _effective_documents(manifest, metadata)
+        key = (str(manifest.get("generation_id") or ""), digest)
+        if self._documents_cache is None or self._documents_cache[0] != key:
+            self._documents_cache = (key, _effective_documents(manifest, metadata))
+        return self._documents_cache[1]
+
+    async def warm_lexical(self) -> None:
+        """Load the selected generation's lexical index and compile its search.
+
+        bm25s compiles its retrieval with Numba on a process's first query, which
+        takes seconds. The app runs this once it serves, so the first search finds
+        the index loaded and compiled. A project without a generation has nothing
+        to warm.
+        """
+
+        try:
+            async with self._read() as lease:
+                current = self._load_current_optional()
+                if current is None:
+                    return
+                lease.hold(str(current[1]["generation_id"]))
+                async with self._retriever(*current):
+                    await self.lexical.search_bm25("warm", 1)
+        except Exception as exc:  # noqa: BLE001 - the first search reports this failure
+            LOGGER.debug("lexical warm-up did not run: %s", exc)
 
     def _source_exclusions(self) -> dict[str, dict[str, str]]:
         try:

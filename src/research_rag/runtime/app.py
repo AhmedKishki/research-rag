@@ -821,9 +821,15 @@ class App:
                 mcp_http.router.lifespan_context(mcp_http),
                 workspace.router.lifespan_context(workspace),
             ):
+                # Once the app serves, the selected index is loaded and its search
+                # compiled, so the first reader's search waits for neither.
+                warm_up = asyncio.create_task(self.service.warm_lexical())
                 try:
                     yield
                 finally:
+                    warm_up.cancel()
+                    with contextlib.suppress(asyncio.CancelledError):
+                        await warm_up
                     await self.lexical.aclose()
 
         return Starlette(

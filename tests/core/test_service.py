@@ -901,6 +901,30 @@ def test_search_can_skip_the_staleness_walk(
     asyncio.run(_assert_search_can_skip_the_staleness_walk(project, monkeypatch))
 
 
+async def _assert_warm_up_loads_the_selected_lexical_index(project: Path) -> None:
+    config = resolve_config(project, vanilla_executable=sys.executable)
+    empty = ResearchService(config, FakeUltraRAG(), dense=FakeDenseBackend())  # type: ignore[arg-type]
+    await empty.warm_lexical()
+    assert empty.lexical.initialized is None
+
+    write_pdf(project / "sources" / "article.pdf", ["Cobalt evidence about labour."])
+    built = await empty.ingest(chunk_size=100, chunk_overlap=10)
+
+    # A restarted app holds nothing until it warms or a search loads the index.
+    restarted = ResearchService(config, FakeUltraRAG(), dense=FakeDenseBackend())  # type: ignore[arg-type]
+    await restarted.warm_lexical()
+    generation_root = Path(built["generation_root"])
+    assert restarted.lexical.initialized == (
+        generation_root / "chunks" / "chunks.jsonl",
+        generation_root / "indexes" / "bm25",
+    )
+    assert restarted._loaded_generation == built["generation_id"]
+
+
+def test_warm_up_loads_the_selected_lexical_index(project: Path) -> None:
+    asyncio.run(_assert_warm_up_loads_the_selected_lexical_index(project))
+
+
 def test_foreign_generation_is_refused_before_loading_artifacts(
     project: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
