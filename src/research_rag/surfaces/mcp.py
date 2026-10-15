@@ -635,9 +635,9 @@ def create_mcp(
         """Exclude a source from retrieval, or restore one, without touching the file.
 
         Record a decision only after you or the user has reviewed the source, and
-        give an exclusion its reason. The decision binds current retrieval at
-        once and the next ingestion. Re-ingest to drop an excluded source
-        physically.
+        give an exclusion its reason. The decision binds retrieval at once, and an
+        excluded source is never ingested. Its data stays in the generation
+        until the user uningests it from the command line.
         """
 
         return _present(

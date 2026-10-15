@@ -139,6 +139,8 @@ generations/<generation-id>/
 - `passage_cleaning.maximum_unclean_percent` records the per-document substantive-loss cap. The name is preserved; its meaning is the share of a PDF's substantive text it may lose to unrecoverable corruption. Extraction reuse requires the same threshold.
 - Recorded policies describe the generation's build; a different current policy does not rewrite its manifest.
 - Historical UltraRAG-compatible backend labels remain readable identifiers. Dependency retirement changes no chunk boundaries, index layout, source/chunk IDs, or policy fingerprints and does not trigger ingestion.
+- `source_files` records each source the generation holds, with the bytes its document was built from, and each excluded file. A source carried from bytes that have changed since keeps its old record, so `status` reports it modified; a source neither held nor excluded is absent, so `status` reports it added.
+- `build_metrics.source_selection` names the sources a build read or took out when it named them; a build of every source has none.
 - A PDF document's `extraction_backend` identifies the extractor that produced its retained text. A generation can contain unchanged legacy PDF artifacts beside new Docling artifacts; its configured backend describes new extraction, not a conversion of every document.
 - An EPUB or MOBI document's `reflowable_extraction_policy_version` records the HTML reading rules that produced its units. A record without the field was read under version 1.
 - New Docling units retain `docling_label`, `docling_content_layer`, and `docling_ref` beside their provenance. These guide pre-chunk filtering and are not quotation offsets.
@@ -235,7 +237,8 @@ generations/<generation-id>/
 
 - An exclusion is explicit, reversible, and enforced at once by every retrieval surface.
 - It never touches the source file.
-- Re-ingesting omits the excluded source from new indexes.
+- An excluded source is never ingested, and an exclusion never makes the generation stale.
+- Data a generation already holds for an excluded source stays in later generations, filtered from every search, until `uningest` takes it out.
 - Nothing duplicates or excludes a file automatically.
 
 ### chunk-exclusions.json

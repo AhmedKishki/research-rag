@@ -30,8 +30,8 @@ HELP_GROUPS: tuple[tuple[str, tuple[tuple[str, str], ...]], ...] = (
                 "ingest",
                 (
                     "Extract, chunk, embed, and index the PDFs, EPUBs and MOBIs in the "
-                    "sources directory. Call it again to resume a build that ran "
-                    "out of time."
+                    "sources directory, or only the sources named. Call it again to "
+                    "resume a build that ran out of time."
                 ),
             ),
         ),
@@ -119,6 +119,14 @@ HELP_GROUPS: tuple[tuple[str, tuple[tuple[str, str], ...]], ...] = (
             (
                 "include",
                 "Put an excluded source or passage back into retrieval.",
+            ),
+            (
+                "uningest",
+                (
+                    "Take sources' chunks and data out of the generation. The files "
+                    "stay, and an ingest of every source reads them again unless "
+                    "they are excluded."
+                ),
             ),
         ),
     ),

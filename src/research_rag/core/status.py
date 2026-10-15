@@ -493,12 +493,28 @@ class StatusWorkflow:
         manifest_source_files = manifest.get("source_files")
         if not isinstance(manifest_source_files, list):
             manifest_source_files = manifest.get("documents", [])
-        current_documents = {
-            str(item["source_relative_path"]): item for item in manifest_source_files
+        # Stale means an ingest of every source would change the generation. An
+        # excluded source is never read, so it never makes the generation stale:
+        # the exclusion filters it at query time, and only `uningest` takes its
+        # data out.
+        held_paths = {
+            str(document.get("source_relative_path") or "")
+            for document in manifest.get("documents", [])
         }
-        scanned = {item.source_relative_path: item for item in scan.selected}
+        current_documents = {
+            relative: item
+            for item in manifest_source_files
+            if (relative := str(item["source_relative_path"])) in held_paths
+            and relative not in exclusions
+        }
+        on_disk = {item.source_relative_path: item for item in scan.selected}
+        scanned = {
+            relative: item
+            for relative, item in on_disk.items()
+            if relative not in exclusions
+        }
         added = sorted(set(scanned) - set(current_documents))
-        removed = sorted(set(current_documents) - set(scanned))
+        removed = sorted(set(current_documents) - set(on_disk))
         modified: list[str] = []
         for relative in sorted(set(scanned) & set(current_documents)):
             source = scanned[relative]
@@ -521,9 +537,7 @@ class StatusWorkflow:
             else bool(exclusions)
         )
         skipped_count = skipped_source_count(manifest)
-        stale = bool(
-            added or removed or modified or source_exclusions_changed or skipped_count
-        )
+        stale = bool(added or removed or modified or skipped_count)
         retrieval = manifest.get("retrieval", {})
         upgrade_reasons = self._generation_upgrade_reasons(manifest)
         # The dense vectors were embedded by the model the generation recorded.
@@ -571,11 +585,6 @@ class StatusWorkflow:
                 "A new generation is in progress; the selected generation remains "
                 "searchable. Call ingest again with the same settings to continue."
             )
-        elif source_exclusions_changed:
-            status_message = (
-                "Source exclusions are enforced immediately by retrieval; the "
-                "selected generation remains available without ingestion."
-            )
         elif embedding_incompatible:
             status_message = (
                 "The selected generation was built with a different embedding "
@@ -587,6 +596,11 @@ class StatusWorkflow:
             status_message = (
                 "Source files differ from the selected generation. Existing indexed "
                 "evidence remains searchable; ingest only to update the source snapshot."
+            )
+        elif source_exclusions_changed:
+            status_message = (
+                "Source exclusions are enforced immediately by retrieval; the "
+                "selected generation remains available without ingestion."
             )
         elif metadata_pending_source_paths:
             status_message = (

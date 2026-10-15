@@ -104,7 +104,9 @@
   - Chunk IDs can change with text or chunking. Document and chunk IDs need not survive incompatible generations.
 - Activate `current.json` only after complete indexing and validation of both BM25 and dense artifacts in the same generation.
 - Honor hand-edited review state. Reject unknown fields, wrong types, and non-normalized paths explicitly.
-- Apply reviewed metadata and passage exclusions at read time, without rewriting artifacts or marking them `stale`.
+- Apply reviewed metadata and source and passage exclusions at read time, without rewriting artifacts or marking the generation `stale`.
+  - An excluded source is never ingested. Data a generation already holds for it is carried into later generations, filtered from every search.
+  - Only `uningest` takes a source's chunks and data out of a generation. Its file, reviewed metadata, and exclusion stay.
 - Keep source and passage exclusions explicit, reversible, project-local, and consistent across surfaces.
   - Do not guess duplicates automatically.
   - Report unmatched passage exclusions in `status`. `requires` must not prescribe `ingest` to recover a removed chunk.
@@ -131,7 +133,9 @@
   - Record each PDF's actual extractor when a build mixes retained legacy artifacts with new Docling output. Never relabel a selected generation or claim its target backend produced every retained document.
   - Decide extraction/chunk reuse and vector reuse independently. A processing change must not discard a valid exact-input vector, and a model change must not discard compatible extracted text.
   - Vector reuse also requires exact canonical text, model revision, and dimension.
-  - `force_recompute=True` disables all reuse.
+  - `force_recompute=True` disables all reuse for the sources a build reads. A source a build carries is never read.
+- `ingest` reads every source that is not excluded, or only the sources the command line names; a build that names sources carries every other held source as it is, and records the bytes it was built from.
+  - Naming sources and `uningest` are command-line only. The agent's `ingest` builds every source.
 - Dispatch dense backends from the manifest. Never substitute one during reuse.
 - A source-local PDF/EPUB/MOBI extraction failure omits that source from a validated partial generation when at least one source remains. Retain the partial generation without selecting it; disclose the omission, mark a selected partial generation stale, and retry omitted sources on ordinary ingestion. Other failures preserve the selected generation.
 

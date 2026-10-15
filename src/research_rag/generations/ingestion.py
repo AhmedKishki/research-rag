@@ -8,7 +8,7 @@ import shutil
 import time
 import uuid
 from collections import Counter, defaultdict
-from collections.abc import Iterable, Iterator
+from collections.abc import Iterable, Iterator, Mapping
 from dataclasses import dataclass, field
 from functools import cached_property
 from pathlib import Path
@@ -97,7 +97,7 @@ from .generation import (
     ReuseSnapshot,
     generation_artifacts_are_valid,
     load_reuse_snapshot,
-    source_set_matches,
+    selection_matches,
 )
 from .staging import (
     _checkpoint_identity,
@@ -162,6 +162,43 @@ def _staged_chunk_census(chunks_path: Path) -> dict[str, Any]:
         "dense_truncated_chunk_count": truncated,
         "maximum_embedding_token_count": maximum,
     }
+
+
+def _selected_sources(
+    scan: SourceScan,
+    exclusions: Mapping[str, Any],
+    held: frozenset[str],
+    selection: dict[str, Any] | None,
+) -> tuple[list[str], list[str]]:
+    """The sources a build's generation will hold, and those it carries unread.
+
+    A build of every source reads each one that is not excluded, and carries an
+    excluded one the selected generation already holds: an exclusion filters what
+    a search returns and never takes data out of a generation. A build of named
+    sources reads those and carries the rest of what is held; one that takes
+    sources out carries everything held but them. A source whose file is gone
+    leaves every build.
+    """
+
+    named = set(selection["source_paths"]) if selection is not None else set()
+    mode = selection["mode"] if selection is not None else None
+    selected: list[str] = []
+    for source in scan.selected:
+        relative = source.source_relative_path
+        if mode is None:
+            keep = relative not in exclusions or relative in held
+        elif mode == "ingest":
+            keep = relative in named or relative in held
+        else:
+            keep = relative in held and relative not in named
+        if keep:
+            selected.append(relative)
+    carried = [
+        relative
+        for relative in selected
+        if (relative in exclusions if mode is None else relative not in named)
+    ]
+    return selected, carried
 
 
 def _chunking_outputs(directory: Path) -> list[tuple[int, int, Path]]:
@@ -244,6 +281,25 @@ class _Build:
     def selected_paths(self) -> list[str]:
         return [str(item) for item in self.checkpoint["selected_source_paths"]]
 
+    @cached_property
+    def carried(self) -> frozenset[str]:
+        """Sources the build keeps exactly as the selected generation holds them."""
+
+        return frozenset(self.checkpoint.get("carried_source_paths") or ())
+
+    def forced(self, relative: str) -> bool:
+        """Whether this source is read again with every reuse disabled."""
+
+        return self.force_recompute and relative not in self.carried
+
+    @cached_property
+    def forced_source_ids(self) -> frozenset[str]:
+        return frozenset(
+            self.sources_by_path[relative].source_id
+            for relative in self.selected_paths
+            if self.forced(relative) and relative in self.sources_by_path
+        )
+
     def budget_expired(self) -> bool:
         return time.perf_counter() >= self.deadline
 
@@ -266,16 +322,36 @@ class _Build:
             (path for path in self.selected_paths if path not in completed), None
         )
 
-    def source_records(self) -> list[dict[str, Any]]:
+    def recorded_sources(
+        self, documents: Mapping[str, dict[str, Any]]
+    ) -> list[dict[str, Any]]:
+        """The source records a generation keeps: what it holds, and the excluded.
+
+        A source a generation does not hold and does not exclude is left out, so
+        `status` reports it as not yet ingested. A source carried from bytes that
+        have changed since keeps the record those bytes had, so `status` reports
+        it as modified.
+        """
+
         digests = self.checkpoint["source_digests"]
-        return [
-            {
-                **record,
-                "sha256": str(digests[record["source_relative_path"]]),
-                "included": record["source_relative_path"] not in self.exclusions,
-            }
-            for record in self.checkpoint["source_inventory"]
-        ]
+        selected = set(self.selected_paths)
+        records: list[dict[str, Any]] = []
+        for record in self.checkpoint["source_inventory"]:
+            relative = record["source_relative_path"]
+            excluded = relative in self.exclusions
+            if relative not in selected and not excluded:
+                continue
+            kept = {**record, "sha256": str(digests[relative])}
+            document = documents.get(relative)
+            if (
+                document is not None
+                and str(document.get("sha256")) != kept["sha256"]
+                and self.snapshot is not None
+                and relative in self.snapshot.source_files
+            ):
+                kept = dict(self.snapshot.source_files[relative])
+            records.append({**kept, "included": not excluded})
+        return records
 
     def excluded_sources(self) -> list[dict[str, Any]]:
         return [
@@ -1099,9 +1175,12 @@ class IngestionWorkflow:
         chunk_size: int,
         chunk_overlap: int,
         force_recompute: bool,
+        held: frozenset[str],
+        selection: dict[str, Any] | None,
     ) -> tuple[Path, dict[str, Any]]:
         build_id = _generation_id()
         inventory = _source_inventory(scan)
+        selected, carried = _selected_sources(scan, exclusions, held, selection)
         identity = _checkpoint_identity(
             project_id=self.config.project_id,
             inventory=inventory,
@@ -1114,6 +1193,7 @@ class IngestionWorkflow:
             embedding=self.config.settings.embedding_facts,
             maximum_unclean_percent=self.config.settings.maximum_unclean_percent,
             pdf_backend_fingerprint=self._pdf_backend_fingerprint,
+            selection=selection,
         )
         now = _utc_now()
         checkpoint: dict[str, Any] = {
@@ -1133,13 +1213,11 @@ class IngestionWorkflow:
                 "chunk_headers": self.config.settings.chunk_headers,
                 "maximum_unclean_percent": self.config.settings.maximum_unclean_percent,
                 "force_recompute": force_recompute,
+                **({"selection": selection} if selection is not None else {}),
             },
             "source_inventory": inventory,
-            "selected_source_paths": [
-                source.source_relative_path
-                for source in scan.selected
-                if source.source_relative_path not in exclusions
-            ],
+            "selected_source_paths": selected,
+            "carried_source_paths": carried,
             "source_exclusion_revision": exclusion_revision,
             "source_digests": {},
             "extracted_source_paths": [],
@@ -1304,7 +1382,7 @@ class IngestionWorkflow:
         skipped = {
             item["source_relative_path"]
             for item in checkpoint.get("skipped_sources", [])
-        }
+        } | set(checkpoint.get("dropped_source_paths") or ())
         sources = [
             self._source_artifact_root(staging_root, relative)
             for relative in checkpoint["selected_source_paths"]
@@ -1496,7 +1574,7 @@ class IngestionWorkflow:
         """
 
         build = _Build(staging_root, checkpoint, scan, exclusions, current, deadline)
-        if build.force_recompute:
+        if build.force_recompute and not build.carried:
             LOGGER.debug("ingest: force_recompute disables every reuse axis")
         else:
             build.snapshot = await self._reuse_snapshot(build)
@@ -1582,9 +1660,13 @@ class IngestionWorkflow:
         snapshot = build.snapshot
         if snapshot is None:
             return None
+        # A carried source is kept as it is, so only the sources a build reads
+        # can make it read them again.
+        reading = [path for path in build.selected_paths if path not in build.carried]
         reflowable_current = all(
-            reflowable_document_is_current(document)
-            for document in snapshot.documents.values()
+            reflowable_document_is_current(snapshot.documents[path])
+            for path in reading
+            if path in snapshot.documents
         )
         if not (
             snapshot.units_reusable
@@ -1603,19 +1685,26 @@ class IngestionWorkflow:
             )
             return None
         manifest = snapshot.manifest
-        if manifest.get("build_metrics", {}).get(
-            "skipped_sources"
-        ) or not source_set_matches(
-            snapshot,
-            build.source_records(),
-            exclusion_revision=str(build.checkpoint["source_exclusion_revision"]),
-            metadata_storage_policy=METADATA_STORAGE_POLICY,
+        # A build of every source retries the ones the last build could not read.
+        retry = "selection" not in build.checkpoint["parameters"] and bool(
+            manifest.get("build_metrics", {}).get("skipped_sources")
+        )
+        digests = build.checkpoint["source_digests"]
+        if (
+            retry
+            or any(build.forced(path) for path in reading)
+            or not selection_matches(
+                snapshot,
+                selected=build.selected_paths,
+                digests={path: str(digests[path]) for path in reading},
+                metadata_storage_policy=METADATA_STORAGE_POLICY,
+            )
         ):
             # A backend switch or adapter drift alone changes how a *new* PDF
             # would be read, never the evidence already stored for an unchanged
             # source. An incremental build passes an unchanged legacy PDF through
             # whole, preserving its provenance, so the backend is not part of this
-            # gate; only the source bytes, exclusions, and storage policy are.
+            # gate; only the sources held, their bytes, and storage policy are.
             return None
         try:
             await self._validate_generation_for_activation(snapshot.root, manifest)
@@ -1713,20 +1802,38 @@ class IngestionWorkflow:
             snapshot.documents.get(staged.relative) if snapshot is not None else None
         )
         document_id = str((previous_document or {}).get("document_id") or "")
+        # A carried source is kept from whatever bytes it was built from; a source
+        # the build reads is reused only while its bytes are the same.
+        carried = staged.relative in build.carried
+        same_bytes = (
+            previous_source is not None
+            and previous_source.get("sha256")
+            == build.checkpoint["source_digests"][staged.relative]
+        )
         reusable_units = bool(
             snapshot is not None
             and snapshot.units_reusable
             and previous_source is not None
             and previous_document is not None
-            and previous_source.get("sha256")
-            == build.checkpoint["source_digests"][staged.relative]
+            and (same_bytes or carried)
+            and not build.forced(staged.relative)
             and snapshot.manifest.get("metadata_storage_policy")
             == METADATA_STORAGE_POLICY
             and document_id in snapshot.units_by_document
             # An EPUB or MOBI read under earlier HTML rules is read again; a PDF
-            # is unaffected by those rules.
-            and reflowable_document_is_current(previous_document)
+            # is unaffected by those rules, and a carried source is kept as it is.
+            and (carried or reflowable_document_is_current(previous_document))
         )
+        if not reusable_units and carried and staged.relative in build.exclusions:
+            # An excluded source is never read. One whose stored extraction this
+            # build cannot keep, after a rule or budget change, leaves the
+            # generation, and the build names it.
+            build.checkpoint.setdefault("dropped_source_paths", []).append(
+                staged.relative
+            )
+            for key in ("extracted_source_paths", "chunked_source_paths"):
+                build.checkpoint[key].append(staged.relative)
+            return await self._commit(build)
         if reusable_units and snapshot is not None and previous_document is not None:
             # Units and chunks reuse independently. A header or chunk-size change
             # keeps the units but forces the chunks to be derived again from them.
@@ -1737,6 +1844,7 @@ class IngestionWorkflow:
                 previous_document,
                 reuse_chunks=snapshot.chunks_reusable
                 and document_id in snapshot.chunks_by_document,
+                same_bytes=same_bytes,
             )
         else:
             start = {
@@ -1755,6 +1863,7 @@ class IngestionWorkflow:
         previous_document: dict[str, Any],
         *,
         reuse_chunks: bool,
+        same_bytes: bool,
     ) -> None:
         """Carry an unchanged source's extraction forward from the selected generation.
 
@@ -1764,13 +1873,15 @@ class IngestionWorkflow:
         legacy rather than re-extracted or relabelled as Docling.
         """
 
+        # The same bytes may sit in a touched file; changed bytes keep the stat of
+        # the file the document was read from.
+        stat = (
+            {"size": staged.source.size, "mtime_ns": staged.source.mtime_ns}
+            if same_bytes
+            else {}
+        )
         document = self._document_with_provenance(
-            {
-                **previous_document,
-                "size": staged.source.size,
-                "mtime_ns": staged.source.mtime_ns,
-            },
-            staged.source,
+            {**previous_document, **stat}, staged.source
         )
         # Each lookup reads fresh records, so they need no copy.
         units = await _atomic_to_thread(
@@ -2265,14 +2376,16 @@ class IngestionWorkflow:
         reuse_keys = [chunk_text(chunk) for chunk in batch]
         reusable_vectors = (
             await _atomic_to_thread(build.snapshot.vectors_for_texts, reuse_keys)
-            if build.snapshot is not None
-            and not build.force_recompute
-            and reuse_keys == batch_texts
+            if build.snapshot is not None and reuse_keys == batch_texts
             else {}
         )
         missing_positions: list[int] = []
         for index, text in enumerate(batch_texts):
-            reusable_vector = reusable_vectors.get(text)
+            reusable_vector = (
+                None
+                if str(batch[index].get("source_id")) in build.forced_source_ids
+                else reusable_vectors.get(text)
+            )
             if reusable_vector is None:
                 missing_positions.append(index)
             else:
@@ -2453,7 +2566,7 @@ class IngestionWorkflow:
         skipped_paths = {
             item["source_relative_path"]
             for item in checkpoint.get("skipped_sources", [])
-        }
+        } | set(checkpoint.get("dropped_source_paths") or ())
         documents = await _atomic_to_thread(
             list,
             map(
@@ -2484,7 +2597,12 @@ class IngestionWorkflow:
                 )
             },
         }
-        manifest = self._generation_manifest(build, documents, counts, build_metrics)
+        records = build.recorded_sources(
+            {str(document["source_relative_path"]): document for document in documents}
+        )
+        manifest = self._generation_manifest(
+            build, documents, records, counts, build_metrics
+        )
         if not build.revalidation_stats_match(require_complete=True):
             raise _SourceChangedDuringIngest(
                 "A source changed while final artifacts were assembled"
@@ -2501,7 +2619,9 @@ class IngestionWorkflow:
                 "A source changed while final indexes were validated"
             )
         select_generation = not build_metrics.get("skipped_sources")
-        generation_root = await self._activate_build(build, select=select_generation)
+        generation_root = await self._activate_build(
+            build, manifest, select=select_generation
+        )
         build_id = checkpoint["build_id"]
         LOGGER.debug(
             "ingest: build %s complete status=%s selected=%s documents=%s chunks=%s",
@@ -2566,6 +2686,18 @@ class IngestionWorkflow:
         return {
             "skipped_sources": checkpoint.get("skipped_sources", []),
             "skipped_source_count": len(checkpoint.get("skipped_sources", [])),
+            # A build that named its sources says which, and whether it read them
+            # or took them out; a build of every source names none.
+            **(
+                {"source_selection": checkpoint["parameters"]["selection"]}
+                if "selection" in checkpoint["parameters"]
+                else {}
+            ),
+            **(
+                {"dropped_excluded_sources": checkpoint["dropped_source_paths"]}
+                if checkpoint.get("dropped_source_paths")
+                else {}
+            ),
             "forced": build.force_recompute,
             "resumed": bool(checkpoint.get("resume_count")),
             **{
@@ -2626,6 +2758,7 @@ class IngestionWorkflow:
         self,
         build: _Build,
         documents: list[dict[str, Any]],
+        records: list[dict[str, Any]],
         counts: dict[str, Any],
         build_metrics: dict[str, Any],
     ) -> dict[str, Any]:
@@ -2654,7 +2787,7 @@ class IngestionWorkflow:
             "metadata_storage_policy": METADATA_STORAGE_POLICY,
             "source_exclusion_revision": checkpoint["source_exclusion_revision"],
             "retrieval_policy_fingerprint": self.retrieval_policy_fingerprint,
-            "source_file_count": len(build.scan.selected),
+            "source_file_count": len(records),
             "excluded_source_count": len(build.exclusions),
             "document_count": len(documents),
             **counts,
@@ -2710,7 +2843,7 @@ class IngestionWorkflow:
                 },
             },
             "documents": documents,
-            "source_files": build.source_records(),
+            "source_files": records,
             "excluded_sources": build.excluded_sources(),
             "files": {
                 "extracted_units": "corpus/extracted-units.jsonl",
@@ -2725,7 +2858,9 @@ class IngestionWorkflow:
             "build_metrics": build_metrics,
         }
 
-    async def _activate_build(self, build: _Build, *, select: bool) -> Path:
+    async def _activate_build(
+        self, build: _Build, manifest: dict[str, Any], *, select: bool
+    ) -> Path:
         """Move the validated build into place as a generation, and select it if asked.
 
         The activation journal is written first, so a crash at any point after it
@@ -2745,7 +2880,11 @@ class IngestionWorkflow:
                 "identity": checkpoint["identity"],
                 "baseline_generation_id": checkpoint.get("baseline_generation_id"),
                 "source_inventory": checkpoint["source_inventory"],
-                "source_digests": checkpoint["source_digests"],
+                # What the activated manifest records, which a recovery compares.
+                "source_digests": {
+                    str(record["source_relative_path"]): str(record["sha256"])
+                    for record in manifest["source_files"]
+                },
                 "revalidation_stats": checkpoint["revalidation_stats"],
                 "source_exclusion_revision": checkpoint["source_exclusion_revision"],
                 "created_at": _utc_now(),
@@ -2769,6 +2908,76 @@ class IngestionWorkflow:
         await _atomic_to_thread(fsync_directory, self._pending_activation_path.parent)
         self._loaded_generation = None
         return generation_root
+
+    def _source_selection(
+        self,
+        mode: str,
+        names: list[str],
+        *,
+        scan: SourceScan,
+        exclusions: Mapping[str, Any],
+        held: frozenset[str],
+        current: tuple[Path, dict[str, Any]] | None,
+    ) -> dict[str, Any]:
+        """The sources a command named, as paths, or a refusal naming the problem.
+
+        A source is named by its path as `sources` reports it or by its `src_` id.
+        An ingest names sources on disk that are not excluded, since an exclusion
+        keeps a source from being ingested. An uningest names sources the selected
+        generation holds, whether or not their files remain.
+        """
+
+        scanned = {source.source_relative_path for source in scan.selected}
+        by_id = {
+            source.source_id: source.source_relative_path for source in scan.selected
+        }
+        for document in current[1].get("documents", []) if current else []:
+            if isinstance(document, dict) and document.get("source_id"):
+                by_id.setdefault(
+                    str(document["source_id"]),
+                    str(document.get("source_relative_path") or ""),
+                )
+        paths: set[str] = set()
+        unknown: list[str] = []
+        for name in names:
+            relative = name if name in scanned | held else by_id.get(name)
+            if relative:
+                paths.add(relative)
+            else:
+                unknown.append(name)
+        if unknown:
+            raise ResearchError(
+                f"No source matches {', '.join(map(repr, unknown))}. Name a source "
+                "by its path, as `sources` reports it, or by its src_ id."
+            )
+        if mode == "ingest":
+            missing = sorted(paths - scanned)
+            if missing:
+                raise ResearchError(
+                    f"{', '.join(missing)} has no file under the source directory, "
+                    "so there is nothing to ingest."
+                )
+            excluded = sorted(paths & set(exclusions))
+            if excluded:
+                raise ResearchError(
+                    f"{', '.join(excluded)} is excluded, which keeps a source from "
+                    "being ingested. Include it first: "
+                    + project_command(self.config.project_root, "include", excluded[0])
+                )
+        else:
+            absent = sorted(paths - held)
+            if absent:
+                raise ResearchError(
+                    f"The selected generation does not hold {', '.join(absent)}, so "
+                    "there is nothing to uningest."
+                )
+            selection = {"mode": mode, "source_paths": sorted(paths)}
+            if not _selected_sources(scan, exclusions, held, selection)[0]:
+                raise ResearchError(
+                    "Uningesting these sources would leave the generation empty, so "
+                    "nothing was changed."
+                )
+        return {"mode": mode, "source_paths": sorted(paths)}
 
     def _generation_root(self, generation_id: str) -> Path:
         """Resolve one generation directory by name, refusing any other name.
@@ -2948,14 +3157,67 @@ class IngestionWorkflow:
         chunk_overlap: int | None = None,
         force_recompute: bool = False,
         work_budget_seconds: int | None = None,
+        sources: list[str] | None = None,
     ) -> dict[str, Any]:
         """Create or refresh the generation that search reads.
 
-        An omitted parameter comes from the merged settings, where the
-        chunking values live; a caller that passes one gets it checked here.
+        Every source that is not excluded is read, unless `sources` names the ones
+        to read: then every other source the selected generation holds is carried
+        as it is, and `force_recompute` reads only the named ones again. An omitted
+        parameter comes from the merged settings, where the chunking values live; a
+        caller that passes one gets it checked here.
         """
 
+        return await self._build(
+            chunk_size=chunk_size,
+            chunk_overlap=chunk_overlap,
+            force_recompute=force_recompute,
+            work_budget_seconds=work_budget_seconds,
+            selection=("ingest", sources) if sources else None,
+        )
+
+    async def uningest(
+        self, *, sources: list[str], work_budget_seconds: int | None = None
+    ) -> dict[str, Any]:
+        """Build a generation without the named sources, and carry every other one.
+
+        Their chunks and data leave the new generation. The files, their reviewed
+        metadata, and their exclusions stay, so an ingest of every source reads a
+        source again unless it is excluded. The generation before keeps it, until
+        it is removed.
+        """
+
+        if not sources:
+            raise ResearchError("Name at least one source to uningest")
+        return await self._build(
+            chunk_size=None,
+            chunk_overlap=None,
+            force_recompute=False,
+            work_budget_seconds=work_budget_seconds,
+            selection=("uningest", sources),
+        )
+
+    async def _build(
+        self,
+        *,
+        chunk_size: int | None,
+        chunk_overlap: int | None,
+        force_recompute: bool,
+        work_budget_seconds: int | None,
+        selection: tuple[str, list[str]] | None,
+    ) -> dict[str, Any]:
         settings = self.config.settings
+        # A build that names its sources carries the rest as they are, so it
+        # chunks with the sizes the selected generation recorded.
+        recorded = (
+            (self._load_current_optional() or (None, {}))[1].get("chunking") or {}
+            if selection is not None
+            else {}
+        )
+        if chunk_size is None:
+            chunk_size = recorded.get("chunk_size")
+        if chunk_overlap is None:
+            chunk_overlap = recorded.get("chunk_overlap")
         if chunk_size is None:
             chunk_size = settings.chunk_size
         if chunk_overlap is None:
@@ -2993,17 +3255,30 @@ class IngestionWorkflow:
                     f"No PDF, EPUB or MOBI sources found beneath {self.config.source_root}"
                 )
             exclusions = self._source_exclusions()
-            selected = tuple(
-                source
-                for source in scan.selected
-                if source.source_relative_path not in exclusions
-            )
-            if not selected:
+            if selection is None and all(
+                source.source_relative_path in exclusions for source in scan.selected
+            ):
                 raise ResearchError(
                     "All discovered PDF, EPUB and MOBI sources are excluded; include at "
                     "least one source before ingesting"
                 )
             current = self._load_current_optional()
+            held = frozenset(
+                str(document.get("source_relative_path") or "")
+                for document in (current[1].get("documents", []) if current else [])
+                if isinstance(document, dict)
+            )
+            selection_record = (
+                None
+                if selection is None
+                else self._source_selection(
+                    *selection,
+                    scan=scan,
+                    exclusions=exclusions,
+                    held=held,
+                    current=current,
+                )
+            )
             await _atomic_to_thread(
                 self._sync_source_catalog, scan, current, exclusions=exclusions
             )
@@ -3029,6 +3304,7 @@ class IngestionWorkflow:
                 embedding=self.config.settings.embedding_facts,
                 maximum_unclean_percent=self.config.settings.maximum_unclean_percent,
                 pdf_backend_fingerprint=self._pdf_backend_fingerprint,
+                selection=selection_record,
             )
             recovered = await self._recover_pending_activation(
                 expected_identity=identity,
@@ -3068,6 +3344,8 @@ class IngestionWorkflow:
                     chunk_size=chunk_size,
                     chunk_overlap=chunk_overlap,
                     force_recompute=force_recompute,
+                    held=held,
+                    selection=selection_record,
                 )
             else:
                 staging_root, checkpoint = existing
@@ -3125,6 +3403,8 @@ class IngestionWorkflow:
                     chunk_size=chunk_size,
                     chunk_overlap=chunk_overlap,
                     force_recompute=force_recompute,
+                    held=held,
+                    selection=selection_record,
                 )
                 del fresh_root
                 return self._in_progress_result(

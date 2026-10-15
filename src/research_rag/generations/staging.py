@@ -87,8 +87,13 @@ def _checkpoint_identity(
     embedding: EmbeddingModel,
     maximum_unclean_percent: float = 1.0,
     pdf_backend_fingerprint: str = DEFAULT_PDF_BACKEND_FINGERPRINT,
+    selection: dict[str, Any] | None = None,
 ) -> str:
     """Fingerprint the inputs a staged build may resume from.
+
+    A build of named sources, or one that takes sources out, carries its
+    selection; a build of every source carries none, so its identity is the one
+    a build checkpointed before selections existed computed.
 
     The ranking policy is deliberately absent: it decides how a generation is
     *searched*, not what its artifacts contain, so a ranking edit reuses every
@@ -99,6 +104,7 @@ def _checkpoint_identity(
 
     return value_fingerprint(
         {
+            **({"selection": selection} if selection is not None else {}),
             "project_id": project_id,
             "inventory": inventory,
             "exclusion_revision": exclusion_revision,

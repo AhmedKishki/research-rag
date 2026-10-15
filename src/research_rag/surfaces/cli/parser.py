@@ -293,18 +293,47 @@ def _parser() -> argparse.ArgumentParser:
         "ingest",
         description=(
             "Build the searchable generation from the PDFs, EPUBs and MOBIs in the "
-            "source directory: extract, chunk, embed, and index them. A build that "
-            "fails or is cancelled leaves the generation search reads in place, "
-            "and calling this again resumes the checkpoint."
+            "source directory: extract, chunk, embed, and index them. Name sources "
+            "to read only those; every other source the generation holds is kept "
+            "as it is. An excluded source is never read. A build that fails or is "
+            "cancelled leaves the generation search reads in place, and calling "
+            "this again resumes the checkpoint."
+        ),
+    )
+    refresh.add_argument(
+        "sources",
+        nargs="*",
+        metavar="SOURCE",
+        help=(
+            "A source to read, by its path as `sources` reports it or by its src_ "
+            "id. Name none to read every source that is not excluded."
         ),
     )
     refresh.add_argument(
         "--force-recompute",
         action="store_true",
         help=(
-            "Rebuild every document, chunk, and vector instead of reusing the "
-            "compatible ones, and write a new generation beside them."
+            "Read the named sources, or every source, again instead of reusing "
+            "their documents, chunks, and vectors, and write a new generation "
+            "beside the current one."
         ),
+    )
+
+    take_out = add(
+        "uningest",
+        description=(
+            "Build a generation without these sources: their chunks and data leave "
+            "it, and every other source is kept as it is. The files, their "
+            "reviewed metadata, and their exclusions stay, so an ingest of every "
+            "source reads them again unless they are excluded. The generation "
+            "before keeps them until it is removed."
+        ),
+    )
+    take_out.add_argument(
+        "sources",
+        nargs="+",
+        metavar="SOURCE",
+        help="A source to take out, by its path as `sources` reports it or by its src_ id.",
     )
 
     find = add(

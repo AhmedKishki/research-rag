@@ -76,7 +76,9 @@ async def _operation(app: App, request: Request) -> JSONResponse:
     """One corpus operation, named in the path and argued in the body."""
 
     name = request.path_params["name"]
-    payload = await run(app.service, name, await _body(request))
+    # The control API answers the command line alone, so it takes what only the
+    # command line may ask for.
+    payload = await run(app.service, name, await _body(request), command_line=True)
     # The command line reads the app's own state beside the service's, the
     # answer the workspace's status carries.
     if name == "status":

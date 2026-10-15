@@ -1,7 +1,7 @@
 # Generation tests
 
 - `test_generation.py`: the reuse gates in `generation.py`.
-  - `source_set_matches` is the predicate a no-op `ingest` uses to decide whether the selected generation describes the sources as they are.
+  - `selection_matches` is the predicate a no-op `ingest` uses to decide whether the selected generation already holds what the build would make.
     - A reviewed-metadata revision does not break the match, because that overlay applies at read time.
     - A ranking-policy edit does not break the match either, because ranking is a runtime decision that changes no stored artifact.
     - A changed exclusion revision or source digest, a missing index directory, or the legacy metadata storage policy refuses it.
