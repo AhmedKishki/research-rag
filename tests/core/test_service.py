@@ -2879,6 +2879,61 @@ def test_apparatus_is_left_out_only_when_asked(project: Path) -> None:
     asyncio.run(_assert_apparatus_is_left_out_only_when_asked(project))
 
 
+async def _assert_a_hand_edit_reaches_the_running_service(project: Path) -> None:
+    """A settings file edited by hand counts at the next call, as a save does.
+
+    Every layer is read again, so the edit lands where a workspace save would. An
+    edit that does not resolve keeps the values in force and is named in the health
+    report, and a setting read once at start waits for a restart, also named.
+    """
+
+    service = ResearchService(  # type: ignore[arg-type]
+        resolve_config(project, vanilla_executable=sys.executable),
+        FakeUltraRAG(),
+        dense=FakeDenseBackend(),
+    )
+    path = project / ".research-rag" / "config.toml"
+    edits = iter(range(1, 10))
+
+    def write(text: str) -> None:
+        # Each edit gets its own change time, so two quick edits of one length
+        # never share a stamp.
+        path.write_text(text, encoding="utf-8")
+        moment = 1_700_000_000_000_000_000 + next(edits) * 1_000_000_000
+        os.utime(path, ns=(moment, moment))
+
+    def settings_check(status: dict) -> list[dict]:
+        return [
+            entry
+            for entry in status.get("degraded", [])
+            if entry["check"] == "settings_files"
+        ]
+
+    assert service.config.settings.exclude_apparatus is False
+
+    write("[retrieval]\nexclude_apparatus = true\n")
+    status = await service.status()
+    assert service.config.settings.exclude_apparatus is True
+    assert service.config.settings_provenance["retrieval.exclude_apparatus"].startswith(
+        "project config"
+    )
+    assert settings_check(status) == []
+
+    write("[retrieval]\nexclude_apparatus = maybe\n")
+    status = await service.status()
+    assert service.config.settings.exclude_apparatus is True
+    assert "does not resolve" in settings_check(status)[0]["reason"]
+
+    write("[runtime]\nnice = 5\n\n[retrieval]\nexclude_apparatus = false\n")
+    status = await service.status()
+    assert service.config.settings.exclude_apparatus is False
+    assert "runtime.nice" in settings_check(status)[0]["reason"]
+
+
+def test_a_hand_edit_reaches_the_running_service(project: Path) -> None:
+    asyncio.run(_assert_a_hand_edit_reaches_the_running_service(project))
+
+
 def test_the_length_floor_is_counted_in_the_chunkers_tokens() -> None:
     """A fraction of a chunk size is only a length rule if the unit matches.
 

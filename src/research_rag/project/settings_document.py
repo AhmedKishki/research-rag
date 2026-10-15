@@ -26,6 +26,7 @@ one sentence per key rather than a description written twice.
 
 from __future__ import annotations
 
+import logging
 import math
 import textwrap
 from collections.abc import Iterable, Mapping
@@ -34,7 +35,7 @@ from pathlib import Path
 from typing import Any
 
 from ..storage.durable_io import atomic_file
-from .config import project_command
+from .config import project_command, settings_files_stamp
 from .policy import ResearchError, retrieval_policy_fingerprint, value_fingerprint
 from .settings import (
     SETTINGS,
@@ -43,6 +44,7 @@ from .settings import (
     Setting,
     default_config_file,
     packaged_defaults,
+    sources_for,
 )
 from .settings_layers import (
     LAYER_COMMAND_LINE,
@@ -52,7 +54,10 @@ from .settings_layers import (
     LAYER_PROJECT,
     SettingsError,
     read_config_document,
+    resolve_settings,
 )
+
+LOGGER = logging.getLogger(__name__)
 
 #: The three costs a change can carry.
 COST_NONE = "none"
@@ -575,6 +580,46 @@ class SettingsWorkflow:
 
         return self.config.portable_root / "config.toml"
 
+    def refresh_settings(self) -> None:
+        """Take a hand edit to a settings file into this process before a call.
+
+        A stamp that moved means a file layer was edited, so every layer is resolved
+        again as at start, and the command line and environment still outrank the
+        files. An edit that does not resolve leaves the values in force and is named
+        in the health report until the file changes again.
+        """
+
+        config = self.config
+        stamp = settings_files_stamp(config.project_root, config.settings_config_path)
+        if stamp == config.settings_stamp:
+            return
+        try:
+            values, provenance = resolve_settings(
+                SETTINGS,
+                sources_for(config.project_root),
+                config_path=config.settings_config_path,
+                overrides=config.settings_overrides,
+            )
+            settings = EffectiveSettings.from_values(values)
+        except SettingsError as exc:
+            LOGGER.warning(
+                "settings: an edited file does not resolve, so the values read "
+                "before stay in force: %s",
+                exc,
+            )
+            self.config = replace(
+                config, settings_stamp=stamp, settings_reload_error=str(exc)
+            )
+            return
+        self.config = replace(
+            config,
+            settings=settings,
+            settings_provenance=dict(provenance),
+            settings_stamp=stamp,
+            settings_reload_error=None,
+        )
+        self.retrieval_policy_fingerprint = retrieval_policy_fingerprint(settings)
+
     def section_rows(self) -> list[dict[str, Any]]:
         """Every setting, grouped by section, in registry order.
 
@@ -638,6 +683,7 @@ class SettingsWorkflow:
         every row would say the same thing on every row.
         """
 
+        self.refresh_settings()
         return {
             "revision": settings_revision(
                 self.config.settings, self.config.settings_provenance
@@ -738,7 +784,13 @@ class SettingsWorkflow:
             # key it wrote sits above the user file and below nothing that outranks
             # it.
             self.config = replace(
-                self.config, settings=proposed, settings_provenance=settled
+                self.config,
+                settings=proposed,
+                settings_provenance=settled,
+                settings_stamp=settings_files_stamp(
+                    self.config.project_root, self.config.settings_config_path
+                ),
+                settings_reload_error=None,
             )
             self.retrieval_policy_fingerprint = retrieval_policy_fingerprint(proposed)
             return {

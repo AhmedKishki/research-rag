@@ -245,9 +245,9 @@ A project's settings resolve in four layers, each overriding the one above it, a
   4. an extra file named by --config PATH
 
 `config --write key=value` writes the project file, and so does the browser
-workspace: both refuse a change they cannot validate and name what it costs, and a
-running app takes the value at once. A hand edit to the file is read when the app
-starts. The two global options below are per-call and are recorded nowhere:
+workspace: both refuse a change they cannot validate and name what it costs. A
+running app takes either at once, and a hand edit to any settings file at its next
+call. The two global options below are per-call and are recorded nowhere:
 
   --set key=value    override one value for this command, repeatable
   --config PATH      add one more layer for this command

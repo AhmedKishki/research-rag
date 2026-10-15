@@ -18,6 +18,40 @@ from ..storage.durable_io import atomic_write_json
 from .settings import SETTINGS, EffectiveSettings, sources_for
 from .settings_layers import SettingsError, resolve_settings
 
+# One file layer as it stood when read: its path, change time, size, and inode.
+# An editor that saves through a renamed temporary file changes the inode even
+# when the time and size match.
+SettingsStamp = tuple[tuple[str, int | None, int | None, int | None], ...]
+
+
+def settings_files_stamp(
+    project_root: str | Path, config_path: str | Path | None
+) -> SettingsStamp:
+    """The stamp of every settings file a process reads besides its packaged defaults.
+
+    A running app compares it before a call, so a hand edit to the user file, the
+    project file, or a `--config` file is noticed without watching the disk.
+    """
+
+    sources = sources_for(project_root)
+    paths = (
+        sources.user_config,
+        sources.project_config,
+        Path(config_path).expanduser() if config_path is not None else None,
+    )
+    stamp: list[tuple[str, int | None, int | None, int | None]] = []
+    for path in paths:
+        if path is None:
+            continue
+        try:
+            info = path.stat()
+        except OSError:
+            stamp.append((str(path), None, None, None))
+        else:
+            stamp.append((str(path), info.st_mtime_ns, info.st_size, info.st_ino))
+    return tuple(stamp)
+
+
 # The one console script this product installs, named because the health report
 # prints commands an operator can paste.
 CLI_COMMAND = "research-rag"
@@ -187,6 +221,16 @@ class ResearchConfig:
     settings: EffectiveSettings
     settings_provenance: dict[str, str] = field(default_factory=dict)
     runtime_root: Path | None = None
+    # What reading the settings again takes: the per-call layers this process was
+    # given, which keep outranking the files, and the files' stamp when they were
+    # read. An edit that does not resolve is named until the file is fixed.
+    settings_config_path: Path | None = None
+    settings_overrides: tuple[str, ...] = ()
+    settings_stamp: SettingsStamp = ()
+    settings_reload_error: str | None = None
+    # The values this process loaded at start. A setting read once keeps it until
+    # a restart, whatever the files say now.
+    settings_loaded: EffectiveSettings | None = None
 
     # The tunables live in one place — the merged settings — and these names
     # read through to them, so nothing has to be kept in step by hand.
@@ -685,6 +729,9 @@ def resolve_config(
     if offline:
         overrides.append("runtime.offline=true")
 
+    # Stamped before reading, so an edit landing during the read is taken at the
+    # next call rather than missed.
+    stamp = settings_files_stamp(project, config_path)
     try:
         values, provenance = resolve_settings(
             SETTINGS,
@@ -769,6 +816,12 @@ def resolve_config(
         settings=settings,
         settings_provenance=dict(provenance),
         runtime_root=custom_state if relocated else None,
+        settings_config_path=(
+            Path(config_path).expanduser() if config_path is not None else None
+        ),
+        settings_overrides=tuple(overrides),
+        settings_stamp=stamp,
+        settings_loaded=settings,
     )
 
 

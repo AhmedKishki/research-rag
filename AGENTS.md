@@ -155,6 +155,7 @@
 - Preserve CLI access to every workspace capability.
   - Nothing is configurable in the workspace that the command line and `config.toml` cannot also configure.
   - Settings writes belong to the workspace and the command line, never agents. `research-rag config --write` takes the workspace's path through the service.
+  - A running app takes a change from any of the three at its next call. An edit that does not resolve keeps the values in force and is named in the health report.
   - Open a browser only with `--start-ui`.
 - Use `child_process_environment()`, never `dict(os.environ)`, for subprocesses.
 - Never point the app at a second copy of itself.

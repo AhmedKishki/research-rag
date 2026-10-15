@@ -175,6 +175,7 @@ class ResearchService(
         operation whose reader is waiting on the answer rather than on the work.
         """
 
+        self.refresh_settings()
         try:
             async with self._writes.slot():
                 try:
@@ -209,6 +210,7 @@ class ResearchService(
         removal waits for the read to finish.
         """
 
+        self.refresh_settings()
         lease = _ReadLease(self)
         try:
             yield lease
