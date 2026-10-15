@@ -126,10 +126,9 @@ def test_backend_drift_is_diagnostic_and_pdf_scoped(
     manifest = _manifest()
     manifest["source_files"] = [{"source_relative_path": f"book{extension}"}]
     monkeypatch.setattr(
-        status_module, "pdf_backend_available", lambda backend, config: True
-    )
-    monkeypatch.setattr(
-        status_module, "pdf_backend_fingerprint", lambda backend, config: "new"
+        status_module,
+        "available_pdf_backend_record",
+        lambda backend, config: {"fingerprint": "new"},
     )
 
     # A recorded backend is provenance, so it never names a serving upgrade. It is
@@ -146,7 +145,7 @@ def test_older_epub_rules_are_a_diagnostic_difference(tmp_path, monkeypatch) -> 
     manifest = _manifest()
     manifest["documents"] = [{"format": "pdf"}, {"format": "epub"}]
     monkeypatch.setattr(
-        status_module, "pdf_backend_available", lambda backend, config: False
+        status_module, "available_pdf_backend_record", lambda backend, config: None
     )
 
     # The selected generation stays servable; ingest reads the EPUB again.

@@ -26,7 +26,7 @@ from ..generations.generation_inventory import generation_inventory
 from ..project.policy import ResearchError
 from ..project.state_files import SEARCH_STATS_FILE
 from ..retrieval.artifact_lookup import chunk_text
-from ..retrieval.documents import _effective_documents, _public_document
+from ..retrieval.documents import _public_document
 from ..storage.search_stats import (
     TRACKED_RANKS,
     SearchStatsError,
@@ -198,7 +198,7 @@ class StatsWorkflow:
                 return answer
             generation_root, manifest = current
             lease.hold(str(manifest["generation_id"]))
-            documents = _effective_documents(manifest, self._metadata())
+            documents = self._reviewed_documents(manifest)
             excluded = set(self._source_exclusions())
             by_source = {
                 str(document.get("source_id")): document
@@ -329,7 +329,7 @@ class StatsWorkflow:
                 raise ResearchError("No knowledge base exists; call ingest first")
             generation_root, manifest = current
             lease.hold(str(manifest["generation_id"]))
-            documents = _effective_documents(manifest, self._metadata())
+            documents = self._reviewed_documents(manifest)
             document = next(
                 (
                     item

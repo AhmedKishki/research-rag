@@ -150,6 +150,10 @@ class FakeService:
 
     def __init__(self) -> None:
         self.calls: list[tuple[str, dict[str, Any]]] = []
+        self.warmed = False
+
+    async def warm_lexical(self) -> None:
+        self.warmed = True
 
     def _record(self, name: str, arguments: dict[str, Any]) -> dict[str, Any]:
         self.calls.append((name, arguments))
@@ -229,6 +233,8 @@ async def test_the_agent_surface_answers_on_the_workspaces_port(project: Path) -
             assert answer.data["ui_url"] == app.url
             assert "mcp_url" not in answer.data
             assert app.mcp_url == f"{app.url}/mcp"
+        # A serving app loads and compiles the lexical index before a search asks.
+        assert app.service.warmed
     finally:
         await app.stop()
     assert app.ready is False

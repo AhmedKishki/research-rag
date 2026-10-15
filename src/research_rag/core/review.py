@@ -20,7 +20,6 @@ from typing import Any
 from ..corpus.sources import SourcePolicyError, SourceScan, scan_sources
 from ..project.policy import ResearchError
 from ..retrieval.documents import (
-    _effective_documents,
     _normalized_filter,
     _public_document,
 )
@@ -264,7 +263,7 @@ class ReviewWorkflow:
                     document
                 )
                 for document in (
-                    _effective_documents(manifest, metadata).values()
+                    self._reviewed_documents(manifest).values()
                     if current is not None
                     else []
                 )
@@ -457,7 +456,7 @@ class ReviewWorkflow:
                     "reviewed_metadata_sources": reviewed_metadata_sources,
                 }
             _generation_root, manifest = current
-            documents_by_id = _effective_documents(manifest, metadata)
+            documents_by_id = self._reviewed_documents(manifest)
             sources = [
                 _public_document(document)
                 for document in documents_by_id.values()

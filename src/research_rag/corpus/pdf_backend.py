@@ -190,6 +190,20 @@ def pdf_backend_record(
     return _docling_record(components, spec)
 
 
+def available_pdf_backend_record(
+    backend: str, config: ResearchConfig
+) -> dict[str, Any] | None:
+    """The operational reader's record when it can run here, or None.
+
+    One resolution of the managed environment answers both whether a build could
+    read a PDF now and what it would record.
+    """
+
+    normalize_pdf_backend(backend)
+    env = resolve_docling_env(config)
+    return None if env is None else docling_backend_record_from_env(env)
+
+
 def docling_backend_record_from_env(env: DoclingEnv) -> dict[str, Any]:
     """The recorded Docling identity for an already-resolved environment."""
 

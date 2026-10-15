@@ -103,9 +103,10 @@ def test_mixed_pdf_provenance_is_diagnostic_and_never_requires_ingestion(
         "retrieval": {"available_methods": ["bm25"]},
     }
     before = copy.deepcopy(manifest)
-    monkeypatch.setattr(status_module, "pdf_backend_available", lambda *_: True)
     monkeypatch.setattr(
-        status_module, "pdf_backend_fingerprint", lambda *_: "docling-current"
+        status_module,
+        "available_pdf_backend_record",
+        lambda *_: {"fingerprint": "docling-current"},
     )
 
     diagnostics = generation_diagnostics(config, manifest, "current")
