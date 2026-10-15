@@ -6,7 +6,9 @@ package.
 
 Normalization never rewrites source prose. `clean_unclean_passage` is one
 exception: it rewrites only a run of characters that were decoded with the wrong
-single-byte codec, so its repair is exact and invents nothing. `text_quality`
+single-byte codec, so its repair is exact and invents nothing. The other is the
+fi and fl ligatures a Mac-encoded text face exposed as private use, which are
+read back as letters only where they sit in a word. `text_quality`
 decides whether the result is usable, and `extraction` assembles it into PDF and
 EPUB units. `is_known_formatting_glyph` recognises a formatting glyph a symbol
 face exposed as private use, so it never withholds a readable passage.
@@ -257,6 +259,46 @@ def is_known_formatting_glyph(character: str) -> bool:
     return code in _SYMBOL_EXTENDERS
 
 
+# ---------------------------------------------------------------------------
+# Recovering the ligatures a Mac-encoded text face exposed as private use
+# ---------------------------------------------------------------------------
+#
+# A text face without a usable ToUnicode exposes its codes as `0xF000 + code`
+# too. Under Mac OS Roman, which Mac typesetting wrote, 0xDE and 0xDF are the fi
+# and fl ligatures, so such a book arrives as "suf\uf0de cient" and
+# "re\uf0df ect", often with a layout space where the glyph ended. The Symbol
+# face draws double arrows at the same two codes, but an arrow never starts
+# inside a word. A code attached to a letter is therefore a ligature, and so is
+# one that opens a word of two or more letters. One that opens a one-letter word
+# is read as a ligature only when the same text holds an attached one, so
+# "p \uf0de q" in a formula stays as it arrived.
+_PRIVATE_USE_LIGATURES = {"\uf0de": "fi", "\uf0df": "fl"}
+_LOWERCASE = "a-zß-öø-ÿ"
+# The space or line-break hyphen after the glyph is layout, closed only when the
+# word continues in lower case: "Geref\uf0de , Gary" keeps its comma.
+_ATTACHED_LIGATURE = re.compile(
+    rf"(?<=[^\W\d_])([\uf0de\uf0df])(?:(?: ?-)? (?=[{_LOWERCASE}]))?"
+)
+_OPENING_LIGATURE = re.compile(
+    rf"(?<![^\W\d_])([\uf0de\uf0df]) ?(?=[{_LOWERCASE}]{{2}})"
+)
+_SHORT_OPENING_LIGATURE = re.compile(
+    rf"(?<![^\W\d_])([\uf0de\uf0df]) ?(?=[{_LOWERCASE}](?![^\W\d_]))"
+)
+
+
+def _ligature(match: re.Match[str]) -> str:
+    return _PRIVATE_USE_LIGATURES[match.group(1)]
+
+
+def _recover_private_use_ligatures(value: str) -> str:
+    if "\uf0de" not in value and "\uf0df" not in value:
+        return value
+    attached = _ATTACHED_LIGATURE.search(value) is not None
+    text = _OPENING_LIGATURE.sub(_ligature, _ATTACHED_LIGATURE.sub(_ligature, value))
+    return _SHORT_OPENING_LIGATURE.sub(_ligature, text) if attached else text
+
+
 def _fold_compatibility_characters(value: str) -> str:
     if not _FOLDABLE_CHARACTERS.search(value):
         return value
@@ -299,7 +341,7 @@ def normalize_reading_text(value: str) -> str:
         separated = False
     if current:
         paragraphs.append(current)
-    return "\n\n".join(paragraphs)
+    return _recover_private_use_ligatures("\n\n".join(paragraphs))
 
 
 def normalize_inline_text(value: str) -> str:

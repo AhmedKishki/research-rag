@@ -7,7 +7,7 @@ What is on disk, how it is read, and what a file's text says about itself.
 | `sources.py` | The scan of `sources/`, the policy that decides what is a source, and the stable source ID |
 | `extraction.py` | Docling PDF page-unit adaptation, EPUB traversal, MOBI text-part adaptation, source-wide apparatus cleanup, and the shared quality/loss gate |
 | `mobi_reader.py` | Offline, resource-bounded MOBI parsing, in-memory KF8 reconstruction, and bounded serialized-unit handoff; calls shared extraction helpers inside the worker without conversion output |
-| `text_normalization.py` | Reading text as it is read: compatibility characters, whitespace, sentence ends, and the formatting glyphs a symbol face exposed as private use |
+| `text_normalization.py` | Reading text as it is read: compatibility characters, whitespace, sentence ends, the formatting glyphs a symbol face exposed as private use, and the ligatures a Mac-encoded text face exposed there |
 | `text_quality.py` | Whether a string is usable: corruption, scripts, the flags a chunk carries, which paragraphs belong to a non-argument section, and whether a whole source is readable |
 | `pdf_backend.py` | The sole operational Docling PDF backend, its resource boundary, readiness, and active versus historical provenance |
 | `docling_env.py` | The managed, versioned Docling environment: lazy first-use install under a bounded lock and cgroup, spec/ABI completion manifest, atomic publish, and the isolated worker bootstrap |

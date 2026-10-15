@@ -382,6 +382,29 @@ def test_formula_letters_and_ligatures_fold_for_matching() -> None:
     assert normalize_inline_text("ﬂour and ﬁbre") == "flour and fibre"
 
 
+@pytest.mark.parametrize(
+    ("raw", "expected"),
+    [
+        # A ligature attached to a letter closes the layout space after it.
+        ("hardly suf\uf0de cient means", "hardly sufficient means"),
+        # A line-break hyphen after the glyph is layout too.
+        ("suf\uf0de -\ncient", "sufficient"),
+        # A ligature opens a word of two or more letters.
+        ("the \uf0de eld and \uf0de rst", "the field and first"),
+        ("re\uf0df ect", "reflect"),
+        # A word that ends in the ligature keeps the punctuation after it.
+        ("Geref\uf0de , Gary", "Gereffi , Gary"),
+        # A one-letter word is a ligature only beside an attached one.
+        ("a \uf0de t of\uf0de cial", "a fit official"),
+        ("p \uf0de q", "p \uf0de q"),
+    ],
+)
+def test_private_use_ligatures_recover_only_inside_words(
+    raw: str, expected: str
+) -> None:
+    assert normalize_reading_text(raw) == expected
+
+
 def test_folding_preserves_letters_and_symbols_that_carry_meaning() -> None:
     for text in (
         "Café workers’ organisations analyse political economy.",
