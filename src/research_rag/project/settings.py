@@ -653,8 +653,9 @@ SETTINGS: tuple[Setting, ...] = (
         kind=int,
         layer="runtime",
         doc=(
-            "Extraction units sent to one chunker call. Throughput only: each "
-            "unit keeps its own durable output and redo boundary."
+            "Extraction units sent to one chunker call. Throughput only: the "
+            "batch's output is one durable file, and a crash redoes at most one "
+            "batch."
         ),
         minimum=1,
         maximum=256,
