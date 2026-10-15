@@ -765,13 +765,30 @@ def _parser() -> argparse.ArgumentParser:
         ),
     )
 
-    add(
+    settings = add(
         "config",
         description=(
             "Print every effective setting with the layer it came from, what the "
-            "key does, and what a change to it costs. This never writes: the "
-            "browser workspace writes this project's own config.toml, and a hand "
-            "edit there is read as it is. `help settings` names the layers."
+            "key does, and what a change to it costs. With --write, change this "
+            "project's own config.toml through the same check the workspace uses: "
+            "a running app takes the value at once, and a key a higher layer sets "
+            "is refused. A hand edit to config.toml is read when the app starts. "
+            "`help settings` names the layers."
+        ),
+    )
+    settings.add_argument(
+        "--write",
+        action="append",
+        metavar="KEY=VALUE",
+        default=None,
+        help="Write one value to this project's config.toml; repeatable.",
+    )
+    settings.add_argument(
+        "--confirm",
+        action="store_true",
+        help=(
+            "Accept a change that alters what the next build records. Without it, "
+            "such a change is refused with its cost."
         ),
     )
 

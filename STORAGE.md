@@ -82,13 +82,13 @@ my-research-project/
 
 ### config.toml
 
-- The project's own settings layer, written by hand or by the workspace.
+- The project's own settings layer, written by hand, by the workspace, or by `research-rag config --write`.
 - Every key is a `Setting` declared in `src/research_rag/project/settings.py`. Its default is in `src/research_rag/project/default.toml` under a table named for its section, so `[retrieval]` holds `retrieval.rrf_k`.
-- A browser save rewrites the whole file from the values it read.
+- A save from the workspace or `config --write` rewrites the whole file from the values it read. A running app takes the saved values at once; a hand edit is read when the app starts.
   - It preserves keys it does not know.
   - It drops comments.
 - A key supplied by the environment, the command line, or `--config` cannot be written here, because those layers outrank this file.
-- `research-rag config` prints every value with its layer and change cost.
+- `research-rag config` prints every value with its layer and change cost. `--write KEY=VALUE` changes this file, and `--confirm` accepts a change that alters what the next build records.
 - A legacy `ingestion.pdf_backend="custom"` value resolves to Docling without rewriting the settings file. It never enables a custom extractor.
 
 ## Derived state

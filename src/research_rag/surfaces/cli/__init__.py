@@ -149,6 +149,8 @@ async def _run(args: argparse.Namespace) -> CommandResult:
     apply_process_priority(config.nice)
     _configure_logging(config)
     if args.command == "config":
+        if args.write:
+            return CommandResult(payload=await _write_settings(args, config))
         print(
             describe_settings(
                 SETTINGS, config.settings.as_values(), config.settings_provenance
@@ -175,6 +177,32 @@ async def _run(args: argparse.Namespace) -> CommandResult:
     async with _operations(config) as operations:
         payload = await _operate(args, operations)
     return CommandResult(payload=payload)
+
+
+async def _write_settings(
+    args: argparse.Namespace, config: ResearchConfig
+) -> dict[str, Any]:
+    """Write `--write` values through the service call the workspace makes.
+
+    A running app answers through the control API and takes the values in
+    memory; without one, the write runs in process. Either way the revision read
+    here guards the write, so a change made elsewhere in between is refused.
+    """
+
+    values: dict[str, str] = {}
+    for item in args.write:
+        key, separator, value = item.partition("=")
+        if not separator or not key.strip():
+            raise ResearchError(f"--write takes KEY=VALUE, not {item!r}")
+        values[key.strip()] = value
+    async with _operations(config) as operations:
+        current = await operations.call("settings_read")
+        return await operations.call(
+            "settings_write",
+            values=values,
+            expected_revision=current["revision"],
+            confirm=args.confirm,
+        )
 
 
 def main(argv: Sequence[str] | None = None) -> None:
