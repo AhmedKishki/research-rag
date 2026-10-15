@@ -39,6 +39,7 @@ EXPECTED_CHECKS = (
     "embedding_model",
     "reranker_model",
     "lock",
+    "settings_files",
     "generation",
     "capacity",
     "code_currency",

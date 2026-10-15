@@ -20,6 +20,7 @@ from ..project.config import ResearchConfig, project_command, runtime_root_claim
 from ..project.embeddings import resolve_embedding_model
 from ..project.model_cache import snapshot_is_complete, snapshot_path
 from ..project.rerankers import RERANKER_REQUIRED_FILES, resolve_reranker_model
+from ..project.settings_document import RESTART_SETTINGS
 from ..project.state_files import LOCK_FILE, process_alive
 from . import version as version_module
 
@@ -377,6 +378,36 @@ def _capacity_check(config: ResearchConfig, status: Mapping[str, Any]) -> Check:
     )
 
 
+def _settings_files_check(config: ResearchConfig) -> Check:
+    """Whether the values in force are the ones the settings files hold."""
+
+    if config.settings_reload_error is not None:
+        return Check(
+            "settings_files",
+            WARN,
+            "A settings file was edited and does not resolve, so this app keeps the "
+            f"values it read before. {config.settings_reload_error}",
+            _command(config, "config"),
+        )
+    loaded = config.settings_loaded
+    waiting = sorted(
+        key
+        for key in RESTART_SETTINGS
+        if loaded is not None and config.settings.value(key) != loaded.value(key)
+    )
+    if waiting:
+        return Check(
+            "settings_files",
+            WARN,
+            "These settings changed after this app started, and what it already "
+            f"loaded keeps their old values until it restarts: {', '.join(waiting)}.",
+            "Restart this app in the terminal that started it.",
+        )
+    return Check(
+        "settings_files", OK, "This app runs the values its settings files hold."
+    )
+
+
 def _code_currency_check() -> Check:
     """The versions are read through their module, so an answer follows the module
     it patched.
@@ -522,6 +553,7 @@ def health_report(
                 offline_state=OK,
             ),
             _lock_check(config),
+            _settings_files_check(config),
             (
                 Check(
                     "generation",

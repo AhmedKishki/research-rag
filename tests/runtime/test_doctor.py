@@ -131,7 +131,7 @@ def test_every_check_is_one_line_naming_its_state_and_its_remedy(
     checks = [
         line for line in result.lines if line[:8].strip() in {"ok", "warn", "blocked"}
     ]
-    assert len(checks) == 11
+    assert len(checks) == 12
     for line in checks:
         state, name, _rest = line.split(maxsplit=2)
         assert state in {"ok", "warn", "blocked", "unknown"}

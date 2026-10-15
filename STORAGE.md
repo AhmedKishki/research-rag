@@ -84,7 +84,10 @@ my-research-project/
 
 - The project's own settings layer, written by hand, by the workspace, or by `research-rag config --write`.
 - Every key is a `Setting` declared in `src/research_rag/project/settings.py`. Its default is in `src/research_rag/project/default.toml` under a table named for its section, so `[retrieval]` holds `retrieval.rrf_k`.
-- A save from the workspace or `config --write` rewrites the whole file from the values it read. A running app takes the saved values at once; a hand edit is read when the app starts.
+- A save from the workspace or `config --write` rewrites the whole file from the values it read.
+- A running app takes a save at once and a hand edit to any settings file at its next call, reading every layer again as at start.
+  - An edit that does not resolve keeps the values in force. The health report names it until the file changes again.
+  - A setting the app reads once at start, such as `runtime.nice`, waits for a restart, and the health report names it until then.
   - It preserves keys it does not know.
   - It drops comments.
 - A key supplied by the environment, the command line, or `--config` cannot be written here, because those layers outrank this file.

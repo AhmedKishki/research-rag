@@ -120,7 +120,7 @@
 | Immutable generations | Each build produces a new generation. The active pointer moves only after both indexes validate. |
 | Relocatable derived state | `--runtime-root` puts indexes, staging, and logs on a chosen disk, claimed by a marker naming the owning project. A copy cannot silently share it. |
 | Copy-based portability | A project moves, is shared, or is archived with ordinary file tools. There is no export format. |
-| Editable project settings | The workspace and `research-rag config` show every effective value with its description, source layer, and change cost. A browser save and `research-rag config --write` write the project's `config.toml` through one service call, and a running app takes the value at once. Both refuse a value a higher layer supplied, name the keys that force a rebuild before writing, and preserve keys they did not change. |
+| Editable project settings | The workspace and `research-rag config` show every effective value with its description, source layer, and change cost. A browser save and `research-rag config --write` write the project's `config.toml` through one service call, and a running app takes the value at once. A hand edit to any settings file reaches a running app at its next call. Both refuse a value a higher layer supplied, name the keys that force a rebuild before writing, and preserve keys they did not change. |
 
 ### Installation and updates
 

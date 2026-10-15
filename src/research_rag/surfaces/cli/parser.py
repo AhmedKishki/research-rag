@@ -772,7 +772,7 @@ def _parser() -> argparse.ArgumentParser:
             "key does, and what a change to it costs. With --write, change this "
             "project's own config.toml through the same check the workspace uses: "
             "a running app takes the value at once, and a key a higher layer sets "
-            "is refused. A hand edit to config.toml is read when the app starts. "
+            "is refused. A running app reads a hand edit at its next call. "
             "`help settings` names the layers."
         ),
     )
