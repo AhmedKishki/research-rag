@@ -1,6 +1,6 @@
 # Evaluation harness tests
 
-These tests need no project, gateway, or model. The fakes and the PDF writer come from `tests/core/test_service.py` and `tests/conftest.py`. The harness is loaded by path, because `scripts/` is not a package.
+These tests use temporary projects and fake retrieval backends without a gateway or model. The fakes and the PDF writer come from `tests/service_helpers.py` and `tests/conftest.py`. The harness is loaded by path, because `scripts/` is not a package.
 
 - `test_evaluation.py`: the metrics and payload readers.
   - Each measure against what it says it compares: exact equality, lexical containment, missing-passage coverage, the cosine gate against its own denominator, repetition rates, and latency percentiles.

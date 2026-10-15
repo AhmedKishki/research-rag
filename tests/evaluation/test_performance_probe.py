@@ -906,7 +906,7 @@ def probe_real_service(project: Path) -> Any:
     from research_rag.core.service import ResearchService
     from research_rag.project.config import resolve_config
     from tests.conftest import write_pdf
-    from tests.core.test_service import (
+    from tests.service_helpers import (
         FakeDenseBackend,
         FakeUltraRAG,
         UnavailableRerankerDenseBackend,

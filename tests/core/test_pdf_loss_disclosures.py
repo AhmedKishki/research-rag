@@ -3,19 +3,16 @@
 from __future__ import annotations
 
 import asyncio
-import sys
 import tomllib
 from pathlib import Path
 
-from research_rag.core.service import ResearchService
 from research_rag.core.stats import StatsWorkflow
 from research_rag.core.tool_views import lean_ingest
 from research_rag.generations.ingestion import _document_loss_totals
-from research_rag.project.config import resolve_config
 from research_rag.project.settings import SETTINGS_BY_KEY, default_config_file
 from research_rag.storage.durable_io import read_json
 from tests.conftest import write_pdf
-from tests.core.test_service import FakeDenseBackend, FakeUltraRAG
+from tests.service_helpers import make_service
 
 LOSS_FIELDS = (
     "substantive_character_count",
@@ -125,12 +122,7 @@ def test_ingest_records_aggregate_pdf_loss_totals(project: Path) -> None:
     """A build sums each document's loss fields and derives the corpus rate."""
 
     write_pdf(project / "sources" / "article.pdf", ["Readable cobalt evidence."])
-    config = resolve_config(project, vanilla_executable=sys.executable)
-    service = ResearchService(
-        config,
-        FakeUltraRAG(),
-        dense=FakeDenseBackend(),  # type: ignore[arg-type]
-    )
+    service = make_service(project)
 
     result = asyncio.run(service.ingest(chunk_size=50, chunk_overlap=10))
     assert result["status"] == "ready"

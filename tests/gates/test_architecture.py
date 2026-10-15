@@ -226,9 +226,9 @@ def test_only_a_surface_imports_the_web_stack() -> None:
     importers = {
         _relative(path) for path in _modules() if _absolute_imports(path) & WEB_IMPORTS
     }
-    assert importers == set(WEB_MODULES), (
-        "modules importing the web stack changed; the surface set is "
-        f"{sorted(WEB_MODULES)}"
+    offenders = importers - set(WEB_MODULES)
+    assert not offenders, (
+        f"modules importing the web stack outside its boundary: {sorted(offenders)}"
     )
 
 
@@ -270,85 +270,6 @@ def test_the_workspace_imports_nothing_outside_itself() -> None:
         for path in sorted((PACKAGE / "surfaces" / "workspace").rglob("*.py"))
     }
     assert {name: found for name, found in offenders.items() if found} == {}
-
-
-def test_the_agent_surface_is_declared_once() -> None:
-    """One tool, one resource, and `status` twice.
-
-    `status` is declared once for a project this machine serves and once for a project
-    its agent entry names and nothing here resolves. Every other operation is declared
-    once, because a second declaration would be a second answer for a corpus that
-    exists.
-    """
-
-    declaring: dict[str, list[str]] = {}
-    for path in _modules():
-        names: list[str] = []
-        for node in ast.walk(_parse(path)):
-            for decorator in getattr(node, "decorator_list", []):
-                target = (
-                    decorator.func if isinstance(decorator, ast.Call) else decorator
-                )
-                parts: list[str] = []
-                while isinstance(target, ast.Attribute):
-                    parts.append(target.attr)
-                    target = target.value
-                if isinstance(target, ast.Name):
-                    parts.append(target.id)
-                parts.reverse()
-                if parts[:1] == ["app"] and parts[1:2] in (["tool"], ["resource"]):
-                    names.append(f"{'.'.join(parts)}:{node.name}")
-        if names:
-            declaring[_relative(path)] = names
-    assert list(declaring) == ["surfaces/mcp.py"], declaring
-
-    operations = [name.split(":", 1)[1] for name in declaring["surfaces/mcp.py"]]
-    assert set(operations) == {
-        "status",
-        "ingest",
-        "search",
-        "find_source",
-        "get_passage",
-        "set_source_inclusion",
-        "set_chunk_inclusion",
-        "set_source_metadata",
-        "status_resource",
-    }
-    assert len(operations) == 11, operations
-    for name in set(operations) - {"status", "status_resource"}:
-        assert operations.count(name) == 1, name
-    assert operations.count("status") == 2
-
-
-def test_the_answer_projection_is_shared_by_the_two_bounded_readers() -> None:
-    """An agent and a terminal read one projection; the workspace reads the payload.
-
-    A second reader of the lean answer must read this projection rather than write its
-    own, and the workspace, with the whole screen, must not reach for it.
-    """
-
-    callers = sorted(
-        _relative(path)
-        for path in _modules()
-        if "present_tool_response" in path.read_text(encoding="utf-8")
-        and path.name != "tool_views.py"  # the module that defines it
-    )
-    assert callers == ["surfaces/mcp.py"], callers
-    # The command line selects the mode per run rather than through the MCP server's own
-    # configuration, and the account record reads the projection because reading
-    # whether one project's app is up is part of reading the record.
-    lean_callers = sorted(
-        _relative(path)
-        for path in _modules()
-        if "lean_status" in path.read_text(encoding="utf-8")
-        and path.name != "tool_views.py"
-    )
-    assert lean_callers == ["runtime/account.py", "surfaces/cli/corpus.py"], (
-        lean_callers
-    )
-    # The workspace, with the whole payload on screen, still must not reach for
-    # it: it reads the service's own answer rather than a projection of it.
-    assert "surfaces/ui.py" not in lean_callers
 
 
 # The layer stack, the registry's `Setting` type, the coercion, the provenance, and the

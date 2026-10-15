@@ -699,14 +699,20 @@ h3 {
 /* One labelled disclosure holds every filter field, so the search console
    stays a query box and its controls, and the fields a reader rarely opens are
    closed by default with a count on the summary saying how many are set. */
-.filter-drawer {
+.filter-drawer,
+.client-drawer,
+.detail-drawer,
+.identifier-drawer {
   margin-top: var(--space-2xs);
   border: 1px solid var(--border-subtle);
   border-radius: var(--radius-sm);
   background: var(--bg-card);
 }
 
-.filter-drawer summary {
+.filter-drawer summary,
+.detail-drawer > summary,
+.identifier-drawer > summary,
+.client-drawer summary {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
@@ -717,16 +723,24 @@ h3 {
   font-size: var(--text-sm);
 }
 
-.filter-drawer summary:hover {
+.filter-drawer summary:hover,
+.detail-drawer > summary:hover,
+.identifier-drawer > summary:hover,
+.client-drawer summary:hover {
   color: var(--text-primary);
 }
 
-.filter-drawer .drawer-title {
+.filter-drawer .drawer-title,
+.detail-drawer .drawer-title,
+.client-drawer .drawer-title {
   color: var(--text-primary);
   font-weight: 600;
 }
 
-.filter-drawer .drawer-note {
+.filter-drawer .drawer-note,
+.detail-drawer .drawer-note,
+.identifier-drawer .drawer-note,
+.client-drawer .drawer-note {
   color: var(--text-secondary);
   font-size: var(--text-xs);
 }
@@ -1120,41 +1134,10 @@ textarea:disabled {
 /* A disclosure whose contents are facts and identifiers. It is the one place a
    long identifier, a path, or a per-component score is shown: in full, labelled,
    and selectable, because the reader who opens it came to read the whole of it. */
-.detail-drawer,
-.identifier-drawer {
-  margin-top: var(--space-2xs);
-  border: 1px solid var(--border-subtle);
-  border-radius: var(--radius-sm);
-  background: var(--bg-card);
-}
-
 .detail-drawer > summary,
-.identifier-drawer > summary {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: var(--space-2xs);
-  min-height: var(--control-height);
-  padding: var(--space-2xs) var(--space-xs);
-  color: var(--text-secondary);
-  font-size: var(--text-sm);
+.identifier-drawer > summary,
+.client-drawer summary {
   cursor: pointer;
-}
-
-.detail-drawer > summary:hover,
-.identifier-drawer > summary:hover {
-  color: var(--text-primary);
-}
-
-.detail-drawer .drawer-title {
-  color: var(--text-primary);
-  font-weight: 600;
-}
-
-.detail-drawer .drawer-note,
-.identifier-drawer .drawer-note {
-  color: var(--text-secondary);
-  font-size: var(--text-xs);
 }
 
 .detail-drawer > .fact-list,
@@ -1467,39 +1450,6 @@ textarea:disabled {
    list is folded away and the summary carries the count. It opens on one click
    and a reader who came for the list opens it; a reader who came for the
    endpoint does not scroll past it. */
-.client-drawer {
-  margin-top: var(--space-2xs);
-  border: 1px solid var(--border-subtle);
-  border-radius: var(--radius-sm);
-  background: var(--bg-card);
-}
-
-.client-drawer summary {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: var(--space-2xs);
-  min-height: var(--control-height);
-  padding: var(--space-2xs) var(--space-xs);
-  color: var(--text-secondary);
-  font-size: var(--text-sm);
-  cursor: pointer;
-}
-
-.client-drawer summary:hover {
-  color: var(--text-primary);
-}
-
-.client-drawer .drawer-title {
-  color: var(--text-primary);
-  font-weight: 600;
-}
-
-.client-drawer .drawer-note {
-  color: var(--text-secondary);
-  font-size: var(--text-xs);
-}
-
 .client-drawer .client-list {
   margin: 0;
   padding: 0 var(--space-xs) var(--space-xs);

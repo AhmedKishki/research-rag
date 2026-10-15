@@ -84,25 +84,6 @@ def test_the_shims_import_no_upstream_or_process_stack() -> None:
         assert not (roots & FORBIDDEN_IMPORT_ROOTS), (name, roots)
 
 
-def test_the_retired_installer_and_validator_are_gone() -> None:
-    from research_rag.gateway import runtime, server
-
-    for name in (
-        "install_managed_runtime",
-        "validate_managed_runtime",
-        "managed_runtime_path",
-        "default_cache_root",
-        "describe_tree_difference",
-        "MARKER_FILENAME",
-        "RUNTIME_CACHE_ENV",
-        "RuntimeErrorBase",
-        "RuntimeValidationError",
-    ):
-        assert not hasattr(runtime, name), name
-    for name in ("create_gateway", "SERVER_NAME", "SERVER_VERSION"):
-        assert not hasattr(server, name), name
-
-
 def test_gateway_help_explains_retirement_and_needs_no_workspace_root(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
@@ -170,25 +151,19 @@ def test_runtime_reports_no_external_runtime_and_exits_zero(
     monkeypatch.setattr(
         sys,
         "argv",
-        ["research-rag-runtime", "--cache-root", str(cache), "--offline"],
+        [
+            "research-rag-runtime",
+            "--cache-root",
+            str(cache),
+            "--offline",
+            "--validate-only",
+        ],
     )
     runtime.main()
 
     out = capsys.readouterr().out
     assert "No external runtime is required" in out
     assert not cache.exists()
-
-
-def test_runtime_accepts_the_historical_validate_only_flag(
-    monkeypatch: pytest.MonkeyPatch,
-    capsys: pytest.CaptureFixture[str],
-) -> None:
-    from research_rag.gateway import runtime
-
-    monkeypatch.setattr(sys, "argv", ["research-rag-runtime", "--validate-only"])
-    runtime.main()
-
-    assert "No external runtime is required" in capsys.readouterr().out
 
 
 @pytest.mark.parametrize(

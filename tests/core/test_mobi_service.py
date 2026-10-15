@@ -9,8 +9,8 @@ import pytest
 from research_rag.core.service import ResearchService
 from research_rag.project.config import resolve_config
 from research_rag.storage.durable_io import read_jsonl
-from tests.core.test_service import FakeDenseBackend, FakeUltraRAG
 from tests.mobi_fixtures import install_small_pipe_worker, write_mobi
+from tests.service_helpers import FakeDenseBackend, FakeUltraRAG
 
 
 def test_mobi_ingestion_search_noop_reuse_and_partial_failure(project):

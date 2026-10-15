@@ -32,7 +32,7 @@ from research_rag.project.policy import (
 )
 from research_rag.storage.durable_io import read_json, read_jsonl
 from tests.conftest import write_epub, write_pdf
-from tests.core.test_service import FakeDenseBackend, FakeUltraRAG
+from tests.service_helpers import FakeDenseBackend, FakeUltraRAG
 
 _PAGES = {
     1: "Page one amber evidence argues the case.",

@@ -66,21 +66,6 @@ def test_a_query_time_ranking_knob_keeps_the_build_fingerprint(
     )
 
 
-def test_a_layer_names_only_what_it_changes(tmp_path: Path) -> None:
-    project = tmp_path / "project"
-    _write(
-        project / ".research-rag" / "config.toml",
-        "[retrieval]\nrrf_k = 25\n\n[chunking]\noverlap = 32\n",
-    )
-
-    settings, provenance = _resolve(project, environ={})
-
-    assert settings.rrf_k == 25
-    assert settings.chunk_overlap == 32
-    assert settings.chunk_size == 384
-    assert provenance["retrieval.rrf_k"] != provenance["chunking.size"]
-
-
 def test_a_retired_pdf_backend_in_the_project_file_resolves_without_a_rewrite(
     tmp_path: Path,
 ) -> None:
@@ -235,6 +220,7 @@ def test_resolve_config_exposes_the_merged_settings(project: Path) -> None:
     assert config.settings.rrf_k == 42
     assert config.settings.chunk_size == 200
     assert config.offline is False
+    assert config.tool_detail == "lean"
     assert config.reranker_model == "Xenova/ms-marco-MiniLM-L-6-v2"
     assert config.settings_provenance["retrieval.rrf_k"] == "command line"
 

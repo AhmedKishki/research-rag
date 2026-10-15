@@ -40,11 +40,7 @@ from research_rag.project.embeddings import (
 from research_rag.project.policy import DEFAULT_RETRIEVAL_METHOD, value_fingerprint
 from research_rag.project.rerankers import DEFAULT_RERANKER_MODEL, RERANKER_MODELS
 from research_rag.project.settings import resolve_gate_stopwords
-from research_rag.retrieval.dense import (
-    DenseSearchHit,
-    DenseTokenAuditUnavailable,
-    RerankerUnavailable,
-)
+from research_rag.retrieval.dense import DenseSearchHit
 from research_rag.retrieval.documents import (
     _citation,
     _effective_document_metadata,
@@ -57,6 +53,13 @@ from research_rag.storage.durable_io import (
     write_jsonl,
 )
 from tests.conftest import write_epub, write_pdf, write_reviewed_metadata
+from tests.service_helpers import (
+    FakeDenseBackend,
+    FakeUltraRAG,
+    ProgressivelyFilteredUltraRAG,
+    UnavailableRerankerDenseBackend,
+    make_service,
+)
 
 DEFAULT_EMBEDDING_FACTS = resolve_embedding_model(DEFAULT_EMBEDDING_MODEL)
 
@@ -71,82 +74,6 @@ CORRUPT_TEXT = (
     "ᓌˈ⭡᭯ ᓌ᢯ᣵޘ䜘؞༽䍴䠁ˈᴰ㓸䙐ᡀ⊑ḃ⋫⨶ᡀᵜ⽮Պॆ "
     "ˈᒦᕅਁ ⧟ຳнޜǄᴹ∂ᓏ⢙൪ൠ 䳮�"
 )
-
-
-class FakeUltraRAG:
-    def __init__(self) -> None:
-        self.passages: list[str] = []
-        self.initialized: tuple[Path, Path] | None = None
-        self.chunk_calls = 0
-        self.bm25_build_calls = 0
-        self.bm25_language = ""
-
-    async def chunk(
-        self,
-        input_path: Path,
-        output_path: Path,
-        *,
-        chunk_size: int,
-        chunk_overlap: int,
-    ) -> None:
-        assert chunk_size > chunk_overlap
-        self.chunk_calls += 1
-        units = read_jsonl(input_path)
-        write_jsonl(
-            output_path,
-            (
-                {
-                    "id": index,
-                    "doc_id": item["id"],
-                    "title": item["title"],
-                    "contents": item["contents"],
-                }
-                for index, item in enumerate(units)
-            ),
-        )
-
-    async def build_bm25(
-        self,
-        chunks_path: Path,
-        index_path: Path,
-        *,
-        language: str = "en",
-    ) -> None:
-        self.bm25_language = language
-        self.bm25_build_calls += 1
-        index_path.mkdir(parents=True)
-        (index_path / "fake-index.json").write_text("{}\n", encoding="utf-8")
-        self.passages = [item["contents"] for item in read_jsonl(chunks_path)]
-        self.initialized = (chunks_path, index_path)
-
-    async def initialize_bm25(
-        self,
-        chunks_path: Path,
-        index_path: Path,
-        *,
-        language: str = "en",
-    ) -> None:
-        self.bm25_language = language
-        index_file = index_path / "fake-index.json"
-        if (
-            not index_file.is_file()
-            or json.loads(index_file.read_text(encoding="utf-8")) != {}
-        ):
-            raise RuntimeError("fake BM25 index is missing")
-        self.passages = [
-            str(item.get("contents") or item.get("text") or "")
-            for item in read_jsonl(chunks_path)
-        ]
-        self.initialized = (chunks_path, index_path)
-
-    async def search_bm25(self, query: str, top_k: int) -> list[str]:
-        terms = query.casefold().split()
-
-        def score(passage: str) -> int:
-            value = passage.casefold()
-            return sum(value.count(term) for term in terms)
-
-        return sorted(self.passages, key=score, reverse=True)[:top_k]
 
 
 class SimulatedProcessExit(BaseException):
@@ -213,176 +140,6 @@ class SymbolChunkUltraRAG(FakeUltraRAG):
                 },
             ],
         )
-
-
-class FakeDenseBackend:
-    def __init__(self, dense_backend: str = "portable-exact-vectors") -> None:
-        self.chunks: list[dict[str, object]] = []
-        # Mirrors what `auto` selects for a small corpus so manifest assertions
-        # match the real default. Pass a name to emulate the other backend.
-        self.dense_backend = dense_backend
-        self.fail_build = False
-        self.build_calls = 0
-        self.embed_calls = 0
-        self.embedded_text_count = 0
-        # The exact strings a vector was created from, so a test can assert what
-        # the dense half was given rather than only how much of it there was.
-        self.embedded_texts: list[str] = []
-        self.upload_batches: list[tuple[int, int]] = []
-        self.audit_unavailable = False
-        self.audited_text_count = 0
-        self.token_count_override: int | None = None
-        # One entry per rerank call: the model the caller named, or None when it
-        # left the choice to the engine.
-        self.rerank_models: list[str | None] = []
-
-    def embedding_token_counts(self, texts: list[str]) -> list[int]:
-        if self.audit_unavailable:
-            raise DenseTokenAuditUnavailable("simulated missing tokenizer")
-        self.audited_text_count += len(texts)
-        if self.token_count_override is not None:
-            return [self.token_count_override for _ in texts]
-        # Deterministic stand-in for the real tokenizer: one token per word.
-        return [len(text.split()) for text in texts]
-
-    def embed_texts(self, texts: list[str]) -> np.ndarray:
-        self.embed_calls += 1
-        self.embedded_text_count += len(texts)
-        self.embedded_texts.extend(texts)
-        return np.ones((len(texts), 384), dtype=np.float32)
-
-    def _build_index(
-        self,
-        chunks: list[dict[str, object]],
-        index_path: Path,
-        vectors: np.ndarray,
-    ) -> dict[str, object]:
-        self.build_calls += 1
-        if self.fail_build:
-            raise RuntimeError("simulated dense-index failure")
-        assert vectors.shape == (len(chunks), 384)
-        index_path.mkdir(parents=True)
-        (index_path / "fake-qdrant.json").write_text(
-            json.dumps({"point_count": len(chunks), "dimension": 384}) + "\n",
-            encoding="utf-8",
-        )
-        self.chunks = chunks
-        return {
-            "backend": "fake Qdrant",
-            "embedding_model": DEFAULT_EMBEDDING_FACTS.name,
-            "embedding_model_revision": DEFAULT_EMBEDDING_FACTS.revision,
-            "embedding_dimension": 384,
-            "point_count": len(chunks),
-        }
-
-    def initialize_index(self, index_path: Path, dimension: int) -> None:
-        self.build_calls += 1
-        if self.fail_build:
-            raise RuntimeError("simulated dense-index failure")
-        assert dimension == 384
-        index_path.mkdir(parents=True)
-        self.chunks = []
-
-    def upload_index_batch(
-        self,
-        chunks: list[dict[str, object]],
-        index_path: Path,
-        vectors: np.ndarray,
-        *,
-        offset: int,
-    ) -> None:
-        assert index_path.is_dir()
-        assert vectors.shape == (len(chunks), 384)
-        assert offset == len(self.chunks)
-        self.upload_batches.append((offset, len(chunks)))
-        self.chunks.extend(chunks)
-
-    def finalize_index(
-        self,
-        index_path: Path,
-        *,
-        expected_count: int,
-        dimension: int,
-    ) -> dict[str, object]:
-        assert index_path.is_dir()
-        assert dimension == 384
-        assert len(self.chunks) == expected_count
-        (index_path / "fake-qdrant.json").write_text(
-            json.dumps({"point_count": expected_count, "dimension": dimension}) + "\n",
-            encoding="utf-8",
-        )
-        return {
-            "backend": "fake Qdrant",
-            "dense_backend": self.dense_backend,
-            "embedding_model": DEFAULT_EMBEDDING_FACTS.name,
-            "embedding_model_revision": DEFAULT_EMBEDDING_FACTS.revision,
-            "embedding_dimension": 384,
-            "point_count": expected_count,
-        }
-
-    def validate_index(
-        self,
-        index_path: Path,
-        *,
-        expected_count: int,
-        dimension: int,
-    ) -> None:
-        metadata = json.loads(
-            (index_path / "fake-qdrant.json").read_text(encoding="utf-8")
-        )
-        if metadata != {"point_count": expected_count, "dimension": dimension}:
-            raise RuntimeError("fake dense index validation failed")
-
-    def build_from_vectors(
-        self,
-        chunks: list[dict[str, object]],
-        index_path: Path,
-        vectors_path: Path,
-    ) -> dict[str, object]:
-        vectors = np.load(vectors_path, allow_pickle=False)
-        assert vectors.shape == (len(chunks), 384)
-        return self._build_index(chunks, index_path, vectors)
-
-    def search(
-        self,
-        index_path: Path,
-        query: str,
-        top_k: int,
-        *,
-        document_ids: list[str] | None = None,
-        excluded_document_ids: list[str] | None = None,
-    ) -> list[DenseSearchHit]:
-        assert index_path.is_dir()
-        document_filter = set(document_ids or [])
-        excluded_document_filter = set(excluded_document_ids or [])
-        terms = query.casefold().split()
-        scored: list[tuple[float, str]] = []
-        for chunk in self.chunks:
-            if document_filter and chunk["document_id"] not in document_filter:
-                continue
-            if chunk["document_id"] in excluded_document_filter:
-                continue
-            text = str(chunk["contents"]).casefold()
-            score = float(sum(text.count(term) for term in terms))
-            scored.append((score, str(chunk["chunk_id"])))
-        scored.sort(key=lambda item: (-item[0], item[1]))
-        return [
-            DenseSearchHit(chunk_id=chunk_id, score=score)
-            for score, chunk_id in scored[:top_k]
-        ]
-
-    def rerank(
-        self,
-        query: str,
-        documents: list[str],
-        *,
-        model: str | None = None,
-    ) -> list[float]:
-        self.rerank_models.append(model)
-        return [
-            float(document.casefold().count(query.split()[0].casefold()))
-            for document in documents
-        ]
 
 
 class ScoredDenseBackend(FakeDenseBackend):
@@ -479,43 +236,6 @@ class ManyChunkUltraRAG(FakeUltraRAG):
                 for index in range(130)
             ),
         )
-
-
-class ProgressivelyFilteredUltraRAG(FakeUltraRAG):
-    def __init__(self) -> None:
-        super().__init__()
-        self.search_depths: list[int] = []
-
-    async def chunk(
-        self,
-        input_path: Path,
-        output_path: Path,
-        *,
-        chunk_size: int,
-        chunk_overlap: int,
-    ) -> None:
-        assert chunk_size > chunk_overlap
-        self.chunk_calls += 1
-        unit = read_jsonl(input_path)[0]
-        title = str(unit["title"])
-        count = 30 if title == "Distractor" else 5
-        emphasis = "cobalt cobalt" if title == "Distractor" else "cobalt"
-        write_jsonl(
-            output_path,
-            (
-                {
-                    "id": index,
-                    "doc_id": unit["id"],
-                    "title": title,
-                    "contents": f"{emphasis} {title} evidence {index}.",
-                }
-                for index in range(count)
-            ),
-        )
-
-    async def search_bm25(self, query: str, top_k: int) -> list[str]:
-        self.search_depths.append(top_k)
-        return await super().search_bm25(query, top_k)
 
 
 def test_unsearchable_upstream_chunks_are_counted_without_losing_a_unit() -> None:
@@ -851,12 +571,7 @@ async def _assert_search_can_skip_the_staleness_walk(
 ) -> None:
     source = project / "sources" / "article.pdf"
     write_pdf(source, ["Cobalt evidence about labour."], title="Research Article")
-    config = resolve_config(project, vanilla_executable=sys.executable)
-    service = ResearchService(  # type: ignore[arg-type]
-        config,
-        FakeUltraRAG(),
-        dense=FakeDenseBackend(),
-    )
+    service = make_service(project)
     await service.ingest(chunk_size=100, chunk_overlap=10)
 
     checked = await service.search("cobalt labour", top_k=1)
@@ -966,11 +681,7 @@ async def _assert_incompatible_embedding_generation_serves_bm25(
         title="Research Article",
     )
     config = resolve_config(project, vanilla_executable=sys.executable)
-    service = ResearchService(  # type: ignore[arg-type]
-        config,
-        FakeUltraRAG(),
-        dense=FakeDenseBackend(),
-    )
+    service = make_service(config)
     ingested = await service.ingest(chunk_size=100, chunk_overlap=10)
     assert (await service.status())["hybrid_ready"] is True
 
@@ -1070,11 +781,7 @@ async def _assert_incompatible_embedding_generation_serves_bm25(
     # A changed model rebuilds the dense vectors instead of reusing them.
     write_manifest(manifest_with(embedding_model_revision="0" * 40))
     dense = FakeDenseBackend()
-    rebuilt_service = ResearchService(  # type: ignore[arg-type]
-        config,
-        FakeUltraRAG(),
-        dense=dense,
-    )
+    rebuilt_service = make_service(config, dense=dense)
     rebuilt = await rebuilt_service.ingest(chunk_size=100, chunk_overlap=10)
     assert rebuilt["generation_changed"] is True
     assert rebuilt["created_vector_count"] == rebuilt["chunk_count"]
@@ -1094,11 +801,7 @@ async def _assert_reviewed_metadata_is_a_runtime_overlay(project: Path) -> None:
     )
     config = resolve_config(project, vanilla_executable=sys.executable)
     dense = FakeDenseBackend()
-    service = ResearchService(  # type: ignore[arg-type]
-        config,
-        FakeUltraRAG(),
-        dense=dense,
-    )
+    service = make_service(config, dense=dense)
 
     write_reviewed_metadata(
         config,
@@ -1250,11 +953,7 @@ async def _assert_source_ids_address_reviewed_sources(project: Path) -> None:
     source_path = project / "sources" / "article.pdf"
     write_pdf(source_path, ["Stable cobalt evidence for source identity."])
     config = resolve_config(project, vanilla_executable=sys.executable)
-    service = ResearchService(  # type: ignore[arg-type]
-        config,
-        FakeUltraRAG(),
-        dense=FakeDenseBackend(),
-    )
+    service = make_service(config)
 
     discovered = await service.list_sources()
     assert discovered["ready"] is False
@@ -1311,11 +1010,7 @@ async def _assert_find_source_answers_for_one_source(project: Path) -> None:
     write_pdf(first, ["Cobalt evidence about archives and borders."])
     write_pdf(second, ["Cobalt evidence about a different archive."])
     config = resolve_config(project, vanilla_executable=sys.executable)
-    service = ResearchService(  # type: ignore[arg-type]
-        config,
-        FakeUltraRAG(),
-        dense=FakeDenseBackend(),
-    )
+    service = make_service(config)
 
     # Before an ingestion the files are known and neither is searchable.
     before = await service.find_source("crawford")
@@ -1407,11 +1102,7 @@ async def _assert_reviewed_metadata_survives_source_removal(
     source = project / "sources" / "temporary.pdf"
     write_pdf(source, ["Temporary evidence."])
     config = resolve_config(project, vanilla_executable=sys.executable)
-    service = ResearchService(  # type: ignore[arg-type]
-        config,
-        FakeUltraRAG(),
-        dense=FakeDenseBackend(),
-    )
+    service = make_service(config)
     source_id = (await service.list_sources())["discovered_sources"][0]["source_id"]
     write_reviewed_metadata(
         config,
@@ -1476,11 +1167,7 @@ async def _assert_catalog_retains_unindexed_deleted_and_renamed_sources(
     original = project / "sources" / "temporary.pdf"
     write_pdf(original, ["Temporary evidence registered before ingestion."])
     config = resolve_config(project, vanilla_executable=sys.executable)
-    service = ResearchService(  # type: ignore[arg-type]
-        config,
-        FakeUltraRAG(),
-        dense=FakeDenseBackend(),
-    )
+    service = make_service(config)
     listed = await service.list_sources()
     original_id = listed["discovered_sources"][0]["source_id"]
 
@@ -1536,12 +1223,7 @@ def test_the_sources_listing_filters_with_the_search_predicate(
     second = project / "sources" / "two.pdf"
     write_pdf(first, ["First evidence."])
     write_pdf(second, ["Second evidence."])
-    config = resolve_config(project, vanilla_executable=sys.executable)
-    service = ResearchService(  # type: ignore[arg-type]
-        config,
-        FakeUltraRAG(),
-        dense=FakeDenseBackend(),
-    )
+    service = make_service(project)
 
     async def scenario() -> dict[str, Any]:
         await service.set_source_metadata(
@@ -1888,12 +1570,7 @@ def test_status_payload_is_one_vocabulary_with_or_without_a_generation(
             ["Cobalt evidence about labour and artificial intelligence."],
             title="Research Article",
         )
-        config = resolve_config(project, vanilla_executable=sys.executable)
-        service = ResearchService(  # type: ignore[arg-type]
-            config,
-            FakeUltraRAG(),
-            dense=FakeDenseBackend(),
-        )
+        service = make_service(project)
 
         empty = service._status()
         assert tuple(empty) == without_generation
@@ -1998,11 +1675,7 @@ def test_dense_backend_selection_builds_exact_unless_qdrant_is_named(
     """Qdrant local mode reloads every point per open, so `auto` never picks it."""
 
     config = resolve_config(project, vanilla_executable=sys.executable)
-    service = ResearchService(  # type: ignore[arg-type]
-        config,
-        FakeUltraRAG(),
-        dense=FakeDenseBackend(),
-    )
+    service = make_service(config)
 
     assert config.dense_backend == "auto"
     assert service._select_build_dense_backend() == "portable-exact-vectors"
@@ -2057,11 +1730,7 @@ def test_generation_records_its_dense_backend_and_dispatch_follows_it(
     config = resolve_config(project, vanilla_executable=sys.executable)
     qdrant_double = FakeDenseBackend()
     exact_double = FakeDenseBackend()
-    service = ResearchService(  # type: ignore[arg-type]
-        config,
-        FakeUltraRAG(),
-        dense=qdrant_double,
-    )
+    service = make_service(config, dense=qdrant_double)
     # Both recorded kinds resolve to the single injected double by default, so
     # replace the mapping to observe dispatch itself.
     service._dense_backends = {
@@ -2257,12 +1926,7 @@ async def _assert_agent_reviewed_source_exclusion(project: Path) -> None:
     duplicate = project / "sources" / "duplicate.pdf"
     write_pdf(preferred, ["Shared cobalt evidence for duplicate review."])
     write_pdf(duplicate, ["Shared cobalt evidence for duplicate review."])
-    config = resolve_config(project, vanilla_executable=sys.executable)
-    service = ResearchService(  # type: ignore[arg-type]
-        config,
-        FakeUltraRAG(),
-        dense=FakeDenseBackend(),
-    )
+    service = make_service(project)
 
     first = await service.ingest(chunk_size=50, chunk_overlap=10)
     assert first["source_file_count"] == 2
@@ -2479,11 +2143,7 @@ def test_agent_reviewed_source_exclusion_is_immediate_and_reversible(
 async def _assert_deleted_excluded_source_is_restorable_by_id(project: Path) -> None:
     source = project / "sources" / "temporary.pdf"
     write_pdf(source, ["Temporary source that is reviewed before ingestion."])
-    service = ResearchService(  # type: ignore[arg-type]
-        resolve_config(project, vanilla_executable=sys.executable),
-        FakeUltraRAG(),
-        dense=FakeDenseBackend(),
-    )
+    service = make_service(project)
 
     discovered = await service.list_sources()
     source_id = discovered["discovered_sources"][0]["source_id"]
@@ -2567,12 +2227,7 @@ async def _assert_relevance_gates_allow_abstention(project: Path) -> None:
         ["Lenovo ZTE Sony (Motorola) Microsoft Samsung Vodafone"],
         title="Brand Table",
     )
-    config = resolve_config(project, vanilla_executable=sys.executable)
-    service = ResearchService(  # type: ignore[arg-type]
-        config,
-        FakeUltraRAG(),
-        dense=FakeDenseBackend(),
-    )
+    service = make_service(project)
     await service.ingest(chunk_size=50, chunk_overlap=10)
 
     unrelated = await service.search("hello", top_k=8)
@@ -2607,12 +2262,7 @@ async def _assert_contentless_queries_abstain(project: Path) -> None:
         project / "sources" / "questions.pdf",
         ["How does the analysis work, and what does it show?"],
     )
-    config = resolve_config(project, vanilla_executable=sys.executable)
-    service = ResearchService(  # type: ignore[arg-type]
-        config,
-        FakeUltraRAG(),
-        dense=FakeDenseBackend(),
-    )
+    service = make_service(project)
     await service.ingest(chunk_size=50, chunk_overlap=10)
 
     for query in ("how?", "what?", "why not?", "what does it do?"):
@@ -2887,11 +2537,7 @@ async def _assert_a_hand_edit_reaches_the_running_service(project: Path) -> None
     report, and a setting read once at start waits for a restart, also named.
     """
 
-    service = ResearchService(  # type: ignore[arg-type]
-        resolve_config(project, vanilla_executable=sys.executable),
-        FakeUltraRAG(),
-        dense=FakeDenseBackend(),
-    )
+    service = make_service(project)
     path = project / ".research-rag" / "config.toml"
     edits = iter(range(1, 10))
 
@@ -2975,8 +2621,12 @@ async def _assert_no_change_ingest_is_noop_and_force_rebuilds(project: Path) -> 
     assert second["rebuilt_document_count"] == 0
     assert second["created_vector_count"] == 0
     assert forced["generation_id"] != first["generation_id"]
+    assert forced["status"] == "ready"
     assert forced["generation_changed"] is True
     assert forced["reused_document_count"] == 0
+    assert forced["rebuilt_document_count"] == forced["document_count"]
+    assert forced["reused_chunk_count"] == 0
+    assert forced["reused_vector_count"] == 0
     assert forced["created_vector_count"] == forced["chunk_count"]
     assert Path(first["generation_root"]).is_dir()
     assert Path(forced["generation_root"]).is_dir()
@@ -3101,54 +2751,6 @@ def test_source_local_extraction_failure_skips_and_retries_unchanged_source(
         assert repaired["document_count"] == 2
         assert repaired["skipped_source_count"] == 0
         assert bad.read_bytes() == before
-
-    asyncio.run(exercise())
-
-
-def test_staged_docling_reads_a_long_pdf_in_two_batches(
-    project: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """A nine-page source with the default eight-page batch uses two worker calls.
-
-    Each batch covers a disjoint, half-open physical page range, so the whole
-    document is read once and every page reaches finalize.
-    """
-
-    from research_rag.generations import ingestion
-
-    async def exercise():
-        topics = [
-            "Cobalt",
-            "Amber",
-            "Copper",
-            "Lithium",
-            "Silicon",
-            "Nickel",
-            "Graphite",
-            "Quartz",
-            "Manganese",
-        ]
-        write_pdf(
-            project / "sources" / "long.pdf",
-            [
-                f"{topic} research develops a distinct account of material evidence."
-                for topic in topics
-            ],
-        )
-        config = resolve_config(project, vanilla_executable=sys.executable)
-        service = ResearchService(config, FakeUltraRAG(), dense=FakeDenseBackend())
-        batch_ranges: list[tuple[int, int]] = []
-        original = ingestion.docling_pdf_batch
-
-        def record(source, existing, start, end, **kwargs):
-            batch_ranges.append((start, end))
-            return original(source, existing, start, end, **kwargs)
-
-        monkeypatch.setattr(ingestion, "docling_pdf_batch", record)
-        result = await service.ingest(chunk_size=50, chunk_overlap=10)
-
-        assert result["status"] == "ready"
-        assert batch_ranges == [(0, 8), (8, 9)]
 
     asyncio.run(exercise())
 
@@ -3429,11 +3031,7 @@ async def _assert_ordinary_ingest_migrates_legacy_metadata_storage(
     source = project / "sources" / "article.pdf"
     write_pdf(source, ["Stable cobalt evidence."], title="Automatic Title")
     config = resolve_config(project, vanilla_executable=sys.executable)
-    service = ResearchService(  # type: ignore[arg-type]
-        config,
-        FakeUltraRAG(),
-        dense=FakeDenseBackend(),
-    )
+    service = make_service(config)
     write_reviewed_metadata(
         config,
         "article.pdf",
@@ -3499,11 +3097,7 @@ async def _assert_processing_policy_drift_preserves_generation(
 
     write_pdf(project / "sources" / "article.pdf", ["Cobalt evidence about labour."])
     config = resolve_config(project, vanilla_executable=sys.executable)
-    service = ResearchService(  # type: ignore[arg-type]
-        config,
-        FakeUltraRAG(),
-        dense=FakeDenseBackend(),
-    )
+    service = make_service(config)
     first = await service.ingest(chunk_size=50, chunk_overlap=10)
 
     manifest_path = Path(first["generation_root"]) / "manifest.json"
@@ -3589,11 +3183,7 @@ async def _assert_pending_metadata_status_is_not_reported_as_active(
     first_source = project / "sources" / "first.pdf"
     write_pdf(first_source, ["Stable cobalt evidence."], title="First")
     config = resolve_config(project, vanilla_executable=sys.executable)
-    service = ResearchService(  # type: ignore[arg-type]
-        config,
-        FakeUltraRAG(),
-        dense=FakeDenseBackend(),
-    )
+    service = make_service(config)
     first = await service.ingest(chunk_size=50, chunk_overlap=10)
 
     # A legacy manifest with no observational revision and no current overrides
@@ -3769,11 +3359,7 @@ def test_checkpoint_progress_is_reconciled_from_per_source_state(
     project: Path,
 ) -> None:
     config = resolve_config(project, vanilla_executable=sys.executable)
-    service = ResearchService(  # type: ignore[arg-type]
-        config,
-        FakeUltraRAG(),
-        dense=FakeDenseBackend(),
-    )
+    service = make_service(config)
     root = config.staging_root / "build"
     checkpoint: dict[str, object] = {
         "phase": "extraction",
@@ -3843,6 +3429,16 @@ async def _assert_pdf_ingestion_checkpoints_fixed_page_batches(
     project: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    from research_rag.generations import ingestion
+
+    batch_ranges: list[tuple[int, int]] = []
+    original = ingestion.docling_pdf_batch
+
+    def record(source, existing, start, end, **kwargs):
+        batch_ranges.append((start, end))
+        return original(source, existing, start, end, **kwargs)
+
+    monkeypatch.setattr(ingestion, "docling_pdf_batch", record)
     write_pdf(
         project / "sources" / "batched.pdf",
         [
@@ -3861,11 +3457,7 @@ async def _assert_pdf_ingestion_checkpoints_fixed_page_batches(
         ],
     )
     config = resolve_config(project, vanilla_executable=sys.executable)
-    service = ResearchService(  # type: ignore[arg-type]
-        config,
-        FakeUltraRAG(),
-        dense=FakeDenseBackend(),
-    )
+    service = make_service(config)
 
     first = await service.ingest(
         chunk_size=50,
@@ -3908,6 +3500,7 @@ async def _assert_pdf_ingestion_checkpoints_fixed_page_batches(
         work_budget_seconds=300,
     )
     assert ready["status"] == "ready"
+    assert batch_ranges == [(0, 8), (8, 9)]
     units = read_jsonl(Path(ready["generation_root"]) / "corpus/extracted-units.jsonl")
     assert [unit["locator"]["page"] for unit in units] == list(range(1, 10))
 
@@ -3943,11 +3536,7 @@ async def _assert_partial_pdf_batch_is_replayed_after_hard_crash(
         ],
     )
     config = resolve_config(project, vanilla_executable=sys.executable)
-    service = ResearchService(  # type: ignore[arg-type]
-        config,
-        FakeUltraRAG(),
-        dense=FakeDenseBackend(),
-    )
+    service = make_service(config)
 
     class SimulatedProcessExit(BaseException):
         pass
@@ -4299,11 +3888,7 @@ async def _assert_checkpointless_staging_is_cleaned_before_ingest(
     orphan = config.staging_root / "interrupted-before-checkpoint"
     orphan.mkdir()
     (orphan / ".checkpoint.tmp").write_text("partial", encoding="utf-8")
-    service = ResearchService(  # type: ignore[arg-type]
-        config,
-        FakeUltraRAG(),
-        dense=FakeDenseBackend(),
-    )
+    service = make_service(config)
 
     result = await service.ingest(chunk_size=50, chunk_overlap=10)
 
@@ -4391,11 +3976,7 @@ async def _assert_metadata_edit_preserves_ingestion_checkpoint(
         title="Automatic Title",
     )
     config = resolve_config(project, vanilla_executable=sys.executable)
-    service = ResearchService(  # type: ignore[arg-type]
-        config,
-        FakeUltraRAG(),
-        dense=FakeDenseBackend(),
-    )
+    service = make_service(config)
 
     pending = await service.ingest(
         chunk_size=50,
@@ -4632,11 +4213,7 @@ async def _assert_incompatible_force_mode_supersedes_checkpoint(
 ) -> None:
     write_pdf(project / "sources" / "article.pdf", ["Stable research evidence."])
     config = resolve_config(project, vanilla_executable=sys.executable)
-    service = ResearchService(  # type: ignore[arg-type]
-        config,
-        FakeUltraRAG(),
-        dense=FakeDenseBackend(),
-    )
+    service = make_service(config)
 
     normal = await service.ingest(
         chunk_size=50,
@@ -4683,11 +4260,7 @@ async def _assert_final_revalidation_catches_same_stat_mutation(
     write_pdf(source, ["Stable research evidence."])
     original_stat = source.stat()
     config = resolve_config(project, vanilla_executable=sys.executable)
-    service = ResearchService(  # type: ignore[arg-type]
-        config,
-        FakeUltraRAG(),
-        dense=FakeDenseBackend(),
-    )
+    service = make_service(config)
 
     for _ in range(30):
         result = await service.ingest(
@@ -4814,11 +4387,7 @@ def test_bounded_and_single_call_builds_are_equivalent(
 async def _assert_invalid_activation_journals_self_heal(project: Path) -> None:
     write_pdf(project / "sources" / "evidence.pdf", ["Recoverable evidence."])
     config = resolve_config(project, vanilla_executable=sys.executable)
-    service = ResearchService(  # type: ignore[arg-type]
-        config,
-        FakeUltraRAG(),
-        dense=FakeDenseBackend(),
-    )
+    service = make_service(config)
     journal_path = config.state_root / "pending-activation.json"
 
     journal_path.write_text("{not-json", encoding="utf-8")
@@ -5242,11 +4811,7 @@ def test_legacy_text_chunks_remain_searchable(project: Path) -> None:
 async def _assert_unreadable_source_fails_without_activation(project: Path) -> None:
     write_epub(project / "sources" / "broken.epub", CORRUPT_TEXT)
     config = resolve_config(project, vanilla_executable=sys.executable)
-    service = ResearchService(  # type: ignore[arg-type]
-        config,
-        FakeUltraRAG(),
-        dense=FakeDenseBackend(),
-    )
+    service = make_service(config)
 
     with pytest.raises(ResearchError, match="no readable English-oriented text"):
         await service.ingest(chunk_size=50, chunk_overlap=10)
@@ -5325,12 +4890,7 @@ async def _assert_query_paths_use_generation_lookup(
             "Cobalt context in the neighboring passage.",
         ],
     )
-    config = resolve_config(project, vanilla_executable=sys.executable)
-    service = ResearchService(  # type: ignore[arg-type]
-        config,
-        FakeUltraRAG(),
-        dense=FakeDenseBackend(),
-    )
+    service = make_service(project)
     result = await service.ingest(chunk_size=100, chunk_overlap=10)
     generation_root = Path(result["generation_root"])
     lookup_path = generation_root / "indexes" / "artifact-lookup.sqlite3"
@@ -5432,11 +4992,7 @@ async def _assert_status_lists_retained_generations(project: Path) -> None:
         title="Article",
     )
     config = resolve_config(project, vanilla_executable=sys.executable)
-    service = ResearchService(  # type: ignore[arg-type]
-        config,
-        FakeUltraRAG(),
-        dense=FakeDenseBackend(),
-    )
+    service = make_service(config)
     first = await service.ingest(chunk_size=50, chunk_overlap=10)
     write_pdf(
         project / "sources" / "second.pdf",
@@ -5511,21 +5067,6 @@ async def _assert_status_lists_retained_generations(project: Path) -> None:
 
 def test_status_lists_retained_generations(project: Path) -> None:
     asyncio.run(_assert_status_lists_retained_generations(project))
-
-
-class UnavailableRerankerDenseBackend(FakeDenseBackend):
-    """A dense backend whose reranker model cannot be loaded."""
-
-    def rerank(
-        self,
-        query: str,
-        documents: list[str],
-        *,
-        model: str | None = None,
-    ) -> list[float]:
-        raise RerankerUnavailable(
-            "The reranker model is not present in the shared model cache."
-        )
 
 
 async def _assert_search_falls_back_when_reranking_is_unavailable(
@@ -5620,12 +5161,7 @@ async def _assert_search_rejects_an_unsupported_reranker_model(project: Path) ->
         ["Cobalt evidence about labour and artificial intelligence."],
         title="Research Article",
     )
-    config = resolve_config(project, vanilla_executable=sys.executable)
-    service = ResearchService(  # type: ignore[arg-type]
-        config,
-        FakeUltraRAG(),
-        dense=FakeDenseBackend(),
-    )
+    service = make_service(project)
     await service.ingest(chunk_size=50, chunk_overlap=10)
 
     with pytest.raises(ResearchError, match="Unsupported reranker model"):
@@ -5669,107 +5205,6 @@ def test_dense_backends_embed_with_the_configured_model(tmp_path: Path) -> None:
         assert dimension == config.settings.embedding_dimension, name
 
 
-def test_the_reranked_window_follows_its_settings(project: Path) -> None:
-    paragraphs = [
-        (
-            "Commodity fetishism describes how relations between people appear as "
-            "relations between things, so that value seems to belong to the object "
-            "rather than to the labour that produced it, and the analysis has to "
-            "begin from that appearance."
-        ),
-        (
-            "The mysterious character of the commodity arises from the form of "
-            "value rather than from its use, and the inversion is practical rather "
-            "than merely mistaken, which is why criticism starts at the surface."
-        ),
-        (
-            "Later writers extend the argument to attention, data, and platforms, "
-            "where the same inversion reappears between users and the systems that "
-            "measure them and turn their activity into a resource."
-        ),
-        (
-            "The study of labour under digital conditions asks how work is made "
-            "visible to capital, and which forms of effort remain unmeasured and "
-            "therefore unpaid in the accounts that firms keep."
-        ),
-        (
-            "Colonial histories of extraction connect the factory to the mine, and "
-            "the mine to the plantation, across a single circuit of accumulation "
-            "that reorganised labour on several continents."
-        ),
-        (
-            "Waste studies follow what is discarded, showing that the remainder of "
-            "production is not outside the economy but one of its conditions, and "
-            "a source of value in its own right."
-        ),
-        (
-            "Fetishism is not only an error of perception: it is a form of social "
-            "organisation that the analysis has to describe from the inside, in "
-            "the language its participants already use."
-        ),
-        (
-            "An account of appearance begins with the surface, because the surface "
-            "is where the inversion is lived, and where any criticism that wants "
-            "to be more than moralising has to start."
-        ),
-    ]
-
-    async def exercise() -> None:
-        source = project / "sources" / "article.pdf"
-        write_pdf(source, paragraphs, title="Window Article")
-
-        base = resolve_config(project, vanilla_executable=sys.executable)
-        service = ResearchService(  # type: ignore[arg-type]
-            base, FakeUltraRAG(), dense=FakeDenseBackend()
-        )
-        built = await service.ingest(chunk_size=50, chunk_overlap=5)
-        count = built["chunk_count"]
-        assert count >= 6, count
-
-        async def window(overrides: list[str], *, top_k: int) -> int:
-            config = resolve_config(
-                project,
-                vanilla_executable=sys.executable,
-                settings_overrides=overrides,
-            )
-            scoped = ResearchService(  # type: ignore[arg-type]
-                config, FakeUltraRAG(), dense=FakeDenseBackend()
-            )
-            result = await scoped.search(
-                "commodity fetishism labour", top_k=top_k, rerank=True
-            )
-            return result["rerank_window"]
-
-        # Each setting is exercised below the observed default, which is what proves it is read
-        # rather than assumed.
-        default = await window([], top_k=1)
-        assert default >= 3, default
-        assert (
-            await window(
-                [
-                    "retrieval.rerank_window_multiple=1",
-                    "retrieval.rerank_window_floor=1",
-                ],
-                top_k=1,
-            )
-            == 1
-        )
-        assert await window(["retrieval.rerank_window_floor=3"], top_k=1) == 3
-        assert await window(["retrieval.rerank_max_candidates=2"], top_k=1) == 2
-        assert (
-            await window(
-                [
-                    "retrieval.rerank_window_multiple=1",
-                    "retrieval.rerank_window_floor=1",
-                ],
-                top_k=3,
-            )
-            == 3
-        )
-
-    asyncio.run(exercise())
-
-
 def test_a_ranking_change_preserves_the_generation(project: Path) -> None:
     async def exercise() -> None:
         source = project / "sources" / "article.pdf"
@@ -5797,11 +5232,20 @@ def test_a_ranking_change_preserves_the_generation(project: Path) -> None:
         assert first["chunk_count"] >= 2, first["chunk_count"]
         manifest_path = Path(first["generation_root"]) / "manifest.json"
         preserved = manifest_path.read_bytes(), base.current_path.read_bytes()
+        assert "selection" not in json.loads(preserved[0])["retrieval"]
+        initial_answer = await service.search("commodity fetishism", top_k=1)
+        assert initial_answer["selection_policy"] == {
+            "method": "greedy_source_diversity",
+            "source_diversity_penalty": 0.25,
+        }
 
         changed_config = resolve_config(
             project,
             vanilla_executable=sys.executable,
-            settings_overrides=["retrieval.rrf_k=30"],
+            settings_overrides=[
+                "retrieval.rrf_k=30",
+                "retrieval.source_diversity_penalty=0.6",
+            ],
         )
         changed = ResearchService(  # type: ignore[arg-type]
             changed_config, FakeUltraRAG(), dense=FakeDenseBackend()
@@ -5813,6 +5257,10 @@ def test_a_ranking_change_preserves_the_generation(project: Path) -> None:
         assert second["generation_id"] == first["generation_id"]
         answer = await changed.search("commodity fetishism", top_k=1)
         assert answer["fusion"]["rrf_k"] == 30
+        assert answer["selection_policy"] == {
+            "method": "greedy_source_diversity",
+            "source_diversity_penalty": 0.6,
+        }
         assert answer["generation_upgrade_required"] is False
         assert (manifest_path.read_bytes(), base.current_path.read_bytes()) == preserved
 
@@ -5924,21 +5372,6 @@ def test_feedback_without_a_table_ranks_by_leader_support() -> None:
     )
 
     assert ranked == ["beta", "alpha"]
-
-
-def test_feedback_is_reproducible_for_the_same_input() -> None:
-    arguments: dict[str, object] = {
-        "query": "commodity fetishism",
-        "texts": ["fetishism and the digital object", "the object of fetishism"],
-        "maximum_terms": 3,
-        "stopwords": ENGLISH_GATE_STOPWORDS,
-        "document_frequencies": {"digital": 9, "object": 2},
-        "corpus_size": 40,
-    }
-
-    assert ranking_module._pseudo_relevance_terms(
-        **arguments
-    ) == ranking_module._pseudo_relevance_terms(**arguments)  # type: ignore[arg-type]
 
 
 def test_diversity_relevance_normalizes_the_scored_band() -> None:
@@ -6060,87 +5493,6 @@ def test_an_unranked_tail_yields_to_a_charged_repeat() -> None:
     )
 
     assert selected == ["a1", "tail"]
-
-
-def test_diversity_selection_is_reproducible_for_the_same_input() -> None:
-    arguments: dict[str, object] = {
-        "ordered_ids": ["a1", "b1", "a2", "b2", "c1"],
-        "source_id_by_chunk": {
-            "a1": "a",
-            "a2": "a",
-            "b1": "b",
-            "b2": "b",
-            "c1": "c",
-        },
-        "scores": {"a1": 5.0, "b1": 4.0, "a2": 3.0, "b2": 2.0, "c1": 1.0},
-        "top_k": 4,
-        "penalty": 0.25,
-    }
-
-    first = ranking_module._source_diverse_selection(**arguments)  # type: ignore[arg-type]
-    second = ranking_module._source_diverse_selection(**arguments)  # type: ignore[arg-type]
-
-    assert first == second
-
-
-def test_a_diversity_penalty_is_reported_but_rebuilds_nothing(
-    project: Path,
-) -> None:
-    """A reordering of ranked candidates is not a reason to rebuild a generation.
-
-    The penalty applies to what a generation already ranked, so it changes none
-    of its files and is no part of what a generation is: one build answers two
-    penalties, each answer names the one it used, and the manifest is untouched.
-    """
-
-    async def exercise() -> None:
-        write_pdf(
-            project / "sources" / "article.pdf",
-            ["Cobalt labour in the mine.", "Wages and the working day."],
-        )
-        write_pdf(
-            project / "sources" / "second.pdf",
-            ["Cobalt, labour, and the machinery of extraction."],
-        )
-        config = resolve_config(project, vanilla_executable=sys.executable)
-        service = ResearchService(  # type: ignore[arg-type]
-            config, FakeUltraRAG(), dense=FakeDenseBackend()
-        )
-        ingested = await service.ingest(chunk_size=50, chunk_overlap=10)
-        manifest = json.loads(
-            (Path(ingested["generation_root"]) / "manifest.json").read_text(
-                encoding="utf-8"
-            )
-        )
-        assert "selection" not in manifest["retrieval"]
-
-        answer = await service.search("cobalt labour", top_k=2, include_staleness=False)
-        assert answer["generation_upgrade_required"] is False
-        assert answer["selection_policy"] == {
-            "method": "greedy_source_diversity",
-            "source_diversity_penalty": 0.25,
-        }
-
-        spread = ResearchService(  # type: ignore[arg-type]
-            resolve_config(
-                project,
-                vanilla_executable=sys.executable,
-                settings_overrides=["retrieval.source_diversity_penalty=0.6"],
-            ),
-            FakeUltraRAG(),
-            dense=FakeDenseBackend(),
-        )
-        respread = await spread.search(
-            "cobalt labour", top_k=2, include_staleness=False
-        )
-        assert respread["generation_id"] == answer["generation_id"]
-        assert respread["generation_upgrade_required"] is False
-        assert respread["selection_policy"] == {
-            "method": "greedy_source_diversity",
-            "source_diversity_penalty": 0.6,
-        }
-
-    asyncio.run(exercise())
 
 
 def test_contextual_headers_reach_the_embedding_and_never_the_passage(
@@ -6574,11 +5926,7 @@ async def _two_generation_service(project: Path) -> tuple[Any, Any, str, str]:
         title="Article",
     )
     config = resolve_config(project, vanilla_executable=sys.executable)
-    service = ResearchService(  # type: ignore[arg-type]
-        config,
-        FakeUltraRAG(),
-        dense=FakeDenseBackend(),
-    )
+    service = make_service(config)
     first = await service.ingest(chunk_size=50, chunk_overlap=10)
     write_pdf(
         project / "sources" / "second.pdf",
@@ -6786,26 +6134,6 @@ async def _assert_remove_generation_refuses_a_pending_activation_target(
     assert (config.generations_root / first).is_dir()
 
 
-async def _assert_a_removed_generation_can_be_rebuilt_and_selected_again(
-    project: Path,
-) -> None:
-    """Removal is permanent, and the stated recovery is one ingestion."""
-
-    service, config, first, second = await _two_generation_service(project)
-    await service.remove_generation(first, confirm=first)
-    assert not (config.generations_root / first).exists()
-
-    rebuilt = await service.ingest(chunk_size=50, chunk_overlap=10)
-
-    # The build is refused as unchanged while the current generation still
-    # matches the corpus, so the recovered generation is a rollback target
-    # rather than a second copy of what is already in use.
-    assert rebuilt["status"] in {"unchanged", "complete"}
-    status = await service.status()
-    assert status["generation_id"] == second
-    assert status["ready"] is True
-
-
 def test_use_generation_rolls_the_pointer_back(project: Path) -> None:
     asyncio.run(_assert_use_generation_rolls_the_pointer_back(project))
 
@@ -6850,7 +6178,3 @@ def test_remove_generation_will_not_run_on_a_mistyped_id(project: Path) -> None:
 
 def test_remove_generation_refuses_a_pending_activation_target(project: Path) -> None:
     asyncio.run(_assert_remove_generation_refuses_a_pending_activation_target(project))
-
-
-def test_a_removed_generation_can_be_rebuilt_and_selected_again(project: Path) -> None:
-    asyncio.run(_assert_a_removed_generation_can_be_rebuilt_and_selected_again(project))

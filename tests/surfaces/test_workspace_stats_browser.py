@@ -271,6 +271,11 @@ _HARNESS = r"""
       : null,
     historyText: text("history"),
     usageText: text("usage"),
+    figures: text("searches"),
+    corpus: text("corpus"),
+    people: text("people"),
+    build: text("build"),
+    counts: ["sources", "passages", "history"].map((id) => card(id).querySelector(".count-badge").textContent),
     historyLinks: links("history"),
     sourceLinks: links("sources"),
     passageLinks: links("passages"),
@@ -524,6 +529,19 @@ def test_the_board_renders_real_content(
     ]
     assert "labour and automation" in probe["historyText"]
     assert "search invocations" in probe["usageText"]
+    for fact in (
+        "7.5 passages on average",
+        "18% of searches",
+        "840 ms",
+        "95th percentile 2.4 s",
+        "of 3 searchable sources",
+    ):
+        assert fact in probe["figures"]
+    assert "20 fewest · 100 median · 280 most" in probe["corpus"]
+    assert "2020s" in probe["corpus"]
+    assert "marxism" in probe["people"] and "Crawford" in probe["people"]
+    assert "26,532 embedded" in probe["build"]
+    assert probe["counts"] == ["2", "1", "1"]
     # sourceCell and passageSourceCell return a DocumentFragment; its anchor must
     # be a real element in the table, not lost on append.
     assert ["Atlas of AI", "#/source?id=src_1"] in probe["sourceLinks"]

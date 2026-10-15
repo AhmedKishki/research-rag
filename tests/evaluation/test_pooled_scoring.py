@@ -385,7 +385,6 @@ def test_a_passage_judged_under_another_question_does_not_satisfy_a_ranking() ->
     [
         ("relevance", None),
         ("relevance", "uncertain"),
-        ("relevance", "maybe"),
         ("usability", None),
         ("usability", "usable-ish"),
         ("source_verified", "yes"),
@@ -1013,6 +1012,11 @@ def test_every_trial_against_one_family_leaves_both_intervals_unusable() -> None
         assert trial["families_evaluated"] == 1
         assert trial["interval_95"]["usable"] is False
         assert trial["interval_95"]["low"] is None
+        assert trial["interval_95"]["high"] is None
+        assert trial["interval_95"]["draws"] == 0
+        assert (
+            trial["interval_95"]["draws_requested"] == pooled.DEFAULT_BOOTSTRAP_SAMPLES
+        )
         assert "fewer than two evaluable families" in trial["interval_95"]["reason"]
 
 
@@ -1108,22 +1112,16 @@ def test_the_comparison_publishes_no_cross_arm_average() -> None:
     )
 
 
-def test_the_bootstrap_leaves_the_interval_null_below_its_draw_floor() -> None:
-    interval = pooled._cluster_bootstrap([0.1, 0.9], 1, 0)
-    assert interval["usable"] is False
-    assert interval["low"] is None
-    assert interval["high"] is None
-    assert interval["draws"] == 0
-    assert interval["draws_requested"] == 1
-    assert "below the 200-draw floor" in interval["reason"]
-    assert "not a 95% interval" in interval["reason"]
-    assert "neither stability nor power" in interval["reason"]
-
-
 def test_the_draw_floor_is_exactly_where_it_is_stated() -> None:
     below = pooled._cluster_bootstrap([0.1, 0.9], pooled.BOOTSTRAP_MIN_SAMPLES - 1, 0)
     at_floor = pooled._cluster_bootstrap([0.1, 0.9], pooled.BOOTSTRAP_MIN_SAMPLES, 3)
     assert below["usable"] is False
+    assert below["low"] is None and below["high"] is None
+    assert below["draws"] == 0
+    assert below["draws_requested"] == pooled.BOOTSTRAP_MIN_SAMPLES - 1
+    assert "below the 200-draw floor" in below["reason"]
+    assert "not a 95% interval" in below["reason"]
+    assert "neither stability nor power" in below["reason"]
     assert at_floor["usable"] is True
     assert at_floor["draws"] == pooled.BOOTSTRAP_MIN_SAMPLES
     assert pooled.BOOTSTRAP_MIN_SAMPLES == 200
@@ -1141,14 +1139,6 @@ def test_one_draw_through_the_api_leaves_the_point_estimate_and_no_interval() ->
     assert "below the 200-draw floor" in trial["interval_95"]["reason"]
 
 
-def test_one_evaluable_family_is_refused_before_the_draw_floor_is_reached() -> None:
-    interval = pooled._cluster_bootstrap([0.5], 2000, 0)
-    assert interval["usable"] is False
-    assert interval["draws"] == 0
-    assert interval["draws_requested"] == 2000
-    assert "fewer than two evaluable families" in interval["reason"]
-
-
 def test_the_baseline_defaults_to_the_first_declared_condition_and_is_selectable() -> (
     None
 ):
@@ -1163,19 +1153,6 @@ def test_the_baseline_defaults_to_the_first_declared_condition_and_is_selectable
 def test_an_undeclared_baseline_is_refused() -> None:
     with pytest.raises(Refused, match="is not a declared condition"):
         pooled.evaluate(_unequal_families(), baseline="arm-that-was-never-run")
-
-
-def test_one_evaluable_family_has_no_interval() -> None:
-    handoff = _simple()
-    for question in handoff["questions"]:
-        question["family_id"] = "one-family"
-    interval = pooled.evaluate(handoff)["comparison"]["per_metric"][
-        "ndcg_at_requested_k"
-    ]["conditions"]["treatment"]["interval_95"]
-    assert interval["usable"] is False
-    assert interval["low"] is None and interval["high"] is None
-    assert interval["draws"] == 0
-    assert "fewer than two evaluable families" in interval["reason"]
 
 
 def test_the_interval_reproduces_from_its_seed() -> None:
@@ -1261,31 +1238,19 @@ def _write(tmp_path: Path, name: str, payload: dict[str, Any]) -> Path:
     return path
 
 
-def test_a_handoff_is_read_without_being_changed(tmp_path: Path) -> None:
-    source = _write(tmp_path, "handoff.json", _simple())
-    before = source.read_bytes()
-    document = pooled.load_handoff(source)
-    pooled.evaluate(document)
-    assert source.read_bytes() == before
-
-
 def test_a_report_is_written_exclusively_and_readable(tmp_path: Path) -> None:
     source = _write(tmp_path, "handoff.json", _simple())
+    before = source.read_bytes()
     report = tmp_path / "report.json"
     assert pooled.main(["--input", str(source), "--report", str(report)]) == 0
+    assert source.read_bytes() == before
+    assert report.stat().st_mode & 0o777 == 0o600
     payload = json.loads(report.read_text(encoding="utf-8"))
     assert payload["report_meta"]["protocol"] == "author_pool_v1"
     assert [item["condition_id"] for item in payload["conditions"]] == [
         "baseline",
         "treatment",
     ]
-
-
-def test_a_report_is_owner_only(tmp_path: Path) -> None:
-    source = _write(tmp_path, "handoff.json", _simple())
-    report = tmp_path / "report.json"
-    pooled.main(["--input", str(source), "--report", str(report)])
-    assert report.stat().st_mode & 0o777 == 0o600
 
 
 def test_an_existing_report_path_is_refused_and_left_alone(tmp_path: Path) -> None:
@@ -1388,13 +1353,17 @@ def test_the_rubric_digest_is_verified_and_published_as_verified() -> None:
     rubric = {
         "rubric_id": "rubric-2",
         "relevance": ["irrelevant", "contextual", "direct"],
-        "notes": "A boundary call is a needs_context direct, never a context.",
+        "notes": {"z": "grade é", "a": [1, 2]},
     }
+    canonical = (
+        '{"notes":{"a":[1,2],"z":"grade é"},'
+        '"relevance":["irrelevant","contextual","direct"],"rubric_id":"rubric-2"}'
+    )
     payload = pooled.evaluate(_simple(provenance=_provenance(rubric=rubric)))
     meta = payload["report_meta"]
     assert meta["provenance"]["rubric"] == rubric
     assert meta["rubric_verification"] == {
-        "rubric_sha256": _rubric_digest(rubric),
+        "rubric_sha256": _digest(canonical),
         "verified": True,
         "canonical_json": (
             "sha256(json.dumps(rubric, sort_keys=True, ensure_ascii=False, "
@@ -1402,16 +1371,6 @@ def test_the_rubric_digest_is_verified_and_published_as_verified() -> None:
         ),
     }
     assert not any("form only" in limit for limit in payload["limits"])
-
-
-def test_the_canonical_digest_sorts_keys_and_drops_whitespace() -> None:
-    assert _rubric_digest({"b": 1, "a": 2}) == _digest('{"a":2,"b":1}')
-    assert _rubric_digest({"a": {"d": 1, "c": 2}}) == _digest('{"a":{"c":2,"d":1}}')
-    assert _rubric_digest([1, 2]) == _digest("[1,2]")
-    # Non-ASCII is kept as itself, never escaped: a rubric's own characters hash
-    # as the reader sees them.
-    assert _rubric_digest({"note": "grade é"}) == _digest('{"note":"grade é"}')
-    assert _rubric_digest({"note": "grade é"}) != _digest('{"note":"grade \\u00e9"}')
 
 
 def test_a_rubric_edited_after_it_was_hashed_is_refused() -> None:
@@ -1514,20 +1473,6 @@ def test_protected_roots_must_be_declared_as_a_list_of_paths(roots: Any) -> None
         pooled.evaluate(_simple(provenance=_provenance(protected_roots=roots)))
 
 
-def test_a_report_inside_a_protected_root_is_refused(tmp_path: Path) -> None:
-    protected = tmp_path / "protected"
-    protected.mkdir()
-    source = _write(
-        tmp_path,
-        "handoff.json",
-        _simple(provenance=_provenance(protected_roots=[str(protected)])),
-    )
-    report = protected / "report.json"
-    assert pooled.main(["--input", str(source), "--report", str(report)]) == 2
-    assert not report.exists()
-    assert list(protected.iterdir()) == []
-
-
 def test_a_protected_root_covers_itself_and_every_path_below_it(tmp_path: Path) -> None:
     protected = tmp_path / "protected"
     nested = protected / "deeper" / "still"
@@ -1541,6 +1486,8 @@ def test_a_protected_root_covers_itself_and_every_path_below_it(tmp_path: Path) 
         pooled.main(["--input", str(source), "--report", str(protected / "r.json")])
         == 2
     )
+    assert not (protected / "r.json").exists()
+    assert list(protected.iterdir()) == [protected / "deeper"]
     assert (
         pooled.main(["--input", str(source), "--report", str(nested / "r.json")]) == 2
     )

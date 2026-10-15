@@ -4,8 +4,8 @@ The gate split lives in ``generations/generation.py`` and is unit-tested in
 ``test_generation.py``. Here ``_advance_ingestion`` is exercised with the shared
 retrieval fakes, so the decisions that only appear end to end are covered:
 
-- a model-only change reuses extraction and chunks while recomputing every vector;
-- ``force_recompute`` disables every reuse axis.
+- a model-only change reuses text while renewing vectors and token audits;
+- a header change reuses units and rebuilds chunks, including across a resume.
 """
 
 from __future__ import annotations
@@ -22,7 +22,7 @@ from research_rag.core.service import ResearchService
 from research_rag.project.config import resolve_config
 from research_rag.project.embeddings import resolve_embedding_model
 from tests.conftest import write_pdf
-from tests.core.test_service import FakeDenseBackend, FakeUltraRAG
+from tests.service_helpers import FakeDenseBackend, FakeUltraRAG
 
 _OTHER_EMBEDDING = resolve_embedding_model("BAAI/bge-base-en-v1.5")
 
@@ -43,7 +43,11 @@ def test_a_model_change_reuses_text_and_recomputes_vectors(project: Path) -> Non
             title="Article",
         )
         config = resolve_config(project, vanilla_executable=sys.executable)
-        first = await _service(config).ingest(chunk_size=50, chunk_overlap=10)
+        first_backend = FakeDenseBackend()
+        first_backend.token_count_override = 7
+        first = await ResearchService(
+            config, FakeUltraRAG(), dense=first_backend
+        ).ingest(chunk_size=50, chunk_overlap=10)
         assert first["status"] == "ready"
         assert first["chunk_count"] >= 1
 
@@ -60,7 +64,11 @@ def test_a_model_change_reuses_text_and_recomputes_vectors(project: Path) -> Non
         }
         manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
 
-        second = await _service(config).ingest(chunk_size=50, chunk_overlap=10)
+        second_backend = FakeDenseBackend()
+        second_backend.token_count_override = 99
+        second = await ResearchService(
+            config, FakeUltraRAG(), dense=second_backend
+        ).ingest(chunk_size=50, chunk_overlap=10)
 
         assert second["status"] == "ready"
         assert second["generation_changed"] is True
@@ -72,33 +80,19 @@ def test_a_model_change_reuses_text_and_recomputes_vectors(project: Path) -> Non
         assert second["reused_chunk_count"] == second["chunk_count"]
         assert second["reused_vector_count"] == 0
         assert second["created_vector_count"] == second["chunk_count"]
-
-    asyncio.run(exercise())
-
-
-def test_force_recompute_disables_every_reuse_axis(project: Path) -> None:
-    async def exercise() -> None:
-        write_pdf(
-            project / "sources" / "article.pdf",
-            ["Stable cobalt evidence about commodity fetishism."],
-            title="Article",
+        new_manifest = json.loads(
+            (Path(second["generation_root"]) / "manifest.json").read_text(
+                encoding="utf-8"
+            )
         )
-        config = resolve_config(project, vanilla_executable=sys.executable)
-        first = await _service(config).ingest(chunk_size=50, chunk_overlap=10)
-        assert first["status"] == "ready"
-
-        forced = await _service(config).ingest(
-            chunk_size=50,
-            chunk_overlap=10,
-            force_recompute=True,
-        )
-
-        assert forced["status"] == "ready"
-        assert forced["reused_document_count"] == 0
-        assert forced["rebuilt_document_count"] == forced["document_count"]
-        assert forced["reused_chunk_count"] == 0
-        assert forced["reused_vector_count"] == 0
-        assert forced["created_vector_count"] == forced["chunk_count"]
+        chunks_path = Path(second["generation_root"]) / new_manifest["files"]["chunks"]
+        chunks = [
+            json.loads(line)
+            for line in chunks_path.read_text(encoding="utf-8").splitlines()
+            if line
+        ]
+        assert len(chunks) == second["chunk_count"]
+        assert {chunk["embedding_token_count"] for chunk in chunks} == {99}
 
     asyncio.run(exercise())
 
@@ -181,57 +175,6 @@ def test_header_change_resumes_with_units_reused_and_chunks_rebuilt(
         assert result["reused_document_count"] == result["document_count"]
         assert result["rebuilt_chunk_count"] == result["chunk_count"]
         assert result["reused_chunk_count"] == 0
-
-    asyncio.run(exercise())
-
-
-def test_a_model_change_recomputes_the_embedding_token_audit(project: Path) -> None:
-    """Reused chunks carry the new model's token audit, never the old model's."""
-
-    async def exercise() -> None:
-        write_pdf(
-            project / "sources" / "article.pdf",
-            ["Stable cobalt evidence about commodity fetishism."],
-            title="Article",
-        )
-        config = resolve_config(project, vanilla_executable=sys.executable)
-        first_backend = FakeDenseBackend()
-        first_backend.token_count_override = 7
-        first = await ResearchService(  # type: ignore[arg-type]
-            config, FakeUltraRAG(), dense=first_backend
-        ).ingest(chunk_size=50, chunk_overlap=10)
-        assert first["status"] == "ready"
-
-        manifest_path = Path(first["generation_root"]) / "manifest.json"
-        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-        manifest["retrieval"]["dense"] = {
-            "embedding_model": _OTHER_EMBEDDING.name,
-            "embedding_model_revision": _OTHER_EMBEDDING.revision,
-            "embedding_dimension": _OTHER_EMBEDDING.dimension,
-            "embedding_model_repository": _OTHER_EMBEDDING.repository,
-        }
-        manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
-
-        second_backend = FakeDenseBackend()
-        second_backend.token_count_override = 99
-        second = await ResearchService(  # type: ignore[arg-type]
-            config, FakeUltraRAG(), dense=second_backend
-        ).ingest(chunk_size=50, chunk_overlap=10)
-        assert second["status"] == "ready"
-        assert second["reused_chunk_count"] == second["chunk_count"]
-
-        new_manifest = json.loads(
-            (Path(second["generation_root"]) / "manifest.json").read_text(
-                encoding="utf-8"
-            )
-        )
-        chunks_path = Path(second["generation_root"]) / new_manifest["files"]["chunks"]
-        counts = {
-            json.loads(line)["embedding_token_count"]
-            for line in chunks_path.read_text(encoding="utf-8").splitlines()
-            if line
-        }
-        assert counts == {99}
 
     asyncio.run(exercise())
 

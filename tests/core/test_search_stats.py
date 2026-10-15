@@ -20,7 +20,7 @@ from research_rag.storage.search_stats import (
     record_search,
 )
 from tests.conftest import write_epub, write_pdf, write_reviewed_metadata
-from tests.core.test_service import FakeDenseBackend, FakeUltraRAG
+from tests.service_helpers import FakeDenseBackend, FakeUltraRAG
 
 
 def _service(

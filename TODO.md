@@ -62,8 +62,6 @@ An item is done when the harness has produced its measurement and the validation
   - Test `BaseHTTPMiddleware` first. `runtime/app.py` wraps the streaming MCP app in it, and Starlette's base middleware raises `No response returned` when the wrapped app ends before `http.response.start`. Pure ASGI middleware avoids it.
 - [ ] **Reuse the bridge's upstream session.** Feature. Each bridged tool call costs a health request, a control request, and a new MCP handshake.
 
-- [ ] **The search page's Categories field does nothing.** Bug. The Reviewed metadata box sends `categories`, which `search` does not take, so `surfaces/ui.py` drops it. Add an all-of category filter to `search`, or remove the field.
-
 ## reporting
 
 - [ ] **Show ingestion and generation activity in the workspace.** Feature. Show the active phase, completed and total work where available, elapsed time, and the last progress update so a user can distinguish a working server from a stalled operation. Show an activity indicator during phases without measurable progress. Distinguish waiting, running, failed, and completed states; do not imply that animation alone proves progress. Test long phases and stale or disconnected status updates.

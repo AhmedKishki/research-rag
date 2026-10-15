@@ -51,34 +51,16 @@ from research_rag.corpus.text_quality import (
 from research_rag.project.config import resolve_config
 from research_rag.project.policy import ResearchError
 from tests.conftest import write_epub, write_pdf
-from tests.core.test_service import FakeDenseBackend, FakeUltraRAG
 from tests.extraction_helpers import extract_sources
+from tests.service_helpers import FakeDenseBackend, FakeUltraRAG
 
-# A prose paragraph long enough that a page's own text, rather than a title line,
-# establishes the body font size the footnote rule measures against.
+# Readable body evidence used beside removed apparatus and damaged passages.
 BODY_PROSE = (
     "The extraction of a page is a layout decision before it is a reading one. "
     "A block that sits beside the body column is set narrow and set apart, and "
     "that geometry is what separates it from a paragraph without consulting a "
     "single word of what it says. A note apparatus is set below the body in a "
     "smaller size, and the same is true of both halves at once."
-)
-# A lead paragraph set larger than the prose it introduces. It is what a journal,
-# a deck, and a standfirst all are, and a page that carries one above its body is
-# the case where a median body size reads the body itself as a note.
-LEAD_PARAGRAPH = (
-    "This chapter follows the road from the archive to the market and argues "
-    "that every account of the harvest is also an account of the labour that "
-    "picked it, and that the council minutes recorded one of the two while the "
-    "carts on the quay recorded the other for rather longer than that."
-)
-# A data table and a block quote are both set small and both sit low on a page,
-# which is the shape of a note apparatus. Neither opens with a marker, so neither
-# is one.
-DATA_TABLE = "Year | Harvest | Wage | Strike 1919 | 4200 | 3.10 | 41 1920 | 5100 | 3.40"
-BLOCK_QUOTE = (
-    "Cobalt, they wrote, is the only metal that keeps a memory of the heat that "
-    "made it, and the assay office in this town read that memory twice a year."
 )
 REFERENCES_HEADING = "References"
 SYMBOLS_ONLY = "… — ∑ × 🙂"
@@ -1333,167 +1315,10 @@ def test_the_gate_records_the_removal_counts_the_extractor_reported() -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_excluded_furniture_is_counted_and_the_argument_is_indexed(
-    project: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """A running head or marginal note the worker excluded is not indexed.
-
-    The managed worker removes declared page furniture before it emits units and
-    reports how many items it dropped; the extraction records that count. Geometry
-    no longer decides furniture, so one case covers a head, a footer, and a
-    margin. The native sidebar and small-font footnote geometry rules are retired;
-    the furniture-layer exclusion in `test_docling_adapter.py` is their supported
-    replacement.
-    """
-
-    _record_docling_pages(
-        monkeypatch,
-        project / "sources" / "furniture.pdf",
-        {1: [BODY_PROSE]},
-        excluded_furniture=1,
-    )
-
-    documents, units = _extracted(project)
-
-    assert "layout decision before it is a reading one" in _combined(units)
-    assert documents[0]["removed_repeated_margin_blocks"] == 1
-
-
-def test_an_unmarked_note_in_the_foot_of_the_page_is_kept(project: Path) -> None:
-    """A note printed without its marker is left in, which is the safe direction.
-
-    A note apparatus is numbered, and the marker is the only evidence a page
-    carries that a small block at the foot is a note rather than evidence. A
-    publisher that drops the numbers loses the removal, not the text.
-    """
-
-    _pdf(
-        project / "sources" / "unmarked-note.pdf",
-        [
-            [
-                ((72, 100, 540, 320), BODY_PROSE, 10.0),
-                (
-                    (72, 700, 540, 760),
-                    "The archive copy of the minute book names the clerk who wrote it.",
-                    7.0,
-                ),
-            ]
-        ],
-    )
-
-    documents, units = _extracted(project)
-
-    assert "The archive copy of the minute book" in _combined(units)
-    assert documents[0]["removed_footnote_blocks"] == 0
-
-
-def test_a_lead_paragraph_set_larger_than_the_body_is_not_a_note(
-    project: Path,
-) -> None:
-    """A deck above the argument must not make the argument a note.
-
-    A lead, a deck, and a standfirst are all set larger than the prose they
-    introduce. A body size read as the middle of the page's sizes then finds every
-    body paragraph below it, at the foot of the page or not, and the page's whole
-    argument goes with its first paragraph.
-    """
-
-    _pdf(
-        project / "sources" / "lead.pdf",
-        [
-            [
-                ((72, 60, 540, 175), LEAD_PARAGRAPH, 13.0),
-                ((72, 200, 540, 300), BODY_PROSE, 10.0),
-            ]
-        ],
-    )
-
-    documents, units = _extracted(project)
-
-    combined = _combined(units)
-    assert "the labour that picked it" in combined
-    assert "layout decision before it is a reading one" in combined
-    assert documents[0]["removed_footnote_blocks"] == 0
-    assert documents[0]["removed_non_argument_characters"] == 0
-
-
-def test_a_small_font_table_in_the_foot_of_the_page_is_not_a_note(
-    project: Path,
-) -> None:
-    """A data table is set small and sits low, and is evidence either way."""
-
-    _pdf(
-        project / "sources" / "small-table.pdf",
-        [
-            [
-                ((72, 100, 540, 320), BODY_PROSE, 10.0),
-                ((90, 700, 520, 800), DATA_TABLE, 8.0),
-            ]
-        ],
-    )
-
-    documents, units = _extracted(project)
-
-    assert "Year | Harvest | Wage" in _combined(units)
-    assert documents[0]["removed_footnote_blocks"] == 0
-
-
-def test_a_small_font_block_quote_in_the_foot_of_the_page_is_not_a_note(
-    project: Path,
-) -> None:
-    """A block quote is set small, is indented, and sits low. None of that is a note."""
-
-    _pdf(
-        project / "sources" / "small-quote.pdf",
-        [
-            [
-                ((72, 100, 540, 320), BODY_PROSE, 10.0),
-                ((90, 700, 520, 800), BLOCK_QUOTE, 8.0),
-            ]
-        ],
-    )
-
-    documents, units = _extracted(project)
-
-    assert "keeps a memory of the heat" in _combined(units)
-    assert documents[0]["removed_footnote_blocks"] == 0
-
-
-def test_body_text_in_the_lower_half_of_a_page_is_not_a_footnote(
-    project: Path,
-) -> None:
-    _pdf(
-        project / "sources" / "low-body.pdf",
-        [
-            [
-                ((72, 100, 540, 300), BODY_PROSE, 10.0),
-                (
-                    (72, 500, 540, 640),
-                    (
-                        "A second paragraph of the same body size that a page "
-                        "carries low down because the argument continues there."
-                    ),
-                    10.0,
-                ),
-            ]
-        ],
-    )
-
-    documents, units = _extracted(project)
-
-    assert "the argument continues there" in _combined(units)
-    assert documents[0]["removed_footnote_blocks"] == 0
-
-
 def test_a_numbered_list_in_the_foot_of_the_page_is_not_a_note(
     project: Path,
 ) -> None:
-    """A list carries the marker a note carries, and is set in the body size.
-
-    The marker alone would take it. A page sets a numbered list in the body size
-    and does not separate it from the body, so the other three conditions are what
-    hold it.
-    """
+    """Numbered argument survives; Docling labels, not geometry, protect content."""
 
     _pdf(
         project / "sources" / "low-list.pdf",
@@ -1512,6 +1337,7 @@ def test_a_numbered_list_in_the_foot_of_the_page_is_not_a_note(
     assert "The first claim the chapter defends" in combined
     assert "The second claim follows from it" in combined
     assert documents[0]["removed_footnote_blocks"] == 0
+    assert documents[0]["removed_non_argument_characters"] == 0
 
 
 def _epub_spine(path: Path, sections: list[str], *, title: str = "Gate Book") -> None:
@@ -1706,6 +1532,8 @@ def test_a_pdf_reference_list_running_over_several_pages_is_removed(
     assert "history decision before it is a reading one" in combined
     assert "The appendix sets out the coding scheme" in combined
     assert documents[0]["removed_reference_segments"] == 3
+    assert documents[0]["removed_non_argument_characters"] > 0
+    assert all(unit["locator"]["page"] != 2 for unit in units)
 
 
 def test_explanatory_pdf_notes_running_onto_the_next_page_are_kept(
@@ -1773,27 +1601,6 @@ def test_a_heading_followed_by_argument_closes_the_section_before_the_list(
     assert documents[0]["removed_reference_segments"] == 0
 
 
-def test_a_pdf_page_of_only_entries_contributes_no_unit(
-    project: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    _record_docling_pages(
-        monkeypatch,
-        project / "sources" / "entries-only.pdf",
-        {
-            1: [BODY_PROSE, REFERENCES_HEADING],
-            2: [ENTRY_ONE, ENTRY_TWO],
-        },
-    )
-
-    documents, units = _extracted(project)
-
-    assert all("Smith, J. (2019)" not in str(unit["contents"]) for unit in units)
-    assert all("Jones, A. (2020)" not in str(unit["contents"]) for unit in units)
-    assert any("layout decision" in str(unit["contents"]) for unit in units)
-    # The page held nothing but entries, so it yields no unit at all.
-    assert documents[0]["removed_reference_segments"] == 3
-
-
 def test_an_ambiguous_pdf_references_heading_above_prose_is_kept(
     project: Path,
 ) -> None:
@@ -1821,83 +1628,6 @@ def test_an_ambiguous_pdf_references_heading_above_prose_is_kept(
     assert REFERENCES_HEADING in combined
     assert "not at all shaped like a citation" in combined
     assert documents[0]["removed_reference_segments"] == 0
-
-
-def test_a_pdf_figure_caption_in_the_foot_of_the_page_is_not_a_footnote(
-    project: Path,
-) -> None:
-    """A caption is set small, sits low, and is evidence about the figure."""
-
-    _pdf(
-        project / "sources" / "caption.pdf",
-        [
-            [
-                ((72, 100, 540, 320), BODY_PROSE, 10.0),
-                (
-                    (72, 700, 540, 760),
-                    "Figure 3. The extractor before and after the cleanup rules.",
-                    7.5,
-                ),
-            ]
-        ],
-    )
-
-    documents, units = _extracted(project)
-
-    assert "Figure 3." in _combined(units)
-    assert documents[0]["removed_footnote_blocks"] == 0
-
-
-def test_a_uniformly_small_page_keeps_every_block(project: Path) -> None:
-    _pdf(
-        project / "sources" / "uniform.pdf",
-        [
-            [
-                ((72, 100, 540, 300), "A page set small throughout its own text.", 7.0),
-                ((72, 340, 540, 420), "A second block of that same small size.", 7.0),
-            ]
-        ],
-    )
-
-    documents, units = _extracted(project)
-
-    assert "A second block of that same small size." in _combined(units)
-    assert documents[0]["removed_footnote_blocks"] == 0
-
-
-def test_a_two_column_page_keeps_both_columns(project: Path) -> None:
-    _pdf(
-        project / "sources" / "columns.pdf",
-        [
-            [
-                ((55, 120, 270, 240), "The left column of a two-column page.", 10.0),
-                ((325, 120, 540, 240), "The right column of the same page.", 10.0),
-            ]
-        ],
-    )
-
-    documents, units = _extracted(project)
-
-    assert "The left column" in _combined(units)
-    assert "The right column" in _combined(units)
-    assert documents[0]["removed_sidebar_blocks"] == 0
-
-
-def test_a_pdf_reference_page_loses_its_entries_before_chunking(
-    project: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    _record_docling_pages(
-        monkeypatch,
-        project / "sources" / "references.pdf",
-        {1: [BODY_PROSE, REFERENCES_HEADING, ENTRY_ONE, ENTRY_TWO]},
-    )
-
-    documents, units = _extracted(project)
-
-    assert "Smith, J. (2019)" not in _combined(units)
-    assert "layout decision before it is a reading one" in _combined(units)
-    assert documents[0]["removed_reference_segments"] == 3
-    assert documents[0]["removed_non_argument_characters"] > 0
 
 
 # ---------------------------------------------------------------------------
@@ -1985,8 +1715,9 @@ def test_every_removal_category_the_record_carries_is_registered(
         excluded_furniture=3,
     )
 
-    documents, _units = _extracted(project)
+    documents, units = _extracted(project)
 
+    assert "layout decision before it is a reading one" in _combined(units)
     assert set(empty_removal_counts()) == set(REMOVAL_FIELDS)
     recorded = {key for key in REMOVAL_FIELDS if key in documents[0]}
     assert recorded == set(REMOVAL_FIELDS)
@@ -1994,32 +1725,6 @@ def test_every_removal_category_the_record_carries_is_registered(
         key: 1 for key in recorded
     }
     assert documents[0]["removed_repeated_margin_blocks"] == 3
-
-
-def test_removed_furniture_is_counted_without_refusing_the_source(
-    project: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """The furniture the worker dropped is reported, and does not veto.
-
-    A file whose text layer carries page furniture and a readable paragraph beside
-    it loses that furniture, and the paragraph survives. The removal count is
-    recorded so a reader can see what was dropped, but no share of removed text
-    refuses a source.
-    """
-
-    _record_docling_pages(
-        monkeypatch,
-        project / "sources" / "head-heavy.pdf",
-        {page: ["The council met again about the harvest."] for page in range(1, 5)},
-        excluded_furniture=4,
-    )
-
-    documents, units = _extracted(project)
-
-    assert documents[0]["removed_repeated_margin_blocks"] > 0
-    assert any(
-        "The council met again about the harvest." in str(u["contents"]) for u in units
-    )
 
 
 def test_epub_sidebar_and_note_elements_are_not_indexed(project: Path) -> None:

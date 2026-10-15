@@ -572,6 +572,9 @@ def test_a_decision_that_names_two_subjects_or_none_is_refused() -> None:
 
     service = RecordingService()
 
+    with pytest.raises(ResearchError, match="Name the passage"):
+        asyncio.run(_operate(_args("include"), service))
+
     with pytest.raises(ResearchError, match="Name the passage with --chunk"):
         asyncio.run(_operate(_args("exclude", "--reason", "nothing named"), service))
 

@@ -16,6 +16,6 @@ What enters an index: source selection, locators, text cleanup, and the health g
   - A staged build reaching the same verdict as a direct one, with a refusal preserving the current generation.
 
 - The PDF and EPUB writers come from `tests/conftest.py`. `test_sources_and_extraction.py` also builds malformed `pymupdf` and `ebooklib` documents directly.
-- `test_extraction_health_gate.py` also needs the fakes from `tests/core/test_service.py`.
-- Fast tests use the offline synthetic Docling worker in `tests/conftest.py`; recorded payloads exercise structural roles. `real_docling` opts out of the stub for a worker-boundary test.
+- `test_extraction_health_gate.py` also needs the fakes from `tests/service_helpers.py`.
+- Fast PDF tests use the text-only synthetic Docling worker in `tests/conftest.py`, not font or layout geometry. Recorded Docling payloads exercise structural roles. `real_docling` opts out of the stub for a worker-boundary test.
 - Run this folder before any retrieval run, because a change here changes what a generation holds.

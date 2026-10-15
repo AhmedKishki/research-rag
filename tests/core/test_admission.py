@@ -14,7 +14,7 @@ from research_rag.core.service import ResearchService
 from research_rag.project.config import resolve_config
 from research_rag.project.policy import ResearchError
 from tests.conftest import write_pdf
-from tests.core.test_service import FakeDenseBackend, FakeUltraRAG
+from tests.service_helpers import FakeDenseBackend, FakeUltraRAG
 
 
 async def _settle() -> None:

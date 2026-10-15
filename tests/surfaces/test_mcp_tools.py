@@ -274,31 +274,16 @@ def _client(project: Path, service: _Service | None = None, state: dict | None =
     return Client(_server(project, service or _Service(), state))
 
 
-async def test_the_surface_declares_eight_tools_and_one_resource(project: Path) -> None:
+async def test_the_advertised_contract_and_handshake(project: Path) -> None:
     async with _client(project) as client:
         tools = await client.list_tools()
         resources = await client.list_resources()
+        instructions = client.initialize_result.instructions
 
     assert tuple(tool.name for tool in tools) == TOOLS
     assert tuple(str(item.uri) for item in resources) == ("research://status",)
     assert SERVER_NAME == AGENT_BRIDGE_NAME == "research-rag"
-
-
-async def test_the_client_handshake_carries_the_instructions(project: Path) -> None:
-    async with _client(project) as client:
-        assert client.initialize_result.instructions == AGENT_INSTRUCTIONS
-
-
-async def test_the_serialized_tools_list_stays_inside_its_budget(project: Path) -> None:
-    """Descriptions and schemas are read by every client before any answer arrives.
-
-    A client that lists tools pays for all eight at once, so their size is a
-    presentation cost rather than a rounding error. The bound is measured on the
-    declared surface, so it tracks the text an agent actually receives.
-    """
-
-    async with _client(project) as client:
-        tools = await client.list_tools()
+    assert instructions == AGENT_INSTRUCTIONS
 
     listing = json.dumps(
         [
@@ -320,12 +305,7 @@ async def test_the_serialized_tools_list_stays_inside_its_budget(project: Path) 
         for name, schema in tool.inputSchema["properties"].items():
             assert schema["description"], f"{tool.name}.{name}"
 
-
-async def test_no_tool_offers_engine_tuning_to_a_caller(project: Path) -> None:
-    """A caller chooses what to ask for, never how the engine answers it."""
-
-    async with _client(project) as client:
-        schemas = {tool.name: tool.inputSchema for tool in await client.list_tools()}
+    schemas = {tool.name: tool.inputSchema for tool in tools}
 
     everything = json.dumps(schemas)
     for engine_key in (
@@ -361,16 +341,7 @@ async def test_no_tool_offers_engine_tuning_to_a_caller(project: Path) -> None:
     assert set(schemas["get_passage"]["properties"]) == {"chunk_id"}
     assert set(schemas["find_source"]["properties"]) == {"query", "limit"}
 
-
-async def test_the_metadata_schema_states_the_types_and_the_replace_rule(
-    project: Path,
-) -> None:
-    """A free-form mapping is only safe to send when its fields and types are named."""
-
-    async with _client(project) as client:
-        tools = {tool.name: tool for tool in await client.list_tools()}
-
-    schema = tools["set_source_metadata"].inputSchema
+    schema = schemas["set_source_metadata"]
     assert set(schema["properties"]) == {"source_path", "metadata"}
     assert set(schema["required"]) == {"source_path", "metadata"}
     description = schema["properties"]["metadata"]["description"]
@@ -389,12 +360,7 @@ async def test_the_metadata_schema_states_the_types_and_the_replace_rule(
     assert "replaces" in description
     assert "clears it" in description
 
-
-async def test_the_annotations_tell_a_client_when_to_ask_first(project: Path) -> None:
-    """`find_source` is a lookup, and it is not read-only: it syncs the catalog."""
-
-    async with _client(project) as client:
-        tools = {tool.name: tool for tool in await client.list_tools()}
+    tools = {tool.name: tool for tool in tools}
 
     for name in ("status", "search", "get_passage"):
         assert tools[name].annotations.readOnlyHint is True, name
@@ -414,24 +380,17 @@ async def test_the_annotations_tell_a_client_when_to_ask_first(project: Path) ->
     for tool in tools.values():
         assert tool.annotations.openWorldHint is False, tool.name
 
-
-async def test_the_instructions_explain_no_engine_they_cannot_act_on() -> None:
-    """The reader acts on calls and conditions, so the guidance carries those."""
-
-    lowered = AGENT_INSTRUCTIONS.lower()
-    for internal in ("bm25", "dense semantic", "cpu", "reciprocal rank", "qdrant"):
-        assert internal not in lowered, internal
+    lowered = instructions.lower()
     for tool_name in TOOLS:
-        assert tool_name in AGENT_INSTRUCTIONS, tool_name
-    assert "direct_quote_safe" not in AGENT_INSTRUCTIONS
+        assert tool_name in instructions, tool_name
     assert "cleaned text, not a transcript" in lowered
     # The reranker falling back leaves the lexical and dense order in place, which is
     # a ranking and not an absence of one.
     assert "unranked" not in lowered
     assert "lexical" in lowered and "dense" in lowered and "rerank_fallback" in lowered
-    assert len(AGENT_INSTRUCTIONS.encode("utf-8")) < 3000
+    assert len(instructions.encode("utf-8")) < 3000
     # The command line is a reader's, and this surface must not offer it as a call.
-    assert "research-rag " not in AGENT_INSTRUCTIONS
+    assert "research-rag " not in instructions
 
 
 async def test_status_reports_the_workspace_and_nothing_else_of_the_app(

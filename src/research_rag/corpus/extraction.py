@@ -19,9 +19,7 @@ import hashlib
 import re
 import threading
 from collections import Counter
-from dataclasses import dataclass
 from pathlib import Path
-from statistics import median
 from typing import Any
 
 import ebooklib
@@ -86,27 +84,12 @@ _FRONT_MATTER_EXCLUSIONS = re.compile(
     r"check\s+for\s+updates$)",
     re.IGNORECASE,
 )
-_AUTHOR_EXCLUSIONS = re.compile(
-    r"^(?:abstract|keywords?|volume|number|doi|issn|copyright|published|received|"
-    r"accepted|introduction)\b",
-    re.IGNORECASE,
-)
 _YEAR = re.compile(r"\b(18\d{2}|19\d{2}|20\d{2}|21\d{2})\b")
 _PDF_DATE_YEAR = re.compile(r"^(?:D:)?(18\d{2}|19\d{2}|20\d{2}|21\d{2})")
-_DATED_LINE = re.compile(
-    r"\b(?:jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|"
-    r"jul(?:y)?|aug(?:ust)?|sep(?:tember)?|oct(?:ober)?|nov(?:ember)?|"
-    r"dec(?:ember)?)\b.*\b(?:18\d{2}|19\d{2}|20\d{2}|21\d{2})\b",
-    re.IGNORECASE,
-)
 _BYLINE = re.compile(r"^(?:by|written\s+by|author(?:s)?\s*:)\s+", re.IGNORECASE)
 _AUTHOR_JUNK = re.compile(
     r"^(?:unknown|anonymous|untitled|microsoft\s+word|adobe\s+(?:acrobat|indesign)|"
     r"administrator|admin|user)$",
-    re.IGNORECASE,
-)
-_TITLE_LABEL = re.compile(
-    r"^(?:review\s+of\s+the\s+month|research\s+article|original\s+article|article)$",
     re.IGNORECASE,
 )
 _AUTHOR_AFFILIATION = re.compile(
@@ -121,21 +104,6 @@ _EPUB_SEMANTIC_ELEMENTS = _EPUB_HEADING_ELEMENTS | _EPUB_CONTENT_ELEMENTS
 # else, so they go with it.
 _EPUB_NOTE_MARKER_TEXT = re.compile(r"[\[(]?(?:\d{1,4}|[*∗†‡§¶]{1,3})[\])]?")
 _EPUB_MARKER_WRAPPERS = frozenset({"sup", "span", "small"})
-
-
-@dataclass(frozen=True, slots=True)
-class _TextBlock:
-    number: int
-    bbox: tuple[float, float, float, float]
-    lines: tuple[str, ...]
-    text: str
-    font_size: float
-    recovery_attempted: bool = False
-    recovered: bool = False
-
-    @property
-    def width(self) -> float:
-        return max(0.0, self.bbox[2] - self.bbox[0])
 
 
 REMOVAL_FIELDS = (
@@ -296,40 +264,6 @@ def _author_names(value: str) -> list[str]:
     return []
 
 
-def _title_and_embedded_byline(
-    blocks: list[_TextBlock],
-) -> tuple[str, list[str]]:
-    lines = [line for block in blocks for line in block.lines]
-    authors: list[str] = []
-    if len(lines) >= 3 and lines[1].rstrip().endswith(":"):
-        possible_author = _author_names(lines[0])
-        if possible_author:
-            authors = possible_author
-            lines = lines[1:]
-
-    cleaned_lines: list[str] = []
-    for line in lines:
-        normalized = normalize_inline_text(line)
-        if (
-            not normalized
-            or _TITLE_LABEL.fullmatch(normalized)
-            or _FRONT_MATTER_EXCLUSIONS.match(normalized)
-            or _URL.match(normalized)
-        ):
-            continue
-        cleaned_lines.append(normalized)
-    # Preserve the original line boundaries long enough for the common
-    # ``inter-\nword`` PDF wrapping case to be joined as ``interword``.
-    title = normalize_inline_text(normalize_reading_text("\n".join(cleaned_lines)))
-    title = re.sub(
-        r"\s+arxiv:\d{4}\.\d+(?:v\d+)?(?:\s+\[[^]]+\])?(?:\s+\d{1,2}\s+\w+\s+\d{4})?$",
-        "",
-        title,
-        flags=re.IGNORECASE,
-    ).strip()
-    return title, authors
-
-
 # A language is detected from how much of a language's own function-word
 # inventory a text sample uses. Coverage, not raw share, because bm25s's lists are
 # very different sizes (33 English words against 499 Korean ones) and a share
@@ -455,150 +389,28 @@ def _pdf_author_list(metadata: dict[str, Any]) -> list[str]:
     return [item for item in parts if _valid_author(item)]
 
 
-def _front_matter_identity(
-    pages: list[tuple[list[_TextBlock], float, float]],
+def _pdf_metadata_identity(
     metadata: dict[str, Any],
     filename_stem: str,
     declared_language: str = "",
 ) -> tuple[dict[str, Any], dict[str, str], list[str]]:
+    """Resolve PDF identity from the catalogue metadata supplied by Docling."""
+
     embedded_title = normalize_inline_text(str(metadata.get("title") or ""))
-    embedded_authors = _pdf_author_list(metadata)
-    visible_title = ""
-    visible_authors: list[str] = []
-    text_bearing_pages = [page for page in pages if page[0]][:5]
-    declared_code = _iso_language_code(declared_language)
-    language = declared_code or _detect_language(
-        "\n".join(
-            block.text
-            for blocks, _width, _height in text_bearing_pages
-            for block in blocks
-        )
-    )
-    language_source = (
-        "pdf_catalog" if declared_code else "text_sample" if language else "missing"
-    )
-    first_page_text = (
-        "\n".join(block.text for block in text_bearing_pages[0][0])
-        if text_bearing_pages
-        else ""
-    )
-    # A DOI in an arbitrary prose sentence is often a cited work, not this
-    # document. Visible DOI candidates therefore need an explicit DOI cue.
-    visible_doi_text = "\n".join(
-        line
-        for line in first_page_text.splitlines()
-        if re.search(r"(?:\bdoi\b|https?://doi\.org/)", line, re.IGNORECASE)
-    )
-    publication_text = "\n".join(
-        block.text
-        for blocks, _width, _height in text_bearing_pages[:2]
-        for block in blocks
-    )
-
-    for blocks, _width, height in text_bearing_pages:
-        if not blocks:
-            continue
-        vertical_limit = height * (0.95 if len(blocks) <= 5 else 0.62)
-        candidates = [
-            block
-            for block in blocks
-            if block.bbox[1] <= vertical_limit
-            and not _FRONT_MATTER_EXCLUSIONS.match(normalize_inline_text(block.text))
-            and _valid_title(
-                _title_and_embedded_byline([block])[0],
-                filename_stem,
-                reject_filename_match=False,
-            )
-        ]
-        body_sizes = [
-            block.font_size
-            for block in blocks
-            if len(normalize_inline_text(block.text)) >= 200 and block.font_size > 0
-        ]
-        all_sizes = [block.font_size for block in blocks if block.font_size > 0]
-        body_size = median(body_sizes or [min(all_sizes, default=10.0)])
-        if not candidates:
-            continue
-        maximum = max(block.font_size for block in candidates)
-        minimum_title_size = 12.0 if len(blocks) <= 5 else max(12.0, body_size * 1.22)
-        if maximum < minimum_title_size:
-            continue
-        anchor = max(
-            (block for block in candidates if block.font_size >= maximum * 0.98),
-            key=lambda block: (
-                len(_title_and_embedded_byline([block])[0]),
-                -block.bbox[1],
-            ),
-        )
-        top = anchor.bbox[1]
-        title_blocks = sorted(
-            [
-                block
-                for block in candidates
-                if block.font_size >= maximum * 0.79
-                and top - 20 <= block.bbox[1] <= top + 110
-            ],
-            key=lambda item: (item.bbox[1], item.bbox[0]),
-        )
-        if anchor not in title_blocks:
-            title_blocks.append(anchor)
-            title_blocks.sort(key=lambda item: (item.bbox[1], item.bbox[0]))
-        visible_title, embedded_byline = _title_and_embedded_byline(title_blocks)
-        title_bottom = max(block.bbox[3] for block in title_blocks)
-        visible_authors = embedded_byline
-        if not visible_authors:
-            possible_authors = sorted(
-                [
-                    block
-                    for block in blocks
-                    if title_bottom < block.bbox[1] <= title_bottom + 360
-                    and len(normalize_inline_text(block.text)) <= 240
-                    and not _AUTHOR_EXCLUSIONS.match(normalize_inline_text(block.text))
-                ],
-                key=lambda item: (item.bbox[1], item.bbox[0]),
-            )
-            explicit_bylines = [
-                block
-                for block in possible_authors
-                if _BYLINE.match(normalize_inline_text(block.text))
-            ]
-            for author_block in explicit_bylines or possible_authors:
-                if author_names := _author_names(author_block.text):
-                    visible_authors = author_names
-                    break
-        break
-
-    warnings: list[str] = []
-    if visible_title:
-        title = visible_title
-        title_source = "pdf_front_matter"
-        if _valid_title(embedded_title, filename_stem) and (
-            normalize_inline_text(embedded_title).casefold() != visible_title.casefold()
-        ):
-            warnings.append("conflicting_candidates")
-    elif _valid_title(embedded_title, filename_stem):
+    authors = _pdf_author_list(metadata)
+    language = _iso_language_code(declared_language)
+    if _valid_title(embedded_title, filename_stem):
         title = embedded_title
         title_source = "pdf_metadata"
     else:
         title = filename_stem
         title_source = "filename"
 
-    if visible_authors:
-        authors = visible_authors
-        authors_source = "pdf_front_matter"
-    elif embedded_authors:
-        authors = embedded_authors
-        authors_source = "pdf_metadata"
-    else:
-        authors = []
-        authors_source = "missing"
-
     doi = ""
     doi_source = "missing"
     for candidate, source_name in (
         (embedded_title, "pdf_metadata"),
         (" ".join(str(value) for value in metadata.values()), "pdf_metadata"),
-        (visible_doi_text, "pdf_front_matter"),
     ):
         if extracted := _doi(candidate):
             doi = extracted
@@ -607,28 +419,13 @@ def _front_matter_identity(
 
     year: int | None = None
     year_source = "missing"
-    for line in publication_text.splitlines():
-        normalized = normalize_inline_text(line)
-        has_publication_cue = bool(
-            re.search(
-                r"(?:©|copyright|published|volume|number|issue)",
-                normalized,
-                re.IGNORECASE,
-            )
-            or (len(normalized) <= 100 and _DATED_LINE.search(normalized))
-        )
-        if has_publication_cue and (match := _YEAR.search(normalized)):
+    for field in ("creationDate", "modDate"):
+        if match := _PDF_DATE_YEAR.search(
+            normalize_inline_text(str(metadata.get(field) or ""))
+        ):
             year = int(match.group(1))
-            year_source = "pdf_front_matter"
+            year_source = "pdf_metadata"
             break
-    if year is None:
-        for field in ("creationDate", "modDate"):
-            if match := _PDF_DATE_YEAR.search(
-                normalize_inline_text(str(metadata.get(field) or ""))
-            ):
-                year = int(match.group(1))
-                year_source = "pdf_metadata"
-                break
 
     return (
         {
@@ -640,12 +437,12 @@ def _front_matter_identity(
         },
         {
             "title": title_source,
-            "authors": authors_source,
+            "authors": "pdf_metadata" if authors else "missing",
             "year": year_source,
             "doi": doi_source,
-            "language": language_source,
+            "language": "pdf_catalog" if language else "missing",
         },
-        warnings,
+        [],
     )
 
 
@@ -1931,8 +1728,7 @@ def _docling_document_record(
     docling_env: DoclingEnv,
 ) -> dict[str, Any]:
     declared_language = str(pdf_metadata.get("language") or "")
-    automatic, provenance, warnings = _front_matter_identity(
-        [],
+    automatic, provenance, warnings = _pdf_metadata_identity(
         pdf_metadata,
         source.path.stem,
         declared_language=declared_language,

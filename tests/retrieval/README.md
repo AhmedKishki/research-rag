@@ -10,7 +10,7 @@ The two retrieval paths, the fusion, the models, chunk identifiers, filters, and
 - `test_search_evaluation_trace.py`: the evaluation trace.
   - The eight ranking stages with their counts, bounded identifier lists with a cut flag, and no passage text.
   - The cosine gate's denominator and conservation.
-  - The candidate-depth and rerank-window formulas.
+  - The candidate-depth formula and rerank-window formula, including settings overrides.
   - A BM25 payload reporting no dense counts, not zeros.
   - An unavailable reranker traced as not applied.
   - A traced search answering identically to an untraced one.
@@ -23,4 +23,4 @@ The two retrieval paths, the fusion, the models, chunk identifiers, filters, and
   and an offline restart with a reranked search from caches. It needs the cached
   embedding/reranker models and GPT-2 tokenizer, not an upstream runtime.
 
-- `test_search_filters.py`, `test_chunk_exclusions.py`, and `test_search_evaluation_trace.py` import `FakeDenseBackend`, `FakeUltraRAG`, `ProgressivelyFilteredUltraRAG`, and `UnavailableRerankerDenseBackend` from `tests/core/test_service.py`. The last two take the PDF writer from `tests/conftest.py`. Do not move them without updating those imports.
+- Shared fake backends and service construction come from `tests/service_helpers.py`. Source writers come from `tests/conftest.py`.
