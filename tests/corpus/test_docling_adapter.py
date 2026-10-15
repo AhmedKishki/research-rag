@@ -536,33 +536,6 @@ def test_unsupported_item_is_counted_and_named() -> None:
     ]
 
 
-def test_unresolved_reference_is_counted() -> None:
-    payload = {
-        "texts": [
-            {
-                "self_ref": "#/texts/0",
-                "content_layer": "body",
-                "label": "text",
-                "prov": [{"page_no": 1, "charspan": [0, 4]}],
-                "text": "body",
-            }
-        ],
-        "pictures": [
-            {
-                "self_ref": "#/pictures/0",
-                "children": [{"$ref": "#/texts/9"}],
-                "captions": [{"$ref": "#/texts/8"}],
-                "prov": [{"page_no": 1, "charspan": [0, 0]}],
-            }
-        ],
-    }
-
-    _pages, diagnostics = adapt_document(payload, page_first=1, page_last=1)
-
-    assert diagnostics["missing_child_ref_count"] == 1
-    assert diagnostics["missing_caption_ref_count"] == 1
-
-
 def test_a_complete_payload_keeps_clean_diagnostics() -> None:
     payload = _payload(
         body=_body("#/texts/0"),

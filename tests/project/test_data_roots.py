@@ -12,7 +12,6 @@ process or land beside it in a project.
 
 from __future__ import annotations
 
-import tomllib
 from pathlib import Path
 
 import research_rag.project.config as config_module
@@ -87,35 +86,3 @@ def test_a_project_records_where_its_state_lives_only_when_relocated(
         )
     finally:
         config_module.record_runtime_root(portable, None)
-
-
-def test_the_agent_answer_detail_is_declared_and_used() -> None:
-    """The one setting that is neither project, corpus, nor machine tunable.
-
-    It selects the projection an agent's answers are built with, so the test pins the
-    reader as well as the key.
-    """
-
-    keys = {setting.key for setting in SETTINGS}
-    assert "runtime.tool_detail" in keys
-
-    defaults = tomllib.loads(
-        (ROOT / "src/research_rag/project/default.toml").read_text(encoding="utf-8")
-    )
-    assert defaults["runtime"]["tool_detail"] == "lean"
-
-    readers = sorted(
-        path.relative_to(ROOT).as_posix()
-        for path in ROOT.glob("src/research_rag/**/*.py")
-        if "tool_detail" in path.read_text(encoding="utf-8")
-    )
-    # `surfaces/cli/help.py` names the key in the `help settings` page rather than reading
-    # it, so the assertion guards the reader set: a module that behaves differently on
-    # the key is added here deliberately, and the agent surface stays the one that acts
-    # on its value.
-    assert readers == [
-        "src/research_rag/project/config.py",
-        "src/research_rag/project/settings.py",
-        "src/research_rag/surfaces/cli/help.py",
-        "src/research_rag/surfaces/mcp.py",
-    ], readers

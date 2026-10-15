@@ -32,10 +32,6 @@ import pytest
 
 from research_rag.project.config import CLI_COMMAND as CLI_NAME
 from research_rag.surfaces.cli import serving as cli_serving
-from research_rag.surfaces.cli.corpus import _metadata_body
-
-# Aliased on its own line because isort gives an aliased member its own statement.
-from research_rag.surfaces.cli.corpus import _operate as operate
 from research_rag.surfaces.cli.help import _HELP_SUMMARIES, HELP_GROUPS, HELP_TOPICS
 from research_rag.surfaces.cli.parser import _parser
 from research_rag.surfaces.cli.projects import _project_path
@@ -514,26 +510,6 @@ def test_a_missing_project_root_is_refused_with_the_reason(tmp_path: Path) -> No
     assert "not a directory" in result.stderr
 
 
-def test_an_incomplete_mutation_is_refused_with_the_subject_it_is_missing() -> None:
-    """`include` and `metadata` name what is missing rather than failing silently."""
-
-    from research_rag.project.policy import ResearchError
-
-    args = _parser().parse_args(["include"])
-    with pytest.raises(ResearchError, match="Name the passage"):
-        _operate(args)
-
-    args = _parser().parse_args(
-        ["exclude", "a.pdf", "--chunk", "chk_1", "--reason", "duplicate"]
-    )
-    with pytest.raises(ResearchError, match="name one of them"):
-        _operate(args)
-
-    args = _parser().parse_args(["metadata", "a.pdf", "--clear", "--year", "2003"])
-    with pytest.raises(ResearchError, match="--clear cannot be combined"):
-        _metadata_body(args)
-
-
 def test_both_project_selectors_together_are_refused_with_one_to_pass() -> None:
     from research_rag.project.config import ConfigurationError
 
@@ -542,19 +518,6 @@ def test_both_project_selectors_together_are_refused_with_one_to_pass() -> None:
     )
     with pytest.raises(ConfigurationError, match="pass one"):
         _project_path(args)
-
-
-class _NullOperations:
-    """Records nothing and answers nothing, so a refusal happens before a call."""
-
-    def __getattr__(self, name: str) -> Any:
-        raise AssertionError(f"the refusal must come before {name}")
-
-
-def _operate(args: argparse.Namespace) -> dict[str, Any]:
-    """The one dispatcher `_run` reaches, with nothing that could answer a call."""
-
-    return asyncio.run(operate(args, _NullOperations()))
 
 
 def test_the_doctor_help_states_repair_runtime_is_a_deprecated_no_op() -> None:

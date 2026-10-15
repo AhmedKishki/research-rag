@@ -783,17 +783,19 @@ function tagList(values, className = "tag") {
   return fragment;
 }
 
-const FILTER_FIELDS = [
-  "category-filter",
-  "keyword-filter",
-  "category-any-filter",
-  "project-any-filter",
-  "author-filter",
-  "title-filter",
-  "language-filter",
-  "include-source-filter",
-  "exclude-source-filter",
+// Search argument names and their fields. Routes keep the typed text; requests
+// parse each field as a list.
+const FILTER_PARAMS = [
+  ["keywords", "keyword-filter"],
+  ["categories_any", "category-any-filter"],
+  ["projects_any", "project-any-filter"],
+  ["authors_any", "author-filter"],
+  ["titles_any", "title-filter"],
+  ["languages_any", "language-filter"],
+  ["source_ids", "include-source-filter"],
+  ["exclude_source_ids", "exclude-source-filter"],
 ];
+const FILTER_FIELDS = FILTER_PARAMS.map(([, field]) => field);
 
 // The count on the section heading and the sentence on the disclosure summary
 // are the same two facts, so both are computed here rather than in one place
@@ -2028,20 +2030,6 @@ function validTopK(value) {
   return number >= 1 && number <= topKLimit();
 }
 
-// The search filters by the names the search operation takes, each holding the
-// text of its field as typed.
-const FILTER_PARAMS = [
-  ["categories", "category-filter"],
-  ["keywords", "keyword-filter"],
-  ["categories_any", "category-any-filter"],
-  ["projects_any", "project-any-filter"],
-  ["authors_any", "author-filter"],
-  ["titles_any", "title-filter"],
-  ["languages_any", "language-filter"],
-  ["source_ids", "include-source-filter"],
-  ["exclude_source_ids", "exclude-source-filter"],
-];
-
 function parseRoute(hash) {
   const text = String(hash || "").replace(/^#\/?/, "");
   const split = text.indexOf("?");
@@ -2424,20 +2412,10 @@ async function runSearch() {
     query,
     top_k: Number(byId("top-k").value),
   };
-  const optional = {
-    categories: listValue(byId("category-filter").value),
-    categories_any: listValue(byId("category-any-filter").value),
-    projects_any: listValue(byId("project-any-filter").value),
-    keywords: listValue(byId("keyword-filter").value),
-    authors_any: listValue(byId("author-filter").value),
-    titles_any: listValue(byId("title-filter").value),
-    languages_any: listValue(byId("language-filter").value),
-    source_ids: listValue(byId("include-source-filter").value),
-    exclude_source_ids: listValue(byId("exclude-source-filter").value),
-  };
   // Send a filter only when the user selected one.
-  for (const [field, value] of Object.entries(optional)) {
-    if (value?.length) payload[field] = value;
+  for (const [name, field] of FILTER_PARAMS) {
+    const values = listValue(byId(field).value);
+    if (values.length) payload[name] = values;
   }
   setBusy(true, "Searching evidence…");
   try {

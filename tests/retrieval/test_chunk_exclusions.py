@@ -20,7 +20,7 @@ from research_rag.core.tool_views import lean_passage_context
 from research_rag.project.config import resolve_config
 from research_rag.storage.durable_io import StorageError
 from tests.conftest import write_pdf
-from tests.core.test_service import FakeDenseBackend, FakeUltraRAG
+from tests.service_helpers import FakeDenseBackend, FakeUltraRAG
 
 
 async def _service(
@@ -99,6 +99,7 @@ def test_an_excluded_passage_is_refused_by_name_and_kept_as_a_neighbour(
 
     async def exercise() -> None:
         service, hits = await _service(project, pages=3)
+        assert all("direct_quote_safe" not in hit for hit in hits)
         # Which two passages are neighbours is asked of the corpus, because a ranking
         # says which passage is strongest and not what sits beside it.
         adjacent = [
@@ -120,6 +121,7 @@ def test_an_excluded_passage_is_refused_by_name_and_kept_as_a_neighbour(
             await service.get_passage(target)
 
         context = await service.get_passage(reader, context_chunks=1)
+        assert all("direct_quote_safe" not in passage for passage in context["context"])
         assert target in [passage["chunk_id"] for passage in context["context"]]
         marked = {passage["chunk_id"]: passage for passage in context["context"]}
         assert marked[target]["excluded_from_search"] is True
@@ -510,27 +512,6 @@ def test_the_serialiser_writes_only_the_fields_the_schema_names(
         },
     }
     assert text.endswith("}\n")
-
-
-def test_an_exclusion_is_a_decision_about_evidence_and_not_about_quoting(
-    project: Path,
-) -> None:
-    """An exclusion decides whether a passage is evidence, not what may be quoted from
-    it, so no passage carries a quotation field and an excluded one adds none.
-    """
-
-    async def exercise() -> None:
-        service, hits = await _service(project, pages=2)
-        target, neighbour = (hit["chunk_id"] for hit in hits)
-        assert all("direct_quote_safe" not in hit for hit in hits)
-
-        await service.set_chunk_inclusion(
-            target, included=False, reason="Reviewed fragment."
-        )
-        context = await service.get_passage(neighbour, context_chunks=1)
-        assert all("direct_quote_safe" not in passage for passage in context["context"])
-
-    asyncio.run(exercise())
 
 
 def test_a_decision_named_by_hand_outside_a_generation_is_refused_loudly(

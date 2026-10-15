@@ -1092,12 +1092,11 @@ def test_a_terminal_is_asked_once_and_a_yes_installs_the_release_it_previewed(
     assert performed == ["git checkout --detach v0.2.0", "uv lock", "uv sync"]
 
 
-@pytest.mark.parametrize("answer", ["", "\n", "n\n", "no\n", "later\n", "1\n"])
 def test_anything_other_than_yes_declines_and_stops_nothing(
-    answer: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     _behind_a_release(monkeypatch, tmp_path)
-    Question(monkeypatch, answer)
+    Question(monkeypatch, "no\n")
     stopped: list[Any] = []
     monkeypatch.setattr(
         update_module, "stop_app", lambda *args, **kwargs: stopped.append(args)

@@ -2,7 +2,7 @@
 
 The operations every surface calls. Retrieval and dense backends are faked, so no model download or managed runtime is needed.
 
-- `test_service.py`: ingestion, selective reuse, checkpointing, crash windows, activation, retrieval, filtering, reranking, pseudo-relevance feedback, source diversity, and generation selection. It also defines `FakeUltraRAG` and `FakeDenseBackend`.
+- `test_service.py`: ingestion, selective reuse, checkpointing, crash windows, activation, retrieval, filtering, reranking, pseudo-relevance feedback, source diversity, and generation selection.
   - Corpus-derived and explicit BM25 languages reach the backend and match the manifest and status.
 - `test_review_state_edits.py`: hand-edited review files. A hand edit applies at the next read without re-ingestion, a service write keeps an entry edited by hand, and a wrong field, type, or path is refused by name.
 - `test_mobi_service.py`: staged MOBI ingestion, hybrid retrieval, source lookup, no-op and extraction reuse, reviewed metadata and exclusions, and a DRM omission retaining a partial generation without changing the selected one.
@@ -18,6 +18,5 @@ The operations every surface calls. Retrieval and dense backends are faked, so n
 - `test_records.py`: the source catalog's round trip and its refusal of a non-normalized path.
 - `test_generation_compatibility.py`: diagnostic-only processing differences, recorded/current policy provenance, DEBUG compatibility decisions, and refusal of foreign project identities.
 
-- `test_review_state_edits.py` imports the fakes from `test_service.py` and the PDF writer from `tests/conftest.py`.
-- `tests/retrieval/test_chunk_exclusions.py` and `tests/retrieval/test_search_filters.py` import the same fakes. Do not move these files without updating those imports.
+- Shared fake backends and service construction come from `tests/service_helpers.py`. Source writers and the project fixture come from `tests/conftest.py`.
 - A change to an operation, an answer shape, or a review file belongs here, because every surface reaches it through this service.

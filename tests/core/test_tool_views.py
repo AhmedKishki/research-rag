@@ -106,64 +106,6 @@ def test_lean_passage_shape() -> None:
         assert key not in json.dumps(lean)
 
 
-def test_no_passage_carries_a_quotation_flag() -> None:
-    """The cleaned-text rule is stated once in the contract, never per passage.
-
-    A passage that still carries the removed field must not project it into a lean
-    hit or a lean context passage.
-    """
-
-    hit = present_tool_response(
-        "search",
-        _search_payload(hits=[{**_hit(), "direct_quote_safe": True}]),
-        detail=LEAN_TOOL_DETAIL,
-    )
-    assert "direct_quote_safe" not in json.dumps(hit)
-
-    context = present_tool_response(
-        "get_passage",
-        {
-            "generation_id": "20260101T000000Z-abcdef",
-            "requested_chunk_id": "chk_one",
-            "context": [
-                {
-                    "chunk_id": "chk_one",
-                    "text": "cleaned semantic text",
-                    "direct_quote_safe": True,
-                }
-            ],
-        },
-        detail=LEAN_TOOL_DETAIL,
-    )
-    assert "direct_quote_safe" not in json.dumps(context)
-
-
-def test_a_passage_projection_keeps_no_source_path_handle() -> None:
-    """A result names its source by `source_id` and `title`; the path handle
-    belongs to `find_source` and the workspace source list, not to every passage.
-    """
-
-    hit = present_tool_response(
-        "search",
-        _search_payload(hits=[{**_hit(), "source_relative_path": "evidence.pdf"}]),
-        detail=LEAN_TOOL_DETAIL,
-    )["hits"][0]
-    assert "source_relative_path" not in hit
-    assert hit["source_id"] == "src_one"
-    assert hit["title"] == "Citable Evidence"
-
-    context = present_tool_response(
-        "get_passage",
-        {
-            "generation_id": "20260101T000000Z-abcdef",
-            "requested_chunk_id": "chk_one",
-            "context": [{**_hit(), "source_relative_path": "evidence.pdf"}],
-        },
-        detail=LEAN_TOOL_DETAIL,
-    )["context"][0]
-    assert "source_relative_path" not in context
-
-
 def test_a_passage_the_embedder_could_only_read_in_part_says_so() -> None:
     """Its text is whole and its semantic match was partial, which is a condition."""
 
@@ -179,16 +121,6 @@ def test_a_passage_the_embedder_could_only_read_in_part_says_so() -> None:
     )
     assert partial["hits"][0]["dense_truncated"] is True
     assert "dense_truncated" not in partial["hits"][1]
-
-
-def test_lean_response_never_contains_a_diagnostic_key() -> None:
-    for operation, payload in _every_tool_payload().items():
-        lean = present_tool_response(operation, payload, detail=LEAN_TOOL_DETAIL)
-        leaked = _keys(lean) & DIAGNOSTIC_KEYS
-        assert not leaked, f"{operation} leaked {sorted(leaked)}"
-        assert len(json.dumps(lean, ensure_ascii=False)) < len(
-            json.dumps(payload, ensure_ascii=False)
-        )
 
 
 def test_partial_ingest_preserves_manual_selection_remedy() -> None:
@@ -207,12 +139,6 @@ def test_partial_ingest_preserves_manual_selection_remedy() -> None:
     assert result["manual_selection_command"] == payload["manual_selection_command"]
     assert result["generation_changed"] is False
     assert result["skipped_source_count"] == 1
-
-
-def test_full_detail_returns_the_service_payload_unchanged() -> None:
-    payload = _search_payload()
-
-    assert present_tool_response("search", payload, detail=FULL_TOOL_DETAIL) == payload
 
 
 def test_search_reports_rerank_state_and_unknown_ids() -> None:
@@ -302,13 +228,21 @@ def test_passage_context_is_lean_and_keeps_no_rank() -> None:
     payload = {
         "generation_id": "20260101T000000Z-abcdef",
         "requested_chunk_id": "chk_one",
-        "context": [{key: value for key, value in _hit().items() if key != "rank"}],
+        "context": [_hit()],
     }
     lean = present_tool_response("get_passage", payload, detail=LEAN_TOOL_DETAIL)
 
     assert set(lean) == {"generation_id", "context"}
-    assert "rank" not in lean["context"][0]
-    assert lean["context"][0]["source_id"] == "src_one"
+    assert lean["context"] == [
+        {
+            "chunk_id": "chk_one",
+            "source_id": "src_one",
+            "title": "Citable Evidence",
+            "authors": ["A. Researcher"],
+            "locator": {"page": 3},
+            "text": "cleaned semantic text",
+        }
+    ]
 
 
 def test_an_empty_search_answer_says_which_finding_it_is() -> None:
@@ -394,13 +328,15 @@ def test_status_names_a_blocker_and_its_remedy() -> None:
                     "reason": "The tree differs at servers/stray.pyc.",
                     "remedy": "research-rag doctor --project-root /project "
                     "--repair-runtime",
+                    "log_path": "/private/runtime.log",
                 }
             ],
             degraded=[
                 {
                     "check": "lock",
                     "reason": "Process 4321 has held the project since 09:00:00Z.",
-                    "remedy": "research-rag --project-root /project stop --servers",
+                    "remedy": None,
+                    "unchecked": True,
                 }
             ],
         ),
@@ -414,7 +350,13 @@ def test_status_names_a_blocker_and_its_remedy() -> None:
             "remedy": "research-rag doctor --project-root /project --repair-runtime",
         }
     ]
-    assert lean["degraded"][0]["check"] == "lock"
+    assert lean["degraded"] == [
+        {
+            "check": "lock",
+            "reason": "Process 4321 has held the project since 09:00:00Z.",
+            "remedy": None,
+        }
+    ]
 
 
 def test_a_blocked_surface_names_no_call_an_agent_cannot_make() -> None:
@@ -507,38 +449,6 @@ def test_status_carries_its_sentence_only_while_there_is_a_reason() -> None:
         assert lean["message"] == overrides["message"]
 
 
-def test_status_discloses_nothing_the_payload_did_not_say() -> None:
-    """Every string in the lean answer comes from the payload it projects."""
-
-    payload = _status_payload(
-        blocked_by=[
-            {
-                "check": "generation",
-                "reason": "No generation exists; call ingest.",
-                "remedy": None,
-            }
-        ]
-    )
-
-    lean = present_tool_response("status", payload, detail=LEAN_TOOL_DETAIL)
-
-    values = {value for value in _values(lean)}
-    for entry in lean["blocked_by"]:
-        assert set(entry) == {"check", "reason", "remedy"}
-        assert entry["check"] in payload["blocked_by"][0]["check"]
-        assert entry["reason"] in values
-    assert "degraded" not in lean
-    assert json.loads(json.dumps(lean)) == lean
-
-
-def _values(payload: object) -> list[str]:
-    if isinstance(payload, dict):
-        return [item for value in payload.values() for item in _values(value)]
-    if isinstance(payload, list):
-        return [item for value in payload for item in _values(value)]
-    return [payload] if isinstance(payload, str) else []
-
-
 def test_status_lean_states_the_verdict_and_nothing_else() -> None:
     payload = _status_payload()
     lean = present_tool_response("status", payload, detail=LEAN_TOOL_DETAIL)
@@ -546,11 +456,11 @@ def test_status_lean_states_the_verdict_and_nothing_else() -> None:
     # Two booleans the caller can act on and the generation they describe. A ready,
     # current project with nothing required has nothing to explain, so its own
     # sentence is left out rather than restating them.
-    assert set(lean) == {"ready", "stale", "generation_id"}
-    assert lean["ready"] is True
-    assert lean["stale"] is False
-    assert lean["generation_id"] == "20260101T000000Z-abcdef"
-    assert "requires" not in lean
+    assert lean == {
+        "ready": True,
+        "stale": False,
+        "generation_id": "20260101T000000Z-abcdef",
+    }
 
     # A generation that serves only BM25 is usable: its missing dense half is a
     # limitation, not a build the caller must run, so the verdict asks for nothing.
@@ -565,62 +475,24 @@ def test_status_lean_states_the_verdict_and_nothing_else() -> None:
         ),
         detail=LEAN_TOOL_DETAIL,
     )
-    assert legacy["ready"] is True
-    assert legacy["stale"] is False
-    assert "requires" not in legacy
-    assert "hybrid_ready" not in legacy
-    assert "generation_upgrade_required" not in legacy
-    assert "upgrade_reasons" not in legacy
-    assert "available_retrieval_methods" not in legacy
-
-    # Inventories answer a question of their own and belong to the full-detail
-    # payload, so a status answer stays a statement about the selected generation.
-    serialized = json.dumps(lean)
-    assert "generations" not in serialized
-    for key in (
-        "categories",
-        "projects",
-        "project_name",
-        "created_at",
-        "chunk_count",
-        "discovered_source_count",
-        "selected_source_count",
-        "indexed_source_count",
-        "searchable_source_count",
-        "excluded_source_count",
-        "retained_generation_count",
-        "retained_generation_bytes",
-        "generations",
-    ):
-        assert key not in serialized
-        assert key in present_tool_response("status", payload, detail=FULL_TOOL_DETAIL)
-    # A dependency that is fine and one that is only listed are both absent: a lean
-    # answer discloses a condition, not an inventory of checks.
-    assert "blocked_by" not in lean
-    assert "degraded" not in lean
-    assert "checks" not in lean
-    assert "not_checked" not in lean
-    assert "excluded_sources" not in lean
-    assert "generation_upgrade_required" not in lean
-    assert "upgrade_reasons" not in lean
-    # The overlay applies at read time, so it is not a condition the caller acts on.
-    assert "metadata_overlay_active" not in lean
-    assert "metadata_pending_source_paths" not in lean
-    assert "metadata_pending_source_count" not in lean
-    assert "ingestion_progress" not in lean
-    assert "generation_root" not in lean
-    assert "version" not in lean
-    assert "restart_required" not in lean
+    assert legacy == lean
 
 
 def test_status_names_every_call_the_verdict_requires() -> None:
     for overrides in (
-        {"generation_upgrade_required": True, "upgrade_reasons": ["embedding_model"]},
+        {
+            "generation_upgrade_required": True,
+            "upgrade_reasons": ["embedding_model"],
+            "hybrid_ready": False,
+            "hybrid_upgrade_required": True,
+            "available_retrieval_methods": ["bm25"],
+        },
         {"ingestion_progress": {"phase": "embedding", "progress": 0.4}},
     ):
         lean = present_tool_response(
             "status", _status_payload(**overrides), detail=LEAN_TOOL_DETAIL
         )
+        assert lean["ready"] is True
         assert lean["requires"] == ["ingest"], overrides
 
     # A usable generation is not told to build for a snapshot that can be
@@ -628,13 +500,7 @@ def test_status_names_every_call_the_verdict_requires() -> None:
     # source, a missing dense half, or a recorded policy difference: the verdict
     # discloses those and prescribes nothing.
     for overrides in (
-        {
-            "available_retrieval_methods": ["bm25"],
-            "hybrid_ready": False,
-            "hybrid_upgrade_required": True,
-        },
         {"generation_diagnostics": _status_payload()["generation_diagnostics"]},
-        {"stale": True, "changes": {"added": ["new.pdf"]}},
         {"metadata_pending_source_paths": ["a.pdf", "b.pdf"]},
         {"stale": True, "changes": {"source_exclusions_changed": True}},
     ):
@@ -661,29 +527,6 @@ def test_status_names_every_call_the_verdict_requires() -> None:
     assert "metadata_pending_source_count" not in pending
     # The optional snapshot work is still explained, just not prescribed.
     assert "ingest" in pending["message"]
-
-    # Source drift stays visible in the normal verdict even though no build is
-    # required: the counts and the sentence are what a researcher acts on.
-    drifted = present_tool_response(
-        "status",
-        _status_payload(
-            stale=True,
-            changes={
-                "added": ["new.pdf"],
-                "removed": ["gone.pdf"],
-                "modified": [],
-                "metadata_changed": False,
-                "source_exclusions_changed": False,
-            },
-        ),
-        detail=LEAN_TOOL_DETAIL,
-    )
-    assert drifted["stale"] is True
-    assert drifted["changes"] == {
-        "added_source_count": 1,
-        "removed_sources": ["gone.pdf"],
-    }
-    assert "requires" not in drifted
 
     restarting = present_tool_response(
         "status",
@@ -763,28 +606,6 @@ def test_a_foreign_generation_blocks_without_prescribing_a_rebuild() -> None:
     ]
     assert "build one only if" in lean["message"]
     assert "ingest" not in json.dumps(lean["blocked_by"])
-
-
-def test_a_real_embedding_incompatibility_is_actionable() -> None:
-    """A generation whose dense index cannot be scored asks for the rebuild.
-
-    The BM25 half still serves, but the mismatch is the one condition that makes
-    the generation unable to answer as the project configured it.
-    """
-
-    lean = present_tool_response(
-        "status",
-        _status_payload(
-            generation_upgrade_required=True,
-            upgrade_reasons=["embedding_model"],
-            hybrid_ready=False,
-            hybrid_upgrade_required=True,
-            available_retrieval_methods=["bm25"],
-        ),
-        detail=LEAN_TOOL_DETAIL,
-    )
-    assert lean["ready"] is True
-    assert lean["requires"] == ["ingest"]
 
 
 def test_status_counts_available_source_changes_and_names_missing_ones() -> None:
@@ -1158,12 +979,6 @@ def test_a_chunk_decision_is_lean_and_says_whether_it_withholds_anything() -> No
     assert "message" not in present
 
 
-def test_every_public_tool_has_a_lean_projection() -> None:
-    for operation, payload in _every_tool_payload().items():
-        lean = present_tool_response(operation, payload, detail=LEAN_TOOL_DETAIL)
-        assert isinstance(lean, dict)
-
-
 def test_unknown_tool_name_fails_loudly() -> None:
     with pytest.raises(ResearchError):
         present_tool_response("no_such_tool", {}, detail=LEAN_TOOL_DETAIL)
@@ -1210,6 +1025,8 @@ def _hit() -> dict[str, object]:
         "document_id": "doc_one",
         "source_id": "src_one",
         "source_path": "sources/evidence.pdf",
+        "source_relative_path": "evidence.pdf",
+        "direct_quote_safe": True,
         "title": "Citable Evidence",
         "authors": ["A. Researcher"],
         "year": 2025,
@@ -1538,13 +1355,7 @@ def _every_tool_payload() -> dict[str, dict[str, object]]:
             "in_current_generation": True,
             "message": "Chunk exclusion saved and enforced for current retrieval.",
         },
-    }
-
-
-def test_metadata_response_is_lean() -> None:
-    metadata = present_tool_response(
-        "set_source_metadata",
-        {
+        "set_source_metadata": {
             "status": "changed",
             "source_id": "src_one",
             "source_relative_path": "evidence.pdf",
@@ -1555,6 +1366,13 @@ def test_metadata_response_is_lean() -> None:
             "generation_rebuild_recommended": False,
             "message": "Reviewed metadata saved and applied to current retrieval.",
         },
+    }
+
+
+def test_metadata_response_is_lean() -> None:
+    metadata = present_tool_response(
+        "set_source_metadata",
+        _every_tool_payload()["set_source_metadata"],
         detail=LEAN_TOOL_DETAIL,
     )
     assert set(metadata) == {
@@ -1621,9 +1439,14 @@ def test_the_lean_answer_is_a_small_share_of_the_payload_it_projects() -> None:
     and not a retrieval-quality claim.
     """
 
-    for operation, payload in _every_tool_payload().items():
+    payloads = _every_tool_payload()
+    assert len(payloads) == 8
+    for operation, payload in payloads.items():
         lean = present_tool_response(operation, payload, detail=LEAN_TOOL_DETAIL)
         full = present_tool_response(operation, payload, detail=FULL_TOOL_DETAIL)
+        assert isinstance(lean, dict)
+        assert not (_keys(lean) & DIAGNOSTIC_KEYS), operation
+        assert full == payload, operation
         lean_bytes = len(json.dumps(lean, ensure_ascii=False).encode("utf-8"))
         full_bytes = len(json.dumps(full, ensure_ascii=False).encode("utf-8"))
         assert lean_bytes < full_bytes, operation

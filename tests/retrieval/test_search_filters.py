@@ -9,10 +9,10 @@ import pytest
 from research_rag.core.service import ResearchError, ResearchService
 from research_rag.project.config import resolve_config
 from tests.conftest import write_pdf, write_reviewed_metadata
-from tests.core.test_service import (
+from tests.service_helpers import (
     FakeDenseBackend,
-    FakeUltraRAG,
     ProgressivelyFilteredUltraRAG,
+    make_service,
 )
 
 
@@ -25,12 +25,7 @@ async def _build_project(project: Path) -> tuple[ResearchService, dict[str, str]
         project / "sources" / "waste.pdf",
         ["Electronic waste labour evidence from the landfill."],
     )
-    config = resolve_config(project, vanilla_executable=sys.executable)
-    service = ResearchService(  # type: ignore[arg-type]
-        config,
-        FakeUltraRAG(),
-        dense=FakeDenseBackend(),
-    )
+    service = make_service(project)
     await service.ingest(chunk_size=50, chunk_overlap=10)
     listed = await service.list_sources()
     source_ids = {

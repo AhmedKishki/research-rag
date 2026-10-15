@@ -1746,7 +1746,7 @@ def evaluation_real_service(project: Path):
     from research_rag.core.service import ResearchService
     from research_rag.project.config import resolve_config
     from tests.conftest import write_pdf
-    from tests.core.test_service import (
+    from tests.service_helpers import (
         FakeDenseBackend,
         FakeUltraRAG,
         UnavailableRerankerDenseBackend,
@@ -1794,27 +1794,6 @@ def test_the_harness_reads_the_gate_from_a_real_bm25_payload_as_unmeasured(
         assert payload["dense_gate"]["rejected_below_floor"] is None
         assert measures["dense_gate_ran"] is False
         assert measures["dense_rejected_below_floor"] is None
-
-    asyncio.run(exercise())
-
-
-def test_the_harness_reads_a_real_hybrid_gate_with_its_denominator(
-    project: Path, evaluation_real_service: Any
-) -> None:
-    async def exercise() -> None:
-        service = await evaluation_real_service()
-        payload = await service.search(
-            "cobalt labour",
-            top_k=3,
-            retrieval_method="hybrid",
-            rerank=False,
-            evaluation_trace=True,
-        )
-        measures = evaluation._dense_gate_measures(payload)
-        assert measures["dense_gate_ran"] is True
-        assert measures["dense_gate_counts_complete"] is True
-        assert measures["dense_conserved"] is True
-        assert measures["dense_eligible_total"] is not None
 
     asyncio.run(exercise())
 
@@ -1883,22 +1862,6 @@ def test_the_harness_keeps_the_trace_a_real_service_emitted(
         # The reranker ran, so something was scored: a report that kept only the
         # window could not say whether the model read it.
         assert trace["rerank"]["scored_count"] > 0
-
-    asyncio.run(exercise())
-
-
-def test_the_harness_counts_scored_discards_from_a_real_service(
-    project: Path, evaluation_real_service: Any
-) -> None:
-    async def exercise() -> None:
-        service = await evaluation_real_service()
-        payload = await service.search(
-            "cobalt labour",
-            top_k=3,
-            retrieval_method="hybrid",
-            rerank=True,
-            evaluation_trace=True,
-        )
         measures = evaluation._scored_then_collapsed(payload)
         # The corpus here holds two passages of different text, so the collapse
         # discarded nothing and the count is a measured zero rather than a null.
@@ -1924,6 +1887,11 @@ def test_the_harness_reads_a_real_trace_for_a_target_that_is_missed(
             rerank=False,
             evaluation_trace=True,
         )
+        gate = evaluation._dense_gate_measures(payload)
+        assert gate["dense_gate_ran"] is True
+        assert gate["dense_gate_counts_complete"] is True
+        assert gate["dense_conserved"] is True
+        assert gate["dense_eligible_total"] is not None
         returned = [str(hit["chunk_id"]) for hit in payload["hits"]]
         absent = "chk_never_returned"
         measures = evaluation._trace_measures(payload, target_chunk_id=absent)

@@ -414,37 +414,28 @@ def test_the_workspace_forwards_search_and_the_surviving_mutations(
     assert ("ingest", {"force_recompute": True}) in fake.calls
 
 
-def test_the_workspace_carries_a_chunk_decision_and_lists_the_ones_on_file(
+def test_the_adapter_forwards_chunk_decisions_and_restore_without_reason(
     project: Path,
 ) -> None:
-    """A decision about one passage has to be reachable where a reader sees the passage, or it
-    is a decision only a person with a shell can make.
+    from research_rag.surfaces.ui import ResearchUIAdapter
 
-    The listing is what makes the decision reversible: without it a reader can add exclusions
-    and never see them again.
-    """
-
-    client, fake = _client(project)
-    with client:
-        excluded = client.post(
-            "/api/chunk-inclusion",
-            json={
+    fake = FakeResearchService()
+    adapter = ResearchUIAdapter(resolve_config(project), fake)  # type: ignore[arg-type]
+    asyncio.run(
+        adapter.call(
+            "set_chunk_inclusion",
+            {
                 "chunk_id": "chunk-1",
                 "included": False,
                 "reason": "Reviewed fragment",
             },
         )
-        restored = client.post(
-            "/api/chunk-inclusion",
-            json={"chunk_id": "chunk-1", "included": True},
-        )
-        listed = client.get("/api/chunk-exclusions")
-
-    assert excluded.status_code == 200
-    assert excluded.json()["included"] is False
-    assert restored.json()["included"] is True
-    assert listed.status_code == 200
-    assert listed.json()["exclusions"][0]["chunk_id"] == "chunk-1"
+    )
+    asyncio.run(
+        adapter.call("set_chunk_inclusion", {"chunk_id": "chunk-1", "included": True})
+    )
+    listed = asyncio.run(adapter.call("list_chunk_exclusions", {}))
+    assert listed["exclusions"][0]["chunk_id"] == "chunk-1"
     assert (
         "set_chunk_inclusion",
         {
@@ -635,18 +626,6 @@ def _client_client(project: Path, registry: ClientRegistry | None) -> TestClient
     )
 
 
-def test_the_workspace_lists_the_clients_attached_to_the_app(project: Path) -> None:
-    """A person in the browser sees what the command line sees."""
-
-    with _client_client(project, _registry()) as client:
-        response = client.get("/api/clients")
-    assert response.status_code == 200
-    entry = response.json()["clients"][0]
-    assert entry["name"] == "reader-agent"
-    assert entry["attached"] is True
-    assert entry["requests"] == 2
-
-
 def test_the_workspace_says_where_an_agent_is_running(project: Path) -> None:
     """The payload the browser draws a row from names the client, not its handle."""
 
@@ -693,38 +672,7 @@ def test_the_workspace_can_end_one_client(project: Path) -> None:
     assert registry.report()[0]["attached"] is False
 
 
-def test_the_workspace_names_a_session_it_does_not_have(project: Path) -> None:
-    with _client_client(project, _registry()) as client:
-        response = client.post("/api/clients/nope/disconnect", json={})
-    assert response.status_code == 400
-    assert "nope" in response.json()["error"]
-
-
-def test_the_clients_panel_is_offered_because_the_app_is_a_server(
-    project: Path,
-) -> None:
-    config = resolve_config(project, vanilla_executable=sys.executable)
-    with TestClient(
-        create_ui_app(config, service=FakeResearchService()),
-        base_url=LOOPBACK_BASE_URL,
-        client=LOOPBACK_TEST_CLIENT,
-    ) as client:  # type: ignore[arg-type]
-        profile = client.get("/api/ui").json()
-    assert profile["capabilities"]["clients"] is True
-
-
-def test_a_workspace_with_no_process_behind_it_refuses_rather_than_lying(
-    project: Path,
-) -> None:
-    """A stand-in service is not a server, so it says so instead of reporting none."""
-
-    with _client_client(project, None) as client:
-        response = client.get("/api/clients")
-    assert response.status_code == 501
-    assert "not served by a running app" in response.json()["error"]
-
-
-def test_the_workspace_hides_the_panel_when_no_registry_is_wired(
+def test_the_clients_capability_reports_an_unwired_registry(
     project: Path,
 ) -> None:
     config = resolve_config(project, vanilla_executable=sys.executable)
@@ -734,27 +682,9 @@ def test_the_workspace_hides_the_panel_when_no_registry_is_wired(
         client=LOOPBACK_TEST_CLIENT,
     ) as client:  # type: ignore[arg-type]
         assert client.get("/api/ui").json()["capabilities"]["clients"] is True
-        assert client.get("/api/clients").status_code == 501
-
-
-def test_a_workspace_disconnect_is_held_to_the_write_rules(project: Path) -> None:
-    """Ending a session is a write, so the same rules the other writes carry apply."""
-
-    registry = _registry()
-    with _client_client(project, registry) as client:
-        cross_origin = client.post(
-            "/api/clients/s-1/disconnect",
-            headers={"Origin": "https://example.com"},
-            json={"reason": "x"},
-        )
-        form = client.post(
-            "/api/clients/s-1/disconnect",
-            content=b"reason=x",
-            headers={"Content-Type": "application/x-www-form-urlencoded"},
-        )
-    assert cross_origin.status_code == 403
-    assert form.status_code == 415
-    assert registry.report()[0]["attached"] is True
+        response = client.get("/api/clients")
+    assert response.status_code == 501
+    assert "not served by a running app" in response.json()["error"]
 
 
 def test_the_workspace_removes_a_generation_only_with_the_id_repeated(

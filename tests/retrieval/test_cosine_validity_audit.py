@@ -147,25 +147,6 @@ def test_read_only_config_does_not_initialize_a_constructed_only_project(
     assert not config.model_cache_root.exists()
 
 
-def test_analyse_probe_preserves_caller_vector_provenance() -> None:
-    probe = _probe(
-        "provenance",
-        "different_claims",
-        ["a"],
-        [("a", "First claim."), ("b", "Second claim.")],
-    )
-    result = audit.analyse_probe(
-        probe,
-        [1, 0],
-        [[1, 0], [0, 1]],
-        floor=0.72,
-        margin=0.1,
-        duplicate_threshold=0.99,
-        vector_origin="synthetic_unit_test",
-    )
-    assert result["collapse"]["vector_origin"] == "synthetic_unit_test"
-
-
 def test_read_only_config_refuses_to_initialize_an_unregistered_project(
     tmp_path: Path,
 ) -> None:
@@ -460,8 +441,15 @@ def test_analyse_probe_calls_the_engine_and_merges_fabricated_equal_vectors() ->
         floor=0.72,
         margin=0.10,
         duplicate_threshold=0.99,
+        vector_origin="synthetic_unit_test",
     )
     collapse = result["collapse"]
+    assert collapse["vector_origin"] == "synthetic_unit_test"
+    assert result["expectation_kind"] == (
+        "constructed_answer_selection_not_corpus_relevance"
+    )
+    assert result["admission"]["kind"] == "score_only_policy_simulation"
+    assert result["admission"]["production_gate_executed"] is False
     assert collapse["engine_executed"] is True
     assert collapse["threshold"] == 0.99
     assert collapse["input_order"] == ["a", "b"]
@@ -555,28 +543,6 @@ def test_analyse_probe_reports_no_admission_when_nothing_clears_the_floor() -> N
         duplicate_threshold=0.99,
     )
     assert result["unsupported_candidate_admitted"] is False
-
-
-def test_analyse_probe_names_a_constructed_expectation_and_a_simulation() -> None:
-    probe = _probe(
-        "scope",
-        "equivalent_wording",
-        ["a", "b"],
-        [("a", "One wording."), ("b", "Another wording.")],
-    )
-    result = audit.analyse_probe(
-        probe,
-        [1.0, 0.0],
-        [_point(0.9), _point(0.8)],
-        floor=0.72,
-        margin=0.10,
-        duplicate_threshold=0.99,
-    )
-    assert result["expectation_kind"] == (
-        "constructed_answer_selection_not_corpus_relevance"
-    )
-    assert result["admission"]["kind"] == "score_only_policy_simulation"
-    assert result["admission"]["production_gate_executed"] is False
 
 
 def test_analyse_probe_refuses_an_expected_answer_absent_from_the_probe() -> None:
@@ -776,7 +742,7 @@ def test_stream_target_chunks_retains_a_witness_and_bounds_matches(
         {"chunk_id": "c0", "document_id": "d1", "contents": "an introduction"},
         *[
             {"chunk_id": f"u{i}", "document_id": "d9", "contents": "unrelated"}
-            for i in range(40)
+            for i in range(500)
         ],
         {"chunk_id": "c1", "document_id": "d1", "contents": "a needle appears"},
     ]
@@ -786,30 +752,6 @@ def test_stream_target_chunks_retains_a_witness_and_bounds_matches(
     assert stats["exact_match_counts"] == {"t1": 1}
     assert stats["retained_record_count"] == 2
     assert [entry["chunk_id"] for entry in retained] == ["c0", "c1"]
-
-
-def test_stream_target_chunks_unrelated_chunks_do_not_add_retention(
-    tmp_path: Path,
-) -> None:
-    documents = [{"document_id": "d1", "source_relative_path": "alpha.pdf"}]
-    targets = [{"target_id": "t1", "source_path": "alpha.pdf", "snippet": "needle"}]
-    base = [
-        {"chunk_id": "c0", "document_id": "d1", "contents": "an introduction"},
-        {"chunk_id": "c1", "document_id": "d1", "contents": "a needle appears"},
-    ]
-    noise = [
-        {"chunk_id": f"u{i}", "document_id": "d9", "contents": "unrelated"}
-        for i in range(500)
-    ]
-    small, small_stats = _stream(tmp_path / "small", documents, targets, base)
-    large, large_stats = _stream(
-        tmp_path / "large", documents, targets, [*base, *noise]
-    )
-    assert small_stats["retained_record_count"] == 2
-    assert large_stats["retained_record_count"] == 2
-    assert [entry["chunk_id"] for entry in small] == [
-        entry["chunk_id"] for entry in large
-    ]
 
 
 def test_stream_target_chunks_matches_across_case_and_whitespace(
@@ -1061,6 +1003,7 @@ def test_corpus_pool_drops_a_skipped_target_and_its_query(pool_setup: Any) -> No
     )
     assert set(pool["targets"]) == {"t1"}
     assert [query["target_id"] for query in pool["queries"]] == ["t1"]
+    assert pool["target_resolution"]["exact_match_counts"] == {"t1": 1}
 
 
 def test_corpus_pool_refuses_a_skip_that_names_no_judged_target(
@@ -1098,15 +1041,6 @@ def test_corpus_pool_refuses_a_target_the_reviewer_excluded_as_a_passage(
     )
     with pytest.raises(ValueError, match="reviewed as excluded"):
         audit.corpus_pool(pool_setup.config, pool_setup.judgments_path, frozenset())
-
-
-def test_corpus_pool_does_not_stream_a_skipped_target(pool_setup: Any) -> None:
-    pool = audit.corpus_pool(
-        pool_setup.config, pool_setup.judgments_path, frozenset({"t2"})
-    )
-    # The skip is applied before streaming, so a skipped target is neither
-    # resolved nor counted among the streamed matches.
-    assert pool["target_resolution"]["exact_match_counts"] == {"t1": 1}
 
 
 def test_corpus_pool_resolves_a_target_through_the_document_id_fallback(

@@ -32,7 +32,7 @@ from research_rag.project.config import resolve_config
 from research_rag.retrieval.ranking import _passage_equality_key
 from research_rag.retrieval.search import _collapse_repetitions
 from tests.conftest import write_pdf
-from tests.core.test_service import FakeDenseBackend, FakeUltraRAG
+from tests.service_helpers import FakeDenseBackend, FakeUltraRAG
 
 #: The script is read by path, the way a person runs it, so these tests hold the
 #: command's own behaviour rather than a package import of a module.
@@ -589,32 +589,6 @@ def _identical_sources(project: Path) -> ResearchService:
     return service
 
 
-def test_the_real_pipeline_collapses_an_exact_reprint_and_names_both_sources(
-    project: Path,
-) -> None:
-    """The probe's expectation for an exact reprint, against the real pipeline.
-
-    Both halves of the retrieval run on the test fakes, so this is the engine's
-    own order: rank, gate, collapse. Nothing is embedded and no model is loaded;
-    the two copies collapse on their words before any vector is read.
-    """
-
-    service = _identical_sources(project)
-    answer = asyncio.run(service.search("recovery reached", top_k=5, rerank=False))
-    assert len(answer["hits"]) == 1
-    disclosure = answer["collapsed_repetitions"]
-    assert disclosure["repetitions_collapsed"] == 1
-    assert disclosure["collapsed_by_same_words"] == 1
-    pairs = disclosure["pairs"]
-    assert len(pairs) == 1
-    named = {
-        pairs[0]["source_relative_path"],
-        pairs[0]["repeated_source_relative_path"],
-    }
-    assert named == {"alpha.pdf", "beta.pdf"}
-    assert pairs[0]["source_id"] != pairs[0]["repeated_source_id"]
-
-
 def test_the_real_pipeline_keeps_the_allowed_copy_when_the_other_is_excluded(
     project: Path,
 ) -> None:
@@ -622,6 +596,17 @@ def test_the_real_pipeline_keeps_the_allowed_copy_when_the_other_is_excluded(
 
     service = _identical_sources(project)
     first = asyncio.run(service.search("recovery reached", top_k=5, rerank=False))
+    assert len(first["hits"]) == 1
+    disclosure = first["collapsed_repetitions"]
+    assert disclosure["repetitions_collapsed"] == 1
+    assert disclosure["collapsed_by_same_words"] == 1
+    pairs = disclosure["pairs"]
+    assert len(pairs) == 1
+    assert {
+        pairs[0]["source_relative_path"],
+        pairs[0]["repeated_source_relative_path"],
+    } == {"alpha.pdf", "beta.pdf"}
+    assert pairs[0]["source_id"] != pairs[0]["repeated_source_id"]
     withheld = first["hits"][0]
 
     asyncio.run(

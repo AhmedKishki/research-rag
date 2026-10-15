@@ -604,7 +604,6 @@ def test_only_the_local_panels_are_gated_by_the_profile(
     # beside it is a box that asks them to know the codes already listed.
     assert 'id="language-filter"' in page.text
     assert 'id="language-chips"' in page.text
-    assert 'byId("language-filter").value' in javascript.text
     assert "renderLanguages(status)" in javascript.text
 
 

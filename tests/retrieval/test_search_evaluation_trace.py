@@ -22,7 +22,7 @@ from research_rag.project.settings import LEAN_TOOL_DETAIL
 from research_rag.retrieval.search import EVALUATION_TRACE_CANDIDATE_BUDGET
 from research_rag.storage.durable_io import read_jsonl, write_jsonl
 from tests.conftest import write_pdf
-from tests.core.test_service import (
+from tests.service_helpers import (
     FakeDenseBackend,
     FakeUltraRAG,
     UnavailableRerankerDenseBackend,
@@ -120,28 +120,6 @@ def _counts(answer: dict) -> dict[str, int | None]:
     }
 
 
-def test_the_trace_is_absent_unless_a_measurement_asks_for_it(project: Path) -> None:
-    async def exercise() -> None:
-        service = await _corpus(project, 12)
-        ordinary = await service.search(
-            "cobalt evidence",
-            top_k=5,
-            retrieval_method="bm25",
-            rerank=False,
-        )
-        traced = await service.search(
-            "cobalt evidence",
-            top_k=5,
-            retrieval_method="bm25",
-            rerank=False,
-            evaluation_trace=True,
-        )
-        assert "evaluation_trace" not in ordinary
-        assert traced["evaluation_trace"]["retrieval_method"] == "bm25"
-
-    asyncio.run(exercise())
-
-
 def test_the_trace_names_each_stage_with_its_own_count(project: Path) -> None:
     async def exercise() -> None:
         service = await _corpus(project, 12)
@@ -188,24 +166,6 @@ def test_the_trace_names_each_stage_with_its_own_count(project: Path) -> None:
     asyncio.run(exercise())
 
 
-def test_the_trace_carries_identifiers_and_no_passage_text(project: Path) -> None:
-    async def exercise() -> None:
-        service = await _corpus(project, 12)
-        answer = await service.search(
-            "cobalt evidence",
-            top_k=5,
-            rerank=False,
-            evaluation_trace=True,
-        )
-        rendered = str(answer["evaluation_trace"])
-        # A passage's text belongs in the passage. A trace carrying it would be a
-        # second copy of the result list, sized by the depth rather than by k.
-        for chunk in _generation_chunks(service):
-            assert str(chunk.get("contents")) not in rendered
-
-    asyncio.run(exercise())
-
-
 def test_the_cosine_gate_reports_a_denominator_and_conserves_its_candidates(
     project: Path,
 ) -> None:
@@ -245,35 +205,6 @@ def test_the_cosine_gate_reports_a_denominator_and_conserves_its_candidates(
     asyncio.run(exercise())
 
 
-def test_a_bm25_search_reports_no_dense_gate_counts_rather_than_zeros(
-    project: Path,
-) -> None:
-    async def exercise() -> None:
-        service = await _corpus(project, 30)
-        answer = await service.search(
-            "cobalt evidence",
-            top_k=5,
-            retrieval_method="bm25",
-            rerank=False,
-        )
-        gate = answer["dense_gate"]
-        # The block is present for every method, so its presence says nothing.
-        # What is absent is every count: a gate that never opened did not admit
-        # zero candidates, it admitted none, and those are different statements.
-        assert gate["eligible_total"] is None
-        assert gate["admitted_above_floor"] is None
-        assert gate["admitted_below_floor"] is None
-        assert gate["rejected_below_floor"] is None
-        assert gate["conserved"] is None
-        assert gate["excluded_before_gate"] is None
-        assert answer["rejected_candidates"]["dense_below_threshold"] == 0
-        assert (
-            answer["evaluation_trace" if False else "dense_gate"]["conserved"] is None
-        )
-
-    asyncio.run(exercise())
-
-
 def test_the_branch_depth_follows_the_candidate_formula(project: Path) -> None:
     """min(active chunks, maximum candidates, max(minimum candidates, top_k * 4))."""
 
@@ -301,6 +232,8 @@ def test_the_reranked_window_follows_the_window_formula(project: Path) -> None:
 
     async def exercise() -> None:
         service = await _corpus(project, 200)
+        default = await service.search("cobalt evidence", top_k=1, rerank=True)
+        assert default["rerank_window"] >= 3
         for top_k, expected in ((10, 20), (15, 30), (25, 50)):
             answer = await service.search(
                 "cobalt evidence",
@@ -327,6 +260,33 @@ def test_the_reranked_window_follows_the_window_formula(project: Path) -> None:
                 answer["evaluation_trace"]["stages"]["reranked"]["chunk_ids"]
                 == fused[:expected]
             )
+
+        minimum_window = [
+            "retrieval.rerank_window_multiple=1",
+            "retrieval.rerank_window_floor=1",
+        ]
+        for overrides, top_k, expected in (
+            (minimum_window, 1, 1),
+            (["retrieval.rerank_window_floor=3"], 1, 3),
+            (["retrieval.rerank_max_candidates=2"], 1, 2),
+            (minimum_window, 3, 3),
+        ):
+            config = resolve_config(
+                project,
+                vanilla_executable=sys.executable,
+                settings_overrides=overrides,
+            )
+            scoped = ResearchService(  # type: ignore[arg-type]
+                config, FakeUltraRAG(), dense=FakeDenseBackend()
+            )
+            answer = await scoped.search(
+                "cobalt evidence",
+                top_k=top_k,
+                rerank=True,
+                evaluation_trace=True,
+            )
+            assert answer["rerank_window"] == expected, overrides
+            assert answer["evaluation_trace"]["rerank"]["scored_count"] == expected
 
     asyncio.run(exercise())
 
@@ -368,28 +328,6 @@ def test_a_reranker_that_cannot_load_is_traced_as_not_applied(project: Path) -> 
             trace["stages"]["reranked"]["chunk_ids"]
             == trace["stages"]["fused_pre_rerank"]["chunk_ids"][:window]
         )
-
-    asyncio.run(exercise())
-
-
-def test_an_ordinary_search_never_gains_a_trace_key_in_a_lean_answer(
-    project: Path,
-) -> None:
-    async def exercise() -> None:
-        service = await _corpus(project, 12)
-        answer = await service.search(
-            "cobalt evidence",
-            top_k=5,
-            rerank=False,
-            evaluation_trace=True,
-        )
-        lean = present_tool_response("search", answer, detail=LEAN_TOOL_DETAIL)
-        assert "evaluation_trace" in answer
-        assert "evaluation_trace" not in lean
-        # Nothing else about the answer changes: the trace is added beside it.
-        assert [hit["chunk_id"] for hit in lean["hits"]] == [
-            hit["chunk_id"] for hit in answer["hits"]
-        ]
 
     asyncio.run(exercise())
 
@@ -442,6 +380,18 @@ def test_every_method_traces_the_stages_its_own_branch_opens(
         # of them: the trace says where a candidate was, before and after fusion.
         assert counts["fused_pre_rerank"] == counts["post_collapse"] == 20
         assert counts["final"] == 5
+        if method == "bm25":
+            # An unopened dense gate reports no measurement, not measured zeros.
+            for field in (
+                "eligible_total",
+                "admitted_above_floor",
+                "admitted_below_floor",
+                "rejected_below_floor",
+                "conserved",
+                "excluded_before_gate",
+            ):
+                assert answer["dense_gate"][field] is None, field
+            assert answer["rejected_candidates"]["dense_below_threshold"] == 0
 
     asyncio.run(exercise())
 
@@ -513,6 +463,16 @@ def test_the_trace_changes_nothing_else_about_the_answer(project: Path) -> None:
                 rerank=False,
                 evaluation_trace=True,
             )
+            assert "evaluation_trace" not in plain
+            assert traced["evaluation_trace"]["retrieval_method"] == method
+            rendered = str(traced["evaluation_trace"])
+            for chunk in _generation_chunks(service):
+                assert str(chunk.get("contents")) not in rendered
+            lean = present_tool_response("search", traced, detail=LEAN_TOOL_DETAIL)
+            assert "evaluation_trace" not in lean
+            assert [hit["chunk_id"] for hit in lean["hits"]] == [
+                hit["chunk_id"] for hit in traced["hits"]
+            ]
             without = {
                 key: value for key, value in traced.items() if key != "evaluation_trace"
             }

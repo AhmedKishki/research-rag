@@ -712,19 +712,125 @@ def test_valid_pdf_embedded_metadata_is_used_independently(project: Path) -> Non
     assert source["authors"] == ["Ada Lovelace", "Grace Hopper"]
     assert source["metadata_provenance"]["title"] == "pdf_metadata"
     assert source["metadata_provenance"]["authors"] == "pdf_metadata"
+    assert source["doi"] == ""
+    assert source["metadata_provenance"]["doi"] == "missing"
 
 
-def test_pdf_metadata_year_falls_back_to_catalog_dates() -> None:
-    # Docling supplies the catalogue metadata; the shared identity helper reads
-    # the year from a creation date when no visible front matter is available.
-    automatic, provenance, _warnings = extraction_module._front_matter_identity(
-        [],
-        {"title": "Embedded Title", "creationDate": "D:20240310000000Z"},
-        "stem",
+@pytest.mark.parametrize(
+    ("dates", "year"),
+    [
+        ({"creationDate": " D:20240310000000Z ", "modDate": "D:20250101"}, 2024),
+        ({"creationDate": "invalid", "modDate": "20250310"}, 2025),
+        ({"creationDate": "Copyright 2024", "modDate": "D:17990101"}, None),
+    ],
+)
+def test_pdf_metadata_year_falls_back_to_catalog_dates(
+    dates: dict[str, str], year: int | None
+) -> None:
+    automatic, provenance, warnings = extraction_module._pdf_metadata_identity(
+        {"title": "Embedded Title", **dates}, "stem"
     )
 
-    assert automatic["year"] == 2024
-    assert provenance["year"] == "pdf_metadata"
+    assert automatic["year"] == year
+    assert provenance["year"] == ("pdf_metadata" if year is not None else "missing")
+    assert warnings == []
+
+
+@pytest.mark.parametrize(
+    ("metadata", "doi"),
+    [
+        (
+            {"subject": "10.1111/other", "title": "DOI: 10.2222/Title.42)."},
+            "10.2222/Title.42",
+        ),
+        (
+            {"subject": "https://doi.org/10.3333/first;", "keywords": "10.4444/next"},
+            "10.3333/first",
+        ),
+    ],
+)
+def test_pdf_metadata_doi_prefers_title_then_catalogue_order(
+    metadata: dict[str, str], doi: str
+) -> None:
+    automatic, provenance, warnings = extraction_module._pdf_metadata_identity(
+        metadata, "stem"
+    )
+
+    assert automatic["doi"] == doi
+    assert provenance["doi"] == ("pdf_metadata" if doi else "missing")
+    assert warnings == []
+
+
+@pytest.mark.parametrize(
+    ("declared", "language"),
+    [(" EN_us ", ["en"]), ("eng", ["eng"]), ("English", [])],
+)
+def test_pdf_metadata_language_uses_only_catalogue_code(
+    declared: str, language: list[str]
+) -> None:
+    automatic, provenance, warnings = extraction_module._pdf_metadata_identity(
+        {}, "stem", declared_language=declared
+    )
+
+    assert automatic["language"] == language
+    assert provenance["language"] == ("pdf_catalog" if language else "missing")
+    assert warnings == []
+
+
+@pytest.mark.parametrize(
+    ("title", "expected_title", "title_source", "warnings"),
+    [
+        ("  Embedded\tArticle  ", "Embedded Article", "pdf_metadata", []),
+        ("fallback-title.pdf", "fallback-title", "filename", ["title_from_filename"]),
+        ("Untitled", "fallback-title", "filename", ["title_from_filename"]),
+        (
+            "bad\ufffd\ufffdtitle",
+            "fallback-title",
+            "filename",
+            ["corrupt_extracted_title", "title_from_filename"],
+        ),
+    ],
+)
+def test_docling_pdf_metadata_record_preserves_normalization_and_provenance(
+    project: Path,
+    title: str,
+    expected_title: str,
+    title_source: str,
+    warnings: list[str],
+) -> None:
+    write_pdf(project / "sources" / "fallback-title.pdf", "Readable evidence.")
+    config = resolve_config(project, vanilla_executable=sys.executable)
+    source = scan_sources(config).selected[0]
+    record = extraction_module._docling_document_record(
+        source,
+        "digest",
+        {
+            "title": title,
+            "author": " Microsoft Word ; Ada\tLovelace | Unknown | Grace Hopper ",
+            "language": "en-GB",
+            "subject": "https://doi.org/10.5555/Example.42).",
+        },
+        1,
+        _FAKE_ENV,
+    )
+
+    assert record["title"] == expected_title
+    assert record["authors"] == ["Ada Lovelace", "Grace Hopper"]
+    assert record["year"] is None
+    assert record["doi"] == "10.5555/Example.42"
+    assert record["language"] == ["en"]
+    assert record["format"] == "pdf"
+    assert record["metadata_provenance"] == {
+        "title": title_source,
+        "authors": "pdf_metadata",
+        "year": "missing",
+        "doi": "pdf_metadata",
+        "language": "pdf_catalog",
+        "categories": "missing",
+        "keywords": "missing",
+    }
+    assert record["metadata_warnings"] == warnings
+    assert record["extraction_backend"]["backend"] == "docling"
 
 
 def test_epub_uses_opf_then_visible_metadata(project: Path) -> None:

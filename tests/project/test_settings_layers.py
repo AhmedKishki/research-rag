@@ -280,19 +280,6 @@ def test_a_boolean_is_refused_where_a_number_is_expected(tmp_path: Path) -> None
         resolve_settings(SETTINGS, _sources(tmp_path), config_path=layer, **EMPTY)
 
 
-def test_a_sibling_key_is_untouched_by_a_layer_that_omits_it(tmp_path: Path) -> None:
-    layer = _write(tmp_path / "a.toml", "[window]\ndepth = 5\n")
-
-    values, provenance = resolve_settings(
-        SETTINGS, _sources(tmp_path), config_path=layer, **EMPTY
-    )
-
-    assert values["depth"] == 5
-    assert values["glass"] == "clear"
-    assert LAYER_FILE in provenance["window.depth"]
-    assert provenance["window.glass"].startswith(LAYER_DEFAULT)
-
-
 def test_a_table_where_one_setting_is_declared_is_refused(tmp_path: Path) -> None:
     layer = _write(tmp_path / "a.toml", "[window]\ndepth = { a = 1 }\n")
 

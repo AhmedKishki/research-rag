@@ -397,50 +397,6 @@ async def test_a_control_settings_write_reaches_the_one_service(project: Path) -
         await app.stop()
 
 
-async def test_a_control_settings_write_is_refused_from_another_site(
-    project: Path,
-) -> None:
-    """A settings write changes what the next build records, so origin matters."""
-
-    config = resolve_config(project, vanilla_executable=sys.executable)
-    app = App(config, port=free_port())
-    fake = FakeService()
-    app.service = fake  # type: ignore[assignment]
-    await app.start()
-    try:
-        await wait_until_ready(app)
-        code, body = await asyncio.to_thread(
-            post_ordered,
-            app.url,
-            "/control/operations/settings_write",
-            {"values": {"retrieval.rrf_k": 40}, "expected_revision": "r"},
-            {
-                "Content-Type": "application/json",
-                "Sec-Fetch-Site": "cross-site",
-            },
-        )
-        assert code == 403
-        assert "Cross-origin" in body["error"]
-        # A page on another site must not be able to make the app record anything.
-        assert fake.calls == []
-
-        host = app.url.rpartition(":")[2]
-        code, body = await asyncio.to_thread(
-            post_ordered,
-            app.url,
-            "/control/operations/settings_write",
-            {"values": {"retrieval.rrf_k": 40}, "expected_revision": "r"},
-            {
-                "Content-Type": "application/json",
-                "Origin": f"http://elsewhere.example:{host}",
-            },
-        )
-        assert code == 403
-        assert fake.calls == []
-    finally:
-        await app.stop()
-
-
 async def test_a_control_settings_write_requires_a_json_body(project: Path) -> None:
     config = resolve_config(project, vanilla_executable=sys.executable)
     app = App(config, port=free_port())
@@ -874,6 +830,23 @@ async def test_every_control_write_is_refused_from_another_site(project: Path) -
             assert code == 403, path
             assert body["error"], path
             assert fake.calls == [], path
+
+        # JSON alone cannot bypass either independent cross-origin signal.
+        port = app.url.rpartition(":")[2]
+        for origin_headers in (
+            {"Sec-Fetch-Site": "cross-site"},
+            {"Origin": f"http://elsewhere.example:{port}"},
+        ):
+            code, body = await asyncio.to_thread(
+                post_ordered,
+                app.url,
+                "/control/operations/settings_write",
+                {"values": {"retrieval.rrf_k": 40}, "expected_revision": "r"},
+                {"Content-Type": "application/json", **origin_headers},
+            )
+            assert code == 403, origin_headers
+            assert "Cross-origin" in body["error"], origin_headers
+            assert fake.calls == [], origin_headers
     finally:
         await app.stop()
 

@@ -4,16 +4,14 @@ from __future__ import annotations
 
 import asyncio
 import json
-import sys
 from pathlib import Path
 
 import pytest
 
 from research_rag.core.records import load_metadata_overrides
 from research_rag.core.service import ResearchError, ResearchService
-from research_rag.project.config import resolve_config
 from tests.conftest import write_pdf, write_reviewed_metadata
-from tests.core.test_service import FakeDenseBackend, FakeUltraRAG
+from tests.service_helpers import make_service
 
 
 def _write_metadata_file(project: Path, sources: dict[str, dict[str, object]]) -> Path:
@@ -32,12 +30,7 @@ async def _service(project: Path) -> tuple[ResearchService, str]:
         project / "sources" / "article.pdf",
         ["Cobalt evidence for the hand-edited review state."],
     )
-    config = resolve_config(project, vanilla_executable=sys.executable)
-    service = ResearchService(  # type: ignore[arg-type]
-        config,
-        FakeUltraRAG(),
-        dense=FakeDenseBackend(),
-    )
+    service = make_service(project)
     await service.ingest(chunk_size=50, chunk_overlap=10)
     return service, "article.pdf"
 
