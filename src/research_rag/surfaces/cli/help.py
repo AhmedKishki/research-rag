@@ -242,7 +242,7 @@ below are per-call and are recorded nowhere:
   --set key=value    override one value for this command, repeatable
   --config PATH      add one more layer for this command
 
-What a key does is written once, as `Setting.doc` in src/research_rag/settings.py.
+What a key does is written once, as `Setting.doc` in src/research_rag/project/settings.py.
 `config` prints that sentence beside each key and the workspace's Config tab shows
 the same one.
 

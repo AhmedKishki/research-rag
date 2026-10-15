@@ -240,7 +240,7 @@ def _bm25_stopword_roundtrip_error(language: str) -> str | None:
     return None
 
 
-# The registry, in the order `--print-config` prints it. Every value in
+# The registry, in the order `research-rag config` prints it. Every value in
 # `default.toml` is validated against this table, and a `--set` or environment
 # name absent here is refused.
 SETTINGS: tuple[Setting, ...] = (
@@ -251,9 +251,10 @@ SETTINGS: tuple[Setting, ...] = (
         layer="identity",
         doc=(
             "The languages the corpus is written in, as ISO 639-1 codes: one "
-            "code, or several separated by commas. A language BM25 cannot "
-            "tokenize is refused, because the stopword list comes from it, and "
-            "every language named must be covered by the embedding model."
+            "code, or several separated by commas, most-used first. A language "
+            "BM25 cannot tokenize is refused, because the stopword list comes "
+            "from it. A language the embedding model does not cover is reported "
+            "by `status`."
         ),
         env="RESEARCH_RAG_LANGUAGE_CORPUS",
     ),
@@ -745,8 +746,10 @@ SETTINGS: tuple[Setting, ...] = (
         layer="engine",
         normalize_case=True,
         doc=(
-            "Dense index backend for new generations: 'auto' scans the portable "
-            "vectors below the documented corpus threshold."
+            "Dense index backend for new generations. 'auto' and 'exact' build "
+            "the exact scan over the portable vectors. 'qdrant' builds a Qdrant "
+            "local index, which loads every point each time it opens and scores "
+            "by brute force, so it is built only when named."
         ),
         choices=DENSE_BACKENDS,
         env="RESEARCH_RAG_DENSE_BACKEND",
