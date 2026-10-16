@@ -1085,6 +1085,7 @@ def test_live_ingestion_polling(tmp_path: Path, outcome: str) -> None:
     assert result["bar"] == {"hidden": False, "value": 1, "max": 3}
     assert result["barHidden"]
     assert "ETA" not in result["progress"]
+    assert "Status checked" in result["progress"]
     assert result["aborted"] and result["lateIgnored"]
     assert not result["busy"]
     assert result["timers"] == result["listeners"] == 0
@@ -1103,89 +1104,125 @@ def test_live_ingestion_polling(tmp_path: Path, outcome: str) -> None:
         assert "is ready with 12 passages" in message
 
 
-def test_source_phase_ingestion_progress_and_eta(tmp_path: Path) -> None:
+def test_ingestion_progress_counts_and_phase_transitions(tmp_path: Path) -> None:
     result = _drive_page(
         tmp_path,
         r"""
 (() => {
-  const estimate = phaseEtaEstimator();
   const status = { build_id: 'a', phase: 'extraction', source: 'Book.pdf',
     overall_progress: { completed: 5, total: 20, unit: 'sources' },
     progress: { completed: 100, total: 100, unit: 'pages' },
-    source_progress: { completed: 100, total: 100, unit: 'pages' } };
-  const tick = (completed, time) => {
-    status.overall_progress.completed = completed;
+    source_progress: { completed: 100, total: 100, unit: 'pages' }, eta_seconds: 120 };
+  const snapshot = () => {
     renderIngestionProgress(status);
-    return estimate(status, time);
+    return { summary: liveIngestionSummary(status), hidden: byId('ingestion-progress').hidden,
+      value: byId('ingestion-progress').value, max: byId('ingestion-progress').max };
   };
-  const samples = [tick(5, 0), tick(6, 1000), tick(7, 2000), tick(8, 3000)];
-  const summary = liveIngestionSummary(status, samples[3]);
-  const stalled = tick(8, 6000);
-  const resets = [];
-  status.phase = 'embedding'; resets.push(tick(8, 7000));
-  // Three files in one poll suffice; page changes and source names do not reset it.
-  status.source = 'Other.pdf'; status.progress.completed = 0;
-  const batch = tick(11, 10000);
-  status.build_id = 'b'; resets.push(tick(11, 11000));
-  status.overall_progress.total = 30; resets.push(tick(11, 12000));
-  resets.push(tick(2, 13000));
-  resets.push(tick(3, 12000));
-  resets.push(tick(31, 14000));
-  const invalidHidden = byId('ingestion-progress').hidden;
+  const snapshots = [snapshot()];
+  status.phase = 'chunking'; status.source = 'Other.epub';
+  status.overall_progress.completed = 8;
+  snapshots.push(snapshot());
   status.overall_progress = null;
-  status.progress = { completed: 2, total: 10, unit: 'chunks' };
-  renderIngestionProgress(status);
-  const fallback = { hidden: byId('ingestion-progress').hidden,
-    value: byId('ingestion-progress').value, max: byId('ingestion-progress').max };
+  for (const phase of ['embedding', 'dense_indexing', 'qdrant_indexing']) {
+    status.phase = phase;
+    status.progress = { completed: 2, total: 10, unit: 'chunks' };
+    snapshots.push(snapshot());
+    status.progress.completed = 10;
+    snapshots.push(snapshot());
+  }
+  const invalid = [-1, 11, NaN].map(completed => {
+    status.progress.completed = completed;
+    return snapshot().hidden;
+  });
+  status.progress = { completed: 1, unit: 'chunks' };
+  const unknown = snapshot();
+  status.phase = 'validation'; status.progress = null;
+  const uncounted = snapshot();
   renderIngestionProgress({});
-  result = { samples, summary, stalled, batch, resets, invalidHidden, fallback,
+  result = { snapshots, invalid, unknown, uncounted,
     missingHidden: byId('ingestion-progress').hidden };
 })();
 """,
     )
-    assert result["samples"] == [None, None, None, "1–2 min"]
-    assert result["stalled"] == "1–2 min"
-    assert result["batch"] is None
-    assert result["resets"] == [None] * 6
-    assert result["invalidHidden"] and result["missingHidden"]
-    assert result["fallback"] == {"hidden": False, "value": 2, "max": 10}
-    assert result["summary"] == "extraction · Book.pdf · 8 / 20 sources · ETA 1–2 min"
+    snapshots = result["snapshots"]
+    for row, phase, source, completed in zip(
+        snapshots[:2], ["extraction", "chunking"], ["Book.pdf", "Other.epub"], [5, 8]
+    ):
+        assert phase in row["summary"] and source in row["summary"]
+        assert f"{completed} / 20 sources" in row["summary"]
+        assert "pages" not in row["summary"]
+        assert not row["hidden"] and row["value"] == completed and row["max"] == 20
+    for index, row in enumerate(snapshots[2:]):
+        completed = 2 if index % 2 == 0 else 10
+        assert f"{completed} / 10 chunks" in row["summary"]
+        assert not row["hidden"] and row["value"] == completed and row["max"] == 10
+    for row in [*snapshots, result["unknown"], result["uncounted"]]:
+        assert "ETA" not in row["summary"]
+        assert "estimating" not in row["summary"].lower()
+    assert all(result["invalid"]) and result["missingHidden"]
+    assert result["unknown"]["hidden"] and result["uncounted"]["hidden"]
+    assert "validation" in result["uncounted"]["summary"]
 
 
-def test_source_eta_stability_and_independent_stall(tmp_path: Path) -> None:
+def test_ingestion_inactivity_resets_and_completion(tmp_path: Path) -> None:
     result = _drive_page(
         tmp_path,
         r"""
 (() => {
-  const estimate = phaseEtaEstimator();
   const stalled = ingestionStallDetector();
   const status = { build_id: 'a', phase: 'chunking', source: 'First.pdf',
     overall_progress: { completed: 0, total: 100, unit: 'sources' },
     progress: { completed: 0, total: 10, unit: 'pages' } };
-  estimate(status, 0); stalled(status, 0);
-  const earlyStall = stalled(status, 60000);
-  const earlySummary = liveIngestionSummary(status, estimate(status, 60000), earlyStall);
+  const initial = stalled(status, 0);
+  const idle = [stalled(status, 2000), stalled(status, 59999), stalled(status, 60000)];
+  const summary = liveIngestionSummary(status, idle[2]);
   status.overall_progress.completed = 3;
-  const first = estimate(status, 180000);
   const resumed = stalled(status, 180000);
-  status.source = 'Second.pdf'; status.progress.completed = 5;
-  status.overall_progress.completed = 50;
-  const held = estimate(status, 210000);
-  stalled(status, 210000);
-  const before = stalled(status, 269999);
-  const after = stalled(status, 270000);
-  const revised = estimate(status, 270000);
-  const materialHeld = estimate(status, 330000);
-  result = { earlyStall, earlySummary, first, resumed, held, before, after,
-    revised, materialHeld };
+  let now = 180000;
+  const transitions = [];
+  const reset = (change) => {
+    now += 60000;
+    const idle = stalled(status, now);
+    change();
+    transitions.push({ idle, reset: stalled(status, now), before: stalled(status, now + 59999) });
+  };
+  reset(() => { status.source = 'Second.pdf'; });
+  reset(() => { status.phase = 'extraction'; });
+  reset(() => { status.build_id = 'b'; });
+  reset(() => { status.overall_progress.total = 200; });
+  reset(() => { status.overall_progress.completed = 0; });
+  const backwards = stalled(status, 0);
+  const afterBackwards = stalled(status, 60000);
+  const missing = stalled({}, 120000);
+  const restarted = stalled(status, 180000);
+  status.overall_progress.completed = status.overall_progress.total;
+  const complete = [stalled(status, 240000), stalled(status, 360000)];
+  // A completed source total must not mask inactivity in a later chunk phase.
+  status.phase = 'embedding';
+  status.progress = { completed: 2, total: 10, unit: 'chunks' };
+  const chunks = [stalled(status, 420000), stalled(status, 480000)];
+  status.progress.completed = 3;
+  chunks.push(stalled(status, 480000));
+  status.progress.completed = 10;
+  chunks.push(stalled(status, 600000));
+  result = { initial, idle, summary, resumed, transitions, backwards, afterBackwards,
+    missing, restarted, complete, chunks };
 })();
 """,
     )
-    assert result["earlyStall"] and "No progress for 60s" in result["earlySummary"]
-    assert "ETA" not in result["earlySummary"]
-    assert result["first"] == result["held"] == "65–130 min"
-    assert not result["resumed"] and not result["before"] and result["after"]
-    assert result["revised"] == result["materialHeld"] == "2–6 min"
+    assert not result["initial"] and result["idle"] == [False, False, True]
+    assert "No reported progress" in result["summary"]
+    assert "may still be running" in result["summary"]
+    assert "logs" in result["summary"] and "ETA" not in result["summary"]
+    assert not result["resumed"]
+    assert all(
+        row["idle"] and not row["reset"] and not row["before"]
+        for row in result["transitions"]
+    )
+    assert not result["backwards"] and result["afterBackwards"]
+    assert not result["missing"] and not result["restarted"]
+    assert result["complete"] == [False, False]
+    assert result["chunks"] == [False, True, False, False]
 
 
 def test_ingestion_stall_tracks_source_batches_not_only_finished_sources(
@@ -1205,99 +1242,19 @@ def test_ingestion_stall_tracks_source_batches_not_only_finished_sources(
   const advancing = stalled(status, 59000);
   const notStalled = stalled(status, 60000);
   const stalledLater = stalled(status, 119000);
-  result = { advancing, notStalled, stalledLater };
+  status.progress.completed = 11;
+  const phaseBatch = stalled(status, 120000);
+  const phaseBatchIdle = stalled(status, 179999);
+  status.source = 'Other.pdf'; status.source_progress.completed = 0;
+  const nextSource = stalled(status, 180000);
+  result = { advancing, notStalled, stalledLater, phaseBatch, phaseBatchIdle, nextSource };
 })();
 """,
     )
     assert not result["advancing"] and not result["notStalled"]
     assert result["stalledLater"]
-
-
-def test_phase_local_ingestion_eta(tmp_path: Path) -> None:
-    result = _drive_page(
-        tmp_path,
-        r"""
-(() => {
-  const estimate = phaseEtaEstimator();
-  const status = { build_id: 'a', phase: 'embedding', eta_seconds: null,
-    progress: { completed: 10, total: 100, unit: 'chunks' },
-    overall_progress: { completed: 999, total: 1000 } };
-  const tick = (completed, time) => {
-    status.progress.completed = completed;
-    return estimate(status, time);
-  };
-  const samples = [tick(10, 0), tick(10, 1000), tick(20, 2000), tick(30, 4000)];
-  const summary = liveIngestionSummary(status, samples[3]);
-  const stalled = tick(30, 8000);
-  const resets = [];
-  resets.push(tick(5, 9000));
-  tick(10, 10000); tick(15, 11000);
-  status.phase = 'dense_indexing'; resets.push(tick(20, 12000));
-  tick(25, 13000); tick(30, 14000);
-  status.build_id = 'b'; resets.push(tick(35, 15000));
-  tick(40, 16000); tick(45, 17000);
-  status.progress.total = 200; resets.push(tick(50, 18000));
-  tick(55, 19000); tick(60, 20000);
-  status.progress = null; resets.push(estimate(status, 21000));
-  status.progress = { completed: 65, total: 200, unit: 'chunks' };
-  resets.push(estimate(status, 22000));
-  const estimating = liveIngestionSummary(status);
-  status.eta_seconds = 120;
-  result = { samples, stalled, resets, summary, estimating,
-    backend: liveIngestionSummary(status, 999),
-    fresh: phaseEtaEstimator()(status, 23000) };
-})();
-""",
-    )
-    assert result["samples"] == [None, None, None, 14]
-    assert result["stalled"] == 14
-    assert result["resets"] == [None] * 6
-    assert "ETA 15 sec" in result["summary"]
-    assert "ETA" not in result["estimating"]
-    assert "ETA 17 min" in result["backend"]
-    assert result["fresh"] is None
-
-
-@pytest.mark.parametrize("phase", ["embedding", "dense_indexing", "qdrant_indexing"])
-def test_passage_eta_scope_completion_and_rounding(tmp_path: Path, phase: str) -> None:
-    result = _drive_page(
-        tmp_path,
-        r"""
-(() => {
-  const estimate = phaseEtaEstimator();
-  const status = { build_id: 'a', phase: PHASE, source: 'First.pdf',
-    progress: { completed: 40, total: 100, unit: 'chunks' } };
-  const first = estimate(status, 0);
-  status.progress.completed = 50;
-  const second = estimate(status, 10000);
-  status.source = 'Second.pdf';
-  status.progress.completed = 60;
-  const third = estimate(status, 20000);
-  status.progress.completed = 100;
-  const complete = estimate(status, 30000);
-  const completeSummary = liveIngestionSummary(status, 0);
-  const excluded = ['hashing', 'extraction', 'chunking'].map(phase =>
-    liveIngestionSummary({ ...status, phase, eta_seconds: 120 }, 120));
-  status.progress = { completed: 1, total: 10, unit: 'pages' };
-  const pages = liveIngestionSummary(status, 120);
-  status.progress = { completed: 1, unit: 'chunks' };
-  const unknown = liveIngestionSummary(status, 120);
-  result = { first, second, third, complete, completeSummary, excluded, pages, unknown,
-    rounded: [0.1, 54, 58, 61, 64].map(formatPhaseEta) };
-})();
-""".replace("PHASE", json.dumps(phase)),
-    )
-    assert result["first"] is None and result["second"] is None
-    assert result["third"] == 40
-    assert result["complete"] is None
-    for summary in [
-        result["completeSummary"],
-        *result["excluded"],
-        result["pages"],
-        result["unknown"],
-    ]:
-        assert "ETA" not in summary
-    assert result["rounded"] == ["5 sec", "55 sec", "1 min", "1 min", "1 min"]
+    assert not result["phaseBatch"] and not result["phaseBatchIdle"]
+    assert not result["nextSource"]
 
 
 def test_ingestion_poll_failure_and_pagehide_cleanup(tmp_path: Path) -> None:
