@@ -79,10 +79,8 @@ RESTART_SETTINGS = frozenset(
         "runtime.search_concurrency",
         "runtime.search_history",
         "runtime.offline",
-        "runtime.embedding_threads",
         "dense.embedding_model",
         "dense.reranker_model",
-        "dense.embedding_inference_batch_size",
     }
 )
 

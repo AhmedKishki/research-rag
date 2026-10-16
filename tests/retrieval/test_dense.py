@@ -67,6 +67,7 @@ def test_embedding_threads_reach_the_model_loader(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     seen: dict[str, object] = {}
+    loads: list[int | None] = []
 
     def fake_loader(
         cache_root: Path,
@@ -79,6 +80,7 @@ def test_embedding_threads_reach_the_model_loader(
         seen["offline"] = offline
         seen["model"] = model
         seen["threads"] = threads
+        loads.append(threads)
         return object()
 
     # The loaders moved to `model_runtime`, and a backend reaches them through the
@@ -92,6 +94,15 @@ def test_embedding_threads_reach_the_model_loader(
     )
     configured.runtime._embedder()
     assert seen["threads"] == 8
+
+    # A live settings change reloads the model only when the thread count moved.
+    configured.set_embedding_throughput(threads=8, inference_batch_size=4)
+    configured.runtime._embedder()
+    assert loads == [8]
+    assert configured.runtime.embedding_inference_batch_size == 4
+    configured.set_embedding_throughput(threads=2, inference_batch_size=4)
+    configured.runtime._embedder()
+    assert loads == [8, 2]
 
     default = LocalVectorDenseBackend(tmp_path / "models", offline=True)
     default.runtime._embedder()
