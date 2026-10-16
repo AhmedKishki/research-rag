@@ -2460,13 +2460,14 @@ def test_a_short_fragment_is_not_evidence(project: Path) -> None:
     asyncio.run(_assert_a_short_fragment_is_not_evidence(project))
 
 
-async def _assert_apparatus_is_left_out_while_the_rule_is_on(project: Path) -> None:
+async def _assert_apparatus_is_left_out_only_when_asked(
+    project: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """A reference list holds a query's names and titles and no argument to cite.
 
     It is long enough for every length rule and shares the query's words, so only
-    the apparatus verdict separates it from a passage. Turning the rule off
-    returns it, and turning it on removes nothing: the same generation answers
-    both searches.
+    the apparatus verdict separates it from a passage. The rule ships off, and
+    turning it on removes nothing: the same generation answers both searches.
     """
 
     write_pdf(
@@ -2495,40 +2496,120 @@ async def _assert_apparatus_is_left_out_while_the_rule_is_on(project: Path) -> N
         title="Prose",
     )
 
+    from research_rag.corpus import extraction as extraction_module
+
+    fragments = [
+        "Emergence",
+        "Emergence is irreducible.",
+        "Stratification and Emergence",
+        "Index",
+        "emergence 97-8",
+        "emergence 17,142,144",
+        "emergence 12, 18, 24",
+        "1 Emergence cannot be inferred from a page list.",
+        "Conclusion",
+        "Emergence outside an index entails novelty.",
+    ]
+    write_pdf(project / "sources" / "fragments.pdf", fragments)
+    original = extraction_module.run_docling_batch
+
+    def labelled_batch(**kwargs):
+        payload = original(**kwargs)
+        if kwargs["source_path"].name == "fragments.pdf":
+            for page, units in payload["pages"].items():
+                label = {
+                    1: "section_header",
+                    3: "section_header",
+                    4: "section_header",
+                    7: "table",
+                    8: "footnote",
+                    9: "section_header",
+                }.get(int(page), "text")
+                for unit in units:
+                    unit["docling_label"] = label
+                    if label == "table":
+                        unit["content_kind"] = "table"
+        return payload
+
+    monkeypatch.setattr(extraction_module, "run_docling_batch", labelled_batch)
+    service = make_service(project)
+    built = await service.ingest(chunk_size=200, chunk_overlap=20)
+    generation_root = Path(built["generation_root"])
+    canonical = {
+        path: path.read_bytes()
+        for path in generation_root.rglob("*")
+        if path.is_file() and path.name != "artifact-lookup.sqlite3"
+    }
+    pointer = service.config.current_path.read_bytes()
+    chunks = read_jsonl(generation_root / "chunks" / "chunks.jsonl")
+    ids_by_text = {chunk["contents"]: chunk["chunk_id"] for chunk in chunks}
+    flagged_ids = {
+        ids_by_text[text]
+        for text in (fragments[0], fragments[2], fragments[4], fragments[5])
+    } | {
+        chunk["chunk_id"]
+        for chunk in chunks
+        if chunk["contents"].startswith("Gidwani,")
+    }
+
     async def search_with(exclude: bool) -> tuple[dict, dict]:
-        service = ResearchService(  # type: ignore[arg-type]
-            resolve_config(
-                project,
-                vanilla_executable=sys.executable,
-                settings_overrides=[
-                    f"retrieval.exclude_apparatus={str(exclude).lower()}"
-                ],
-            ),
-            FakeUltraRAG(),
-            dense=FakeDenseBackend(),
+        (service.config.portable_root / "config.toml").write_text(
+            f"[retrieval]\nexclude_apparatus = {str(exclude).lower()}\n",
+            encoding="utf-8",
         )
-        await service.ingest(chunk_size=200, chunk_overlap=20, force_recompute=True)
-        return await service.search("waste", top_k=5), await service.status()
+        return (
+            await service.search("waste emergence", top_k=20, evaluation_trace=True),
+            await service.status(),
+        )
 
     everything, status = await search_with(exclude=False)
-    assert everything["result_count"] == 2
     assert everything["apparatus_policy"]["exclude_apparatus"] is False
     assert everything["rejected_candidates"]["bm25_apparatus"] == 0
     assert everything["rejected_candidates"]["dense_apparatus"] == 0
     assert status["exclude_apparatus"] is False
-    assert status["apparatus_chunk_count"] == 1
+    assert status["apparatus_chunk_count"] == len(flagged_ids)
 
     evidence_only, status = await search_with(exclude=True)
-    assert [hit["title"] for hit in evidence_only["hits"]] == ["prose"]
     assert evidence_only["apparatus_policy"]["exclude_apparatus"] is True
-    assert evidence_only["rejected_candidates"]["bm25_apparatus"] == 1
-    assert evidence_only["rejected_candidates"]["dense_apparatus"] == 1
+    assert evidence_only["rejected_candidates"]["bm25_apparatus"] == len(flagged_ids)
+    assert evidence_only["rejected_candidates"]["dense_apparatus"] == len(flagged_ids)
     assert status["exclude_apparatus"] is True
-    assert status["apparatus_chunk_count"] == 1
+    assert status["apparatus_chunk_count"] == len(flagged_ids)
+    for stage in ("bm25_after_gates", "dense_eligible"):
+        before = set(everything["evaluation_trace"]["stages"][stage]["chunk_ids"])
+        after = set(evidence_only["evaluation_trace"]["stages"][stage]["chunk_ids"])
+        assert flagged_ids <= before
+        assert before - after == flagged_ids
+        # Neither a short claim, integer table, explanatory note nor out-of-index
+        # prose depends on an arbitrary minimum length to survive the filter.
+        assert {
+            ids_by_text[text]
+            for text in (fragments[1], fragments[6], fragments[7], fragments[9])
+        } <= after
+    claim = await service.get_passage(ids_by_text[fragments[1]])
+    assert any(
+        item["chunk_id"] == ids_by_text[fragments[0]] for item in claim["context"]
+    )
+    restored, _ = await search_with(exclude=False)
+    assert (
+        restored["evaluation_trace"]["stages"]
+        == everything["evaluation_trace"]["stages"]
+    )
+    assert service.config.current_path.read_bytes() == pointer
+    assert all(path.read_bytes() == contents for path, contents in canonical.items())
+    assert (
+        evidence_only["generation_id"]
+        == everything["generation_id"]
+        == built["generation_id"]
+    )
+    assert status["hybrid_ready"] is True
+    assert not status.get("generation_upgrade_required")
 
 
-def test_apparatus_is_left_out_while_the_rule_is_on(project: Path) -> None:
-    asyncio.run(_assert_apparatus_is_left_out_while_the_rule_is_on(project))
+def test_apparatus_is_left_out_only_when_asked(
+    project: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    asyncio.run(_assert_apparatus_is_left_out_only_when_asked(project, monkeypatch))
 
 
 async def _assert_a_hand_edit_reaches_the_running_service(project: Path) -> None:
@@ -2557,11 +2638,11 @@ async def _assert_a_hand_edit_reaches_the_running_service(project: Path) -> None
             if entry["check"] == "settings_files"
         ]
 
-    assert service.config.settings.exclude_apparatus is True
-
-    write("[retrieval]\nexclude_apparatus = false\n")
-    status = await service.status()
     assert service.config.settings.exclude_apparatus is False
+
+    write("[retrieval]\nexclude_apparatus = true\n")
+    status = await service.status()
+    assert service.config.settings.exclude_apparatus is True
     assert service.config.settings_provenance["retrieval.exclude_apparatus"].startswith(
         "project config"
     )
@@ -2569,19 +2650,16 @@ async def _assert_a_hand_edit_reaches_the_running_service(project: Path) -> None
 
     write("[retrieval]\nexclude_apparatus = maybe\n")
     status = await service.status()
-    assert service.config.settings.exclude_apparatus is False
+    assert service.config.settings.exclude_apparatus is True
     assert "does not resolve" in settings_check(status)[0]["reason"]
 
-    write("[runtime]\nnice = 5\n\n[retrieval]\nexclude_apparatus = true\n")
+    write("[runtime]\nnice = 5\n\n[retrieval]\nexclude_apparatus = false\n")
     status = await service.status()
-    assert service.config.settings.exclude_apparatus is True
+    assert service.config.settings.exclude_apparatus is False
     assert "runtime.nice" in settings_check(status)[0]["reason"]
 
 
-def test_a_hand_edit_reaches_the_running_service(
-    project: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    monkeypatch.delenv("RESEARCH_RAG_RETRIEVAL_EXCLUDE_APPARATUS")
+def test_a_hand_edit_reaches_the_running_service(project: Path) -> None:
     asyncio.run(_assert_a_hand_edit_reaches_the_running_service(project))
 
 
@@ -3857,9 +3935,13 @@ def test_query_gate_falls_back_without_a_stored_verdict(
         calls: list[str] = []
         real_flags = search_module.chunk_health_flags
 
-        def counting_flags(_text: str, *, quality_flags: object = None) -> int:
+        def counting_flags(
+            _text: str, *, quality_flags: object = None, apparatus_context=None
+        ) -> int:
             calls.append(_text)
-            return real_flags(_text, quality_flags=quality_flags)
+            return real_flags(
+                _text, quality_flags=quality_flags, apparatus_context=apparatus_context
+            )
 
         monkeypatch.setattr(search_module, "chunk_health_flags", counting_flags)
         # Model a lookup that predates the stored verdict: the query path has to

@@ -103,3 +103,105 @@ def test_apparatus_is_named_by_its_structure(text: str, kind: str) -> None:
 def test_evidence_keeps_its_passage(text: str) -> None:
     assert apparatus_kind(text) is None
     assert not chunk_health_flags(text) & CHUNK_FLAG_APPARATUS
+
+
+@pytest.mark.parametrize(
+    ("text", "context", "kind"),
+    [
+        ("emergence 97–8", {"section_kind": "index"}, "index"),
+        ("emergence 17,142,144", {"section_kind": "index"}, "index"),
+        ("emergence 97–8", {}, None),
+        ("emergence 17,142,144", {}, None),
+        (
+            "Emergence",
+            {"docling_label": "section_header", "whole_unit": True},
+            "heading",
+        ),
+        (
+            "§2 Emergence",
+            {"docling_label": "section_header", "whole_unit": True},
+            "heading",
+        ),
+        (
+            "Stratification and Emergence",
+            {"docling_label": "section_header", "whole_unit": True},
+            "heading",
+        ),
+        ("Emergence", {}, None),
+        ("Emergence", {"docling_label": "section_header", "whole_unit": False}, None),
+        (
+            "Emergence is irreducible",
+            {"docling_label": "section_header", "whole_unit": True},
+            None,
+        ),
+        (
+            "Markets Destroy Communities",
+            {"docling_label": "section_header", "whole_unit": True},
+            None,
+        ),
+        (
+            "Emergence entails novelty",
+            {"docling_label": "section_header", "whole_unit": True},
+            None,
+        ),
+        (
+            "Unknown words",
+            {"docling_label": "section_header", "whole_unit": True},
+            None,
+        ),
+        (
+            "emergence 17,142,144",
+            {"section_kind": "index", "docling_label": "table"},
+            None,
+        ),
+        (
+            "emergence 17,142,144",
+            {"section_kind": "index", "content_kind": "table"},
+            None,
+        ),
+        ("E = 17,142,144", {"section_kind": "index"}, None),
+        ("Emergence increases at 97–8 degrees", {"section_kind": "index"}, None),
+    ],
+)
+def test_contextual_fragments_need_structural_proof(
+    text: str, context: dict, kind: str | None
+) -> None:
+    assert apparatus_kind(text, context=context) == kind
+    assert bool(
+        chunk_health_flags(text, apparatus_context=context) & CHUNK_FLAG_APPARATUS
+    ) == (kind is not None)
+
+
+@pytest.mark.parametrize(
+    "label", ["caption", "formula", "code", "table", "unknown_future_label"]
+)
+def test_structural_data_is_not_apparatus(label: str) -> None:
+    assert (
+        apparatus_kind(
+            "Growth, 17, 142, 144",
+            context={"docling_label": label, "section_kind": "index"},
+        )
+        is None
+    )
+
+
+def test_split_author_and_year_is_a_retrieval_verdict_not_text_cleanup() -> None:
+    text = (
+        "Bhaskar, Roy\n\n"
+        "1975. A Realist Theory of Science: Arguments on Ontology, Causality, "
+        "Explanation, Naturalism, Philosophy, Scientific Practice, Methodology, "
+        "Transcendental Realism, Experiments, Structures, Mechanisms, Dispositions, "
+        "Powers, Tendencies, Systems, Stratification, Emergence, Knowledge, "
+        "Epistemology, and Social Relations. London: University Press."
+    )
+    assert apparatus_kind(text) == "bibliography"
+    assert (
+        apparatus_kind(text.replace("University Press", "Routledge")) == "bibliography"
+    )
+    # Short explanatory prose and a claim-bearing note do not need twenty words.
+    for prose in (
+        "Emergence is not reducible to its components.",
+        "1 Bhaskar (1975) argues that emergence is irreducible.",
+        "Bhaskar, Roy\n\n1975. This claim is not supported by the evidence. University Press.",
+    ):
+        assert apparatus_kind(prose) is None

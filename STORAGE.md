@@ -153,11 +153,12 @@ generations/<generation-id>/
 
 ### The artifact lookup
 
-- `artifact-lookup.sqlite3` holds identifiers, ordinals, content hashes, byte offsets into the canonical JSONL files, and one integer retrieval verdict per chunk.
+- `artifact-lookup.sqlite3` holds identifiers, ordinals, content hashes, byte offsets into the canonical JSONL files, retained structural context, and one integer retrieval verdict per chunk.
   - It never stores passage text.
-  - It is rebuilt from the canonical files when missing.
-- The verdict is a bitmask over properties of the chunk alone: corrupt text, extraction artifact, and scholarly apparatus. It mirrors the query-time check exactly.
+  - It is rebuilt from the canonical files when missing or incompatible with the current lookup schema.
+- The verdict is a bitmask over the chunk's text, quality flags, and declared structure: corrupt text, extraction artifact, and scholarly apparatus. It mirrors the query-time check exactly.
   - Search always rejects the first two. It rejects apparatus only while `retrieval.exclude_apparatus` is on, and a passage window shows an apparatus neighbour as context.
+  - Query-only verdicts and context never enter canonical records carried into another generation.
 
 ## Ingestion
 

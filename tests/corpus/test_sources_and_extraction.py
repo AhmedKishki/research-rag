@@ -231,16 +231,18 @@ def test_epub_preserves_element_and_preceding_anchors_with_stable_fallbacks(
     }.intersection(fallback)
 
 
+@pytest.mark.parametrize("element", ["p", 'div class="calibre_9"'])
 def test_epub_mid_paragraph_anchor_splits_without_marker_leakage(
     project: Path,
+    element: str,
 ) -> None:
     path = project / "sources" / "mid-paragraph.epub"
     _write_custom_epub(
         path,
         (
-            "<p>Evidence before the internal marker. "
+            f"<{element}>Evidence before the internal marker. "
             '<a name="midpoint"></a>'
-            "Evidence after the internal marker.</p>"
+            f"Evidence after the internal marker.</{element.split()[0]}>"
         ),
     )
     config = resolve_config(project, vanilla_executable=sys.executable)
@@ -255,7 +257,7 @@ def test_epub_mid_paragraph_anchor_splits_without_marker_leakage(
     ]
     assert [unit["locator"]["block_index"] for unit in units] == [1, 2]
     assert {unit["locator"]["element_path"] for unit in units} == {
-        "/html[1]/body[1]/p[1]"
+        f"/html[1]/body[1]/{element.split()[0]}[1]"
     }
     assert "fragment" not in units[0]["locator"]
     assert units[1]["locator"]["fragment"] == "midpoint"
@@ -265,25 +267,29 @@ def test_epub_mid_paragraph_anchor_splits_without_marker_leakage(
     assert "midpoint" not in " ".join(unit["contents"] for unit in units)
 
 
+@pytest.mark.parametrize("element", ["p", 'div class="calibre_9"'])
 def test_epub_note_references_neither_split_nor_leak_and_note_labels_stay(
     project: Path,
+    element: str,
 ) -> None:
     path = project / "sources" / "notes.epub"
+    name = element.split()[0]
     _write_custom_epub(
         path,
         (
             # Four publishers' references: a superscript after an empty backlink
             # anchor, a plain link after one, a link carrying its own backlink
             # inside a superscript, and a declared noteref.
-            '<p>Hans was celebrated.<a id="r1"></a><a href="notes.xhtml#n1">'
+            f'<{element}>Hans was celebrated.<a id="r1"></a><a href="notes.xhtml#n1">'
             "<sup>1</sup></a> His trainer"
             '<span id="r2"></span><a href="notes.xhtml#n2" class="ref">2</a> '
             'taught arithmetic<sup><a href="notes.xhtml#n3" id="r3"> 3 </a></sup> '
-            'to the horse.<a epub:type="noteref" href="notes.xhtml#n4">[4]</a></p>'
+            'to the horse.<a epub:type="noteref" href="notes.xhtml#n4">[4]</a>'
+            f"</{name}>"
             # A cross-reference prints a digit but is not a note.
-            '<p>See chapter <a href="ch3.xhtml#c3">3</a> for the method.</p>'
+            f'<{element}>See chapter <a href="ch3.xhtml#c3">3</a> for the method.</{name}>'
             # A note's own number opens its block and stays.
-            '<p><a href="locator.xhtml#r1" id="n1">1</a>. Heyn, Berlin’s Horse.</p>'
+            f'<{element}><a href="locator.xhtml#r1" id="n1">1</a>. Heyn, Berlin’s Horse.</{name}>'
         ),
     )
     config = resolve_config(project, vanilla_executable=sys.executable)
@@ -330,19 +336,99 @@ def test_epub_paragraph_role_is_read_as_a_paragraph(project: Path) -> None:
     ]
 
 
-def test_epub_tables_keep_document_order_and_nested_blocks_are_not_duplicated(
+def test_epub_classed_div_prose_preserves_definition_and_paragraphs(
     project: Path,
 ) -> None:
+    path = project / "sources" / "div-prose.epub"
+    # Synthetic prose in the publisher's original-style markup, not a book excerpt.
+    definition = (
+        "Emergence occurs when a whole possesses a property absent from isolated parts."
+    )
+    _write_custom_epub(
+        path,
+        "<div><h2>Emergence</h2>"
+        f'<div class="calibre_9" id="definition">{definition}</div>'
+        '<div class="calibre_9">The <em>whole</em> retains H<sub>2</sub>O and '
+        "<math><mi>x</mi><mo>+</mo><mn>1</mn></math> in its description.</div>"
+        "<div class='calibre_9'>A separate paragraph follows.</div></div>",
+    )
+    original = path.read_bytes()
+    config = resolve_config(project, vanilla_executable=sys.executable)
+    sources = scan_sources(config).selected
+
+    _documents, units = extract_sources(sources, docling_env=_FAKE_ENV)
+    _documents, repeated = extract_sources(sources, docling_env=_FAKE_ENV)
+
+    assert [unit["contents"] for unit in units] == [
+        f"Emergence\n\n{definition}",
+        "The whole retains H2O and x+1 in its description.",
+        "A separate paragraph follows.",
+    ]
+    assert units[0]["locator"]["fragment"] == "definition"
+    assert [unit["locator"]["element_path"] for unit in units] == [
+        f"/html[1]/body[1]/div[1]/div[{index}]" for index in range(1, 4)
+    ]
+    assert [unit["locator"] for unit in repeated] == [unit["locator"] for unit in units]
+    assert [unit["id"] for unit in repeated] == [unit["id"] for unit in units]
+    assert path.read_bytes() == original
+
+
+def test_epub_container_direct_text_survives_around_nested_blocks(
+    project: Path,
+) -> None:
+    path = project / "sources" / "mixed-div.epub"
+    _write_custom_epub(
+        path,
+        '<div class="calibre_9">Before <em>nested</em> blocks.'
+        "<script>Script must not leak.</script><style>Style must not leak.</style>"
+        '<div class="sidebar">Furniture must not leak.</div>'
+        "<!-- A comment must not leak. --><div>Inner paragraph.</div>"
+        'Between blocks.<span id="explicit-container"><p>Explicit paragraph.</p>'
+        "Inline tail.</span>"
+        "After nested blocks.</div>",
+    )
+    config = resolve_config(project, vanilla_executable=sys.executable)
+
+    _documents, units = extract_sources(
+        scan_sources(config).selected, docling_env=_FAKE_ENV
+    )
+
+    assert [unit["contents"] for unit in units] == [
+        "Before nested blocks.",
+        "Inner paragraph.",
+        "Between blocks.",
+        "Explicit paragraph.",
+        "Inline tail.",
+        "After nested blocks.",
+    ]
+    assert units[3]["locator"]["element_path"] == (
+        "/html[1]/body[1]/div[1]/span[1]/p[1]"
+    )
+    assert units[3]["locator"]["fragment"] == "explicit-container"
+    assert units[3]["locator"]["anchor_relation"] == "preceding"
+
+
+@pytest.mark.parametrize("container", [False, True])
+@pytest.mark.parametrize("quote_paragraph", ["p", "div"])
+def test_epub_tables_keep_document_order_and_nested_blocks_are_not_duplicated(
+    project: Path,
+    container: bool,
+    quote_paragraph: str,
+) -> None:
     path = project / "sources" / "ordered-blocks.epub"
+    prefix = '<div class="calibre_9"><section><div>' if container else ""
+    suffix = "</div></section></div>" if container else ""
     _write_custom_epub(
         path,
         (
-            "<p>Prose before the table.</p>"
+            prefix + "<p>Prose before the table.</p>"
             '<table id="evidence-table">'
             "<tr><th>Term</th><th>Value</th></tr>"
             "<tr><td>Labour</td><td>Visible</td></tr>"
             "</table>"
-            "<blockquote><p>Nested quoted evidence.</p></blockquote>"
+            f"<blockquote><{quote_paragraph}>Nested quoted evidence.</{quote_paragraph}>"
+            f"<{quote_paragraph}>The quotation continues.</{quote_paragraph}></blockquote>"
+            "<ul><li>First list entry.</li><li>Second list entry.</li></ul>" + suffix
         ),
     )
     config = resolve_config(project, vanilla_executable=sys.executable)
@@ -354,13 +440,24 @@ def test_epub_tables_keep_document_order_and_nested_blocks_are_not_duplicated(
     assert [unit["contents"] for unit in units] == [
         "Prose before the table.",
         "Term | Value\nLabour | Visible",
-        "Nested quoted evidence.",
+        "Nested quoted evidence.\n\nThe quotation continues.",
+        "First list entry.",
+        "Second list entry.",
     ]
-    assert [unit["content_kind"] for unit in units] == ["prose", "table", "prose"]
+    assert [unit["content_kind"] for unit in units] == [
+        "prose",
+        "table",
+        "prose",
+        "prose",
+        "prose",
+    ]
     assert units[1]["locator"]["fragment"] == "evidence-table"
     assert units[1]["locator"]["anchor_relation"] == "element"
-    assert units[1]["locator"]["element_path"] == "/html[1]/body[1]/table[1]"
-    assert units[2]["locator"]["element_path"] == ("/html[1]/body[1]/blockquote[1]")
+    parent_path = "/html[1]/body[1]" + (
+        "/div[1]/section[1]/div[1]" if container else ""
+    )
+    assert units[1]["locator"]["element_path"] == f"{parent_path}/table[1]"
+    assert units[2]["locator"]["element_path"] == f"{parent_path}/blockquote[1]"
     assert (
         "\n".join(unit["contents"] for unit in units).count("Nested quoted evidence.")
         == 1

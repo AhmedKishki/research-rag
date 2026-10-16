@@ -54,8 +54,8 @@ EXTRACTION_POLICY_VERSION = 14
 # each EPUB or MOBI document rather than on the generation, so a change to those
 # rules re-reads those sources on an ordinary ingest and passes every unchanged PDF
 # through untouched. A document without the field was read under version 1.
-# Version 2 reads `role="paragraph"` blocks and drops note references.
-REFLOWABLE_EXTRACTION_POLICY_VERSION = 2
+# Version 3 also reads unmarked div prose without flattening nested containers.
+REFLOWABLE_EXTRACTION_POLICY_VERSION = 3
 
 
 REFLOWABLE_FORMATS = frozenset({"epub", "mobi"})
