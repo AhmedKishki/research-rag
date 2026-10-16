@@ -8,7 +8,6 @@ from __future__ import annotations
 import argparse
 import asyncio
 import contextlib
-import math
 import os
 import shutil
 import sys
@@ -126,110 +125,31 @@ INGEST_PROGRESS_INTERVAL = 2.0
 INGEST_HEARTBEAT_INTERVAL = 15.0
 
 
-PASSAGE_ETA_PHASES = frozenset({"embedding", "dense_indexing", "qdrant_indexing"})
-
-
-class _PhaseETA:
-    """Measure current-phase throughput, with bounded display updates."""
+class _IngestionActivity:
+    """Track inactivity across phase, source, and counter updates."""
 
     def __init__(self) -> None:
         self.key: tuple[Any, ...] | None = None
-        self.start = 0.0
-        self.initial = 0
-        self.previous = 0
-        self.advances = 0
         self.last_progress = 0.0
-        self.displayed: float | None = None
-        self.display_time = 0.0
         self.stalled = False
-        self.sources = False
-        self.activity: tuple[Any, ...] | None = None
 
-    def observe(self, progress: dict[str, Any], now: float) -> float | None:
-        activity = _ingestion_progress_key({"ingestion_progress": progress})
-        if activity != self.activity:
-            self.activity = activity
-            self.last_progress = now
-        self.sources = progress.get("phase") in {"extraction", "chunking"}
-        counts = progress.get("overall_progress" if self.sources else "progress")
-        if (
-            (not self.sources and progress.get("phase") not in PASSAGE_ETA_PHASES)
-            or not isinstance(counts, dict)
-            or counts.get("unit") != ("sources" if self.sources else "chunks")
-            or not math.isfinite(now)
-        ):
-            self.key = None
-            return None
-        completed, total = counts.get("completed"), counts.get("total")
-        if (
-            type(completed) is not int
-            or type(total) is not int
-            or not 0 <= completed <= total
-            or total <= 0
-        ):
-            self.key = None
-            return None
-        key = (
-            progress.get("build_id"),
-            progress.get("phase"),
-            total,
-            counts.get("unit"),
-        )
-        if key != self.key or completed < self.previous or now < self.start:
+    def observe(self, status: dict[str, Any], now: float) -> None:
+        key = _ingestion_progress_key(status)
+        if key is None or key != self.key or now < self.last_progress:
             self.key = key
-            self.start = now
-            self.initial = completed
-            self.previous = completed
-            self.advances = 0
             self.last_progress = now
-            self.displayed = None
-            self.display_time = now
-            self.stalled = False
-            return None
-        if completed > self.previous:
-            self.advances += 1
-            self.last_progress = now
-        self.previous = completed
-        self.stalled = now - self.last_progress >= 60
-        sampled = completed - self.initial >= 3 if self.sources else self.advances >= 2
-        if not sampled or now <= self.start or completed == total:
-            self.displayed = None
-            return None
-        return (total - completed) * (now - self.start) / (completed - self.initial)
-
-    def label(self, estimate: float | None, now: float) -> str:
-        if estimate is None:
-            return "ETA —"
-        if self.sources:
-            # Power-of-two minute ranges are intentionally coarse for unequal books.
-            upper = 2 ** max(1, math.ceil(math.log2(max(1, estimate / 60))))
-            candidate = float(upper * 60)
-        else:
-            bucket = 60 if estimate >= 60 else 10
-            candidate = float(max(bucket, math.ceil(estimate / bucket) * bucket))
-        if self.displayed is None or (
-            now - self.display_time >= 60
-            and (candidate >= self.displayed * 1.5 or candidate <= self.displayed / 1.5)
-        ):
-            self.displayed = candidate
-            self.display_time = now
-        minutes = int(self.displayed / 60)
-        if self.sources:
-            return f"ETA {minutes // 2}–{minutes}m"
-        return f"ETA ~{minutes}m" if minutes else f"ETA ~{int(self.displayed)}s"
+        self.stalled = key is not None and now - self.last_progress >= 60
 
 
 def _ingestion_progress_line(
-    status: dict[str, Any], estimator: _PhaseETA | None = None
+    status: dict[str, Any], activity: _IngestionActivity | None = None
 ) -> str | None:
     """Render a compact human-readable snapshot, not the backend payload."""
+    if activity is not None:
+        activity.observe(status, time.monotonic())
     progress = status.get("ingestion_progress")
     if not isinstance(progress, dict) or not progress:
-        if estimator is not None:
-            estimator.key = None
         return None
-    now = time.monotonic()
-    estimate = estimator.observe(progress, now) if estimator is not None else None
     phase = str(progress.get("phase") or "unknown")
     labels = {
         "source_hashing": "Hashing sources",
@@ -264,10 +184,9 @@ def _ingestion_progress_line(
         # Source names are data, not terminal commands or multiline log records.
         safe_source = "".join(char if char.isprintable() else " " for char in source)
         fields.append(safe_source)
-    # Backend/source deadlines cannot describe measured global passage work.
     counts = progress.get("progress")
     passage_counts = (
-        phase in PASSAGE_ETA_PHASES
+        phase in {"embedding", "dense_indexing", "qdrant_indexing"}
         and isinstance(counts, dict)
         and counts.get("unit") == "chunks"
         and type(counts.get("completed")) is int
@@ -275,17 +194,16 @@ def _ingestion_progress_line(
         and 0 <= counts["completed"] <= counts["total"]
         and counts["total"] > 0
     )
-    fields.append(estimator.label(estimate, now) if estimator else "ETA —")
     if passage_counts and counts["completed"] == counts["total"]:
         fields.append("Finalizing")
-    if estimator is not None and estimator.stalled and estimator.key is not None:
+    if activity is not None and activity.stalled:
         fields.append("Stalled: no progress for ≥60s")
     return " | ".join(fields)
 
 
 def _ingestion_progress_key(status: dict[str, Any]) -> tuple[Any, ...] | None:
     progress = status.get("ingestion_progress")
-    if not isinstance(progress, dict):
+    if not isinstance(progress, dict) or not progress:
         return None
     counters = []
     for name in ("progress", "overall_progress", "source_progress"):
@@ -348,13 +266,7 @@ def _ingestion_progress_frame(status: dict[str, Any], line: str, columns: int) -
         and counts.get("unit") != "phase"
     )
     percentage = round(100 * completed / total) if valid else None
-    eta = next(
-        (field for field in fields if field.startswith("ETA ")),
-        "",
-    )
     suffix = f" {percentage:3d}%" if percentage is not None else "  --%"
-    if eta:
-        suffix += f" | {eta}"
     for field in fields:
         if field.startswith(("Stalled:", "Finalizing")):
             suffix += f" | {field}"
@@ -374,7 +286,7 @@ async def _ingest_with_progress(
     """Poll read-only status while the single build request is outstanding."""
     ingest = asyncio.create_task(operations.call(operation, **arguments))
     status_task: asyncio.Task[dict[str, Any]] | None = None
-    estimator = _PhaseETA()
+    activity = _IngestionActivity()
     previous_key: tuple[Any, ...] | None = None
     last_printed = 0.0
     redraw = (
@@ -398,7 +310,7 @@ async def _ingest_with_progress(
                 0
             ]
             line = (
-                _ingestion_progress_line(status_result, estimator)
+                _ingestion_progress_line(status_result, activity)
                 if isinstance(status_result, dict)
                 else None
             )

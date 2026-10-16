@@ -3506,7 +3506,7 @@ async function restoreSource(path) {
   }
 }
 
-// Source estimates are coarse; passage estimates use the known phase total.
+// Source phases report completed files; other phases report their work units.
 function ingestionPhaseCount(status) {
   return status.overall_progress?.unit === "sources"
     ? status.overall_progress : status.progress;
@@ -3524,65 +3524,14 @@ function renderIngestionProgress(status) {
   }
 }
 
-function ingestionEtaCount(status) {
-  const sources = ["extraction", "chunking"].includes(status.phase);
-  if (!sources && !["embedding", "dense_indexing", "qdrant_indexing"].includes(status.phase)) return null;
-  const count = sources ? status.overall_progress : status.progress;
-  return count?.unit === (sources ? "sources" : "chunks") && Number.isFinite(count.completed)
-    && Number.isFinite(count.total) && count.total > 0
-    && count.completed >= 0 && count.completed <= count.total ? count : null;
-}
-
-function phaseEtaEstimator() {
-  let sample = null;
-  return (status, now) => {
-    const count = ingestionEtaCount(status);
-    if (!count || !Number.isFinite(count.completed) || !Number.isFinite(count.total)
-        || count.total <= 0 || count.completed < 0 || count.completed > count.total
-        || !Number.isFinite(now)) {
-      sample = null;
-      return null;
-    }
-    const key = JSON.stringify([status.build_id, status.phase, count.unit, count.total]);
-    if (!sample || sample.key !== key || count.completed < sample.completed || now < sample.time) {
-      sample = { key, completed: count.completed, time: now,
-        start: now, initial: count.completed, advances: 0, advancedAt: now,
-        shown: null, shownAt: now, seconds: null };
-      return null;
-    }
-    if (count.completed > sample.completed) {
-      sample.advances++;
-      sample.advancedAt = now;
-    }
-    sample.completed = count.completed;
-    sample.time = now;
-    const elapsed = (now - sample.start) / 1000;
-    const delta = count.completed - sample.initial;
-    const sources = count.unit === "sources";
-    if ((sources ? delta < 3 : sample.advances < 2) || elapsed <= 0 || delta <= 0
-        || count.completed === count.total) return null;
-    // Idle polls do not inflate the measured rate or revise the displayed ETA.
-    const seconds = (count.total - count.completed) * (sample.advancedAt - sample.start) / 1000 / delta;
-    const minutes = Math.max(1, Math.round(seconds / 60));
-    const step = minutes >= 10 ? 5 : 1;
-    const lower = Math.max(step, Math.floor(minutes * 0.7 / step) * step);
-    const upper = Math.max(lower + step, Math.ceil(minutes * 1.3 / step) * step);
-    const candidate = sources ? `${lower}–${upper} min` : seconds;
-    if (sample.shown === null || (now - sample.shownAt >= 60000
-        && Math.abs(seconds - sample.seconds) >= Math.max(30, sample.seconds * 0.25))) {
-      sample.shown = candidate;
-      sample.seconds = seconds;
-      sample.shownAt = now;
-    }
-    return sample.shown;
-  };
-}
-
 function ingestionStallDetector() {
   let sample = null;
   return (status, now) => {
-    const count = ingestionEtaCount(status) || ingestionPhaseCount(status);
-    if (!count || !Number.isFinite(count.completed) || !Number.isFinite(now)) {
+    const count = ["extraction", "chunking"].includes(status.phase)
+      ? ingestionPhaseCount(status) : status.progress || ingestionPhaseCount(status);
+    if (!count || !Number.isFinite(count.completed) || !Number.isFinite(count.total)
+        || count.total <= 0 || count.completed < 0 || count.completed > count.total
+        || !Number.isFinite(now)) {
       sample = null;
       return false;
     }
@@ -3596,15 +3545,7 @@ function ingestionStallDetector() {
   };
 }
 
-function formatPhaseEta(seconds) {
-  if (seconds >= 60) return `${Math.max(1, Math.round(seconds / 60))} min`;
-  const rounded = Math.max(5, Math.round(seconds / 5) * 5);
-  const minutes = Math.floor(rounded / 60);
-  const remainder = rounded % 60;
-  return minutes ? `${minutes} min${remainder ? ` ${remainder} sec` : ""}` : `${rounded} sec`;
-}
-
-function liveIngestionSummary(progress, localEta = null, stalled = false) {
+function liveIngestionSummary(progress, stalled = false) {
   const parts = [String(progress.phase || "Building indexes").replaceAll("_", " ")];
   const counts = (label, value) => {
     if (value && Number.isFinite(value.completed) && Number.isFinite(value.total) && value.total > 0) {
@@ -3613,20 +3554,13 @@ function liveIngestionSummary(progress, localEta = null, stalled = false) {
   };
   if (progress.source) parts.push(String(progress.source));
   counts("", ingestionPhaseCount(progress));
-  const etaCount = ingestionEtaCount(progress);
-  if (etaCount && etaCount.completed < etaCount.total) {
-    if (Number.isFinite(localEta) && localEta > 0) {
-      parts.push(`ETA ${formatPhaseEta(localEta)}`);
-    } else if (typeof localEta === "string") parts.push(`ETA ${localEta}`);
-  }
-  if (stalled) parts.push("No progress for 60s");
+  if (stalled) parts.push("No reported progress for 60s; work may still be running. Check ingestion logs.");
   return parts.join(" · ");
 }
 
 // One bounded status request at a time; never reload the source inventory while
 // the single ingest POST owns the build. Late responses cannot overwrite the UI.
 function pollIngestionProgress() {
-  const estimate = phaseEtaEstimator();
   const stalled = ingestionStallDetector();
   let stopped = false;
   let timer;
@@ -3641,10 +3575,9 @@ function pollIngestionProgress() {
         const progress = status.ingestion_progress;
         renderIngestionProgress(progress);
         const now = performance.now();
-        byId("busy-message").textContent = `${liveIngestionSummary(progress, estimate(progress, now), stalled(progress, now))} · Status checked ${new Date().toLocaleTimeString()}`;
+        byId("busy-message").textContent = `${liveIngestionSummary(progress, stalled(progress, now))} · Status checked ${new Date().toLocaleTimeString()}`;
       } else if (!stopped) {
         renderIngestionProgress({});
-        estimate({}, performance.now());
         stalled({}, performance.now());
       }
     } catch (_error) {
