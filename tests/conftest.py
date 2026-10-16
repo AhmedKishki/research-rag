@@ -227,6 +227,23 @@ def _no_collapsed_repetitions_in_the_suite(
 
 
 @pytest.fixture(autouse=True)
+def _every_passage_is_evidence_in_the_suite(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """This suite's corpora are shorter than the shipped evidence floors.
+
+    A source here is a sentence or a titled line, which the length floors and the
+    apparatus verdict would remove from every search. The tests about those rules
+    pass their own values, and a test that edits a project file for them clears
+    these first.
+    """
+
+    monkeypatch.setenv("RESEARCH_RAG_RETRIEVAL_MINIMUM_PASSAGE_WORDS", "0")
+    monkeypatch.setenv("RESEARCH_RAG_RETRIEVAL_MINIMUM_PASSAGE_TOKEN_FRACTION", "0.0")
+    monkeypatch.setenv("RESEARCH_RAG_RETRIEVAL_EXCLUDE_APPARATUS", "false")
+
+
+@pytest.fixture(autouse=True)
 def _an_account_directory_of_this_run(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path_factory: pytest.TempPathFactory,

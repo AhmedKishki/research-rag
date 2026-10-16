@@ -176,7 +176,7 @@ uv run python scripts/evaluate_retrieval.py --project /mnt/data/my-project \
 - `retrieval.minimum_passage_words` drops a candidate whose cleaned text is shorter than the setting, before fusion, in both halves.
 - `retrieval.minimum_passage_token_fraction` states the floor as a fraction of the generation's recorded `chunking.size`, counted with the tokenizer that generation was chunked with. A chunk holds `chunking.size` tokens, so a tenth of that is a fragment whatever its word count. The count covers the returned text, which is cleaned after chunking.
 - Both are runtime settings and apply at the next search.
-- Neither is a back-matter filter. An index line is as short as a one-line paragraph, and only the query tells them apart. A corpus whose answers are table rows, catalogue entries, or bibliography lines would lose evidence a judged set cannot detect. Both ship off, and the value belongs in a project's own configuration.
+- Neither is a back-matter filter. An index line is as short as a one-line paragraph, and only the query tells them apart. A corpus whose answers are table rows, catalogue entries, or bibliography lines would lose evidence a judged set cannot detect. Both ship on, and such a project sets them to 0 in its own configuration.
 
 ### The apparatus filter
 
@@ -184,7 +184,7 @@ uv run python scripts/evaluate_retrieval.py --project /mnt/data/my-project \
 - `retrieval.exclude_apparatus` drops a candidate whose lookup verdict carries the apparatus bit, before fusion, in both halves. It is a runtime setting and applies at the next search.
 - `src/research_rag/corpus/text_quality.py::apparatus_kind` reads the passage's own text. A passage nearly without argument grammar is judged by structure: citation markers among mostly capitalised words, page lists, or copyright boilerplate. Twenty words of argument sentences or six measurements keep it.
 - The verdict judges form, not meaning. A note that makes its claim inside a citation is filtered with the citation. A known-item score cannot detect that loss, because only the designated passage is judged.
-- The filter ships off, and the value belongs in a project's own configuration.
+- The filter ships on. A project whose evidence is bibliographic turns it off in its own configuration.
 
 ### The lexical abstention gate
 
@@ -409,4 +409,51 @@ Counts and MRR credit only the designated target chunk in the final top ten, wit
   - Apparatus fell from 3.5% of the kept questions' hits to none, and from 7.2% of the off-topic hits to none.
   - For the kept questions, 21 flagged passages left the top ten and 30 passages entered. Three first hits changed, each from a reference entry to argument; one now opens on the cited article itself rather than another book's entry for it.
   - Nine unflagged passages left. Two had no reranker score because they sat beyond the scored window. The other seven scored a median of −4.2 against the entrants' median of −0.9; one of them, a second passage from a source still ranked first, left through the diversity rule.
-- This shows no loss on the judged targets and no reference entries in the measured results. A known-item set cannot see a filtered passage that carried a claim of its own, so it does not establish that nothing of value was lost. The setting stays off by default.
+- This shows no loss on the judged targets and no reference entries in the measured results. A known-item set cannot see a filtered passage that carried a claim of its own, so it does not establish that nothing of value was lost.
+
+## Default length and apparatus filters (2026-10-16)
+
+- Protocol: `evaluation/README.md`; offline schema-3 reports, harness revision `e1e657ace39061285db3e93a8138b569980caacf`. Private reports remain outside Git.
+- Each arm sets all three keys through environment variables, so neither depends on a project file.
+  - Off: `retrieval.minimum_passage_words` 0, `retrieval.minimum_passage_token_fraction` 0.0, `retrieval.exclude_apparatus` false.
+  - On: 12, 0.1, and true.
+- Generation `20261016T090404Z-e268e656` holds 158 searchable sources and 61,054 chunks. 10,909 chunks carry the apparatus verdict.
+- The pinned BGE-small-en-v1.5 embedder, MiniLM-L-6-v2 reranker, and source-diversity penalty 0.25 serve both arms.
+- Thirty known-item queries cover 18 targets with `--skip-targets t12`.
+
+| Mode, top-k 10 | Filters | Success@1 | Success@10 | Document@10 | MRR | nDCG@10 |
+|---|---|---:|---:|---:|---:|---:|
+| BM25 | off | 56.7% | 80.0% | 86.7% | 0.643 | 0.681 |
+| BM25 | on | 56.7% | 83.3% | 90.0% | 0.652 | 0.695 |
+| Dense | off | 33.3% | 56.7% | 63.3% | 0.400 | 0.439 |
+| Dense | on | 33.3% | 56.7% | 63.3% | 0.401 | 0.441 |
+| Hybrid | off | 60.0% | 76.7% | 86.7% | 0.643 | 0.672 |
+| Hybrid | on | 60.0% | 80.0% | 90.0% | 0.645 | 0.680 |
+| Hybrid + rerank | off | 76.7% | 83.3% | 90.0% | 0.787 | 0.798 |
+| Hybrid + rerank | on | 76.7% | 83.3% | 90.0% | 0.788 | 0.799 |
+
+- The hybrid top-k 50 pass reached 93.3% designated-passage success in both arms.
+- Reranked median latency was 1.20 seconds off and 1.21 seconds on.
+- With the filters off, 32 of the 300 reranked slots (10.7%) held a passage the filters drop. With them on, none did. No first hit changed.
+- Turning the filters on displaced 13 unflagged passages from ranks 3–10 and brought in 45. Two of the displaced were reference entries the verdict misses.
+- Verdicts for returned passages were recomputed from their stored text with the engine's apparatus function, word count, and GPT-2 token count.
+
+### Second corpus: critical realism
+
+- The `critical-realism` corpus has no judged set.
+- Generation `20261016T131444Z-88890ae3` holds ten books and 20,263 chunks. 5,379 carry the apparatus verdict, and 7,599 have fewer than 12 words.
+- Thirty questions were fixed before any result was read: four from the project's search history, sixteen concept questions, two quotations of an Elder-Vass definition, and eight off-topic questions.
+- Each ran reranked at top-k 10 in both arms, uncounted.
+
+| Questions | Filtered slots, off | Filtered slots, on | Filtered first hits, off |
+|---|---:|---:|---:|
+| History and concept, 20 | 84 of 200 | 0 | 4 |
+| Off-topic, 8 | 46 of 80 | 0 | 7 |
+
+- Both quotation questions returned the same Elder-Vass passage first in both arms. The quoted wording is not in the corpus verbatim.
+- One annotator read the 84 distinct filtered passages that the 22 on-topic questions returned.
+  - 78 were headings, contents lines, index lines, or reference entries.
+  - Six carried part of a claim: a list's lead-in, a list item, two numbered theses, a notation footnote, and the closing sentence of a split paragraph.
+- Eight unflagged passages left from ranks 7–10, displaced.
+- The filters lost no judged target. Their measured cost is the six claim fragments.
+- Known-item judgments cannot see a filtered passage that carried a claim. No untouched confirmation set exists for this change. The default rests on these two checks and the reviewer's decision.
