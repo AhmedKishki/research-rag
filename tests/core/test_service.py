@@ -2390,7 +2390,7 @@ async def _assert_a_short_fragment_is_not_evidence(project: Path) -> None:
     that can outrank prose: a five-word index entry holds the query's words and
     nothing to cite. The floor admits it, the diversity rule cannot see it, and
     the reranker scores it as relevant — only a length rule separates it from a
-    passage. The rule ships off; this is what turning it on does.
+    passage. The apparatus rule is held off, so the length rule alone decides.
     """
 
     write_pdf(project / "sources" / "fragment.pdf", ["Waste, 12-14"], title="Index")
@@ -2414,6 +2414,7 @@ async def _assert_a_short_fragment_is_not_evidence(project: Path) -> None:
                 settings_overrides=[
                     f"retrieval.minimum_passage_words={minimum}",
                     f"retrieval.minimum_passage_token_fraction={fraction}",
+                    "retrieval.exclude_apparatus=false",
                 ],
             ),
             FakeUltraRAG(),
@@ -2459,12 +2460,13 @@ def test_a_short_fragment_is_not_evidence(project: Path) -> None:
     asyncio.run(_assert_a_short_fragment_is_not_evidence(project))
 
 
-async def _assert_apparatus_is_left_out_only_when_asked(project: Path) -> None:
+async def _assert_apparatus_is_left_out_while_the_rule_is_on(project: Path) -> None:
     """A reference list holds a query's names and titles and no argument to cite.
 
     It is long enough for every length rule and shares the query's words, so only
-    the apparatus verdict separates it from a passage. The rule ships off, and
-    turning it on removes nothing: the same generation answers both searches.
+    the apparatus verdict separates it from a passage. Turning the rule off
+    returns it, and turning it on removes nothing: the same generation answers
+    both searches.
     """
 
     write_pdf(
@@ -2525,8 +2527,8 @@ async def _assert_apparatus_is_left_out_only_when_asked(project: Path) -> None:
     assert status["apparatus_chunk_count"] == 1
 
 
-def test_apparatus_is_left_out_only_when_asked(project: Path) -> None:
-    asyncio.run(_assert_apparatus_is_left_out_only_when_asked(project))
+def test_apparatus_is_left_out_while_the_rule_is_on(project: Path) -> None:
+    asyncio.run(_assert_apparatus_is_left_out_while_the_rule_is_on(project))
 
 
 async def _assert_a_hand_edit_reaches_the_running_service(project: Path) -> None:
@@ -2555,11 +2557,11 @@ async def _assert_a_hand_edit_reaches_the_running_service(project: Path) -> None
             if entry["check"] == "settings_files"
         ]
 
-    assert service.config.settings.exclude_apparatus is False
-
-    write("[retrieval]\nexclude_apparatus = true\n")
-    status = await service.status()
     assert service.config.settings.exclude_apparatus is True
+
+    write("[retrieval]\nexclude_apparatus = false\n")
+    status = await service.status()
+    assert service.config.settings.exclude_apparatus is False
     assert service.config.settings_provenance["retrieval.exclude_apparatus"].startswith(
         "project config"
     )
@@ -2567,16 +2569,19 @@ async def _assert_a_hand_edit_reaches_the_running_service(project: Path) -> None
 
     write("[retrieval]\nexclude_apparatus = maybe\n")
     status = await service.status()
-    assert service.config.settings.exclude_apparatus is True
+    assert service.config.settings.exclude_apparatus is False
     assert "does not resolve" in settings_check(status)[0]["reason"]
 
-    write("[runtime]\nnice = 5\n\n[retrieval]\nexclude_apparatus = false\n")
+    write("[runtime]\nnice = 5\n\n[retrieval]\nexclude_apparatus = true\n")
     status = await service.status()
-    assert service.config.settings.exclude_apparatus is False
+    assert service.config.settings.exclude_apparatus is True
     assert "runtime.nice" in settings_check(status)[0]["reason"]
 
 
-def test_a_hand_edit_reaches_the_running_service(project: Path) -> None:
+def test_a_hand_edit_reaches_the_running_service(
+    project: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.delenv("RESEARCH_RAG_RETRIEVAL_EXCLUDE_APPARATUS")
     asyncio.run(_assert_a_hand_edit_reaches_the_running_service(project))
 
 

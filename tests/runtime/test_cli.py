@@ -1042,7 +1042,7 @@ def test_the_running_app_answers_in_a_thread_and_without_diagnostics() -> None:
 
 
 def test_config_writes_the_project_file_through_the_workspace_check(
-    project: Path,
+    project: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """Every setting the workspace writes, the command line writes the same way.
 
@@ -1051,6 +1051,9 @@ def test_config_writes_the_project_file_through_the_workspace_check(
     waits for `--confirm`.
     """
 
+    monkeypatch.delenv("RESEARCH_RAG_RETRIEVAL_EXCLUDE_APPARATUS")
+    monkeypatch.delenv("RESEARCH_RAG_RETRIEVAL_MINIMUM_PASSAGE_WORDS")
+
     def config(*arguments: str) -> Any:
         return asyncio.run(
             _run(_args("--project-root", str(project), "config", *arguments))
@@ -1058,19 +1061,19 @@ def test_config_writes_the_project_file_through_the_workspace_check(
 
     written = config(
         "--write",
-        "retrieval.exclude_apparatus=true",
+        "retrieval.exclude_apparatus=false",
         "--write",
-        "retrieval.minimum_passage_words=12",
+        "retrieval.minimum_passage_words=0",
     )
     assert written.payload["changed"] == [
         "retrieval.exclude_apparatus",
         "retrieval.minimum_passage_words",
     ]
     stored = (project / ".research-rag" / "config.toml").read_text(encoding="utf-8")
-    assert "exclude_apparatus = true" in stored
+    assert "exclude_apparatus = false" in stored
     settings = _resolve(_args("--project-root", str(project), "status")).settings
-    assert settings.exclude_apparatus is True
-    assert settings.minimum_passage_words == 12
+    assert settings.exclude_apparatus is False
+    assert settings.minimum_passage_words == 0
 
     with pytest.raises(ResearchError, match="KEY=VALUE"):
         config("--write", "retrieval.exclude_apparatus")
