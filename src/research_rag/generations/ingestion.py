@@ -240,6 +240,12 @@ _DISCARDED_CHUNK_KEYS = (
 )
 _NO_DISCARDED_CHUNKS = dict.fromkeys(_DISCARDED_CHUNK_KEYS, 0)
 
+#: The canonical JSONL artifacts a generation's lookup indexes, by manifest key.
+_CANONICAL_FILES = {
+    "extracted_units": "corpus/extracted-units.jsonl",
+    "chunks": "chunks/chunks.jsonl",
+}
+
 
 @dataclass
 class _Build:
@@ -261,6 +267,9 @@ class _Build:
     loaded_axes: set[str] = field(default_factory=set)
     units_cache: dict[str, list[dict[str, Any]]] = field(default_factory=dict)
     portable_vectors: np.ndarray[Any, np.dtype[np.float32]] | None = None
+    # The phase the running step belongs to, and when its time was last taken.
+    step_phase: str = ""
+    step_started: float = field(default_factory=time.perf_counter)
     # The warm Docling worker this call's PDF batches share, until extraction ends.
     docling_worker: DoclingWorker | None = None
 
@@ -311,11 +320,19 @@ class _Build:
 
         self.checkpoint[key] = int(self.checkpoint.get(key) or 0) + amount
 
-    def add_time(self, phase: str, started: float) -> None:
+    def take_time(self) -> None:
+        """Add the time since it was last taken to the phase this step runs in.
+
+        A step is timed whole, its reuse lookups and checkpoint saves included, so
+        a build's phase timings add up to the time it took.
+        """
+
+        now = time.perf_counter()
         timings = self.checkpoint.setdefault("phase_timings_seconds", {})
-        timings[phase] = float(timings.get(phase) or 0.0) + (
-            time.perf_counter() - started
+        timings[self.step_phase] = float(timings.get(self.step_phase) or 0.0) + (
+            now - self.step_started
         )
+        self.step_started = now
 
     def next_source(self, done: str) -> str | None:
         """The first selected source the checkpoint's `done` list does not hold."""
@@ -392,7 +409,6 @@ class _StagedSource:
     source: SourceFile
     root: Path
     digest: str
-    started: float
     state: dict[str, Any] | None = None
 
     @property
@@ -1458,6 +1474,7 @@ class IngestionWorkflow:
         )
 
     async def _save(self, build: _Build) -> None:
+        build.take_time()
         await _atomic_to_thread(
             self._write_checkpoint, build.staging_root, build.checkpoint
         )
@@ -1556,7 +1573,6 @@ class IngestionWorkflow:
                     "skipped_source": record,
                 },
             )
-            build.add_time("extraction", staged.started)
             await self._record_skip(build, record)
             return None
 
@@ -1577,6 +1593,7 @@ class IngestionWorkflow:
         """
 
         build = _Build(staging_root, checkpoint, scan, exclusions, current, deadline)
+        build.step_phase = str(checkpoint["phase"])
         if build.force_recompute and not build.carried:
             LOGGER.debug("ingest: force_recompute disables every reuse axis")
         else:
@@ -1617,7 +1634,9 @@ class IngestionWorkflow:
                     raise _BuildCannotResume(
                         f"Unsupported ingestion checkpoint phase: {phase}"
                     )
+                build.step_phase = phase
                 result = await handler(build)
+                build.take_time()
                 if result is not None:
                     return result
         finally:
@@ -1649,14 +1668,12 @@ class IngestionWorkflow:
                 await self._enter_phase(build, "extraction")
             return unchanged
         source = build.sources_by_path[str(record["source_relative_path"])]
-        started = time.perf_counter()
         try:
             digest = await _atomic_to_thread(sha256_file, source.path)
         except OSError as exc:
             raise _SourceChangedDuringIngest(
                 "A source became unavailable during hashing"
             ) from exc
-        build.add_time("source_hashing", started)
         digests[source.source_relative_path] = digest
         return await self._commit(build)
 
@@ -1778,7 +1795,6 @@ class IngestionWorkflow:
             source=build.sources_by_path[relative],
             root=root,
             digest=str(build.checkpoint["source_digests"][relative]),
-            started=time.perf_counter(),
         )
         if staged.state_path.exists():
             staged.state = await _atomic_to_thread(read_json, staged.state_path)
@@ -1797,12 +1813,6 @@ class IngestionWorkflow:
         if step is None:
             raise _BuildCannotResume(f"Unsupported staged extraction phase: {stage}")
         return await step(build, staged)
-
-    async def _end_extraction_step(
-        self, build: _Build, staged: _StagedSource
-    ) -> dict[str, Any] | None:
-        build.add_time("extraction", staged.started)
-        return await self._commit(build)
 
     async def _start_extraction(
         self, build: _Build, staged: _StagedSource
@@ -1868,7 +1878,7 @@ class IngestionWorkflow:
             }.get(staged.source.extension, self._start_epub)
             if not await start(build, staged):
                 return self._pause_if_due(build)
-        return await self._end_extraction_step(build, staged)
+        return await self._commit(build)
 
     async def _reuse_extraction(
         self,
@@ -2017,7 +2027,7 @@ class IngestionWorkflow:
         build.add("reused_document_count" if reused else "rebuilt_document_count")
         if not reused:
             build.add("extraction_work_completed")
-        return await self._end_extraction_step(build, staged)
+        return await self._commit(build)
 
     async def _extract_pdf_pages(
         self, build: _Build, staged: _StagedSource
@@ -2106,7 +2116,7 @@ class IngestionWorkflow:
             state["extraction_stage"] = "finalize"
             state["next_index"] = 0
         await _atomic_to_thread(atomic_write_json, staged.state_path, state)
-        return await self._end_extraction_step(build, staged)
+        return await self._commit(build)
 
     async def _extract_epub_item(
         self, build: _Build, staged: _StagedSource
@@ -2142,7 +2152,7 @@ class IngestionWorkflow:
         await _atomic_to_thread(
             fsync_directories, [staged.root / "unit-batches", staged.root]
         )
-        return await self._end_extraction_step(build, staged)
+        return await self._commit(build)
 
     async def _finalize_extraction(
         self, build: _Build, staged: _StagedSource
@@ -2189,7 +2199,7 @@ class IngestionWorkflow:
         build.checkpoint["extracted_source_paths"].append(staged.relative)
         build.add("rebuilt_document_count")
         build.add("extraction_work_completed")
-        return await self._end_extraction_step(build, staged)
+        return await self._commit(build)
 
     async def _chunk_next_source(self, build: _Build) -> dict[str, Any] | None:
         """Take the next extracted source one durable step through chunking."""
@@ -2206,7 +2216,6 @@ class IngestionWorkflow:
             units = build.units_cache[relative] = await _atomic_to_thread(
                 read_jsonl, root / "units.jsonl"
             )
-        started = time.perf_counter()
         if (
             bool(state.get("reused"))
             # A resumed checkpoint from before the units/chunk split has no flag
@@ -2241,7 +2250,7 @@ class IngestionWorkflow:
             await _atomic_to_thread(atomic_write_json, root / "state.json", state)
             return await self._commit(build)
         elif int(state.get("chunked_unit_count") or 0) < len(units):
-            return await self._chunk_unit_batch(build, root, state, units, started)
+            return await self._chunk_unit_batch(build, root, state, units)
         else:
             chunks, *discarded = await self._chunks_from_units(
                 build, root, units, document
@@ -2250,7 +2259,6 @@ class IngestionWorkflow:
         await _atomic_to_thread(atomic_write_jsonl, root / "chunks.jsonl", chunks)
         state.update(zip(_DISCARDED_CHUNK_KEYS, discarded, strict=True))
         await _atomic_to_thread(atomic_write_json, root / "state.json", state)
-        build.add_time("chunking", started)
         build.checkpoint["chunked_source_paths"].append(relative)
         build.units_cache.pop(relative, None)
         return await self._commit(build)
@@ -2261,7 +2269,6 @@ class IngestionWorkflow:
         root: Path,
         state: dict[str, Any],
         units: list[dict[str, Any]],
-        started: float,
     ) -> dict[str, Any] | None:
         """Chunk the source's next batch of units and keep its output as one file."""
 
@@ -2322,7 +2329,6 @@ class IngestionWorkflow:
         # The whole batch is on disk before the checkpoint that claims it is
         # complete.
         await _atomic_to_thread(fsync_directories, [chunking_root, root])
-        build.add_time("chunking", started)
         return await self._commit(build)
 
     async def _chunks_from_units(
@@ -2369,11 +2375,9 @@ class IngestionWorkflow:
         return enriched
 
     async def _assemble_corpus(self, build: _Build) -> dict[str, Any] | None:
-        started = time.perf_counter()
         await _atomic_to_thread(
             self._assemble_staged_corpus, build.staging_root, build.checkpoint
         )
-        build.add_time("assembly", started)
         build.checkpoint["phase"] = "embedding"
         return await self._commit(build)
 
@@ -2412,7 +2416,6 @@ class IngestionWorkflow:
                 missing_positions.append(index)
             else:
                 vectors[index] = reusable_vector
-        started = time.perf_counter()
         if missing_positions:
             created = await _atomic_to_thread(
                 self.dense.embed_texts,
@@ -2429,14 +2432,12 @@ class IngestionWorkflow:
             work / "vector-batches" / f"{offset:012d}.npy",
             vectors,
         )
-        build.add_time("embedding", started)
         build.checkpoint["embedded_chunk_count"] = offset + len(batch)
         build.add("reused_vector_count", len(batch) - len(missing_positions))
         build.add("created_vector_count", len(missing_positions))
         return await self._commit(build)
 
     async def _assemble_vectors(self, build: _Build) -> dict[str, Any] | None:
-        started = time.perf_counter()
         await _atomic_to_thread(
             self._assemble_vector_batches,
             build.staging_root / "portable" / "embeddings.npy",
@@ -2444,14 +2445,12 @@ class IngestionWorkflow:
             int(build.checkpoint["chunk_count"]),
             self.config.settings.embedding_dimension,
         )
-        build.add_time("vector_assembly", started)
         build.checkpoint["phase"] = "bm25_indexing"
         return await self._commit(build)
 
     async def _index_bm25(self, build: _Build) -> dict[str, Any] | None:
         bm25_index_path = build.staging_root / "indexes" / "bm25"
         await _atomic_to_thread(shutil.rmtree, bm25_index_path, ignore_errors=True)
-        started = time.perf_counter()
         # The build points the lexical backend's one retriever at the staging
         # index, so a search beside it waits and reloads its own.
         async with self._retriever_lock:
@@ -2461,7 +2460,6 @@ class IngestionWorkflow:
                 bm25_index_path,
                 language=self.config.settings.bm25_stopwords_language,
             )
-        build.add_time("bm25_indexing", started)
         build.checkpoint["phase"] = "dense_indexing"
         build.checkpoint["dense_indexed_count"] = 0
         return await self._commit(build)
@@ -2500,7 +2498,6 @@ class IngestionWorkflow:
                 read_jsonl,
                 build.staging_root / "work" / "chunk-batches" / f"{offset:012d}.jsonl",
             )
-            started = time.perf_counter()
             await _atomic_to_thread(
                 backend.upload_index_batch,
                 batch,
@@ -2508,7 +2505,6 @@ class IngestionWorkflow:
                 build.portable_vectors[offset : offset + len(batch)],
                 offset=offset,
             )
-            build.add_time("dense_indexing", started)
             checkpoint["dense_indexed_count"] = offset + len(batch)
             return await self._commit(build)
         checkpoint["dense_metadata"] = await _atomic_to_thread(
@@ -2534,7 +2530,6 @@ class IngestionWorkflow:
         )
         if record is not None:
             source = build.sources_by_path[str(record["source_relative_path"])]
-            started = time.perf_counter()
             try:
                 digest, stat_identity = await _atomic_to_thread(
                     _hash_with_stable_stat, source.path
@@ -2547,7 +2542,6 @@ class IngestionWorkflow:
             checkpoint["revalidation_stats"][source.source_relative_path] = (
                 stat_identity
             )
-            build.add_time("source_revalidation", started)
             return await self._commit(build)
         if revalidated != checkpoint["source_digests"]:
             raise _SourceChangedDuringIngest(
@@ -2604,6 +2598,15 @@ class IngestionWorkflow:
         census = await _atomic_to_thread(
             _staged_chunk_census, build.staging_root / "chunks" / "chunks.jsonl"
         )
+        try:
+            # Validation needs the lookup too. Built here, its time is in the
+            # manifest, and validation finds it current.
+            await self._ensure_artifact_lookup(
+                build.staging_root, {"files": _CANONICAL_FILES}
+            )
+        except ResearchError as exc:
+            raise _BuildCannotResume(str(exc)) from exc
+        build.take_time()
         build_metrics = self._build_metrics(build, documents, census)
         counts = {
             "extraction_unit_count": int(checkpoint["extraction_unit_count"]),
@@ -2644,6 +2647,12 @@ class IngestionWorkflow:
         generation_root = await self._activate_build(
             build, manifest, select=select_generation
         )
+        # The manifest is written before validation and activation, so their time
+        # is in the call's answer only.
+        phase_timings = {
+            **build_metrics["phase_timings_seconds"],
+            "activation": round(time.perf_counter() - build.step_started, 6),
+        }
         build_id = checkpoint["build_id"]
         LOGGER.debug(
             "ingest: build %s complete status=%s selected=%s documents=%s chunks=%s",
@@ -2687,6 +2696,7 @@ class IngestionWorkflow:
             "embedding_model": self.config.settings.embedding_model,
             "embedding_model_revision": self.config.settings.embedding_model_revision,
             **build_metrics,
+            "phase_timings_seconds": phase_timings,
         }
 
     def _build_metrics(
@@ -2868,8 +2878,7 @@ class IngestionWorkflow:
             "source_files": records,
             "excluded_sources": build.excluded_sources(),
             "files": {
-                "extracted_units": "corpus/extracted-units.jsonl",
-                "chunks": "chunks/chunks.jsonl",
+                **_CANONICAL_FILES,
                 "bm25_index": "indexes/bm25",
                 "dense_index": str(
                     checkpoint.get("dense_index_relative")

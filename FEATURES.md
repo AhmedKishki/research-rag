@@ -158,7 +158,7 @@
 | Source passages and links | A source name opens that source's page: its facts, and its passages in reading order, twenty to a page, each with its size, whether it is excluded, and how often searches returned it. A passage's place, in a result or a table, opens the text around it. `research-rag chunks SOURCE` prints the same page. Every such view has an address, so Back, Forward, and reload return to it. |
 | Open a source in the desktop viewer | The workspace's Open original hands an authorized source to the desktop's own program. A machine with no desktop session shows a PDF in the browser; EPUB and MOBI originals are attachments. MOBI uses `application/x-mobipocket-ebook` and needs a compatible desktop viewer. |
 | PDF passage cleaning | A PDF paragraph with recognizable encoding damage receives reversible repair. `ingestion.maximum_unclean_percent` caps the share of substantive text one PDF may lose to unrecoverable corruption; a PDF over the cap is omitted, and the readable sources around it still index. 100 accepts any PDF that keeps readable text and never a PDF with none. EPUB keeps its existing quality policy. |
-| Build metrics and failure records | Phase timings, reuse counts, rejection counts, and truncation totals are recorded per generation. Non-resumable failures leave a small record. |
+| Build metrics and failure records | Phase timings that add up to the build's wall time, reuse counts, rejection counts, and truncation totals are recorded per generation. Non-resumable failures leave a small record. |
 
 ## What this app does not do
 
