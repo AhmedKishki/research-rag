@@ -81,7 +81,26 @@ _STATS: dict[str, Any] = {
             "in_current_generation": True,
             "in_corpus": True,
             "locator": {"page": 7},
-        }
+        },
+        {
+            # An EPUB names its passage by a section title, which can run to a
+            # sentence. A table cell's `nowrap` must not widen its column with it.
+            "chunk_id": "chk_2",
+            "source_id": "src_2",
+            "title": "Capital",
+            "top_five": 4,
+            "rank_one": 1,
+            "in_current_generation": True,
+            "in_corpus": True,
+            "locator": {
+                "section_title": (
+                    "CHAPTER II. OF MONEY, CONSIDERED AS A PARTICULAR BRANCH OF THE "
+                    "GENERAL STOCK OF THE SOCIETY, OR OF THE EXPENSE OF MAINTAINING "
+                    "THE NATIONAL CAPITAL."
+                ),
+                "href": "chapter-2.xhtml",
+            },
+        },
     ],
     "unreached_source_count": 1,
     "unreached_sources": [{"source_id": "src_9", "title": "Unread Book"}],
@@ -243,6 +262,13 @@ _HARNESS = r"""
       scrollWidth: panel.scrollWidth,
       clientWidth: panel.clientWidth,
     }));
+  const tableOverflow = [...document.querySelectorAll("#stats-board .table-scroll")]
+    .filter((scroller) => scroller.scrollWidth > scroller.clientWidth + 1)
+    .map((scroller) => ({
+      card: scroller.closest("[data-card]")?.dataset.card,
+      scrollWidth: scroller.scrollWidth,
+      clientWidth: scroller.clientWidth,
+    }));
   root.scrollLeft = 100000;
   const horizontalScroll = root.scrollLeft;
   root.scrollLeft = 0;
@@ -255,6 +281,7 @@ _HARNESS = r"""
     horizontalScroll,
     cardIds: panels.map((panel) => panel.dataset.card),
     cardOverflow,
+    tableOverflow,
     panels: Object.fromEntries(panels.map((panel) => [panel.dataset.card, measure(panel)])),
     lists: measure(document.querySelector(".stats-lists")),
     svg: svg
@@ -475,6 +502,16 @@ def test_no_stats_card_overflows_its_own_box(
     assert probe["cardOverflow"] == []
 
 
+def test_a_desktop_window_shows_every_table_column(
+    stats_probes: dict[int, dict[str, Any]],
+) -> None:
+    """At a desktop width no table hides a column behind its own scroller."""
+
+    probe = stats_probes[max(WIDTHS)]
+    assert probe["error"] is None, probe["error"]
+    assert probe["tableOverflow"] == []
+
+
 @pytest.mark.parametrize("width", WIDTHS)
 def test_history_and_usage_take_the_full_board_width(
     stats_probes: dict[int, dict[str, Any]], width: int
@@ -541,7 +578,7 @@ def test_the_board_renders_real_content(
     assert "2020s" in probe["corpus"]
     assert "marxism" in probe["people"] and "Crawford" in probe["people"]
     assert "26,532 embedded" in probe["build"]
-    assert probe["counts"] == ["2", "1", "1"]
+    assert probe["counts"] == ["2", "2", "1"]
     # sourceCell and passageSourceCell return a DocumentFragment; its anchor must
     # be a real element in the table, not lost on append.
     assert ["Atlas of AI", "#/source?id=src_1"] in probe["sourceLinks"]
