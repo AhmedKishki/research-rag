@@ -1,6 +1,6 @@
 # research-rag
 
-research-rag is a research aid for students and researchers working with document corpora. It runs locally on CPU, without an account or hosted model service.
+research-rag is a research aid for students and researchers working with document corpora. It indexes and searches your documents locally on CPU.
 
 - Build a searchable corpus from a project's PDFs, EPUBs, and MOBIs.
 - Find passages through combined lexical and semantic search.
@@ -15,8 +15,8 @@ research-rag is a research aid for students and researchers working with documen
 ## Requirements
 
 - Linux, Python 3.11 or 3.12, [uv](https://docs.astral.sh/uv/), and Git.
-- Internet access for initial model and GPT-2 tokenizer downloads. Cached installations can use `--offline`; no UltraRAG package or source runtime is installed or downloaded.
-- A systemd user session for PDF conversion through the isolated Docling runtime.
+- Internet access for initial model and tokenizer downloads. Cached installations can use `--offline`.
+- A systemd user session for PDF conversion.
 
 ## Install
 
@@ -50,8 +50,8 @@ research-rag --project-root "/path/to/project" ingest
 ```
 
 - The first build can take time. Repeat `ingest` if it reports an unfinished build.
-- The first PDF conversion provisions Docling separately from the app. Run `research-rag --project-root "/path/to/project" doctor --prefetch-models` online before an offline first build.
-- Existing generations remain searchable without conversion. Normal ingestion preserves unchanged PDF artifacts; `ingest --force-recompute` explicitly reprocesses them.
+- Run `research-rag --project-root "/path/to/project" doctor --prefetch-models` online to prepare models and PDF conversion tools for an offline build.
+- Later builds reuse compatible extracted text and vectors. Use `ingest --force-recompute` to reprocess sources.
 - If a source cannot be extracted, a validated generation containing the remaining sources is retained as **partial**, not selected. Review the omitted sources in the result or generation list. Repair them and run `ingest` again, or select the partial generation with `research-rag --project-root "/path/to/project" generations --use GENERATION_ID`.
 
 ## Read the evidence
@@ -61,7 +61,7 @@ research-rag --project-root "/path/to/project" search "How is evidence interpret
 ```
 
 - Search combines lexical and semantic retrieval with reranking.
-- Passages are cleaned text, not a transcript. Check the original at the locator before quoting.
+- Passages contain cleaned source text. Check the original at the locator before quoting.
 
 ## Open the workspace
 
@@ -81,8 +81,8 @@ research-rag --project-root "/path/to/project" --start-ui start
 research-rag --start-ui start --lan
 ```
 
-- Open **Remote Access** on the laptop website. Scan its QR code with your phone or open the displayed URL. QR codes are generated locally, not by an external service.
-- The existing website remains at `/`. The phone workspace is available alongside it at `/next/`; both use the same backend and project.
+- Open **Remote Access** on the laptop website. Scan its locally generated QR code with your phone or open the displayed URL.
+- Open `/next/` for the phone workspace or `/` for the desktop workspace. Both use the same project.
 - LAN mode uses HTTP without a login. Devices able to reach the port on the private network can read this project's sources and perform enabled workspace actions. Traffic is unencrypted. Use only a trusted home network; never forward this port to the internet.
 - LAN access supports the laptop's detected private IPv4 addresses. Allow the displayed port through the laptop firewall for your home network. Guest Wi-Fi or client isolation can prevent access.
 - Keep the laptop awake and its serving terminal open. If the laptop's network address changes, disable and enable LAN access on the laptop's Remote Access page and scan the new code.
@@ -109,7 +109,7 @@ research-rag --project-root "/path/to/project" doctor --mcp-entry
 ```
 
 - HTTP clients use the app's `/mcp` endpoint. stdio clients use `research-rag mcp --project-name "My project"`.
-  - The bridge names a registered project and does not start its app.
+  - The stdio bridge connects to the running app by its registered project name.
 
 ![MCP panel showing attached clients and a copyable local agent endpoint](docs/screenshots/agent-connection.png)
 
@@ -125,13 +125,13 @@ research-rag --project-root "/path/to/project" doctor --mcp-entry
 - `research-rag help TOPIC`: workflow guidance for `agents`, `filters`, or `settings`.
 - Extraction is text only. A PDF with a text layer is indexed as that text; a PDF with no text layer or a password is refused.
   - Scanned PDFs need OCR performed outside this app. Add the recognised copy to the sources directory and run `ingest`.
-  - PDF cleaning repairs passages locally and leaves visible gaps where damaged text cannot be recovered. `ingestion.maximum_unclean_percent` caps substantive text loss per document, excluding confirmed furniture and non-evidence. Over-budget or unreadable PDFs are omitted from a retained partial generation, not used to fail otherwise readable sources.
+  - PDF cleaning repairs recoverable text and marks gaps where text is lost. Extraction and text-quality checks are described in [Features and limits](FEATURES.md).
 - MOBI support covers unencrypted reflowable books, not dictionaries or Print Replica. [Features and limits](FEATURES.md) specifies supported variants and parser safety limits.
 - [Storage and portability](STORAGE.md), [measurement protocols](MEASUREMENTS.md).
 
 ## UltraRAG credit and licensing
 
-- Derived from [UltraRAG](https://github.com/OpenBMB/UltraRAG)'s MCP architecture, corpus chunker, and BM25 retriever. Retrieval calls Chonkie and bm25s directly with the historical chunk and index semantics. UltraRAG itself is not a dependency.
+- Derived from [UltraRAG](https://github.com/OpenBMB/UltraRAG)'s MCP architecture, corpus chunker, and BM25 retriever.
   - UltraRAG credits THUNLP at Tsinghua University, NEUIR at Northeastern University, OpenBMB, AI9stars, and its contributors.
 - This is an independent project, not an official UltraRAG release, and is not affiliated with or endorsed by those organizations or contributors.
 - This repository's code uses the [Apache License 2.0](LICENSE). Extraction dependencies carry separate AGPL and GPL obligations. [NOTICE](NOTICE) records their terms, model licences, and upstream revisions.
