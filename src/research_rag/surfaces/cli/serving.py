@@ -405,24 +405,6 @@ def _is_detached(config: ResearchConfig) -> bool:
     return detached_from_terminal(config, running_url(config) is not None) is True
 
 
-def _project_busy(config: ResearchConfig) -> bool:
-    """Whether a write, such as an ingest build, holds the project now.
-
-    The project lock is probed and released at once, never held, so the app this
-    process then serves takes it as any app does.
-    """
-
-    from filelock import FileLock, Timeout
-
-    lock = FileLock(str(config.state_root / LOCK_FILE))
-    try:
-        lock.acquire(timeout=0)
-    except Timeout:
-        return True
-    lock.release()
-    return False
-
-
 def _held_by(config: ResearchConfig) -> str:
     """Who serves the project, as the app's live process reports it."""
 
@@ -462,6 +444,8 @@ def _take_over(
     address; None when it had none recorded; or the result that ends this call.
     """
 
+    from filelock import FileLock, Timeout
+
     holder = _held_by(config)
     interactive = sys.stdin.isatty() and sys.stdout.isatty()
     report = (
@@ -472,7 +456,43 @@ def _take_over(
     if not asked and not interactive:
         sys.stdout.write(report)
         return CommandResult()
-    if _project_busy(config):
+    lock = FileLock(str(config.state_root / LOCK_FILE), timeout=0)
+    try:
+        if not asked:
+            # Refuse an active write before asking, but do not reserve the project
+            # while the reader decides. A write may start during confirmation.
+            with lock:
+                pass
+            if not _confirmed(
+                f"{config.project_name} is already served at {url} by {holder}; Ctrl-C "
+                f"here would not stop it. Take it over? It restarts in this terminal, "
+                f"and attached agents reconnect. [y/N] "
+            ):
+                sys.stdout.write(report)
+                return CommandResult()
+        # Recheck after confirmation and retain the reservation through exit, so
+        # no write can begin between the final decision and the app stopping.
+        with lock:
+            pid, port = recorded_pid(config), recorded_port(config)
+            if pid is not None:
+                outcome = ownership.ask_to_stop(pid, config.project_root, port=port)
+                if not outcome.asked:
+                    sys.stdout.write(
+                        f"{config.project_name} was not taken over: {outcome.reason}\n"
+                    )
+                    return CommandResult(exit_code=1)
+                deadline = time.monotonic() + TAKE_OVER_WAIT_SECONDS
+                while alive(pid) and time.monotonic() < deadline:
+                    time.sleep(0.1)
+                if alive(pid):
+                    sys.stdout.write(
+                        f"{config.project_name}'s app (pid {pid}) is still stopping, so "
+                        f"this terminal did not start a second one. Call this again once "
+                        f"'{CLI_COMMAND} projects' shows it down.\n"
+                    )
+                    return CommandResult(exit_code=1)
+            return port
+    except Timeout:
         sys.stdout.write(
             f"{config.project_name} is served at {url} by {holder}, and a write "
             f"such as an ingest build holds the project, so it was left running. "
@@ -480,32 +500,6 @@ def _take_over(
             f"stops it now and an interrupted build resumes from its checkpoint.\n"
         )
         return CommandResult(exit_code=1)
-    if not asked and not _confirmed(
-        f"{config.project_name} is already served at {url} by {holder}; Ctrl-C "
-        f"here would not stop it. Take it over? It restarts in this terminal, "
-        f"and attached agents reconnect. [y/N] "
-    ):
-        sys.stdout.write(report)
-        return CommandResult()
-    pid, port = recorded_pid(config), recorded_port(config)
-    if pid is not None:
-        outcome = ownership.ask_to_stop(pid, config.project_root, port=port)
-        if not outcome.asked:
-            sys.stdout.write(
-                f"{config.project_name} was not taken over: {outcome.reason}\n"
-            )
-            return CommandResult(exit_code=1)
-        deadline = time.monotonic() + TAKE_OVER_WAIT_SECONDS
-        while alive(pid) and time.monotonic() < deadline:
-            time.sleep(0.1)
-        if alive(pid):
-            sys.stdout.write(
-                f"{config.project_name}'s app (pid {pid}) is still stopping, so "
-                f"this terminal did not start a second one. Call this again once "
-                f"'{CLI_COMMAND} projects' shows it down.\n"
-            )
-            return CommandResult(exit_code=1)
-    return port
 
 
 def _bare_workspace(args: argparse.Namespace) -> CommandResult:
