@@ -54,6 +54,9 @@ What is on disk, how it is read, and what a file's text says about itself.
   the markup is read, so a paragraph that mentions footnotes is untouched.
 - An element with `role="paragraph"` is read as a paragraph, because some journal
   EPUBs print no `<p>` at all.
+- Unmarked `div` prose is read in inline runs around nested blocks, without
+  flattening containers or duplicating their children. Existing element paths and
+  anchors locate those runs, and headings attach to the following paragraph.
 - A note reference that follows text in its block is removed with the empty
   anchor printed before it, so the sentence around it stays one unit and no
   marker leaks into the text. A marker that opens its block is a note's own number

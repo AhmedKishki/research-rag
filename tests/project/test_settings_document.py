@@ -424,15 +424,6 @@ async def test_a_hostile_json_value_is_answered_with_a_refusal_naming_the_key(
     assert not (project / ".research-rag" / "config.toml").exists()
 
 
-# The suite's environment overrides the duplicate threshold and the evidence floors.
-SUITE_ENVIRONMENT_KEYS = {
-    "retrieval.duplicate_cosine",
-    "retrieval.minimum_passage_words",
-    "retrieval.minimum_passage_token_fraction",
-    "retrieval.exclude_apparatus",
-}
-
-
 async def test_settings_rows_publish_registry_metadata_and_workspace_schema(
     project: Path,
 ) -> None:
@@ -449,7 +440,7 @@ async def test_settings_rows_publish_registry_metadata_and_workspace_schema(
         assert row["doc"] == setting.doc
         assert row["doc"].strip()
         assert row["default"] == defaults[setting.key]
-        assert row["writable"] is (row["key"] not in SUITE_ENVIRONMENT_KEYS)
+        assert row["writable"] is (row["key"] != "retrieval.duplicate_cosine")
         assert row["origin"]
         assert row["cost"]["level"] in {"none", "regeneration", "model"}
         assert row["cost"]["message"]
@@ -464,9 +455,10 @@ async def test_settings_rows_publish_registry_metadata_and_workspace_schema(
         assert row.get("maximum", setting.maximum) == setting.maximum
         assert row.get("choices", list(setting.choices)) == list(setting.choices)
         assert row.get("env", setting.env) == setting.env
+    # The suite's environment overrides only the duplicate threshold.
     assert {row["key"] for row in rows.values() if row["defaulted"]} == set(
         defaults
-    ) - SUITE_ENVIRONMENT_KEYS
+    ) - {"retrieval.duplicate_cosine"}
     assert rows["runtime.nice"]["minimum"] == 0
     assert rows["runtime.nice"]["maximum"] == 19
     assert rows["runtime.log_level"]["choices"] == list(LOG_LEVELS)

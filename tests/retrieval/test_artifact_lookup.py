@@ -9,11 +9,15 @@ import numpy as np
 import pytest
 
 from research_rag.corpus.text_quality import (
+    CHUNK_FLAG_APPARATUS,
     CHUNK_FLAG_EXTRACTION_ARTIFACT,
+    CHUNK_FLAGS_UNREADABLE,
     chunk_health_flags,
 )
 from research_rag.retrieval.artifact_lookup import (
+    LOOKUP_APPARATUS_CONTEXT_KEY,
     LOOKUP_HEALTH_FLAGS_KEY,
+    LOOKUP_SCHEMA_VERSION,
     ArtifactLookup,
     ArtifactLookupError,
     DocumentArtifactMapping,
@@ -22,6 +26,7 @@ from research_rag.retrieval.artifact_lookup import (
     ensure_artifact_lookup,
     validate_artifact_lookup,
 )
+from research_rag.retrieval.search import _candidate_flags
 from research_rag.storage.durable_io import write_jsonl
 
 
@@ -107,6 +112,12 @@ def test_lookup_reads_utf8_offsets_duplicates_documents_and_vectors(
     chunks_by_document = DocumentArtifactMapping(lookup, "chunks")
     assert list(chunks_by_document) == ["document-a", "document-b"]
     assert chunks_by_document["document-b"][0]["chunk_id"] == "chunk-3"
+    canonical_chunks = [
+        record
+        for record in map(json.loads, chunks_path.read_text().splitlines())
+        if record["document_id"] == "document-a"
+    ]
+    assert chunks_by_document["document-a"] == canonical_chunks
 
     vectors = np.arange(12, dtype=np.float32).reshape(3, 4)
     reusable = VectorByContentsMapping(lookup, vectors)
@@ -270,6 +281,86 @@ def test_ensure_rebuilds_missing_corrupt_and_stale_lookup(tmp_path: Path) -> Non
         expected_chunk_count=2,
         expected_unit_count=2,
     )
+
+
+def test_contextual_verdicts_refresh_without_changing_canonical_evidence(
+    tmp_path: Path,
+) -> None:
+    samples = [
+        ("Emergence", "section_header", None, True),
+        ("Emergence is irreducible", "section_header", None, False),
+        ("Index", "section_header", None, False),
+        ("emergence 97–8", "text", None, True),
+        ("emergence 17,142,144", "text", None, True),
+        ("Growth, 17, 142, 144", "table", None, False),
+        ("Growth, 17, 142, 144", "unknown_label", None, False),
+        ("Conclusion", "section_header", None, False),
+        ("emergence 97–8", "text", None, False),
+        # A recorded EPUB section title is also positive Index context.
+        ("emergence 97–8", None, "Index of Subjects", True),
+    ]
+    chunks_path = tmp_path / "chunks.jsonl"
+    units_path = tmp_path / "units.jsonl"
+    lookup_path = tmp_path / "artifact-lookup.sqlite3"
+    write_jsonl(
+        chunks_path,
+        [
+            {
+                "chunk_id": f"c{i}",
+                "unit_id": f"u{i}",
+                "document_id": "doc",
+                "document_chunk_index": i,
+                "contents": text,
+            }
+            for i, (text, _label, _section, _flagged) in enumerate(samples)
+        ],
+    )
+    write_jsonl(
+        units_path,
+        [
+            {
+                "id": f"u{i}",
+                "document_id": "doc",
+                "contents": text,
+                **({"docling_label": label} if label is not None else {}),
+                **(
+                    {"locator": {"section_title": section}}
+                    if section is not None
+                    else {}
+                ),
+            }
+            for i, (text, label, section, _flagged) in enumerate(samples)
+        ],
+    )
+    canonical = (chunks_path.read_bytes(), units_path.read_bytes())
+    lookup = ensure_artifact_lookup(chunks_path, units_path, lookup_path)
+    # Simulate the old classifier's cached zero verdicts, not a serving-schema change.
+    with sqlite3.connect(lookup_path) as connection:
+        connection.execute("UPDATE chunks SET health_flags = 0")
+        connection.execute(f"PRAGMA user_version = {LOOKUP_SCHEMA_VERSION - 1}")
+    lookup = ensure_artifact_lookup(chunks_path, units_path, lookup_path)
+    records = lookup.chunks_by_ids([f"c{i}" for i in range(len(samples))])
+    for i, (_text, _label, _section, flagged) in enumerate(samples):
+        record = records[f"c{i}"]
+        stored = record.pop(LOOKUP_HEALTH_FLAGS_KEY)
+        assert bool(stored & CHUNK_FLAG_APPARATUS) is flagged
+        assert not stored & CHUNK_FLAGS_UNREADABLE
+        assert _candidate_flags(record) == stored
+        assert (
+            chunk_health_flags(
+                record["contents"],
+                apparatus_context=record[LOOKUP_APPARATUS_CONTEXT_KEY],
+            )
+            == stored
+        )
+    # A heading remains a readable neighbour even though opt-in search excludes it.
+    assert [item["chunk_id"] for item in lookup.passage_window("doc", 1, radius=1)] == [
+        "c0",
+        "c1",
+        "c2",
+    ]
+    assert lookup.apparatus_chunk_count() == 4
+    assert canonical == (chunks_path.read_bytes(), units_path.read_bytes())
 
 
 def test_lookup_rejects_duplicate_document_positions_and_unsafe_artifacts(

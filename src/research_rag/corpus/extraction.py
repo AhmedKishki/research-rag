@@ -19,6 +19,7 @@ import hashlib
 import re
 import threading
 from collections import Counter
+from copy import copy
 from pathlib import Path
 from typing import Any
 
@@ -875,43 +876,87 @@ def _drop_epub_noterefs(block: Tag) -> int:
 
 def _epub_semantic_blocks(
     soup: BeautifulSoup,
-) -> list[tuple[Tag, tuple[str, str] | None]]:
-    """Outermost semantic blocks and a nearest standalone anchor."""
+) -> list[tuple[Tag, Tag, tuple[str, str] | None]]:
+    """Original locator elements, readable blocks, and standalone anchors.
+
+    Explicit semantic blocks retain their existing boundaries. Unmarked divs
+    contribute each run of inline content between nested blocks, not the whole
+    container. Detached copies hold those runs so cleanup cannot move the source
+    elements or change their locator paths. Each node contributes text once.
+    """
 
     tags = list(soup.find_all(True))
-    positions = {id(tag): index for index, tag in enumerate(tags)}
-    blocks = [
-        tag
+    positions = {id(node): index for index, node in enumerate(soup.descendants)}
+    # Even an inline wrapper can contain blocks in publisher HTML. Traverse it
+    # instead of flattening it, preserving direct text on both sides of a block.
+    containers = {
+        id(parent)
         for tag in tags
         if _epub_block_name(tag) in _EPUB_SEMANTIC_ELEMENTS
-        and not any(
-            isinstance(parent, Tag)
-            and _epub_block_name(parent) in _EPUB_SEMANTIC_ELEMENTS
-            for parent in tag.parents
-        )
-    ]
-    block_ids = {id(tag) for tag in blocks}
+        or str(tag.name).casefold() == "div"
+        for parent in tag.parents
+    }
+    blocks: list[tuple[Tag, Tag, int]] = []
+    covered: set[int] = set()
+
+    def cover(node: PageElement) -> None:
+        covered.add(id(node))
+        if isinstance(node, Tag):
+            covered.update(id(descendant) for descendant in node.descendants)
+
+    def walk(parent: Tag) -> None:
+        inline: list[PageElement] = []
+
+        def flush() -> None:
+            if any(
+                (node.get_text() if isinstance(node, Tag) else str(node)).strip()
+                for node in inline
+            ):
+                block = soup.new_tag("div")
+                for node in inline:
+                    block.append(copy(node))
+                    cover(node)
+                blocks.append((parent, block, positions[id(inline[0])]))
+            inline.clear()
+
+        for node in parent.children:
+            if isinstance(node, Comment):
+                continue
+            if isinstance(node, Tag):
+                name = _epub_block_name(node)
+                if name == "head":
+                    continue
+                if name in _EPUB_SEMANTIC_ELEMENTS:
+                    flush()
+                    blocks.append((node, node, positions[id(node)]))
+                    cover(node)
+                    continue
+                if name == "div" or id(node) in containers:
+                    flush()
+                    walk(node)
+                    continue
+            inline.append(node)
+        flush()
+
+    walk(soup.body if soup.body is not None else soup)
     standalone_anchors: list[tuple[int, tuple[str, str]]] = []
     for tag in tags:
         anchor = _epub_fragment(tag)
-        if anchor is None or id(tag) in block_ids:
-            continue
-        if any(id(parent) in block_ids for parent in tag.parents):
+        if anchor is None or id(tag) in covered:
             continue
         standalone_anchors.append((positions[id(tag)], anchor))
 
-    results: list[tuple[Tag, tuple[str, str] | None]] = []
+    results: list[tuple[Tag, Tag, tuple[str, str] | None]] = []
     anchor_index = 0
     pending_anchor: tuple[str, str] | None = None
-    for block in blocks:
-        block_position = positions[id(block)]
+    for element, block, block_position in blocks:
         while (
             anchor_index < len(standalone_anchors)
             and standalone_anchors[anchor_index][0] < block_position
         ):
             pending_anchor = standalone_anchors[anchor_index][1]
             anchor_index += 1
-        results.append((block, pending_anchor))
+        results.append((element, block, pending_anchor))
         pending_anchor = None
     return results
 
@@ -958,7 +1003,7 @@ def _epub_text_segments(
             name = _epub_block_name(node)
             if name == "br":
                 parts.append("\n")
-            elif name in _EPUB_CONTENT_ELEMENTS:
+            elif name in _EPUB_CONTENT_ELEMENTS or name == "div":
                 parts.append("\n\n")
                 open_blocks.append(node)
             continue
@@ -1166,10 +1211,10 @@ def _extract_html_item(
             }
         )
 
-    for element, preceding_fragment in _epub_semantic_blocks(soup):
+    for element, block, preceding_fragment in _epub_semantic_blocks(soup):
         element_name = _epub_block_name(element)
         if element_name != "table":
-            removals["removed_epub_furniture_elements"] += _drop_epub_noterefs(element)
+            removals["removed_epub_furniture_elements"] += _drop_epub_noterefs(block)
         element_fragment = _epub_fragment(element)
         initial_anchor = (
             (element_fragment[0], "element", element_fragment[1])
@@ -1181,7 +1226,7 @@ def _extract_html_item(
             )
         )
         if element_name in _EPUB_HEADING_ELEMENTS:
-            heading_segments = _epub_text_segments(element, initial_anchor)
+            heading_segments = _epub_text_segments(block, initial_anchor)
             if source.extension == ".mobi":
                 section_title = normalize_inline_text(element.get_text(" ", strip=True))
             pending_heading_parts.extend(text for text, _anchor in heading_segments)
@@ -1225,7 +1270,7 @@ def _extract_html_item(
             append_unit(text, element=element, anchor=anchor, content_kind="table")
             continue
 
-        segments = _epub_text_segments(element, initial_anchor)
+        segments = _epub_text_segments(block, initial_anchor)
         if not segments:
             continue
         if pending_heading_parts:

@@ -18,17 +18,21 @@ from pathlib import Path
 from typing import Any
 
 from ..corpus.sources import sha256_file
+from ..corpus.text_normalization import normalize_inline_text
 from ..corpus.text_quality import (
     CHUNK_FLAG_APPARATUS,
     CHUNK_FLAGS_UNREADABLE,
+    apparatus_section_kind,
     chunk_health_flags,
 )
 from ..storage.durable_io import file_identity, fsync_file, replace_durably
 
 # Key under which a loaded chunk record carries its stored rejection verdict.
 LOOKUP_HEALTH_FLAGS_KEY = "_lookup_health_flags"
-# Version 4 stores the apparatus bit, so a lookup built before it is rebuilt.
-LOOKUP_SCHEMA_VERSION = 4
+LOOKUP_APPARATUS_CONTEXT_KEY = "_lookup_apparatus_context"
+# Version 5 refreshes verdicts and recovers structural context from canonical units.
+# This disposable index version never changes generation serving compatibility.
+LOOKUP_SCHEMA_VERSION = 5
 LOOKUP_RELATIVE_PATH = Path("indexes") / "artifact-lookup.sqlite3"
 _SQL_BATCH_SIZE = 500
 
@@ -87,7 +91,8 @@ def _create_schema(connection: sqlite3.Connection) -> None:
             content_sha256 BLOB NOT NULL,
             byte_offset INTEGER NOT NULL,
             byte_length INTEGER NOT NULL,
-            health_flags INTEGER NOT NULL
+            health_flags INTEGER NOT NULL,
+            apparatus_context TEXT NOT NULL
         );
         CREATE UNIQUE INDEX chunks_document_position
             ON chunks(document_id, document_chunk_index);
@@ -97,7 +102,9 @@ def _create_schema(connection: sqlite3.Connection) -> None:
             unit_id TEXT NOT NULL UNIQUE,
             document_id TEXT NOT NULL,
             byte_offset INTEGER NOT NULL,
-            byte_length INTEGER NOT NULL
+            byte_length INTEGER NOT NULL,
+            content_sha256 BLOB NOT NULL,
+            apparatus_context TEXT NOT NULL
         );
         CREATE INDEX units_document ON units(document_id);
         """
@@ -137,13 +144,14 @@ def _index_chunks(
                     f"Invalid chunk lookup fields in {path} at line {line_number}"
                 )
             try:
+                context = _chunk_apparatus_context(connection, record, contents)
                 connection.execute(
                     """
                     INSERT INTO chunks(
                         ordinal, chunk_id, document_id,
                         document_chunk_index, content_sha256,
-                        byte_offset, byte_length, health_flags
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                        byte_offset, byte_length, health_flags, apparatus_context
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         count,
@@ -156,7 +164,9 @@ def _index_chunks(
                         chunk_health_flags(
                             contents,
                             quality_flags=record.get("quality_flags"),
+                            apparatus_context=context,
                         ),
+                        json.dumps(context),
                     ),
                 )
             except sqlite3.IntegrityError as exc:
@@ -171,6 +181,27 @@ def _index_chunks(
     return count, digest.hexdigest(), after
 
 
+def _chunk_apparatus_context(
+    connection: sqlite3.Connection, record: Mapping[str, Any], text: str
+) -> dict[str, Any]:
+    """Recover provenance without copying unit text or changing canonical chunks."""
+
+    row = connection.execute(
+        "SELECT apparatus_context, content_sha256 FROM units "
+        "WHERE unit_id = ? AND document_id = ?",
+        (record.get("unit_id"), record.get("document_id")),
+    ).fetchone()
+    context = json.loads(row[0]) if row is not None else {}
+    if row is not None:
+        context["whole_unit"] = (
+            row[1]
+            == hashlib.sha256(normalize_inline_text(text).encode("utf-8")).digest()
+        )
+    if record.get("content_kind") is not None:
+        context["content_kind"] = record["content_kind"]
+    return context
+
+
 def _index_units(
     connection: sqlite3.Connection,
     path: Path,
@@ -178,6 +209,7 @@ def _index_units(
     before = file_identity(path)
     digest = hashlib.sha256()
     count = 0
+    section_kinds: dict[str, str | None] = {}
     with path.open("rb") as handle:
         for line_number, line in enumerate(handle, 1):
             offset = handle.tell() - len(line)
@@ -198,12 +230,31 @@ def _index_units(
                     f"at line {line_number}"
                 )
             try:
+                label = record.get("docling_label")
+                contents = chunk_text(record)
+                if label in {"section_header", "title"}:
+                    section_kinds[document_id] = apparatus_section_kind(contents)
+                context: dict[str, Any] = {}
+                for field in ("docling_label", "content_kind"):
+                    if field in record:
+                        context[field] = record[field]
+                locator = record.get("locator")
+                section_title = (
+                    str(locator.get("section_title") or "")
+                    if isinstance(locator, Mapping)
+                    else ""
+                )
+                if (
+                    section_kinds.get(document_id) == "index"
+                    or apparatus_section_kind(section_title) == "index"
+                ):
+                    context["section_kind"] = "index"
                 connection.execute(
                     """
                     INSERT INTO units(
                         ordinal, unit_id, document_id,
-                        byte_offset, byte_length
-                    ) VALUES (?, ?, ?, ?, ?)
+                        byte_offset, byte_length, content_sha256, apparatus_context
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         count,
@@ -211,6 +262,10 @@ def _index_units(
                         document_id,
                         offset,
                         len(line),
+                        hashlib.sha256(
+                            normalize_inline_text(contents).encode("utf-8")
+                        ).digest(),
+                        json.dumps(context),
                     ),
                 )
             except sqlite3.IntegrityError as exc:
@@ -266,13 +321,13 @@ def build_artifact_lookup(
     try:
         connection = sqlite3.connect(temporary)
         _create_schema(connection)
-        chunk_count, chunk_digest, chunk_identity = _index_chunks(
-            connection,
-            chunks_path,
-        )
         unit_count, unit_digest, unit_identity = _index_units(
             connection,
             units_path,
+        )
+        chunk_count, chunk_digest, chunk_identity = _index_chunks(
+            connection,
+            chunks_path,
         )
         _write_metadata(
             connection,
@@ -438,6 +493,11 @@ class ArtifactLookup:
                         # a candidate without re-scanning its text. Public
                         # projections select their own fields and never expose it.
                         record[LOOKUP_HEALTH_FLAGS_KEY] = stored
+                        columns = row.keys()
+                        if "apparatus_context" in columns:
+                            record[LOOKUP_APPARATUS_CONTEXT_KEY] = json.loads(
+                                row["apparatus_context"]
+                            )
                     loaded.append((row, record))
         except OSError as exc:
             raise ArtifactLookupError(
@@ -685,7 +745,7 @@ class ArtifactLookup:
 
 
 class DocumentArtifactMapping(Mapping[str, list[dict[str, Any]]]):
-    """Lazy document-to-record mapping backed by an :class:`ArtifactLookup`."""
+    """Lazy canonical records for reuse, without query-only lookup annotations."""
 
     def __init__(self, lookup: ArtifactLookup, kind: str) -> None:
         if kind not in {"chunks", "units"}:
@@ -701,6 +761,9 @@ class DocumentArtifactMapping(Mapping[str, list[dict[str, Any]]]):
         )
         if not records:
             raise KeyError(document_id)
+        for record in records:
+            record.pop(LOOKUP_HEALTH_FLAGS_KEY, None)
+            record.pop(LOOKUP_APPARATUS_CONTEXT_KEY, None)
         return records
 
     def __iter__(self) -> Iterator[str]:

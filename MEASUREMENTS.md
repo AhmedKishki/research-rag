@@ -176,15 +176,18 @@ uv run python scripts/evaluate_retrieval.py --project /mnt/data/my-project \
 - `retrieval.minimum_passage_words` drops a candidate whose cleaned text is shorter than the setting, before fusion, in both halves.
 - `retrieval.minimum_passage_token_fraction` states the floor as a fraction of the generation's recorded `chunking.size`, counted with the tokenizer that generation was chunked with. A chunk holds `chunking.size` tokens, so a tenth of that is a fragment whatever its word count. The count covers the returned text, which is cleaned after chunking.
 - Both are runtime settings and apply at the next search.
-- Neither is a back-matter filter. An index line is as short as a one-line paragraph, and only the query tells them apart. A corpus whose answers are table rows, catalogue entries, or bibliography lines would lose evidence a judged set cannot detect. Both ship on, and such a project sets them to 0 in its own configuration.
+- Neither is a back-matter filter. An index line is as short as a one-line paragraph, and only the query tells them apart. A corpus whose answers are table rows, catalogue entries, or bibliography lines would lose evidence a judged set cannot detect. Both ship off, and the value belongs in a project's own configuration.
 
 ### The apparatus filter
 
 - A reference list, citation-only notes, a back-of-book index, and a copyright page hold the names, titles, and years a query asks about and no argument to cite. They win most often when the corpus holds no answer. The reranker scores them as relevant whenever a title matches, so it cannot separate them from argument.
 - `retrieval.exclude_apparatus` drops a candidate whose lookup verdict carries the apparatus bit, before fusion, in both halves. It is a runtime setting and applies at the next search.
-- `src/research_rag/corpus/text_quality.py::apparatus_kind` reads the passage's own text. A passage nearly without argument grammar is judged by structure: citation markers among mostly capitalised words, page lists, or copyright boilerplate. Twenty words of argument sentences or six measurements keep it.
+- `src/research_rag/corpus/text_quality.py::apparatus_kind` reads the passage's text and retained canonical structure. A passage nearly without argument grammar is judged by form: citation markers among mostly capitalised words, page lists, or copyright boilerplate. Twenty words of argument sentences or six measurements keep it.
+- Wrapped author/year entries retain their bibliographic structure for classification. Tiny index entries require declared Index context and whole-entry page syntax.
+- A standalone nominal heading fragment requires a complete declared heading unit. Assertion-shaped and unrecognised headings remain eligible. Tables, formulas, captions, code, figures, and unknown structural labels retain their evidence protections.
+- These rules add no length floor and delete no extraction units. `tests/corpus/test_apparatus.py` and `tests/retrieval/test_artifact_lookup.py` cover structural verdicts, cache refresh, and canonical carry-forward.
 - The verdict judges form, not meaning. A note that makes its claim inside a citation is filtered with the citation. A known-item score cannot detect that loss, because only the designated passage is judged.
-- The filter ships on. A project whose evidence is bibliographic turns it off in its own configuration.
+- The filter ships off, and the value belongs in a project's own configuration.
 
 ### The lexical abstention gate
 
@@ -411,9 +414,10 @@ Counts and MRR credit only the designated target chunk in the final top ten, wit
   - Nine unflagged passages left. Two had no reranker score because they sat beyond the scored window. The other seven scored a median of −4.2 against the entrants' median of −0.9; one of them, a second passage from a source still ranked first, left through the diversity rule.
 - This shows no loss on the judged targets and no reference entries in the measured results. A known-item set cannot see a filtered passage that carried a claim of its own, so it does not establish that nothing of value was lost.
 
-## Default length and apparatus filters (2026-10-16)
+## Optional length and apparatus profile (2026-10-16)
 
 - Protocol: `evaluation/README.md`; offline schema-3 reports, harness revision `e1e657ace39061285db3e93a8138b569980caacf`. Private reports remain outside Git.
+- This comparison uses the text-only apparatus verdicts that preceded structural-context recovery. It does not measure the current classifier or source-text coverage.
 - Each arm sets all three keys through environment variables, so neither depends on a project file.
   - Off: `retrieval.minimum_passage_words` 0, `retrieval.minimum_passage_token_fraction` 0.0, `retrieval.exclude_apparatus` false.
   - On: 12, 0.1, and true.
@@ -456,4 +460,25 @@ Counts and MRR credit only the designated target chunk in the final top ten, wit
   - Six carried part of a claim: a list's lead-in, a list item, two numbered theses, a notation footnote, and the closing sentence of a split paragraph.
 - Eight unflagged passages left from ranks 7–10, displaced.
 - The filters lost no judged target. Their measured cost is the six claim fragments.
-- Known-item judgments cannot see a filtered passage that carried a claim. No untouched confirmation set exists for this change. The default rests on these two checks and the reviewer's decision.
+- Known-item judgments cannot see a filtered passage that carried a claim. No untouched confirmation set exists for this profile. These checks do not establish a global default or repair missing extracted prose.
+
+## Reflowable extraction and structural eligibility regression
+
+- Protocol: `evaluation/README.md`, with `--validate-only` before each measured arm. The tests used isolated project copies; serving projects, source bytes, and their selected generations stayed unchanged.
+- The critical-realism copy began with generation `20261016T131444Z-88890ae3`, ten documents, and 20,263 chunks. The scoped build read four EPUBs and one MOBI and carried all five PDFs unchanged.
+- Validation generation `20261016T145047Z-24d680db` has 20,859 chunks. It reused 20,236 vectors and embedded 623 new chunks. Every carried PDF unit and chunk matches its original canonical record, including identifiers and locators.
+- In Elder-Vass's *The Causal Power of Social Structures*, stored extraction-unit text increased from 76,612 to 538,287 characters. The definition beginning "Emergence occurs when a whole possesses" appears once with its original HTML element path. These counts measure recovered extraction text, not a corruption-loss percentage.
+- The other checked EPUBs preserved their existing prose or recovered additional unmarked runs. The MOBI's text was unchanged. No lookup-private keys entered the rebuilt canonical chunks.
+- Four hand-selected known-item probes cover definitions, relations, irreducibility, and a quoted causal-property phrase. They concern one concept and are not an independent relevance benchmark or an untouched confirmation set.
+- All arms used BGE-small-en-v1.5, the pinned MiniLM-L-6-v2 reranker, top-k 10, no length floors, and source-diversity penalty 0.25. Only the project apparatus switch and reranking window differed.
+
+| Apparatus filter | Rerank-window multiple | Target success@10 | MRR | Median seconds | p95 seconds |
+|---|---:|---:|---:|---:|---:|
+| Off | 2 | 75.0% | 0.531 | 0.71 | 1.14 |
+| On | 2 | 75.0% | 0.531 | 0.91 | 1.20 |
+| On | 5 | 100.0% | 0.778 | 1.35 | 1.98 |
+
+- For "what is emergence", the recovered definition enters the dense candidate pool but falls outside the 20-candidate reranked window in the first two arms. The expanded, still bounded window ranks it first. This is a project-specific diagnostic result, not a change to the shipped window or filtering defaults.
+- The existing 30-query, 18-target AI-and-fetishism set was also checked before and after the repair on generation `20261016T090404Z-e268e656`, with `--skip-targets t12`. Hybrid target success@10 stayed 80.0%; hybrid plus reranking stayed 83.3%. Their MRR values stayed 0.644 and 0.788. The after arm used a frozen copy so refreshing lookup verdicts could not alter the serving project.
+- Private artifacts remain outside Git: `dear-geometry-artifact-verification.json`, `dear-geometry-emergence-queries.json`, the three `dear-geometry-emergence-*-report.json` arms, and `dear-geometry-ai-{before,after}-report.json`.
+- Known-item retention and this one-concept probe do not establish exhaustive relevance, preservation of every short passage, or a larger operating envelope.

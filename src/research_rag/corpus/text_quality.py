@@ -1,6 +1,6 @@
 """Forensics on one string of extracted text, and the verdicts built from them.
 
-A reason is evidence about the text itself, never about the source it came from.
+A reason describes text or its declared structure, never its topical relevance.
 This module reads no file, opens no document, reaches no network, and imports
 nothing from this package.
 
@@ -15,7 +15,7 @@ from __future__ import annotations
 import re
 import unicodedata
 from collections import Counter
-from collections.abc import Iterator, Sequence
+from collections.abc import Iterator, Mapping, Sequence
 
 from .text_normalization import (
     is_control_character,
@@ -269,8 +269,8 @@ def passage_health_reasons(
 
 
 # Retrieval always rejects a candidate for two reasons, and rejects an apparatus
-# passage when a project asks it to. All three are properties of the chunk text
-# plus its stored quality flags rather than of the query. They are computed once
+# passage when a project asks it to. All three describe chunk text, stored quality
+# flags and declared structural context rather than the query. They are computed once
 # when the artifact lookup is built and stored as a bitmask, which removes the
 # per-query text scans from the candidate gate.
 CHUNK_FLAG_CORRUPT_TEXT = 1
@@ -618,7 +618,7 @@ def source_health_reasons(
 # and a copyright page reach the index whole. Each carries the names, titles and
 # years a query asks about and no argument to cite, so it wins exactly the search
 # the corpus cannot answer. `apparatus_kind` names one passage's kind from its own
-# text, and a project decides whether search leaves that kind out.
+# text and optional structural context; a project decides whether search leaves it out.
 #
 # Argument is told apart by grammar rather than topic. The pronouns, auxiliaries
 # and conjunctions an argument cannot do without are about a sixth of its words
@@ -633,6 +633,17 @@ def source_health_reasons(
 APPARATUS_BIBLIOGRAPHY = "bibliography"
 APPARATUS_INDEX = "index"
 APPARATUS_FRONT_MATTER = "front_matter"
+APPARATUS_HEADING = "heading"
+_INDEX_HEADINGS = frozenset(
+    {"index", "subject index", "name index", "index of subjects", "index of names"}
+)
+
+
+def apparatus_section_kind(value: str) -> str | None:
+    """Recognise a declared section title for retrieval, never ingestion removal."""
+
+    return APPARATUS_INDEX if _heading_key(value) in _INDEX_HEADINGS else None
+
 
 _WORD = re.compile(r"[^\W\d_]+(?:['’][^\W\d_]+)?", re.UNICODE)
 _ARGUMENT_WORDS = frozenset(
@@ -849,6 +860,31 @@ _CITATION_MINIMUM_ENTRIES = 2
 _INDEX_ENTRY = re.compile(
     r"[^\W\d_][^,\n]{0,40},\s\d{1,4}(?:[–-]\d{1,4})?(?:,\s\d{1,4}(?:[–-]\d{1,4})?)+"
 )
+# Unlike the text-only index heuristic, a tiny entry needs a declared Index
+# section. Match the entire entry, never a numeric tail inside prose or a table.
+_INDEX_PAGE = r"\d{1,4}(?:\s*[–—-]\s*\d{1,4})?"
+_CONTEXTUAL_INDEX_ENTRY = re.compile(
+    rf"[^\W\d_][^\d\n,;:.!?=]{{0,80}}(?:,\s*|\s+)"
+    rf"{_INDEX_PAGE}(?:\s*[,;]\s*{_INDEX_PAGE})*\s*",
+    re.UNICODE,
+)
+_SPLIT_CITATION_AUTHOR = re.compile(
+    r"^[A-Z][\w'’\-]+,\s*(?:[A-Z][\w'’\-]*\.?\s*){1,4}$"
+)
+_SPLIT_CITATION_YEAR = re.compile(r"^\s*\(?(?:1[5-9]|20)\d{2}[a-z]?[).,:]\s*")
+_CITATION_PUBLISHER = re.compile(
+    r"(?:^|[.!?]\s+)[A-Z][^\n.:!?]{0,60}:\s*[A-Z][^\n.!?]{1,80}\.?\s*$"
+)
+# Recognise only nominal forms, not arbitrary short or title-cased strings. The
+# closed suffix grammar deliberately leaves unknown headings alone: a layout
+# label cannot establish that a sentence carries no claim.
+_NOMINAL_HEADING_WORD = r"[^\W\d_]+(?:ation|ence|ity|ism)"
+_NOMINAL_HEADING = re.compile(
+    rf"(?:§\s*\d+[.)]?\s+|\d+[.)]?\s+)?"
+    rf"{_NOMINAL_HEADING_WORD}"
+    rf"(?:\s+(?:and|of|in|&|/)\s+(?:the\s+)?{_NOMINAL_HEADING_WORD})*",
+    re.IGNORECASE | re.UNICODE,
+)
 _LOCATOR_NUMBER = re.compile(r"(?<![\w.])\d{1,4}(?:[–-]\d{1,4})?(?!\w)")
 
 _FRONT_MATTER = re.compile(
@@ -940,13 +976,59 @@ def _holds_evidence(value: str) -> bool:
     return argument >= _ARGUMENT_GUARD_WORDS or argument > _ARGUMENT_GUARD_SHARE * total
 
 
-def apparatus_kind(value: str) -> str | None:
+def _split_citation(value: str) -> bool:
+    """An author-only line followed by a year-led bibliographic entry.
+
+    Blank lines are layout, not a reason to lose the author signal. Do not change
+    the source text or ingestion's stricter reference-removal rule.
+    """
+
+    lines = [line.strip() for line in value.splitlines() if line.strip()]
+    return bool(
+        len(lines) >= 2
+        and _SPLIT_CITATION_AUTHOR.fullmatch(lines[0])
+        and _SPLIT_CITATION_YEAR.match(lines[1])
+        and (
+            _CITATION_VENUE.search(value)
+            or _CITATION_LOCATOR.search(value)
+            or _CITATION_PUBLISHER.search(value)
+        )
+    )
+
+
+def apparatus_kind(
+    value: str, *, context: Mapping[str, object] | None = None
+) -> str | None:
     """The kind of scholarly apparatus a passage is, or `None` for evidence.
 
     Returns `"bibliography"` for reference entries and citation-only notes,
-    `"index"` for a back-of-book index, or `"front_matter"` for a copyright page.
+    `"index"` for a back-of-book index, `"front_matter"` for a copyright page,
+    or `"heading"` for a proven standalone nominal heading fragment. Short index
+    entries need declared Index context. A heading label alone proves nothing;
+    unknown forms and assertion-shaped headings remain eligible.
     """
 
+    context = context or {}
+    label = context.get("docling_label")
+    if label is not None and label not in {
+        "text",
+        "reference",
+        "list_item",
+        "list",
+        "section_header",
+        "title",
+        "footnote",
+    }:
+        return None
+    if context.get("content_kind") in {"table", "formula", "caption", "code", "figure"}:
+        return None
+    if label in {"section_header", "title"}:
+        return (
+            APPARATUS_HEADING
+            if context.get("whole_unit") is True
+            and _NOMINAL_HEADING.fullmatch(normalize_inline_text(value))
+            else None
+        )
     words = _WORD.findall(value)
     argument_share = sum(word.casefold() in _ARGUMENT_WORDS for word in words) / max(
         len(words), 1
@@ -954,12 +1036,26 @@ def apparatus_kind(value: str) -> str | None:
     if argument_share > _FRONT_MATTER_MAXIMUM_ARGUMENT_SHARE:
         return None
     kind = _apparatus_shape(value, words, argument_share)
+    if (
+        kind is None
+        and argument_share <= _APPARATUS_MAXIMUM_ARGUMENT_SHARE
+        and context.get("section_kind") == APPARATUS_INDEX
+        and _CONTEXTUAL_INDEX_ENTRY.fullmatch(value.strip())
+    ):
+        kind = APPARATUS_INDEX
+    if kind is None and _split_citation(value):
+        kind = APPARATUS_BIBLIOGRAPHY
     if kind is None or _holds_evidence(value):
         return None
     return kind
 
 
-def chunk_health_flags(text: str, *, quality_flags: object = None) -> int:
+def chunk_health_flags(
+    text: str,
+    *,
+    quality_flags: object = None,
+    apparatus_context: Mapping[str, object] | None = None,
+) -> int:
     """A precomputed verdict: an extraction artifact, no searchable alphanumeric
     content, or scholarly apparatus. Mirrors the query-time check, so counters
     cannot change.
@@ -972,6 +1068,6 @@ def chunk_health_flags(text: str, *, quality_flags: object = None) -> int:
         text
     ):
         flags |= CHUNK_FLAG_EXTRACTION_ARTIFACT
-    if apparatus_kind(text) is not None:
+    if apparatus_kind(text, context=apparatus_context) is not None:
         flags |= CHUNK_FLAG_APPARATUS
     return flags

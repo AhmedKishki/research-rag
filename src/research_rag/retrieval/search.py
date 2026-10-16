@@ -21,6 +21,7 @@ from ..project.policy import DEFAULT_RETRIEVAL_METHOD, RETRIEVAL_METHODS, Resear
 from ..project.rerankers import _reranker_revision
 from ..storage.durable_io import _atomic_to_thread, iter_jsonl
 from .artifact_lookup import (
+    LOOKUP_APPARATUS_CONTEXT_KEY,
     LOOKUP_HEALTH_FLAGS_KEY,
     ArtifactLookup,
     VectorByContentsMapping,
@@ -232,6 +233,7 @@ def _candidate_flags(chunk: dict[str, Any]) -> int:
     return chunk_health_flags(
         chunk_text(chunk),
         quality_flags=chunk.get("quality_flags"),
+        apparatus_context=chunk.get(LOOKUP_APPARATUS_CONTEXT_KEY),
     )
 
 
@@ -1087,9 +1089,8 @@ class SearchWorkflow:
             applied_reranker_revision = _reranker_revision(applied_reranker)
         except ValueError as exc:
             raise ResearchError(str(exc)) from exc
-        settings = self.config.settings
-
         async with self._search_read() as lease:
+            settings = self.config.settings
             current = self._load_current_optional()
             if current is None:
                 raise ResearchError("No knowledge base exists; call ingest first")
@@ -1457,9 +1458,11 @@ class SearchWorkflow:
                     "note": (
                         "With exclude_apparatus on, a candidate whose text is a "
                         "reference list, citation-only notes, a back-of-book index, "
-                        "or a copyright page is dropped before fusion, and each half "
+                        "a copyright page, or a confirmed standalone heading fragment "
+                        "is dropped before fusion, and each half "
                         "counts it in rejected_candidates. The verdict is read from "
-                        "the passage's own text when the artifact lookup is built. "
+                        "the passage's text and retained structural context when the "
+                        "artifact lookup is built. "
                         "Nothing is deleted, and turning the setting off returns "
                         "every passage."
                     ),

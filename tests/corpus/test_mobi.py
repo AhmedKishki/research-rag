@@ -12,6 +12,7 @@ from research_rag.corpus.sources import SourcePolicyError, scan_sources, sha256_
 from research_rag.project.config import resolve_config
 from tests.extraction_helpers import extract_sources
 from tests.mobi_fixtures import (
+    TEXT,
     dual_mobi_bytes,
     huff_mobi_bytes,
     install_small_pipe_worker,
@@ -23,10 +24,17 @@ from tests.mobi_fixtures import (
 )
 
 
-@pytest.mark.parametrize("compression", [1, 2])
-def test_mobi_extracts_metadata_html_and_locators_read_only(project, compression):
+@pytest.mark.parametrize("compression,div_prose", [(1, False), (2, False), (1, True)])
+def test_mobi_extracts_metadata_html_and_locators_read_only(
+    project, compression, div_prose
+):
     path = project / "sources" / "book.MOBI"
-    write_mobi(path, compression=compression)
+    html = (
+        TEXT.replace("<p>", '<div class="calibre_9">').replace("</p>", "</div>")
+        if div_prose
+        else TEXT
+    )
+    write_mobi(path, html, compression=compression)
     digest = sha256_file(path)
     config = resolve_config(project, vanilla_executable=sys.executable)
     source = scan_sources(config).selected[0]
