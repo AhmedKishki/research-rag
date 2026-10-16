@@ -163,11 +163,13 @@
 - Signal only proven project-owned processes. Require the app entrypoint and a matching `--project-root` in stop sweeps.
   - A recorded app is proven instead by the app entrypoint and the listening socket on its recorded port, so an app started by `--project` or a bare call can be stopped.
   - Never signal the sweep itself.
-- Serve from the starting terminal. Report a detached serving process instead of adopting it.
+- Serve from the starting terminal. Never adopt a serving process another terminal, or none, holds; restart it here when asked.
   - Refuse to serve from a process with no controlling terminal.
-  - Closing the starting terminal ends its app, by SIGHUP or by the lost terminal. Only `stop` ends a detached app.
+  - Closing the starting terminal ends its app, by SIGHUP or by the lost terminal. Only `stop` or a takeover ends a detached app.
   - Read terminal ownership from `/proc/<pid>/stat`, not only `research-rag-ui.tty`.
-  - `start`, bare invocation, `projects`, and `stop` report the condition with a `stop` remedy. They never launch a second app.
+  - `projects` and `stop` report the condition. They never launch a second app.
+  - A bare call or `start` asks an interactive terminal whether to take the app over, and `--take-over` takes it without asking. Otherwise it reports the condition with both remedies.
+  - A takeover stops the app through `stop`'s ownership proof, waits for it to exit, and serves on its port. It refuses while a write holds the project and never launches a second app.
   - `tests/runtime/test_attached_workspace.py` covers this. Detached serving is deferred in `TODO.md`.
 - Keep private projects, notes, drafts, and original PDFs/EPUBs/MOBIs out of Git. Add new personal paths to `.gitignore`.
 - State unimplemented limits explicitly, never as shipped capabilities.

@@ -105,6 +105,17 @@ def _parser() -> argparse.ArgumentParser:
             "opens one by itself, so a browser appears only when this is passed."
         ),
     )
+    serving.add_argument(
+        "--take-over",
+        dest="take_over",
+        action="store_true",
+        help=(
+            "When another terminal, or none, holds this project's app, stop it and "
+            "serve the project from this terminal on the same port, without asking. "
+            "An interactive terminal is asked instead. A write in progress, such "
+            "as an ingest build, is never interrupted."
+        ),
+    )
     models = parser.add_argument_group(
         "Models and retrieval",
         "A new generation is built with these. A search reads the generation\n"
@@ -843,8 +854,9 @@ def _parser() -> argparse.ArgumentParser:
             "Ctrl-C, a closed window, and `kill` all end it, so the terminal is "
             "where the app lives: this never leaves one running in the "
             "background, and it never opens a browser unless --start-ui was "
-            "passed. An app already up for this project is reported and left "
-            "alone rather than started a second time."
+            "passed. An app already up for this project is never started a "
+            "second time: an interactive terminal is asked whether to take it "
+            "over, and --take-over restarts it here without asking."
         ),
     )
     browser.add_argument(

@@ -317,7 +317,9 @@ def test_a_bare_call_with_one_project_opens_it_in_a_browser(
     _initialised(project, "Only One")
     served: dict[str, Any] = {}
 
-    def _serve(config: Any, *, open_browser: bool) -> cli_serving.CommandResult:
+    def _serve(
+        config: Any, *, port: int | None, open_browser: bool
+    ) -> cli_serving.CommandResult:
         served["name"] = config.project_name
         served["open_browser"] = open_browser
         return cli_serving.CommandResult()
@@ -381,7 +383,9 @@ def test_a_bare_call_with_several_projects_asks_which(
     _initialised(other, "Second")
     served: dict[str, str] = {}
 
-    def _serve(config: Any, *, open_browser: bool) -> cli_serving.CommandResult:
+    def _serve(
+        config: Any, *, port: int | None, open_browser: bool
+    ) -> cli_serving.CommandResult:
         served["name"] = config.project_name
         return cli_serving.CommandResult()
 
@@ -443,7 +447,9 @@ def test_a_bare_call_reports_an_app_already_up(
     )
     monkeypatch.setattr(cli_serving, "_open_browser", opened.append)
 
-    def _refuse(config: Any, *, open_browser: bool) -> cli_serving.CommandResult:
+    def _refuse(
+        config: Any, *, port: int | None, open_browser: bool
+    ) -> cli_serving.CommandResult:
         raise AssertionError("a second app must not be started")
 
     monkeypatch.setattr(cli_serving, "_serve_attached_sync", _refuse)
@@ -455,7 +461,98 @@ def test_a_bare_call_reports_an_app_already_up(
     assert opened == []
     assert "already served" in out
     assert "Ctrl-C here would not stop it" in out
+    assert f"'{CLI_COMMAND} --take-over' restarts it in this terminal" in out
     assert "stop" in out
+
+
+@pytest.mark.parametrize(
+    ("arguments", "answer", "busy", "taken"),
+    [
+        ((), "y\n", False, True),
+        ((), "\n", False, False),
+        (("--take-over",), None, False, True),
+        (("--take-over",), None, True, False),
+    ],
+    ids=["yes-at-the-prompt", "no-at-the-prompt", "flag-skips-the-prompt", "busy"],
+)
+def test_a_bare_call_takes_over_an_app_another_terminal_holds(
+    project: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    arguments: tuple[str, ...],
+    answer: str | None,
+    busy: bool,
+    taken: bool,
+) -> None:
+    """The old app is stopped through `stop`'s proof and served here on its port.
+
+    A no keeps it, a write in progress keeps it without asking, and the flag
+    takes it without asking.
+    """
+
+    _initialised(project, "Held")
+    stopped: list[tuple[int, int | None]] = []
+    served: list[int | None] = []
+    monkeypatch.setattr(
+        cli_serving, "running_url", lambda config: "http://127.0.0.1:5057"
+    )
+    monkeypatch.setattr(cli_serving, "recorded_pid", lambda config: 4242)
+    monkeypatch.setattr(cli_serving, "recorded_port", lambda config: 5057)
+    monkeypatch.setattr(cli_serving, "_is_detached", lambda config: False)
+    monkeypatch.setattr(cli_serving, "_project_busy", lambda config: busy)
+    monkeypatch.setattr(cli_serving, "alive", lambda pid: False)
+    monkeypatch.setattr(cli_serving.sys.stdin, "isatty", lambda: True, raising=False)
+    monkeypatch.setattr(cli_serving.sys.stdout, "isatty", lambda: True, raising=False)
+
+    def readline() -> str:
+        assert answer is not None, "the flag and a busy project ask nothing"
+        return answer
+
+    def ask_to_stop(pid: int, root: Path, *, port: int | None = None) -> Any:
+        stopped.append((pid, port))
+        return cli_serving.ownership.Outcome(asked=True, reason="")
+
+    def serve(
+        config: Any, *, port: int | None, open_browser: bool
+    ) -> cli_serving.CommandResult:
+        served.append(port)
+        return cli_serving.CommandResult()
+
+    monkeypatch.setattr(cli_serving.sys.stdin, "readline", readline, raising=False)
+    monkeypatch.setattr(cli_serving.ownership, "ask_to_stop", ask_to_stop)
+    monkeypatch.setattr(cli_serving, "_serve_attached_sync", serve)
+
+    result = cli_serving._bare_workspace(_no_arguments(*arguments, "--project", "Held"))
+
+    assert stopped == ([(4242, 5057)] if taken else [])
+    assert served == ([5057] if taken else [])
+    assert result.exit_code == (1 if busy else 0)
+    if busy:
+        assert "a write such as an ingest build" in capsys.readouterr().out
+
+
+def test_start_takes_over_on_the_port_it_names(
+    project: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config = _initialised(project, "Moved")
+    served: list[int | None] = []
+    monkeypatch.setattr(cli_serving, "running_url", lambda config: "http://x")
+    monkeypatch.setattr(cli_serving, "_take_over", lambda *_a, **_k: 5057)
+
+    async def serve(config: Any, *, port: int | None, open_browser: bool) -> Any:
+        served.append(port)
+        return cli_serving.CommandResult()
+
+    monkeypatch.setattr(cli_serving, "_serve_attached", serve)
+
+    asyncio.run(cli_serving._start(_no_arguments("--take-over", "start"), config))
+    asyncio.run(
+        cli_serving._start(
+            _no_arguments("--take-over", "start", "--port", "6001"), config
+        )
+    )
+
+    assert served == [5057, 6001]
 
 
 def test_a_bare_call_honours_a_named_project(
@@ -469,7 +566,9 @@ def test_a_bare_call_honours_a_named_project(
     _initialised(other, "Second")
     served: dict[str, str] = {}
 
-    def _serve(config: Any, *, open_browser: bool) -> cli_serving.CommandResult:
+    def _serve(
+        config: Any, *, port: int | None, open_browser: bool
+    ) -> cli_serving.CommandResult:
         served["name"] = config.project_name
         return cli_serving.CommandResult()
 
