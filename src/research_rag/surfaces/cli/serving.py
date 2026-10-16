@@ -28,6 +28,7 @@ from ...project.config import (
     resolve_config,
 )
 from ...project.policy import ResearchError
+from ...project.state_files import LOCK_FILE
 from ...project.state_files import process_alive as alive
 from ...runtime import ownership
 from ...runtime.account import detached_from_terminal, project_app_state
@@ -56,6 +57,8 @@ _PORT_ATTEMPTS = 32
 # products can serve one project, and stopping this app's workspace must not stop
 # a server a user started on purpose.
 STOP_GRACE_SECONDS = 5.0
+# How long a takeover waits for the app it asked to stop to exit and free its port.
+TAKE_OVER_WAIT_SECONDS = 30.0
 
 
 def _service_processes(
@@ -402,6 +405,109 @@ def _is_detached(config: ResearchConfig) -> bool:
     return detached_from_terminal(config, running_url(config) is not None) is True
 
 
+def _project_busy(config: ResearchConfig) -> bool:
+    """Whether a write, such as an ingest build, holds the project now.
+
+    The project lock is probed and released at once, never held, so the app this
+    process then serves takes it as any app does.
+    """
+
+    from filelock import FileLock, Timeout
+
+    lock = FileLock(str(config.state_root / LOCK_FILE))
+    try:
+        lock.acquire(timeout=0)
+    except Timeout:
+        return True
+    lock.release()
+    return False
+
+
+def _held_by(config: ResearchConfig) -> str:
+    """Who serves the project, as the app's live process reports it."""
+
+    if _is_detached(config):
+        return "a process with no terminal attached"
+    terminal = (project_app_state(config.project_root).get("app") or {}).get(
+        "attached_to"
+    )
+    owner = f" ({terminal})" if terminal else ""
+    return f"a process this terminal does not own{owner}"
+
+
+def _confirmed(question: str) -> bool:
+    """Ask a yes-or-no question on this terminal. Anything but yes is no."""
+
+    sys.stdout.write(question)
+    sys.stdout.flush()
+    try:
+        answer = sys.stdin.readline()
+    except KeyboardInterrupt:
+        sys.stdout.write("\n")
+        return False
+    return answer.strip().casefold() in {"y", "yes"}
+
+
+def _take_over(
+    config: ResearchConfig, url: str, *, asked: bool, again: str
+) -> CommandResult | int | None:
+    """Stop the app another terminal holds, so this terminal can serve the project.
+
+    A terminal that did not start the app cannot stop it with Ctrl-C, so the app
+    is restarted here instead of being adopted. `--take-over` or a yes at the
+    prompt asks for that; without either the condition is reported, with the
+    command that takes it over. A write in progress is never interrupted. The old
+    app is stopped through the same proof `stop` uses and given time to exit
+    cleanly. Returns the port the old app served on, so clients keep their
+    address; None when it had none recorded; or the result that ends this call.
+    """
+
+    holder = _held_by(config)
+    interactive = sys.stdin.isatty() and sys.stdout.isatty()
+    report = (
+        f"{config.project_name} is already served at {url} by {holder}; Ctrl-C "
+        f"here would not stop it. '{CLI_COMMAND} --take-over{again}' restarts it "
+        f"in this terminal, and '{CLI_COMMAND} stop' stops it.\n"
+    )
+    if not asked and not interactive:
+        sys.stdout.write(report)
+        return CommandResult()
+    if _project_busy(config):
+        sys.stdout.write(
+            f"{config.project_name} is served at {url} by {holder}, and a write "
+            f"such as an ingest build holds the project, so it was left running. "
+            f"Call this again once the write finishes, or '{CLI_COMMAND} stop' "
+            f"stops it now and an interrupted build resumes from its checkpoint.\n"
+        )
+        return CommandResult(exit_code=1)
+    if not asked and not _confirmed(
+        f"{config.project_name} is already served at {url} by {holder}; Ctrl-C "
+        f"here would not stop it. Take it over? It restarts in this terminal, "
+        f"and attached agents reconnect. [y/N] "
+    ):
+        sys.stdout.write(report)
+        return CommandResult()
+    pid, port = recorded_pid(config), recorded_port(config)
+    if pid is not None:
+        outcome = ownership.ask_to_stop(pid, config.project_root, port=port)
+        if not outcome.asked:
+            sys.stdout.write(
+                f"{config.project_name} was not taken over: {outcome.reason}\n"
+            )
+            return CommandResult(exit_code=1)
+        deadline = time.monotonic() + TAKE_OVER_WAIT_SECONDS
+        while alive(pid) and time.monotonic() < deadline:
+            time.sleep(0.1)
+        if alive(pid):
+            sys.stdout.write(
+                f"{config.project_name}'s app (pid {pid}) is still stopping, so "
+                f"this terminal did not start a second one. Call this again once "
+                f"'{CLI_COMMAND} projects' shows it down.\n"
+            )
+            return CommandResult(exit_code=1)
+    return port
+
+
 def _bare_workspace(args: argparse.Namespace) -> CommandResult:
     """Serve this project's workspace from this terminal, attached to it.
 
@@ -409,10 +515,10 @@ def _bare_workspace(args: argparse.Namespace) -> CommandResult:
     line is where this app is worked from and a browser that appears unasked takes
     the reader out of it.
 
-    An app already up for the project is reported rather than started a second
-    time, because two apps on one project would contend for its lock and indexes.
-    Its terminal is not this one, so this call says so and returns the
-    reader to their prompt instead of occupying it.
+    An app already up for the project is never served a second time, because two
+    apps on one project would contend for its lock and indexes. Its terminal is
+    not this one, so this call offers to take it over, and otherwise says so and
+    returns the reader to their prompt instead of occupying it.
     """
 
     named = getattr(args, "project", None) or getattr(args, "project_root", None)
@@ -420,33 +526,27 @@ def _bare_workspace(args: argparse.Namespace) -> CommandResult:
     config = resolve_config(
         root, source_directory=configured_source_directory(root), **_config_kwargs(args)
     )
+    open_browser = getattr(args, "start_ui", False)
+    port: int | None = None
     url = running_url(config)
     if url is not None:
-        if getattr(args, "start_ui", False):
-            _open_browser(url)
-        if _is_detached(config):
-            sys.stdout.write(
-                f"{config.project_name} is served at {url} by a process with no "
-                f"terminal attached, which is a state this app does not serve. "
-                f"Ctrl-C here would not stop it. '{CLI_COMMAND} stop' ends it, and a "
-                f"bare call then serves the project from this terminal.\n"
-            )
-            return CommandResult()
-        sys.stdout.write(
-            f"{config.project_name} is already served at {url} by a process this "
-            f"terminal does not own; Ctrl-C here would not stop it. "
-            f"'{CLI_COMMAND} stop' stops it, and a bare call then serves it here.\n"
+        taken = _take_over(
+            config, url, asked=getattr(args, "take_over", False), again=""
         )
-        return CommandResult()
-    return _serve_attached_sync(config, open_browser=getattr(args, "start_ui", False))
+        if isinstance(taken, CommandResult):
+            if open_browser:
+                _open_browser(url)
+            return taken
+        port = taken
+    return _serve_attached_sync(config, port=port, open_browser=open_browser)
 
 
 def _serve_attached_sync(
-    config: ResearchConfig, *, open_browser: bool
+    config: ResearchConfig, *, port: int | None, open_browser: bool
 ) -> CommandResult:
     """Run the attached app on the running loop of this process."""
 
-    return asyncio.run(_serve_attached(config, port=None, open_browser=open_browser))
+    return asyncio.run(_serve_attached(config, port=port, open_browser=open_browser))
 
 
 async def _start(args: argparse.Namespace, config: ResearchConfig) -> CommandResult:
@@ -456,33 +556,28 @@ async def _start(args: argparse.Namespace, config: ResearchConfig) -> CommandRes
     process stays in the foreground and in this terminal's process group, where
     Ctrl-C and a closed window both reach it.
 
-    An app already serving this project is reported rather than started a second
-    time, because two apps on one project would contend for its lock and indexes.
-    Its terminal is not this one, so this call says so and returns the
-    reader to their prompt instead of occupying it.
+    An app already serving this project is never served a second time, because
+    two apps on one project would contend for its lock and indexes. Its terminal
+    is not this one, so this call offers to take it over, and otherwise says so
+    and returns the reader to their prompt instead of occupying it.
     """
 
+    port = args.port
     url = running_url(config)
     if url is not None:
-        if args.start_ui:
-            _open_browser(url)
-        if _is_detached(config):
-            sys.stdout.write(
-                f"{config.project_name} is served at {url} by a process with no "
-                f"terminal attached, which is a state this app does not serve. "
-                f"Ctrl-C here would not stop it. '{CLI_COMMAND} stop' ends it, and "
-                f"this command then serves the project here.\n"
-            )
-            return CommandResult()
-        sys.stdout.write(
-            f"{config.project_name} is already served at {url} by a process this "
-            f"terminal does not own; Ctrl-C here would not stop it. "
-            f"'{CLI_COMMAND} stop' stops it, and this command then serves it here.\n"
+        # Nothing runs on this loop before the app does, so the question is asked
+        # on it: a thread blocked on the terminal would outlive a Ctrl-C.
+        taken = _take_over(
+            config, url, asked=getattr(args, "take_over", False), again=" start"
         )
-        return CommandResult()
+        if isinstance(taken, CommandResult):
+            if args.start_ui:
+                _open_browser(url)
+            return taken
+        port = port if port is not None else taken
     return await _serve_attached(
         config,
-        port=args.port,
+        port=port,
         open_browser=args.start_ui,
         **({"lan": True} if getattr(args, "lan", False) else {}),
     )

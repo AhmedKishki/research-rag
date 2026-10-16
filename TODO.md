@@ -38,7 +38,7 @@ An item is done when the harness has produced its measurement and the validation
 - [ ] **Serve detached.** Feature. A serving process with no controlling terminal is refused, not adopted. Detaching suits a workspace that stays up between sessions or a machine serving a phone.
 
   - Add a named flag with its own state, log, and `stop`.
-  - Detached server must be stoppable by a new server attach request, or ownership transfered to terminal.
+  - A takeover must not end a deliberately detached app without the same flag.
   - Record the terminal as deliberately none, because an absent terminal file cannot tell the two cases apart.
   - `stop` needs the same ownership proof plus the flag, and a plain `stop` must never end a detached app.
   - `doctor` and the CLI project listing must learn that a detached app outlives its terminal.

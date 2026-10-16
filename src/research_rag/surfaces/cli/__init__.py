@@ -223,7 +223,7 @@ def main(argv: Sequence[str] | None = None) -> None:
         # this terminal, so closing the terminal closes it. Before the loop
         # starts, because this call owns one.
         try:
-            _bare_workspace(args)
+            result = _bare_workspace(args)
         except (
             ConfigurationError,
             ControlError,
@@ -232,6 +232,9 @@ def main(argv: Sequence[str] | None = None) -> None:
             ValueError,
         ) as exc:
             raise SystemExit(f"{CLI_COMMAND}: {exc}") from exc
+        # A takeover that was refused is not a served workspace.
+        if result.exit_code:
+            raise SystemExit(result.exit_code)
         return
     if args.command == "help":
         # Before the project is resolved: the menu is what a reader has
