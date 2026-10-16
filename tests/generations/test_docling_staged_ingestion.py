@@ -69,6 +69,7 @@ def _install_fake_worker(
         model_cache_root: Path | None,
         docling_env: DoclingEnv,
         timeout: float = 180,
+        worker: Any = None,
     ) -> dict[str, Any]:
         if fail:
             raise DoclingConversionError("worker could not read the page")
@@ -680,3 +681,51 @@ def test_resumed_pdf_build_rejects_pages_from_a_changed_environment(
         assert baseline_manifest.read_bytes() == baseline_bytes
 
     asyncio.run(exercise())
+
+
+def test_one_warm_worker_serves_the_build_and_stops_before_chunking(
+    project: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    for name in ("a", "b"):
+        write_pdf(project / "sources" / f"{name}.pdf", ["Amber one.", "Cobalt two."])
+    config = resolve_config(
+        project,
+        vanilla_executable=sys.executable,
+        settings_overrides=["ingestion.pdf_page_batch_size=1"],
+    )
+    _install_fake_environment(monkeypatch)
+    _install_fake_worker(monkeypatch)
+    events: list[tuple[str, Any]] = []
+    convert = extraction.run_docling_batch
+
+    class RecordingWorker:
+        def __init__(self, **_options: Any) -> None:
+            events.append(("start", self))
+
+        def close(self) -> None:
+            events.append(("close", self))
+
+    def run(**kwargs: Any) -> dict[str, Any]:
+        events.append(("batch", kwargs["worker"]))
+        return convert(**kwargs)
+
+    monkeypatch.setattr(ingestion_module, "DoclingWorker", RecordingWorker)
+    monkeypatch.setattr(extraction, "run_docling_batch", run)
+    service = ResearchService(
+        config,
+        FakeUltraRAG(),
+        dense=FakeDenseBackend(),  # type: ignore[arg-type]
+    )
+    chunk = service._chunk_next_source
+
+    async def chunk_spy(build: Any) -> dict[str, Any] | None:
+        events.append(("chunk", None))
+        return await chunk(build)
+
+    monkeypatch.setattr(service, "_chunk_next_source", chunk_spy)
+    result = asyncio.run(service.ingest(chunk_size=50, chunk_overlap=10))
+
+    assert result["status"] == "ready"
+    kinds = [kind for kind, _ in events]
+    assert kinds[: kinds.index("chunk")] == ["start", *["batch"] * 4, "close"]
+    assert len({id(worker) for kind, worker in events if kind != "chunk"}) == 1

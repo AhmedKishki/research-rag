@@ -261,7 +261,8 @@ def test_worker_file_executes_without_the_app_package_or_a_parent_dependency() -
     )
     completed = subprocess.run(
         [sys.executable, "-I", "-c", child],
-        input=b'{"mode": "extract", "source_path": "/tmp/x.pdf", "start": 1, "end": 1, "offline": true}',
+        input=b'{"protocol": 2, "mode": "extract", "source_path": "/tmp/x.pdf", '
+        b'"start": 1, "end": 1, "offline": true}',
         capture_output=True,
         timeout=60,
         check=False,

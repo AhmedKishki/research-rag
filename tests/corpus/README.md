@@ -4,6 +4,7 @@ What enters an index: source selection, locators, text cleanup, and the health g
 
 - `test_sources_and_extraction.py`: source selection and stable ids, symlink and escaping-directory rejection, Docling PDF and EPUB section locators, EPUB anchor stability, text normalization, corruption and script signals, embedded metadata, language detection, and the relocated runtime root's claim marker.
 - `test_docling_adapter.py` and `test_docling_routing.py`: retained structural labels and provenance, furniture/index exclusion, protected captions/formulas/notes, legacy setting aliases, and the shared gate's configured budget.
+- `test_pdf_backend.py` and `test_pdf_backend_lifecycle.py`: the Docling backend's identity and cgroup checks, the worker's line protocol, and the warm worker's scope, reuse, failure mapping, fresh-worker retry, timeout, and retirement. A real subprocess stands in for the managed interpreter.
 - `test_mobi.py`: real-parser uncompressed, PalmDOC, HUFF/CDIC, KF8, and dual-rendition containers; metadata and logical-part anchors; DRM, malformed-container, resource-limit, and symlink refusals. Synthetic containers come from `tests/mobi_fixtures.py`, not private books.
 - `test_ocr.py`: OCR is gone: the parser, help menu, module, and package extra offer none, and no shipped document names the removed command.
 - `test_apparatus.py`: the apparatus verdict, each kind it names by structure, and the argument, mixed passage, table, and quoted-language prose it keeps.

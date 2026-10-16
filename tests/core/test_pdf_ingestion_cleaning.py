@@ -63,8 +63,9 @@ def _install_pages(
         model_cache_root: Path | None,
         docling_env: Any,
         timeout: float = 180,
+        worker: Any = None,
     ) -> dict[str, Any]:
-        del offline, model_cache_root, docling_env, timeout
+        del offline, model_cache_root, docling_env, timeout, worker
         name = Path(source_path).name
         calls.append(name)
         if name in fail:

@@ -32,6 +32,7 @@ from .docling_env import DoclingEnv
 from .mobi_reader import MobiReadError, MobiText, extract_mobi_payload
 from .pdf_backend import (
     DoclingConversionError,
+    DoclingWorker,
     docling_backend_record_from_env,
     run_docling_batch,
 )
@@ -1874,6 +1875,7 @@ def docling_pdf_batch(
     model_cache_root: Path | None,
     docling_env: DoclingEnv,
     total_pages: int | None = None,
+    worker: DoclingWorker | None = None,
 ) -> tuple[
     dict[int, list[dict[str, Any]]],
     dict[str, Any],
@@ -1886,9 +1888,9 @@ def docling_pdf_batch(
     ``start_index`` and ``end_index`` are 0-based and half-open. The document
     record is built on the first batch and passed back unchanged afterwards, so
     every batch shares one identity. ``docling_env`` is the managed environment
-    resolved once at the start of the build. Raises :class:`ExtractionError` for
-    a source-local conversion failure, which the staged caller omits like any
-    other unreadable source.
+    resolved once at the start of the build, and ``worker`` the build's warm
+    worker for it. Raises :class:`ExtractionError` for a source-local conversion
+    failure, which the staged caller omits like any other unreadable source.
     """
 
     try:
@@ -1899,6 +1901,7 @@ def docling_pdf_batch(
             offline=offline,
             model_cache_root=model_cache_root,
             docling_env=docling_env,
+            worker=worker,
         )
     except DoclingConversionError as exc:
         raise ExtractionError(str(exc)) from exc

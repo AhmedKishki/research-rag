@@ -10,8 +10,9 @@ selectable extractor.
 The worker runs under ``systemd-run --user --scope`` with a 2 GiB memory cap, no
 swap, and a 200% CPU quota. The worker itself verifies those exact cgroup values
 before it imports Docling, so a missing or wrong boundary fails closed instead
-of loading a model unbounded. A wall-clock timeout kills the whole scope, so a
-hung conversion leaves no orphan.
+of loading a model unbounded. A build keeps one warm worker for its page batches
+(:class:`DoclingWorker`). Each batch has a wall-clock limit, and its expiry kills
+the whole scope, so a hung conversion leaves no orphan.
 
 The backend name, its version, its adapter policy, the versions of its
 extraction packages, and its disabled-enrichment options are one fingerprint. It
@@ -29,15 +30,19 @@ models ahead of an offline run.
 
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import json
+import logging
 import os
+import queue
 import shutil
 import subprocess
 import threading
+import time
 import uuid
 from pathlib import Path
-from typing import Any
+from typing import IO, Any, Self
 
 from ..project.config import ResearchConfig, child_process_environment
 from ..project.policy import DEFAULT_PDF_BACKEND_FINGERPRINT, ResearchError
@@ -75,6 +80,14 @@ DOCLING_PACKAGE_REMEDY = (
 )
 
 WALL_TIMEOUT_SECONDS = 180
+# The job and reply shape `docling_worker.serve` speaks. The worker keeps its own
+# copy, because it runs in an interpreter that cannot import this package.
+WORKER_PROTOCOL = 2
+# A worker scope lives this long at most. A batch that could outlive it starts a
+# fresh worker, so every batch keeps its full wall limit.
+WORKER_LIFETIME_SECONDS = 3600
+# The tail of a worker's stderr that a failure report quotes.
+_STDERR_TAIL_BYTES = 64 * 1024
 
 # The fingerprint a generation with no recorded backend carries. It is the
 # legacy default, so recording it does not invalidate an existing corpus. The
@@ -89,7 +102,9 @@ _DOCLING_OPTIONS = {
     "accelerator": "cpu",
     "threads": 2,
 }
+# One live Docling worker per process: held from a worker's start to its retirement.
 _WORKER_LOCK = threading.Lock()
+LOGGER = logging.getLogger(__name__)
 
 
 class PdfBackendError(ResearchError):
@@ -108,6 +123,10 @@ class DoclingResourceError(PdfBackendError):
 class DoclingConversionError(PdfBackendError):
     """The worker failed on the source itself. The caller maps this to the
     source-local omission path."""
+
+
+class _BatchTimeoutError(DoclingResourceError):
+    """A batch outran its wall limit. It is never retried."""
 
 
 def normalize_pdf_backend(value: Any) -> str:
@@ -313,71 +332,229 @@ def _worker_environment(
     return environment
 
 
-def _launch_worker(
-    job: dict[str, Any],
-    *,
-    mode: str,
-    offline: bool,
-    model_cache_root: Path | None,
-    docling_env: DoclingEnv,
-    timeout: float,
-    description: str,
-) -> dict[str, Any]:
-    """Start the managed worker, map its exit code, and return its JSON result.
+def _worker_failure(code: int | None, text: str) -> PdfBackendError:
+    """The error a worker's failure code or exit status names."""
 
-    The managed interpreter runs isolated (``-I``), so no inherited
-    ``PYTHONPATH`` or the app's own site-packages reach it; only the shipped
-    worker module is pointed at from the app source. Docling comes solely from
-    the managed environment.
-    """
-
-    systemd_run = _require_systemd_run()
-    unit = f"research-rag-docling-{os.getpid()}-{uuid.uuid4().hex[:8]}"
-    environment = _worker_environment(mode, offline, model_cache_root)
-    if not _WORKER_LOCK.acquire(timeout=max(1.0, timeout)):
-        raise DoclingUnavailableError(
-            "Another Docling conversion is already running in this process."
-        )
-    try:
-        returncode, stdout, stderr = scoped_child.run_in_scope(
-            systemd_run,
-            worker_command(docling_env),
-            unit=unit,
-            timeout=timeout,
-            env=environment,
-            stdin=json.dumps(job).encode("utf-8"),
-        )
-    except subprocess.TimeoutExpired as exc:
-        raise DoclingResourceError(
-            f"{description} exceeded the {timeout:g}s wall limit; the worker "
-            "scope was killed. Lower ingestion.pdf_page_batch_size, then retry "
-            "the ingest."
-        ) from exc
-    finally:
-        _WORKER_LOCK.release()
-
-    text = stderr.decode("utf-8", "replace").strip()
-    if returncode == 5:
-        raise DoclingResourceError(
+    if code == 5:
+        return DoclingResourceError(
             f"Docling worker refused the resource boundary: {text}"
         )
-    if returncode == 6:
-        raise DoclingUnavailableError(text or "Docling is not installed")
-    if returncode == 3:
-        raise DoclingConversionError(text or "Docling conversion failed")
-    if returncode != 0:
-        raise PdfBackendError(
-            f"Docling worker failed (exit {returncode}): {text or 'no diagnostics'}"
-        )
+    if code == 6:
+        return DoclingUnavailableError(text or "Docling is not installed")
+    if code == 3:
+        return DoclingConversionError(text or "Docling conversion failed")
+    return PdfBackendError(
+        f"Docling worker failed (exit {code}): {text or 'no diagnostics'}"
+    )
+
+
+def _parse_reply(line: bytes) -> dict[str, Any]:
     try:
-        result = json.loads(stdout.decode("utf-8"))
-    except json.JSONDecodeError as exc:
+        reply = json.loads(line.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
         raise PdfBackendError(
             f"Docling worker returned unparseable output: {exc}"
         ) from exc
-    if not isinstance(result, dict):
+    if not isinstance(reply, dict) or (
+        reply.get("ok") and not isinstance(reply.get("result"), dict)
+    ):
         raise PdfBackendError("Docling worker returned a non-object result")
-    return result
+    return reply
+
+
+def _pump_replies(stream: IO[bytes], replies: queue.Queue[bytes | None]) -> None:
+    """Queue each reply line, then None once the worker's stdout closes."""
+
+    try:
+        for line in iter(stream.readline, b""):
+            replies.put(line)
+    except (OSError, ValueError):
+        pass
+    finally:
+        replies.put(None)
+
+
+def _pump_stderr(stream: IO[bytes], tail: bytearray) -> None:
+    """Drain the worker's stderr, so it never blocks on a full pipe."""
+
+    with contextlib.suppress(OSError, ValueError):
+        descriptor = stream.fileno()
+        for chunk in iter(lambda: os.read(descriptor, 4096), b""):
+            tail += chunk
+            del tail[:-_STDERR_TAIL_BYTES]
+
+
+class DoclingWorker:
+    """One warm Docling worker that serves page batches until it is closed.
+
+    Starting a worker imports Docling and loads its layout model, which costs
+    about half as long as converting an eight-page batch. A build therefore keeps
+    one worker for every batch it converts. Each batch keeps its own wall limit,
+    and a timeout kills the scope.
+
+    A batch's failure is reported only by a worker started for that batch. A
+    worker that served an earlier batch and then fails is retired, and the batch
+    runs once more in a fresh worker, so a long-lived worker never changes a
+    batch's outcome. A timeout is not retried. A batch that could outlive the
+    worker's scope also starts a fresh one.
+
+    The process starts on the first batch, not at construction. Close the worker,
+    or use it as a context manager, to release its memory.
+    """
+
+    def __init__(
+        self,
+        *,
+        docling_env: DoclingEnv,
+        offline: bool,
+        model_cache_root: Path | None,
+        mode: str = MODE_EXTRACT,
+    ) -> None:
+        self.docling_env = docling_env
+        self.offline = bool(offline)
+        self.model_cache_root = model_cache_root
+        self.mode = mode
+        self._lock = threading.Lock()
+        self._process: subprocess.Popen[bytes] | None = None
+        self._unit = ""
+        self._expires = 0.0
+        self._replies: queue.Queue[bytes | None] = queue.Queue()
+        self._stderr = bytearray()
+        self._pumps: list[threading.Thread] = []
+
+    def __enter__(self) -> Self:
+        return self
+
+    def __exit__(self, *_exc: object) -> None:
+        self.close()
+
+    def run(
+        self, job: dict[str, Any], *, timeout: float, description: str
+    ) -> dict[str, Any]:
+        """Send one job and return the worker's result."""
+
+        with self._lock:
+            if self._process is not None and time.monotonic() + timeout > self._expires:
+                self._retire()
+            warm = self._process is not None
+            try:
+                return self._exchange(job, timeout, description)
+            except _BatchTimeoutError:
+                raise
+            except PdfBackendError as exc:
+                if not warm:
+                    raise
+                LOGGER.debug(
+                    "docling: a warm worker failed on %s (%s); it runs again in a "
+                    "fresh worker",
+                    description,
+                    exc,
+                )
+            return self._exchange(job, timeout, description)
+
+    def close(self) -> None:
+        with self._lock:
+            self._retire()
+
+    def _start(self, timeout: float) -> subprocess.Popen[bytes]:
+        systemd_run = _require_systemd_run()
+        environment = _worker_environment(
+            self.mode, self.offline, self.model_cache_root
+        )
+        if not _WORKER_LOCK.acquire(timeout=max(1.0, timeout)):
+            raise DoclingUnavailableError(
+                "Another Docling worker is already running in this process."
+            )
+        lifetime = max(WORKER_LIFETIME_SECONDS, timeout)
+        try:
+            self._unit = f"research-rag-docling-{os.getpid()}-{uuid.uuid4().hex[:8]}"
+            self._expires = time.monotonic() + lifetime
+            process = scoped_child.start_in_scope(
+                systemd_run,
+                worker_command(self.docling_env),
+                unit=self._unit,
+                lifetime=lifetime,
+                env=environment,
+            )
+        except BaseException:
+            _WORKER_LOCK.release()
+            raise
+        self._process = process
+        self._replies = queue.Queue()
+        self._stderr = bytearray()
+        self._pumps = [
+            threading.Thread(
+                target=_pump_replies, args=(process.stdout, self._replies), daemon=True
+            ),
+            threading.Thread(
+                target=_pump_stderr, args=(process.stderr, self._stderr), daemon=True
+            ),
+        ]
+        for pump in self._pumps:
+            pump.start()
+        return process
+
+    def _exchange(
+        self, job: dict[str, Any], timeout: float, description: str
+    ) -> dict[str, Any]:
+        process = self._process or self._start(timeout)
+        try:
+            assert process.stdin is not None
+            try:
+                request = json.dumps({**job, "protocol": WORKER_PROTOCOL})
+                process.stdin.write(request.encode("utf-8") + b"\n")
+                process.stdin.flush()
+            except OSError:
+                line = None  # The worker exited before it read the job.
+            else:
+                try:
+                    line = self._replies.get(timeout=timeout)
+                except queue.Empty:
+                    raise _BatchTimeoutError(
+                        f"{description} exceeded the {timeout:g}s wall limit; the "
+                        "worker scope was killed. Lower "
+                        "ingestion.pdf_page_batch_size, then retry the ingest."
+                    ) from None
+            if line is None:
+                raise self._exit_failure(process)
+            reply = _parse_reply(line)
+            if not reply.get("ok"):
+                raise _worker_failure(
+                    int(reply.get("code") or 4), str(reply.get("error") or "")
+                )
+        except BaseException:
+            self._retire()
+            raise
+        return reply["result"]
+
+    def _exit_failure(self, process: subprocess.Popen[bytes]) -> PdfBackendError:
+        """The error for a worker that exited without replying."""
+
+        with contextlib.suppress(subprocess.TimeoutExpired):
+            process.wait(timeout=15)
+        for pump in self._pumps:
+            pump.join(timeout=5)
+        text = bytes(self._stderr).decode("utf-8", "replace").strip()
+        return _worker_failure(process.returncode, text)
+
+    def _retire(self) -> None:
+        process, self._process = self._process, None
+        if process is None:
+            return
+        try:
+            with contextlib.suppress(OSError):
+                assert process.stdin is not None
+                process.stdin.close()
+            scoped_child.terminate_scope(self._unit, process)
+        finally:
+            for pump in self._pumps:
+                pump.join(timeout=5)
+            self._pumps = []
+            for stream in (process.stdout, process.stderr):
+                if stream is not None:
+                    with contextlib.suppress(OSError):
+                        stream.close()
+            _WORKER_LOCK.release()
 
 
 def run_docling_batch(
@@ -389,13 +566,16 @@ def run_docling_batch(
     model_cache_root: Path | None,
     docling_env: DoclingEnv,
     timeout: float = WALL_TIMEOUT_SECONDS,
+    worker: DoclingWorker | None = None,
 ) -> dict[str, Any]:
     """Run one bounded Docling page batch and return the parsed worker result.
 
     ``start`` and ``end`` are 1-based physical page numbers, inclusive. With
     ``offline`` the worker may not fetch missing models and fails closed; without
     it the worker may fetch them lazily on first use, inside the same boundary.
-    Raises :class:`DoclingResourceError` when the boundary is missing or wrong,
+    ``worker`` is a warm worker started for the same environment and offline
+    flag; without one the batch runs in a worker of its own. Raises
+    :class:`DoclingResourceError` when the boundary is missing or wrong,
     :class:`DoclingUnavailableError` when the runner or a required model is
     unavailable, and :class:`DoclingConversionError` when the worker failed on
     the source itself.
@@ -408,15 +588,22 @@ def run_docling_batch(
         "end": int(end),
         "offline": bool(offline),
     }
-    return _launch_worker(
-        job,
-        mode=MODE_EXTRACT,
-        offline=bool(offline),
-        model_cache_root=model_cache_root,
-        docling_env=docling_env,
-        timeout=timeout,
-        description=f"Docling conversion of {source_path.name} pages {start}-{end}",
-    )
+    description = f"Docling conversion of {source_path.name} pages {start}-{end}"
+    if worker is None:
+        with DoclingWorker(
+            docling_env=docling_env,
+            offline=offline,
+            model_cache_root=model_cache_root,
+        ) as own:
+            return own.run(job, timeout=timeout, description=description)
+    if (worker.mode, worker.docling_env, worker.offline, worker.model_cache_root) != (
+        MODE_EXTRACT,
+        docling_env,
+        bool(offline),
+        model_cache_root,
+    ):
+        raise ValueError("The Docling worker was started for another extraction")
+    return worker.run(job, timeout=timeout, description=description)
 
 
 def prefetch_docling_models(
@@ -434,12 +621,14 @@ def prefetch_docling_models(
     # This explicit provisioning command opts into network access even when
     # ordinary project ingestion is offline, like the other model prefetches.
     env = ensure_docling_env(config, allow_install=True)
-    return _launch_worker(
-        {"mode": MODE_PREFETCH},
-        mode=MODE_PREFETCH,
+    with DoclingWorker(
+        docling_env=env,
         offline=False,
         model_cache_root=config.model_cache_root,
-        docling_env=env,
-        timeout=timeout,
-        description="Docling model provisioning",
-    )
+        mode=MODE_PREFETCH,
+    ) as worker:
+        return worker.run(
+            {"mode": MODE_PREFETCH},
+            timeout=timeout,
+            description="Docling model provisioning",
+        )
