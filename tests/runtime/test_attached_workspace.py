@@ -466,14 +466,27 @@ def test_a_bare_call_reports_an_app_already_up(
 
 
 @pytest.mark.parametrize(
-    ("arguments", "answer", "busy", "taken"),
+    ("arguments", "answer", "busy", "stop_state", "taken"),
     [
-        ((), "y\n", False, True),
-        ((), "\n", False, False),
-        (("--take-over",), None, False, True),
-        (("--take-over",), None, True, False),
+        ((), "y\n", None, "stopped", True),
+        ((), "\n", None, "stopped", False),
+        (("--take-over",), None, None, "stopped", True),
+        (("--take-over",), None, "before", "stopped", False),
+        ((), None, "before", "stopped", False),
+        ((), "y\n", "confirmation", "stopped", False),
+        (("--take-over",), None, None, "refused", False),
+        (("--take-over",), None, None, "timeout", False),
     ],
-    ids=["yes-at-the-prompt", "no-at-the-prompt", "flag-skips-the-prompt", "busy"],
+    ids=[
+        "yes-at-the-prompt",
+        "no-at-the-prompt",
+        "flag-skips-the-prompt",
+        "busy-with-flag",
+        "busy-before-prompt",
+        "write-starts-during-confirmation",
+        "ownership-refused",
+        "exit-timeout",
+    ],
 )
 def test_a_bare_call_takes_over_an_app_another_terminal_holds(
     project: Path,
@@ -481,52 +494,93 @@ def test_a_bare_call_takes_over_an_app_another_terminal_holds(
     capsys: pytest.CaptureFixture[str],
     arguments: tuple[str, ...],
     answer: str | None,
-    busy: bool,
+    busy: str | None,
+    stop_state: str,
     taken: bool,
 ) -> None:
     """The old app is stopped through `stop`'s proof and served here on its port.
 
-    A no keeps it, a write in progress keeps it without asking, and the flag
-    takes it without asking.
+    A no keeps it, a write before or during confirmation keeps it, and the flag
+    takes it without asking. The write reservation lasts through stop and exit,
+    and is released before serving or returning a refusal.
     """
 
-    _initialised(project, "Held")
+    from filelock import FileLock, Timeout
+
+    config = _initialised(project, "Held")
+    lock_path = config.state_root / state_files.LOCK_FILE
+    writer = FileLock(lock_path, timeout=0)
     stopped: list[tuple[int, int | None]] = []
     served: list[int | None] = []
+    waits: list[float] = []
     monkeypatch.setattr(
         cli_serving, "running_url", lambda config: "http://127.0.0.1:5057"
     )
     monkeypatch.setattr(cli_serving, "recorded_pid", lambda config: 4242)
     monkeypatch.setattr(cli_serving, "recorded_port", lambda config: 5057)
     monkeypatch.setattr(cli_serving, "_is_detached", lambda config: False)
-    monkeypatch.setattr(cli_serving, "_project_busy", lambda config: busy)
-    monkeypatch.setattr(cli_serving, "alive", lambda pid: False)
     monkeypatch.setattr(cli_serving.sys.stdin, "isatty", lambda: True, raising=False)
     monkeypatch.setattr(cli_serving.sys.stdout, "isatty", lambda: True, raising=False)
+    if stop_state == "timeout":
+        monkeypatch.setattr(cli_serving, "TAKE_OVER_WAIT_SECONDS", 0)
+
+    def assert_reserved() -> None:
+        with pytest.raises(Timeout), FileLock(lock_path, timeout=0):
+            pytest.fail("a write must not start while takeover stops the app")
 
     def readline() -> str:
         assert answer is not None, "the flag and a busy project ask nothing"
+        if busy == "confirmation":
+            writer.acquire()
         return answer
 
     def ask_to_stop(pid: int, root: Path, *, port: int | None = None) -> Any:
+        assert_reserved()
+        assert root == project
         stopped.append((pid, port))
-        return cli_serving.ownership.Outcome(asked=True, reason="")
+        return cli_serving.ownership.Outcome(
+            asked=stop_state != "refused", reason="ownership not proved"
+        )
+
+    def alive(pid: int) -> bool:
+        assert_reserved()
+        return stop_state == "timeout" or not waits
+
+    def wait(seconds: float) -> None:
+        assert_reserved()
+        waits.append(seconds)
 
     def serve(
         config: Any, *, port: int | None, open_browser: bool
     ) -> cli_serving.CommandResult:
+        with FileLock(lock_path, timeout=0):
+            pass
         served.append(port)
         return cli_serving.CommandResult()
 
     monkeypatch.setattr(cli_serving.sys.stdin, "readline", readline, raising=False)
     monkeypatch.setattr(cli_serving.ownership, "ask_to_stop", ask_to_stop)
     monkeypatch.setattr(cli_serving, "_serve_attached_sync", serve)
+    monkeypatch.setattr(cli_serving, "alive", alive)
+    monkeypatch.setattr(cli_serving.time, "sleep", wait)
 
-    result = cli_serving._bare_workspace(_no_arguments(*arguments, "--project", "Held"))
+    try:
+        if busy == "before":
+            writer.acquire()
+        result = cli_serving._bare_workspace(
+            _no_arguments(*arguments, "--project", "Held")
+        )
+        assert writer.is_locked == bool(busy)
+    finally:
+        writer.release()
 
-    assert stopped == ([(4242, 5057)] if taken else [])
+    stop_attempted = not busy and (bool(arguments) or answer == "y\n")
+    assert stopped == ([(4242, 5057)] if stop_attempted else [])
     assert served == ([5057] if taken else [])
-    assert result.exit_code == (1 if busy else 0)
+    assert result.exit_code == (1 if busy or stop_state != "stopped" else 0)
+    assert bool(waits) == taken
+    with FileLock(lock_path, timeout=0):
+        pass
     if busy:
         assert "a write such as an ingest build" in capsys.readouterr().out
 

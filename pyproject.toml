@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "research-rag"
-version = "3.0.0"
+version = "4.0.0"
 description = "A browser workspace for reviewing research evidence over a project's own PDF, EPUB and MOBI corpus"
 readme = "README.md"
 license = "Apache-2.0"
