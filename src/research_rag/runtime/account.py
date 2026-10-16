@@ -94,12 +94,7 @@ def _port_of(url: str | None) -> int | None:
 
 
 def account_projects() -> dict[str, Any]:
-    """Every registered project, and whether an app is serving it.
-
-    This is the one answer to that question: the command line prints it and the
-    workspace selects from it, so a project the terminal calls down is a project
-    the browser calls down too.
-    """
+    """The command line's account-wide project listing and serving states."""
 
     entries: list[dict[str, Any]] = []
     for project in load():

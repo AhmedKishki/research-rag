@@ -25,7 +25,6 @@ from ..project.config import (
     resolve_source_reference,
 )
 from ..project.policy import ResearchError
-from ..runtime.account import account_projects
 from ..runtime.app import ClientError, ClientRegistry
 from ..runtime.doctor import mcp_entry_block
 
@@ -34,37 +33,6 @@ MAX_ERROR_LENGTH = 1200
 # Fields the page sends with a search that the search does not read. They were
 # always dropped here rather than refused, so a typed value changes nothing.
 _PAGE_ONLY_SEARCH_FIELDS = ("categories", "projects", "document_ids")
-
-
-def _project_listing(config: ResearchConfig) -> dict[str, Any]:
-    """The account's projects, projected as the workspace's selector reads them.
-
-    The listing is the one `research-rag projects` prints, read through the same
-    function, so the projects a browser names and the projects a terminal names
-    cannot differ. Each entry carries the address its app is served on, or the
-    absence of one: a project with no app has no URL, and a workspace that
-    invented one would offer a reader a link that fails.
-
-    `current` is this project's own recorded name, so the page marks the project
-    it is serving rather than the first one in the list.
-    """
-
-    account = account_projects()
-    entries = [
-        {
-            "project_name": entry.get("project_name"),
-            "project_root": entry.get("project_root"),
-            "running": bool((entry.get("app") or {}).get("running")),
-            "url": (entry.get("app") or {}).get("url"),
-            "attached_clients": entry.get("attached_clients", 0),
-        }
-        for entry in account.get("projects", [])
-    ]
-    return {
-        "projects": entries,
-        "current": config.project_name,
-        "message": account.get("message") or "",
-    }
 
 
 class ResearchUIAdapter:
@@ -167,11 +135,6 @@ class ResearchUIAdapter:
             return payload
         if operation == "check_updates":
             return await self._check_updates()
-        if operation == "list_projects":
-            # Probing each project's own app is blocking loopback I/O, and a
-            # project whose app is slow to answer must not hold up the page that
-            # asked about it.
-            return await asyncio.to_thread(_project_listing, self.config)
         if operation == "agent_entry":
             # The generator `doctor --mcp-entry` prints, so a client's
             # configuration is the same text whichever surface produced it.

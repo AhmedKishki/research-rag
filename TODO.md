@@ -35,21 +35,13 @@ An item is done when the harness has produced its measurement and the validation
 
 ## app
 
-- [ ] **Choose the project in the workspace, not the terminal.** Feature. A bare `research-rag` asks which project when the installation holds several, before the app can answer anything.
-
-  - The app binds no project, serves every known project, and re-binds in place to the one chosen.
-  - One terminal then serves every project, and closing it ends all of them.
-  - `App` is built around a fixed `ResearchConfig`: the gateway, service, project lock, and pid and port files all derive from it. Binding later tears those down and rebuilds them.
-  - The port, client registry, and process outlive every project, and `Surfaces` reads its two surfaces per request.
-  - Binding a different project detaches every client on the previous one.
-  - The workspace's project selector only links to a running app or hands out a start command. Re-binding needs an action in `surfaces/workspace/`.
 - [ ] **Serve detached.** Feature. A serving process with no controlling terminal is refused, not adopted. Detaching suits a workspace that stays up between sessions or a machine serving a phone.
 
   - Add a named flag with its own state, log, and `stop`.
   - Detached server must be stoppable by a new server attach request, or ownership transfered to terminal.
   - Record the terminal as deliberately none, because an absent terminal file cannot tell the two cases apart.
   - `stop` needs the same ownership proof plus the flag, and a plain `stop` must never end a detached app.
-  - `doctor` and the project selector must learn that a detached app outlives its terminal.
+  - `doctor` and the CLI project listing must learn that a detached app outlives its terminal.
 - [ ] **Authenticated, encrypted remote serving.** Feature. Home-LAN mode has no login and uses unencrypted HTTP; it is not a public or multi-user deployment.
 
   - Design authentication, session expiry, TLS trust, and permissions before supporting untrusted networks or public exposure.

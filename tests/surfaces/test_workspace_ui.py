@@ -1781,35 +1781,68 @@ result.short = pagerNumbers(1, 3);
     assert result["short"] == [1, 2, 3]
 
 
-def test_the_project_picker_offers_only_a_project_that_is_not_on_screen(
+def test_startup_refresh_and_navigation_stay_in_the_serving_workspace(
     tmp_path: Path,
 ) -> None:
-    """A picker over one project, or an "Open" for the project already open,
-    offered a second tab of the same workspace."""
+    """Ordinary browser use never discovers or opens another project's workspace."""
+
+    with _panel_host() as client:
+        page = client.get("/").text
+    assert 'id="project-selector"' not in page
+    assert 'id="project-select"' not in page
+    assert 'id="project-open"' not in page
 
     result = _drive_page(
         tmp_path,
         """
-state.profile = { capabilities: { projects: true } };
-const here = { project_name: "here", running: true, url: "http://127.0.0.1:5051" };
-const there = { project_name: "there", running: true, url: "http://127.0.0.1:5052" };
-renderProjects({ projects: [here], current: "here", message: "" });
-result.single = document.getElementById("project-selector").hidden;
-renderProjects({ projects: [here, there], current: "here", message: "" });
-result.several = document.getElementById("project-selector").hidden;
-result.openForCurrent = !document.getElementById("project-open").hidden;
-document.getElementById("project-select").value = "there";
-showProjectActions();
-result.openForOther = !document.getElementById("project-open").hidden;
+(async () => {
+const opened = [];
+window.open = (...args) => opened.push(args);
+byId("connection-state").lastElementChild = node("span");
+const payloads = {
+  "/api/ui": { capabilities: { clients: true, agent_entry: true, updates: false } },
+  "/api/status": { ready: true, hybrid_ready: true, project_name: "here", project_root: "/here" },
+  "/api/sources": { ready: true, sources: [], excluded_sources: [] },
+  "/api/clients": { clients: [] },
+  "/api/agent-entry": { entry: "current project entry" },
+  "/api/settings": { sections: [] },
+  "/api/chunk-exclusions": { exclusions: [] },
+};
+fetch = async (path, options = {}) => {
+  requests.push({ path, method: options.method || "GET" });
+  return { ok: true, status: 200, json: async () => payloads[path] || {} };
+};
+const loads = [];
+const originalLoad = loadWorkspace;
+loadWorkspace = (...args) => {
+  const pending = originalLoad(...args);
+  loads.push(pending);
+  return pending;
+};
+initialize();
+await loads[0];
+await byId("refresh-button").dispatchEvent({ type: "click" });
+for (const view of ["sources", "status", "search"]) {
+  window.location.hash = "#/" + view;
+  await applyRoute();
+}
+result = { requests, opened, view: activeView(), project: state.status.project_name,
+  entry: state.agentEntry, loads: loads.length, routes: window.history.entries };
+})();
 """,
     )
 
-    assert result == {
-        "single": True,
-        "several": False,
-        "openForCurrent": False,
-        "openForOther": True,
-    }
+    assert result["loads"] == 2
+    assert result["project"] == "here"
+    assert result["entry"] == "current project entry"
+    assert result["view"] == "search"
+    assert result["opened"] == []
+    paths = [request["path"] for request in result["requests"]]
+    assert paths.count("/api/status") == 2
+    assert paths.count("/api/sources") == 2
+    assert "/api/projects" not in paths
+    assert all(path.startswith("/api/") for path in paths)
+    assert all(route.startswith("#/") for _, route in result["routes"])
 
 
 def test_the_workspace_calls_a_passage_a_passage(tmp_path: Path) -> None:
@@ -2312,7 +2345,11 @@ def test_a_load_draws_nothing_the_profile_has_not_allowed() -> None:
         page = client.get("/").text
 
     gated = re.findall(r"<[a-z]+\b[^>]*\bdata-capability=\"[^\"]+\"[^>]*>", page)
-    assert len(gated) == 6
+    assert {re.search(r'data-capability="([^"]+)"', tag).group(1) for tag in gated} == {
+        "clients",
+        "agent_entry",
+        "updates",
+    }
     for tag in gated:
         assert re.search(r"\shidden(?:\s|>)", tag), tag
     assert '<div id="application-name" class="brand-name">Research RAG</div>' in page

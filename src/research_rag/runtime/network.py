@@ -21,7 +21,6 @@ MCP_PATH = "/mcp"
 LOCAL_ONLY_PATHS = (
     CONTROL_PREFIX,
     MCP_PATH,
-    "/api/projects",
     "/api/clients",
     "/api/agent-entry",
     "/api/updates",

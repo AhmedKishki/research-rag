@@ -13,8 +13,6 @@ const state = {
   hits: new Map(),
   restoringRoute: false,
   sourcePages: { sources: 1, excluded: 1 },
-  projects: [],
-  currentProject: "",
   agentEntry: "",
   generationActions: [],
   busy: false,
@@ -425,65 +423,6 @@ async function loadClients() {
   }
 }
 
-function projectOptionLabel(project, isCurrent) {
-  const running = project.running ? "app up" : "app not running";
-  return isCurrent
-    ? `${project.project_name} · ${running} · this project`
-    : `${project.project_name} · ${running}`;
-}
-
-function selectedProject() {
-  return (
-    state.projects.find(
-      (project) => project.project_name === byId("project-select").value,
-    ) || null
-  );
-}
-
-function showProjectActions() {
-  const project = selectedProject();
-  const url = project?.url || "";
-  const open = byId("project-open");
-  // The project on screen is this page, so opening it would only open a second
-  // tab of the same workspace.
-  open.hidden = !url || project.project_name === state.currentProject;
-}
-
-function renderProjects(payload) {
-  state.projects = payload.projects || [];
-  state.currentProject = payload.current || "";
-  const select = byId("project-select");
-  select.replaceChildren();
-  for (const project of state.projects) {
-    const option = node(
-      "option",
-      "",
-      projectOptionLabel(project, project.project_name === state.currentProject),
-    );
-    option.value = project.project_name;
-    select.append(option);
-  }
-  // A host that registered no project leaves the selector disabled rather than
-  // offering an empty one a reader could choose from.
-  select.disabled = !state.projects.length;
-  if (state.projects.some((project) => project.project_name === state.currentProject)) {
-    select.value = state.currentProject;
-  }
-  const message = byId("project-selector-message");
-  message.hidden = !payload.message;
-  message.textContent = payload.message || "";
-  // A selector over one project has nothing to switch to, so it is not drawn;
-  // the sidebar footer still names the project.
-  byId("project-selector").hidden =
-    !hasCapability("projects") || (state.projects.length <= 1 && !payload.message);
-  showProjectActions();
-}
-
-async function loadProjects() {
-  if (!hasCapability("projects")) return;
-  renderProjects(await api("/api/projects"));
-}
-
 function renderAgentEndpoint(status) {
   const url = String(status.mcp_url || "");
   byId("agent-url").textContent =
@@ -886,9 +825,8 @@ function renderPartitions(status) {
   );
 }
 
-// The reviewed project tags on the status view, which narrow this project's own
-// corpus. They are not the account's projects: those are the header selector,
-// and a tag on a source is not a project this installation serves.
+// Reviewed project tags narrow this project's own corpus; they do not select
+// another workspace.
 function renderProjectTags(status) {
   renderInventory("project-chips", status.projects || [], "project", "project-filter");
 }
@@ -1136,13 +1074,6 @@ async function loadWorkspace({ announce = false } = {}) {
     ]);
     renderStatus(status);
     renderSources(sources);
-    if (hasCapability("projects")) {
-      try {
-        await loadProjects();
-      } catch (error) {
-        toast(error.message, true);
-      }
-    }
     if (hasCapability("agent_entry")) {
       try {
         await loadAgentEntry();
@@ -3924,11 +3855,6 @@ function initialize() {
   byId("chunk-form").addEventListener("submit", saveChunkExclusion);
   byId("chunk-exclusion-list").addEventListener("click", handleAction);
   byId("context-content").addEventListener("click", handleAction);
-  byId("project-select").addEventListener("change", showProjectActions);
-  byId("project-open").addEventListener("click", () => {
-    const project = selectedProject();
-    if (project?.url) window.open(project.url, "_blank", "noopener");
-  });
   byId("agent-url-copy").addEventListener("click", () => {
     copyText(byId("agent-url").textContent, "Endpoint copied.");
   });
