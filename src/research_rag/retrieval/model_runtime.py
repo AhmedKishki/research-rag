@@ -216,6 +216,21 @@ class ModelRuntime:
                 )
             return self._embedding_model
 
+    def set_embedding_throughput(
+        self, *, threads: int | None, inference_batch_size: int
+    ) -> None:
+        """Take new values for the two settings that change speed, never vectors.
+
+        A new thread count drops the loaded model, so the next call loads it with
+        that count. A call already embedding finishes on the model it holds.
+        """
+
+        with self._loading:
+            if threads != self.embedding_threads:
+                self.embedding_threads = threads
+                self._embedding_model = None
+            self.embedding_inference_batch_size = inference_batch_size
+
     def _cross_encoder(self, model: str | None = None) -> TextCrossEncoder:
         """The pinned cross-encoder for one model, loaded on demand.
 
@@ -355,6 +370,13 @@ class RuntimeBackend:
 
     def embedding_token_counts(self, texts: list[str]) -> list[int]:
         return self.runtime.embedding_token_counts(texts)
+
+    def set_embedding_throughput(
+        self, *, threads: int | None, inference_batch_size: int
+    ) -> None:
+        self.runtime.set_embedding_throughput(
+            threads=threads, inference_batch_size=inference_batch_size
+        )
 
     def embed_texts(self, texts: list[str]) -> np.ndarray[Any, np.dtype[np.float32]]:
         return self.runtime.embed_texts(texts)

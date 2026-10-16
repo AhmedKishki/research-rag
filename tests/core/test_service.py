@@ -2580,6 +2580,37 @@ def test_a_hand_edit_reaches_the_running_service(project: Path) -> None:
     asyncio.run(_assert_a_hand_edit_reaches_the_running_service(project))
 
 
+def test_embedding_throughput_reaches_the_running_service(project: Path) -> None:
+    """Threads and inference batch size change speed, never vectors, so a running
+    app takes them at its next call instead of waiting for a restart."""
+
+    service = ResearchService(  # type: ignore[arg-type]
+        resolve_config(project, vanilla_executable=sys.executable),
+        FakeUltraRAG(),
+    )
+    runtimes = [backend.runtime for backend in service._dense_backends.values()]
+    for runtime in runtimes:
+        runtime._embedding_model = object()  # type: ignore[assignment]
+    path = project / ".research-rag" / "config.toml"
+    path.write_text(
+        "[runtime]\nembedding_threads = 8\n\n[dense]\n"
+        "embedding_inference_batch_size = 4\n",
+        encoding="utf-8",
+    )
+
+    status = asyncio.run(service.status())
+
+    for runtime in runtimes:
+        assert runtime.embedding_threads == 8
+        assert runtime.embedding_inference_batch_size == 4
+        assert runtime._embedding_model is None
+    assert not [
+        entry
+        for entry in status.get("degraded", [])
+        if entry["check"] == "settings_files"
+    ]
+
+
 def test_the_length_floor_is_counted_in_the_chunkers_tokens() -> None:
     """A fraction of a chunk size is only a length rule if the unit matches.
 

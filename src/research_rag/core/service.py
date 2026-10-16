@@ -80,32 +80,31 @@ class ResearchService(
         # it turns the counts off rather than filling them with its query set.
         self._records_searches = record_searches
         self._dense_backends: dict[str, DenseBackend]
+        # The backends this service built take the throughput settings in force at
+        # every call. An injected backend's are its caller's.
+        self._built_dense_backends: tuple[
+            LocalQdrantDenseBackend | LocalVectorDenseBackend, ...
+        ] = ()
         if dense is not None:
             # An injected backend serves every recorded kind, so deterministic
             # test doubles stand in for both real backends.
             self._dense_backends = {name: dense for name in DENSE_INDEX_PATHS}
         else:
+            options: dict[str, Any] = {
+                "offline": config.offline,
+                "embedding_threads": config.embedding_threads,
+                "reranker_model": config.reranker_model,
+                "embedding_model": config.settings.embedding_model,
+                "embedding_inference_batch_size": (
+                    config.settings.embedding_inference_batch_size
+                ),
+            }
+            qdrant = LocalQdrantDenseBackend(config.models_root, **options)
+            exact = LocalVectorDenseBackend(config.models_root, **options)
+            self._built_dense_backends = (qdrant, exact)
             self._dense_backends = {
-                QDRANT_BACKEND_NAME: LocalQdrantDenseBackend(
-                    config.models_root,
-                    offline=config.offline,
-                    embedding_threads=config.embedding_threads,
-                    reranker_model=config.reranker_model,
-                    embedding_model=config.settings.embedding_model,
-                    embedding_inference_batch_size=(
-                        config.settings.embedding_inference_batch_size
-                    ),
-                ),
-                EXACT_BACKEND_NAME: LocalVectorDenseBackend(
-                    config.models_root,
-                    offline=config.offline,
-                    embedding_threads=config.embedding_threads,
-                    reranker_model=config.reranker_model,
-                    embedding_model=config.settings.embedding_model,
-                    embedding_inference_batch_size=(
-                        config.settings.embedding_inference_batch_size
-                    ),
-                ),
+                QDRANT_BACKEND_NAME: qdrant,
+                EXACT_BACKEND_NAME: exact,
             }
         # The primary backend answers model-only calls; indexing, validation, and
         # retrieval resolve the backend that the generation itself recorded.
@@ -166,6 +165,22 @@ class ResearchService(
         self._documents_cache: (
             tuple[tuple[str, str], dict[str, dict[str, Any]]] | None
         ) = None
+
+    def refresh_settings(self) -> None:
+        """Take edited settings files, then hand the built backends what is in force.
+
+        The embedding thread count and inference batch size change how fast a
+        vector is computed, never its value, so a running app takes them at its
+        next call even while a build embeds.
+        """
+
+        super().refresh_settings()
+        settings = self.config.settings
+        for backend in self._built_dense_backends:
+            backend.set_embedding_throughput(
+                threads=settings.embedding_threads,
+                inference_batch_size=settings.embedding_inference_batch_size,
+            )
 
     @asynccontextmanager
     async def _operation(self, *, busy_command: str = "") -> AsyncIterator[None]:
