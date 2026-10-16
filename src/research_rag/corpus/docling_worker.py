@@ -1,20 +1,28 @@
-"""The bounded subprocess that runs one Docling PDF page batch.
+"""The bounded subprocess that serves Docling PDF page batches.
 
 This module is the worker entry point the parent starts under
 ``systemd-run --user --scope`` with a memory, swap, and CPU bound. It imports
-Docling **inside** :func:`run`, after it has verified the resource boundary it
-was promised, so a missing or wrong boundary fails closed before a model is
-loaded. The parent process never imports Docling.
+Docling **inside** a :class:`Session`, after it has verified the resource
+boundary it was promised, so a missing or wrong boundary fails closed before a
+model is loaded. The parent process never imports Docling.
 
-It reads one JSON job from stdin. Extraction jobs carry
-``{"mode": "extract", "source_path", "start", "end", "offline"}`` and write
-``{"version", "options", "pages", "diagnostics", "image_only_pages",
+It reads one JSON job per stdin line and writes one JSON reply per stdout line,
+until stdin closes. Every job carries ``"protocol": 2``; a job without it came
+from an app older than this file and is refused with exit status 2. The first job's mode and offline flag fix the boundary the
+worker verifies, and every later job must carry the same ones, so the converter
+and its model load once per worker. Extraction jobs carry
+``{"mode": "extract", "source_path", "start", "end", "offline"}`` and succeed
+with ``{"version", "options", "pages", "diagnostics", "image_only_pages",
 "pdf_metadata", "page_labels"}``. An offline extraction may not fetch; an online
 one may fetch a missing model lazily on its first call, inside this boundary. A
 ``{"mode": "prefetch"}`` job, run only by the explicit
-``doctor --prefetch-models`` path, provisions the models and writes
-``{"version", "mode", "ready"}``. Diagnostics and errors go to stderr, never to
-stdout.
+``doctor --prefetch-models`` path, provisions the models and succeeds with
+``{"version", "mode", "ready"}``.
+
+A reply is ``{"ok": true, "result": ...}`` or
+``{"ok": false, "code": ..., "error": ...}``. A failed job ends the worker with
+that code as its exit status, so a worker never converts again after a failure.
+Stdout carries replies alone: anything a library prints goes to stderr.
 """
 
 from __future__ import annotations
@@ -25,7 +33,7 @@ import json
 import os
 import sys
 from pathlib import Path
-from typing import Any
+from typing import Any, TextIO
 
 # The worker runs two ways. Imported as `research_rag.corpus.docling_worker` by
 # tests, it takes the sibling adapter through its package. Executed directly by
@@ -50,6 +58,14 @@ WORKER_NICE = 10
 
 MODE_EXTRACT = "extract"
 MODE_PREFETCH = "prefetch"
+# The parent's `pdf_backend.WORKER_PROTOCOL`. An app started before the worker
+# file changed sends jobs without it, and the worker refuses them rather than
+# answer in a shape that app would misread.
+PROTOCOL = 2
+_PROTOCOL_REMEDY = (
+    "The Docling worker file is newer than the research-rag app that started it. "
+    "Restart the app, then run ingest again."
+)
 
 # Only the explicit provisioning path may reach the network.
 _PREFETCH_REMEDY = (
@@ -413,42 +429,110 @@ def _prefetch(converter: Any, version: str, boundary: dict[str, str]) -> dict[st
     }
 
 
+class Session:
+    """A verified worker's converter, reused for every job it is sent."""
+
+    def __init__(self, mode: str, offline: bool) -> None:
+        self.mode = mode
+        self.offline = offline
+        self.boundary = verify_resource_boundary()
+        _verify_environment(mode, offline)
+        apply_and_verify_nice()
+        self.version = _docling_version()
+        self.converter = _build_converter()
+
+    @classmethod
+    def for_job(cls, job: dict[str, Any]) -> Session:
+        return cls(str(job.get("mode") or MODE_EXTRACT), bool(job.get("offline")))
+
+    def run(self, job: dict[str, Any]) -> dict[str, Any]:
+        mode = str(job.get("mode") or MODE_EXTRACT)
+        offline = bool(job.get("offline"))
+        if (mode, offline) != (self.mode, self.offline):
+            raise ResourceBoundaryError(
+                f"This worker verified mode={self.mode} offline={self.offline}; "
+                f"a mode={mode} offline={offline} job needs a new worker"
+            )
+        if mode == MODE_PREFETCH:
+            return _prefetch(self.converter, self.version, self.boundary)
+        return _extract(job, self.converter, self.version, self.boundary, offline)
+
+
 def run(job: dict[str, Any]) -> dict[str, Any]:
-    mode = str(job.get("mode") or MODE_EXTRACT)
-    offline = bool(job.get("offline"))
-    boundary = verify_resource_boundary()
-    _verify_environment(mode, offline)
-    apply_and_verify_nice()
-    version = _docling_version()
-    converter = _build_converter()
-    if mode == MODE_PREFETCH:
-        return _prefetch(converter, version, boundary)
-    return _extract(job, converter, version, boundary, offline)
+    """Run one job in a new session."""
+
+    return Session.for_job(job).run(job)
+
+
+# Exit status 2 is an invalid job and 4 an unexpected failure.
+_FAILURE_CODES = (
+    (ResourceBoundaryError, 5),
+    (WorkerUnavailableError, 6),
+    (WorkerError, 3),
+)
+
+
+def _failure(exc: Exception) -> tuple[int, str]:
+    for kind, code in _FAILURE_CODES:
+        if isinstance(exc, kind):
+            return code, str(exc)
+    return 4, f"Docling worker failed: {type(exc).__name__}: {exc}"
+
+
+def _reply(replies: TextIO, reply: dict[str, Any]) -> None:
+    replies.write(json.dumps(reply, ensure_ascii=False) + "\n")
+    replies.flush()
+
+
+def _refuse(replies: TextIO, message: str) -> int:
+    """Refuse an invalid job with exit status 2, which no parent reads as a source
+    failure."""
+
+    print(message, file=sys.stderr)
+    _reply(replies, {"ok": False, "code": 2, "error": message})
+    return 2
+
+
+def serve(jobs: TextIO, replies: TextIO) -> int:
+    """Answer each job line with one reply line, and return the exit status.
+
+    Returns 0 when stdin closes. A failed job returns its code after its reply.
+    """
+
+    session: Session | None = None
+    for line in iter(jobs.readline, ""):
+        if not line.strip():
+            continue
+        try:
+            job = json.loads(line)
+        except json.JSONDecodeError as exc:
+            return _refuse(replies, f"Invalid job: {exc}")
+        if not isinstance(job, dict):
+            return _refuse(replies, "Invalid job: a job is a JSON object")
+        if job.get("protocol") != PROTOCOL:
+            return _refuse(replies, _PROTOCOL_REMEDY)
+        try:
+            if session is None:
+                session = Session.for_job(job)
+            result = session.run(job)
+        except Exception as exc:  # noqa: BLE001 - the boundary must fail closed.
+            code, message = _failure(exc)
+            print(message, file=sys.stderr)
+            _reply(replies, {"ok": False, "code": code, "error": message})
+            return code
+        _reply(replies, {"ok": True, "result": result})
+    return 0
 
 
 def main() -> int:
+    # Replies keep the real stdout. A library that prints reaches stderr instead.
+    replies = os.fdopen(os.dup(sys.stdout.fileno()), "w", encoding="utf-8")
+    os.dup2(sys.stderr.fileno(), sys.stdout.fileno())
+    sys.stdout = sys.stderr
     try:
-        job = json.loads(sys.stdin.read())
-    except (json.JSONDecodeError, OSError) as exc:
-        print(f"Invalid worker job: {exc}", file=sys.stderr)
-        return 2
-    try:
-        result = run(job)
-    except ResourceBoundaryError as exc:
-        print(str(exc), file=sys.stderr)
-        return 5
-    except WorkerUnavailableError as exc:
-        print(str(exc), file=sys.stderr)
-        return 6
-    except WorkerError as exc:
-        print(str(exc), file=sys.stderr)
-        return 3
-    except Exception as exc:  # noqa: BLE001 - the boundary must fail closed.
-        print(f"Docling worker failed: {type(exc).__name__}: {exc}", file=sys.stderr)
-        return 4
-    sys.stdout.write(json.dumps(result, ensure_ascii=False))
-    sys.stdout.flush()
-    return 0
+        return serve(sys.stdin, replies)
+    finally:
+        replies.close()
 
 
 if __name__ == "__main__":  # pragma: no cover - process entry point

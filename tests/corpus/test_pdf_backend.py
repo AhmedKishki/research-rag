@@ -2,27 +2,24 @@
 
 from __future__ import annotations
 
+import io
+import json
 import os
-import subprocess
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
 import pytest
 
-from research_rag.corpus import docling_worker, pdf_backend, scoped_child
+from research_rag.corpus import docling_worker, pdf_backend
 from research_rag.corpus.docling_env import DoclingEnv
 from research_rag.corpus.pdf_backend import (
     CUSTOM_BACKEND_FINGERPRINT,
-    DoclingConversionError,
-    DoclingResourceError,
     DoclingUnavailableError,
-    PdfBackendError,
     effective_maximum_unclean_percent,
     legacy_custom_backend_record,
     normalize_pdf_backend,
     pdf_backend_fingerprint,
-    prefetch_docling_models,
     recorded_pdf_backend_fingerprint,
     run_docling_batch,
 )
@@ -208,154 +205,6 @@ def test_missing_systemd_runner_fails_closed(monkeypatch: pytest.MonkeyPatch) ->
     assert "systemd-run" in str(error.value)
 
 
-class _FakeProcess:
-    def __init__(
-        self,
-        *,
-        returncode: int = 0,
-        stdout: bytes = b"{}",
-        stderr: bytes = b"",
-        timeout: bool = False,
-    ) -> None:
-        self.returncode = returncode
-        self._stdout = stdout
-        self._stderr = stderr
-        self._timeout = timeout
-        self.pid = 4242
-
-    def communicate(self, *_args: object, **_kwargs: object):
-        if self._timeout:
-            raise subprocess.TimeoutExpired(cmd="systemd-run", timeout=1)
-        return self._stdout, self._stderr
-
-    def wait(self, timeout: float | None = None) -> int:
-        return self.returncode
-
-    def kill(self) -> None:
-        return None
-
-
-def _arm_runner(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(pdf_backend.shutil, "which", lambda name: f"/usr/bin/{name}")
-    # The launcher retires the scope in a finally; tests that fake Popen must not
-    # let the real systemctl path run.
-    monkeypatch.setattr(scoped_child, "terminate_scope", lambda unit, process: None)
-
-
-@pytest.mark.parametrize(
-    ("returncode", "expected"),
-    [
-        (5, DoclingResourceError),
-        (6, DoclingUnavailableError),
-        (3, DoclingConversionError),
-        (1, PdfBackendError),
-    ],
-)
-def test_worker_exit_codes_map_to_distinct_failures(
-    monkeypatch: pytest.MonkeyPatch, returncode: int, expected: type[Exception]
-) -> None:
-    _arm_runner(monkeypatch)
-    monkeypatch.setattr(
-        pdf_backend.subprocess,
-        "Popen",
-        lambda *args, **kwargs: _FakeProcess(returncode=returncode, stderr=b"boom"),
-    )
-
-    with pytest.raises(expected):
-        run_docling_batch(
-            source_path=Path("/tmp/source.pdf"),
-            start=1,
-            end=1,
-            offline=True,
-            model_cache_root=None,
-            docling_env=_FAKE_ENV,
-        )
-
-
-def test_timeout_kills_the_scope_and_raises(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    _arm_runner(monkeypatch)
-    terminated: list[str] = []
-    monkeypatch.setattr(
-        pdf_backend.subprocess,
-        "Popen",
-        lambda *args, **kwargs: _FakeProcess(timeout=True),
-    )
-    monkeypatch.setattr(
-        scoped_child, "terminate_scope", lambda unit, process: terminated.append(unit)
-    )
-
-    with pytest.raises(DoclingResourceError):
-        run_docling_batch(
-            source_path=Path("/tmp/source.pdf"),
-            start=1,
-            end=8,
-            offline=True,
-            model_cache_root=None,
-            docling_env=_FAKE_ENV,
-        )
-
-    assert len(terminated) == 1
-
-
-def test_launch_requests_the_exact_resource_boundary(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    _arm_runner(monkeypatch)
-    commands: list[list[str]] = []
-
-    def fake_popen(command, **_kwargs):
-        commands.append(list(command))
-        return _FakeProcess(returncode=0, stdout=b"{}")
-
-    monkeypatch.setattr(pdf_backend.subprocess, "Popen", fake_popen)
-
-    run_docling_batch(
-        source_path=Path("/tmp/source.pdf"),
-        start=1,
-        end=8,
-        offline=False,
-        model_cache_root=None,
-        docling_env=_FAKE_ENV,
-    )
-
-    command = commands[0]
-    assert "--scope" in command
-    assert f"--property=MemoryMax={2 * 1024**3}" in command
-    assert "--property=MemorySwapMax=0" in command
-    assert "--property=CPUQuota=200%" in command
-    # The managed interpreter runs isolated and executes the shipped worker file.
-    assert str(_FAKE_ENV.python) in command
-    assert "-I" in command
-    assert command[-1].endswith("docling_worker.py")
-    assert "site-packages" not in command[-1]
-
-
-def test_worker_result_is_returned_when_the_worker_succeeds(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    _arm_runner(monkeypatch)
-    monkeypatch.setattr(
-        pdf_backend.subprocess,
-        "Popen",
-        lambda *args, **kwargs: _FakeProcess(
-            returncode=0, stdout=b'{"version": "2.135.0", "pages": {}}'
-        ),
-    )
-
-    result = run_docling_batch(
-        source_path=Path("/tmp/source.pdf"),
-        start=1,
-        end=1,
-        offline=False,
-        model_cache_root=None,
-        docling_env=_FAKE_ENV,
-    )
-
-    assert result["version"] == "2.135.0"
-
-
 def test_extraction_environment_follows_offline() -> None:
     offline = pdf_backend._worker_environment("extract", True, None)
     assert offline["HF_HUB_OFFLINE"] == "1"
@@ -487,41 +336,102 @@ def test_partial_success_is_rejected_before_export(
     assert exported == []
 
 
-def test_prefetch_launches_online_and_passes_the_mode(
+def _armed_session(monkeypatch: pytest.MonkeyPatch, converter: Any) -> list[str]:
+    """Stub the boundary checks and record each converter build."""
+
+    built: list[str] = []
+
+    def build() -> Any:
+        built.append("converter")
+        return converter
+
+    monkeypatch.setattr(
+        docling_worker, "verify_resource_boundary", lambda: {"memory.max": "x"}
+    )
+    monkeypatch.setattr(
+        docling_worker, "_verify_environment", lambda mode, offline: None
+    )
+    monkeypatch.setattr(docling_worker, "apply_and_verify_nice", lambda: 10)
+    monkeypatch.setattr(docling_worker, "_docling_version", lambda: "2.135.0")
+    monkeypatch.setattr(docling_worker, "_build_converter", build)
+    return built
+
+
+def _serve(lines: list[str]) -> tuple[int, list[dict[str, Any]]]:
+    replies = io.StringIO()
+    status = docling_worker.serve(io.StringIO("".join(lines)), replies)
+    return status, [json.loads(line) for line in replies.getvalue().splitlines()]
+
+
+def test_serve_verifies_once_and_answers_each_job(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    _arm_runner(monkeypatch)
-    captured: list[bytes] = []
+    built = _armed_session(monkeypatch, object())
+    monkeypatch.setattr(
+        docling_worker,
+        "_extract",
+        lambda job, *_args: {"start": job["start"]},
+    )
+    job = {
+        "protocol": pdf_backend.WORKER_PROTOCOL,
+        "mode": "extract",
+        "source_path": "/tmp/x.pdf",
+        "offline": True,
+    }
 
-    class _CapturingProcess(_FakeProcess):
-        def __init__(self) -> None:
-            super().__init__(returncode=0, stdout=b'{"ready": true}')
-
-        def communicate(self, payload: bytes, *_args: object, **_kwargs: object):
-            captured.append(payload)
-            return self._stdout, self._stderr
-
-    def fake_popen(_command, **kwargs):
-        environment = kwargs.get("env") or {}
-        assert "HF_HUB_OFFLINE" not in environment
-        return _CapturingProcess()
-
-    monkeypatch.setattr(pdf_backend.subprocess, "Popen", fake_popen)
-    installation_options = []
-
-    def ensure(config, **options):
-        installation_options.append(options)
-        return _FAKE_ENV
-
-    monkeypatch.setattr(pdf_backend, "ensure_docling_env", ensure)
-
-    result = prefetch_docling_models(
-        SimpleNamespace(model_cache_root=None, offline=True)
+    status, replies = _serve(
+        [json.dumps({**job, "start": start}) + "\n" for start in (1, 9)]
     )
 
-    assert result["ready"] is True
-    assert installation_options == [{"allow_install": True}]
-    assert b'"mode": "prefetch"' in captured[0]
+    assert status == 0
+    assert built == ["converter"]
+    assert replies == [
+        {"ok": True, "result": {"start": 1}},
+        {"ok": True, "result": {"start": 9}},
+    ]
+
+
+def test_serve_stops_after_the_first_failure(monkeypatch: pytest.MonkeyPatch) -> None:
+    _armed_session(monkeypatch, object())
+    monkeypatch.setattr(docling_worker, "_extract", lambda job, *_args: {})
+    job = {
+        "protocol": pdf_backend.WORKER_PROTOCOL,
+        "mode": "extract",
+        "source_path": "/tmp/x.pdf",
+        "start": 1,
+    }
+
+    # A job that differs from the verified mode needs a new worker.
+    status, replies = _serve(
+        [
+            json.dumps({**job, "offline": True}) + "\n",
+            json.dumps({**job, "offline": False}) + "\n",
+            json.dumps({**job, "offline": True}) + "\n",
+        ]
+    )
+    assert status == 5
+    assert [reply["ok"] for reply in replies] == [True, False]
+    assert replies[1]["code"] == 5
+
+    status, replies = _serve(["not json\n", json.dumps(job) + "\n"])
+    assert status == 2
+    assert len(replies) == 1
+
+
+def test_a_job_from_an_older_app_is_refused_as_infrastructure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # An app started before the worker file changed sends a job with no protocol.
+    # Exit status 2 stops its build; 3 would omit the source as unreadable.
+    built = _armed_session(monkeypatch, object())
+    legacy = {"mode": "extract", "source_path": "/tmp/x.pdf", "start": 1, "end": 8}
+
+    status, replies = _serve([json.dumps(legacy)])
+
+    assert status == 2
+    assert "Restart the app" in replies[0]["error"]
+    assert built == []
+    assert docling_worker.PROTOCOL == pdf_backend.WORKER_PROTOCOL
 
 
 def test_image_only_probe_splits_blank_raster_and_text_pages(tmp_path: Path) -> None:

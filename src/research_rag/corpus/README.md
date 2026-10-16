@@ -9,10 +9,10 @@ What is on disk, how it is read, and what a file's text says about itself.
 | `mobi_reader.py` | Offline, resource-bounded MOBI parsing, in-memory KF8 reconstruction, and bounded serialized-unit handoff; calls shared extraction helpers inside the worker without conversion output |
 | `text_normalization.py` | Reading text as it is read: compatibility characters, whitespace, sentence ends, the formatting glyphs a symbol face exposed as private use, and the ligatures a Mac-encoded text face exposed there |
 | `text_quality.py` | Whether a string is usable: corruption, scripts, the flags a chunk carries, whether a passage is scholarly apparatus, which paragraphs belong to a non-argument section, and whether a whole source is readable |
-| `pdf_backend.py` | The sole operational Docling PDF backend, its resource boundary, readiness, and active versus historical provenance |
+| `pdf_backend.py` | The sole operational Docling PDF backend, its resource boundary, readiness, active versus historical provenance, and the warm worker a build's page batches share |
 | `docling_env.py` | The managed, versioned Docling environment: lazy first-use install under a bounded lock and cgroup, spec/ABI completion manifest, atomic publish, and the isolated worker bootstrap |
-| `scoped_child.py` | One child confined to a transient systemd scope: its memory, swap, CPU, and wall limits, and the kill that retires the scope |
-| `docling_worker.py` | The bounded subprocess entry point; verifies its cgroup before importing Docling and never runs in the parent |
+| `scoped_child.py` | One child confined to a transient systemd scope: its memory, swap, CPU, and lifetime limits, and the kill that retires the scope |
+| `docling_worker.py` | The bounded subprocess entry point; verifies its cgroup before importing Docling, answers one JSON job per line, and never runs in the parent |
 | `docling_adapter.py` | Pure conversion of a Docling export into units: physical page provenance, retained structural labels, figure captions and specialised children, and furniture/index exclusion |
 
 ## Rules
@@ -20,7 +20,7 @@ What is on disk, how it is read, and what a file's text says about itself.
 - `text_normalization.py` and `text_quality.py` import only the standard library and each other. A module asking whether text is readable imports `text_quality` and no document reader.
 - `extraction.extract_mobi` requests worker-built units; the worker calls `extraction._mobi_units_from_text` for HTML parsing, metadata inference, and unit construction under the parser's resource boundary. MOBI text parts share EPUB HTML normalization, structural and furniture cleanup, and quality rules. `FEATURES.md` owns parser variants and safety limits; `STORAGE.md` owns logical-part locators.
 - `extraction.py` may not decide what a source is. That is `sources.py`'s.
-- `docling_adapter.py` imports neither Docling nor a PDF library; it reads a plain mapping. `docling_worker.py` imports Docling only inside its `run`, after the resource-boundary check, and the parent process imports neither.
+- `docling_adapter.py` imports neither Docling nor a PDF library; it reads a plain mapping. `docling_worker.py` imports Docling only inside its `Session`, after the resource-boundary check, and the parent process imports neither.
 - An offline Docling extraction never fetches and fails closed on a missing model; an online extraction may fetch one lazily on its first call, inside the verified worker. An online first use also builds the managed environment through `docling_env.py`; an offline run with no ready environment fails closed. `doctor --prefetch-models` provisions both ahead of an offline run.
 - The managed environment is separate from the app's own: its interpreter is run isolated (`-I`) with only the shipped worker pointed at from the app source, so the app's site-packages never reach it and Docling never enters the app's environment.
 - PyMuPDF supplies PDF page-count probing in the parent; it is not a text-extraction fallback. The Docling worker probes metadata and printed page labels inside its managed runtime.

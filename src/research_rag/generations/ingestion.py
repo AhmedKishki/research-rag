@@ -33,6 +33,7 @@ from ..corpus.extraction import (
     screen_source_units,
 )
 from ..corpus.pdf_backend import (
+    DoclingWorker,
     docling_backend_record_from_env,
     effective_maximum_unclean_percent,
     legacy_custom_backend_record,
@@ -260,6 +261,8 @@ class _Build:
     loaded_axes: set[str] = field(default_factory=set)
     units_cache: dict[str, list[dict[str, Any]]] = field(default_factory=dict)
     portable_vectors: np.ndarray[Any, np.dtype[np.float32]] | None = None
+    # The warm Docling worker this call's PDF batches share, until extraction ends.
+    docling_worker: DoclingWorker | None = None
 
     @property
     def chunk_size(self) -> int:
@@ -1599,23 +1602,34 @@ class IngestionWorkflow:
             "finalizing": self._finalize_build,
         }
         logged_phase: str | None = None
-        while True:
-            phase = str(checkpoint["phase"])
-            # One bounded line per phase entry, re-logged after a resume. No
-            # source or passage text is included.
-            if phase != logged_phase:
-                LOGGER.debug(
-                    "ingest: build %s phase %s", checkpoint.get("build_id"), phase
-                )
-                logged_phase = phase
-            handler = handlers.get(phase)
-            if handler is None:
-                raise _BuildCannotResume(
-                    f"Unsupported ingestion checkpoint phase: {phase}"
-                )
-            result = await handler(build)
-            if result is not None:
-                return result
+        try:
+            while True:
+                phase = str(checkpoint["phase"])
+                # One bounded line per phase entry, re-logged after a resume. No
+                # source or passage text is included.
+                if phase != logged_phase:
+                    LOGGER.debug(
+                        "ingest: build %s phase %s", checkpoint.get("build_id"), phase
+                    )
+                    logged_phase = phase
+                handler = handlers.get(phase)
+                if handler is None:
+                    raise _BuildCannotResume(
+                        f"Unsupported ingestion checkpoint phase: {phase}"
+                    )
+                result = await handler(build)
+                if result is not None:
+                    return result
+        finally:
+            await self._retire_docling_worker(build)
+
+    @staticmethod
+    async def _retire_docling_worker(build: _Build) -> None:
+        """Stop the build's warm Docling worker, if it started, and free its memory."""
+
+        worker, build.docling_worker = build.docling_worker, None
+        if worker is not None:
+            await _atomic_to_thread(worker.close)
 
     async def _hash_next_source(self, build: _Build) -> dict[str, Any] | None:
         """Hash the next source; once all are hashed, answer a no-op or start a build."""
@@ -1755,6 +1769,7 @@ class IngestionWorkflow:
         await self._load_axes(build, "units", "chunks")
         relative = build.next_source("extracted_source_paths")
         if relative is None:
+            await self._retire_docling_worker(build)
             return await self._enter_phase(build, "chunking")
         root = self._source_artifact_root(build.staging_root, relative)
         root.mkdir(parents=True, exist_ok=True)
@@ -2038,6 +2053,12 @@ class IngestionWorkflow:
                     build.checkpoint,
                 )
                 existing_document = None
+        if build.docling_worker is None:
+            build.docling_worker = DoclingWorker(
+                docling_env=docling_env,
+                offline=self.config.offline,
+                model_cache_root=self.config.model_cache_root,
+            )
         index = int(state["next_index"])
         end_index = min(index + page_batch_size, total)
         prepared_batch = await self._extract_or_skip(
@@ -2053,6 +2074,7 @@ class IngestionWorkflow:
             model_cache_root=self.config.model_cache_root,
             docling_env=docling_env,
             total_pages=total,
+            worker=build.docling_worker,
         )
         if prepared_batch is None:
             return self._pause_if_due(build)

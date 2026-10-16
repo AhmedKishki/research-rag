@@ -33,6 +33,7 @@ def _synthetic_docling_batch(
     model_cache_root: Path | None,
     docling_env: DoclingEnv,
     timeout: float = 180,
+    worker: Any = None,
 ) -> dict[str, Any]:
     """A Docling-shaped worker result built from a synthetic test PDF.
 
@@ -43,7 +44,7 @@ def _synthetic_docling_batch(
     shape is the one ``corpus/extraction.docling_pdf_batch`` consumes.
     """
 
-    del offline, model_cache_root, docling_env, timeout
+    del offline, model_cache_root, docling_env, timeout, worker
     pages: dict[str, list[dict[str, Any]]] = {}
     with pymupdf.open(source_path) as document:
         page_count = document.page_count

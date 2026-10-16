@@ -30,6 +30,12 @@ uv run python scripts/evaluate_retrieval.py --project /path/to/project --offline
   - A file handed to a peer process and rewritten before every use may skip the write barrier, because no later read can observe an earlier one.
 - **Bounded chunking batches.** Several extraction units share one chunker call, and the batch's output is one durable file in unit order. Chunk identities are identical either way. A crash redoes at most one batch.
   - Durability operations, not the chunker, set the cost of small batches: a file per unit spent most of the phase on fsyncs.
+- **Warm Docling worker.** One worker serves a build's PDF page batches, so Docling's import and layout-model load happen once per build rather than once per batch.
+  - With a worker per batch, an 8-page batch took about 12 seconds: 4 seconds to start the worker and 8 to convert.
+  - Layout-model inference sets the remaining cost: about 1 second per page at the shipped 2 threads and 200% CPU quota. Parsing, reading order, export, and the adapter take milliseconds.
+  - A warm worker and a worker per batch returned identical results for 64 pages of a 201-page book.
+  - Resident memory rose from 0.97 GB to about 1.25 GB over the first six batches of a 321-page book, then held for all 41 batches.
+  - A warm worker that fails is retired, and its batch runs again in a fresh worker. A batch's outcome is the one a worker of its own reports.
 - **Embedding batch size.** FastEmbed pads every sequence to the longest in its batch, and the runtime computes the padded positions.
   - One sequence per inference returns the same vectors as a large batch.
   - `dense.embedding_inference_batch_size` ships at one and is a throughput setting only.

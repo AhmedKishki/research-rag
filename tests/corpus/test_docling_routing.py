@@ -83,6 +83,7 @@ def _install_fake_worker(
         model_cache_root: Path | None,
         docling_env: DoclingEnv,
         timeout: float = 180,
+        worker: Any = None,
     ) -> dict[str, Any]:
         return _canned_result(full, start, end)
 
