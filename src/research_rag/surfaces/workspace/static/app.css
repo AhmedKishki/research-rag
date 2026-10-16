@@ -927,12 +927,14 @@ h3 {
 /* A locator names a place inside a source, and a section title or an identifier
    can be as long as a paragraph. The badge shrinks and wraps rather than holding
    its intrinsic width, because the card holding it clips what does not fit and a
-   clipped locator is a locator the reader cannot use. */
+   clipped locator is a locator the reader cannot use. It sets its own wrapping,
+   so a table cell's `nowrap` cannot widen a column past the counts beside it. */
 .locator-badge {
   flex: 0 1 auto;
   max-width: 100%;
   font-family: var(--font-mono);
   overflow-wrap: anywhere;
+  white-space: normal;
 }
 
 .format-badge {
