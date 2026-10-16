@@ -144,6 +144,7 @@ generations/<generation-id>/
 - Historical UltraRAG-compatible backend labels remain readable identifiers. Dependency retirement changes no chunk boundaries, index layout, source/chunk IDs, or policy fingerprints and does not trigger ingestion.
 - `source_files` records each source the generation holds, with the bytes its document was built from, and each excluded file. A source carried from bytes that have changed since keeps its old record, so `status` reports it modified; a source neither held nor excluded is absent, so `status` reports it added.
 - `build_metrics.source_selection` names the sources a build read or took out when it named them; a build of every source has none.
+- `build_metrics.phase_timings_seconds` gives each phase's wall time, checkpoint saves and reuse lookups included, through `finalizing`, which ends as the manifest is written. The ingest answer adds `activation`: validation and the pointer switch that follow it.
 - A PDF document's `extraction_backend` identifies the extractor that produced its retained text. A generation can contain unchanged legacy PDF artifacts beside new Docling artifacts; its configured backend describes new extraction, not a conversion of every document.
 - An EPUB or MOBI document's `reflowable_extraction_policy_version` records the HTML reading rules that produced its units. A record without the field was read under version 1.
 - New Docling units retain `docling_label`, `docling_content_layer`, and `docling_ref` beside their provenance. These guide pre-chunk filtering and are not quotation offsets.

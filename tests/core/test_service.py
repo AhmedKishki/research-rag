@@ -2672,6 +2672,49 @@ def test_no_change_ingest_is_noop_and_force_rebuilds(project: Path) -> None:
     asyncio.run(_assert_no_change_ingest_is_noop_and_force_rebuilds(project))
 
 
+def test_phase_timings_add_up_to_the_build(
+    project: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Checkpoint saves and the artifact lookup are slowed past everything else, so
+    a build that left either out of its timings would fall short of its own wall
+    time. The manifest is written before activation, which only the answer times."""
+
+    write_pdf(project / "sources" / "article.pdf", ["Stable research evidence."])
+    config = resolve_config(project, vanilla_executable=sys.executable)
+    service = ResearchService(  # type: ignore[arg-type]
+        config, FakeUltraRAG(), dense=FakeDenseBackend()
+    )
+    write_checkpoint = ResearchService._write_checkpoint
+    ensure_lookup = ingestion_module.ensure_artifact_lookup
+
+    def slow_checkpoint(root: Path, checkpoint: dict[str, Any]) -> None:
+        time.sleep(0.02)
+        write_checkpoint(root, checkpoint)
+
+    def slow_lookup(*args: Any) -> Any:
+        time.sleep(0.3)
+        return ensure_lookup(*args)
+
+    monkeypatch.setattr(
+        ResearchService, "_write_checkpoint", staticmethod(slow_checkpoint)
+    )
+    monkeypatch.setattr(ingestion_module, "ensure_artifact_lookup", slow_lookup)
+
+    started = time.perf_counter()
+    result = asyncio.run(service.ingest(chunk_size=50, chunk_overlap=10))
+    wall = time.perf_counter() - started
+
+    manifest = json.loads(
+        (Path(result["generation_root"]) / "manifest.json").read_text(encoding="utf-8")
+    )
+    recorded = manifest["build_metrics"]["phase_timings_seconds"]
+    answered = result["phase_timings_seconds"]
+    assert recorded["finalizing"] >= 0.3
+    assert "activation" not in recorded
+    assert answered == {**recorded, "activation": answered["activation"]}
+    assert sum(answered.values()) >= 0.8 * wall
+
+
 def test_ingest_defers_unclean_source_and_commits_clean_evidence(
     project: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
