@@ -1,9 +1,16 @@
 # research-rag
 
-- Search a project's PDFs, EPUBs, and MOBIs locally on CPU, without an account or hosted model service.
+research-rag is a research aid for students and researchers working with document corpora. It runs locally on CPU, without an account or hosted model service.
+
+- Build a searchable corpus from a project's PDFs, EPUBs, and MOBIs.
+- Find passages through combined lexical and semantic search.
 - Read passages with source locators, review bibliography, and exclude unwanted evidence in the browser.
-- Use the same knowledge base from the browser, command line, or an MCP agent.
+- Work with the same corpus through the browser workspace, command line, or MCP-connected agents.
 - Results are evidence, not generated answers or verified quotations.
+
+[Install](#install) · [Build a project](#build-a-project) · [Open the workspace](#open-the-workspace) · [Search statistics](#search-statistics) · [Connect an agent](#connect-an-agent) · [Features and limits](FEATURES.md)
+
+![Hybrid search over public-domain books, showing a query and a retrieved passage with its title, author, year, section locator, and reviewed tags](docs/screenshots/search.png)
 
 ## Requirements
 
@@ -80,6 +87,18 @@ research-rag --start-ui start --lan
 - Keep the laptop awake and its serving terminal open. If the laptop's network address changes, disable and enable LAN access on the laptop's Remote Access page and scan the new code.
 - MCP, CLI control, installation management, and the local project/client registry remain local-only. The laptop's Remote Access page enables or disables phone access immediately without restarting. `research-rag lan enable` and `research-rag lan disable` provide the same control in a terminal. The choice lasts only for this app run; starting without `--lan` returns to loopback-only serving.
 
+### Search statistics
+
+The **Stats** view shows search totals, response times, and how often each source and passage appeared in the top five or ranked first. Filter by time range and choose how many entries to show. The figures below come from a demo project of public-domain books, not from a performance benchmark.
+
+![Search statistics with source titles, passage locators, top-five and rank-one counts, and frequency bars](docs/screenshots/statistics.png)
+
+### Settings
+
+The **Config** view shows current values, environment overrides, and whether a change needs a new generation.
+
+![Language settings showing corpus language, BM25 stopwords, and environment overrides](docs/screenshots/settings.png)
+
 ## Connect an agent
 
 - Start the app, then copy a client entry from the **MCP** view or print it:
@@ -90,6 +109,8 @@ research-rag --project-root "/path/to/project" doctor --mcp-entry
 
 - HTTP clients use the app's `/mcp` endpoint. stdio clients use `research-rag mcp --project-name "My project"`.
   - The bridge names a registered project and does not start its app.
+
+![MCP panel showing attached clients and a copyable local agent endpoint](docs/screenshots/agent-connection.png)
 
 ## Updates
 
