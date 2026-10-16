@@ -313,61 +313,6 @@ code {
   overflow-wrap: anywhere;
 }
 
-/* The project selector sits at the top of the sidebar, above the views, because
-   changing the workspace is what a reader reaches for before choosing a view. It
-   spans the column rather than a flex basis, and is separated from the views so
-   the nav reads as one list. */
-.project-selector {
-  display: grid;
-  min-width: 0;
-  gap: var(--space-2xs);
-  padding: var(--space-xs);
-  border: 1px solid var(--border-subtle);
-  border-radius: var(--radius-md);
-  background: var(--bg-surface);
-}
-
-.project-selector-field {
-  display: grid;
-  gap: var(--space-3xs);
-}
-
-.project-selector select {
-  width: 100%;
-  min-height: var(--control-height);
-}
-
-.project-selector-note,
-.project-selector #project-selector-message {
-  margin: 0;
-  max-width: var(--measure);
-  line-height: var(--leading-normal);
-}
-
-#project-selector-message {
-  color: var(--warning);
-}
-
-.project-start-command {
-  margin: 0;
-  padding: var(--space-2xs) var(--space-xs);
-  border: 1px solid var(--border-subtle);
-  border-radius: var(--radius-sm);
-  background: var(--bg-input);
-  color: var(--text-primary);
-  font-family: var(--font-mono);
-  font-size: var(--text-xs);
-  line-height: var(--leading-normal);
-  overflow-wrap: anywhere;
-}
-
-.project-actions {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: var(--space-2xs);
-}
-
 .header-actions {
   display: flex;
   flex-wrap: wrap;
@@ -952,7 +897,6 @@ h3 {
 .source-tags,
 .result-actions,
 .header-actions,
-.project-actions,
 .dialog-actions,
 .context-citation {
   display: flex;

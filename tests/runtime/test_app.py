@@ -243,22 +243,77 @@ async def test_the_agent_surface_answers_on_the_workspaces_port(project: Path) -
     assert app.ready is False
 
 
-async def test_the_workspace_answers_on_the_same_port(project: Path) -> None:
-    """The workspace is a route on the app, not a process beside it."""
+async def test_each_workspace_stays_with_its_serving_project_and_port(
+    project: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Two live workspaces cannot discover, rebind to, or drive each other."""
+
+    from research_rag.runtime import account
 
     config = resolve_config(project, vanilla_executable=sys.executable)
     app = App(config, port=free_port())
     app.service = FakeService()  # type: ignore[assignment]
+    other_root = project.parent / "other-project"
+    (other_root / "sources").mkdir(parents=True)
+    other_config = resolve_config(other_root, vanilla_executable=sys.executable)
+    other: App | None = None
     await app.start()
     try:
-        await wait_until_ready(app)
-        code, body = await asyncio.to_thread(get, app.url, "/api/health")
-        assert code == 200
-        assert body["project_root"] == str(project)
-        code, body = await asyncio.to_thread(get, app.url, "/api/ui")
-        assert code == 200
-        assert body["capabilities"]["clients"] is True
+        other = App(other_config, port=free_port())
+        other.service = FakeService()  # type: ignore[assignment]
+        await other.start()
+        await asyncio.gather(wait_until_ready(app), wait_until_ready(other))
+        assert app.port != other.port
+
+        def forbidden(*args: Any, **kwargs: Any) -> Any:
+            pytest.fail("A workspace must not inspect account projects")
+
+        monkeypatch.setattr(account, "account_projects", forbidden)
+        for current, foreign in ((app, other), (other, app)):
+            code, body = await asyncio.to_thread(get, current.url, "/api/ui")
+            assert code == 200
+            assert body["capabilities"]["clients"] is True
+            assert "projects" not in body["capabilities"]
+            code, _ = await asyncio.to_thread(get, current.url, "/api/projects")
+            assert code == 404
+            code, entry = await asyncio.to_thread(get, current.url, "/api/agent-entry")
+            assert code == 200
+            assert current.config.project_name in entry["entry"]
+            assert foreign.config.project_name not in entry["entry"]
+            current.service.calls.clear()
+            code, _ = await asyncio.to_thread(
+                post_ordered,
+                current.url,
+                "/api/search",
+                {"query": "evidence"},
+                {"Content-Type": "application/json", "Origin": foreign.url},
+            )
+            assert code == 403
+            assert current.service.calls == []
+            code, _ = await asyncio.to_thread(
+                post_ordered,
+                current.url,
+                "/api/search",
+                {"query": "evidence", "project_root": str(foreign.config.project_root)},
+                {"Content-Type": "application/json", "Origin": current.url},
+            )
+            assert code == 400
+            assert current.service.calls == []
+            code, _ = await asyncio.to_thread(
+                post_ordered,
+                current.url,
+                "/api/search",
+                {"query": "evidence"},
+                {"Content-Type": "application/json", "Origin": current.url},
+            )
+            assert code == 200
+            assert [name for name, _ in current.service.calls] == ["search"]
+            code, body = await asyncio.to_thread(get, current.url, "/api/health")
+            assert code == 200
+            assert body["project_root"] == str(current.config.project_root)
     finally:
+        if other is not None:
+            await other.stop()
         await app.stop()
 
 

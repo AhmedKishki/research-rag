@@ -63,6 +63,7 @@ research-rag --project-root "/path/to/project" --start-ui start
 ```
 
 - Omit `--project-root` and `--project` to choose a registered project in the terminal. Use Up/Down and Enter; Escape or Ctrl-C cancels. This also applies to a bare `research-rag` invocation.
+- Each browser workspace stays within its project. Start another project from a separate terminal and open its own web address.
 - Keep the terminal open. Ctrl-C or closing it stops the app.
 - The workspace defaults to local-only access.
 

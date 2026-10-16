@@ -181,7 +181,7 @@ def _record_state(config: ResearchConfig, port: int) -> None:
     """Write the running state a second terminal reads to find this app.
 
     The app writes these for itself wherever it was started from, so `clients`,
-    `stop`, and the workspace's project selector see the same thing either way.
+    `stop`, and `projects` see the same thing either way.
     """
 
     state = config.state_root

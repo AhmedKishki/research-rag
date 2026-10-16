@@ -9,7 +9,7 @@ What each surface sends and must never send.
 - `test_workspace_ui.py`: page wiring and executable browser-script behavior.
   - Actual navigation targets, keyboard focus and Escape, the cleaned-text notice, the server's status sentence, and verbatim client-entry copying.
   - WCAG AA contrast of every text pair, and the light and dark schemes declaring the same tokens.
-  - Node-driven page-script tests: the header's build offer per corpus state, the rebuild that alone sends `force_recompute`, health conditions and their copied remedies, filter lists drawn only when they narrow a search, source pagination, the project picker, the generations table, and route restoration.
+  - Node-driven page-script tests: the header's build offer per corpus state, the rebuild that alone sends `force_recompute`, health conditions and their copied remedies, filter lists drawn only when they narrow a search, source pagination, navigation confined to the serving project, the generations table, and route restoration.
   - Update outcomes, declined-version tracking, safe release links, literal release-note rendering, and request-free decline/copy actions share the page harness.
 - `test_workspace_stats_browser.py`: statistics cards, history width, usage graphs, and horizontal overflow. Layout and overflow run at three viewport widths; the data the page drew runs at one, because it does not change with width. It skips when Chrome is unavailable and uses fixture data without starting an app.
 

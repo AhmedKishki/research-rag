@@ -268,7 +268,7 @@ def test_the_workspace_serves_the_page_and_read_apis(project: Path) -> None:
 
     assert health.json()["project_root"] == str(project)
     assert profile.json()["capabilities"] == dict.fromkeys(
-        ("clients", "projects", "agent_entry", "updates"), True
+        ("clients", "agent_entry", "updates"), True
     )
     # The quote rule is stated once in the README, not on every passage a browser renders.
     assert "not for direct quotation" not in json.dumps(profile.json()).lower()
@@ -557,7 +557,7 @@ def test_an_unknown_operation_is_refused(project: Path) -> None:
 def test_the_workspace_rejects_unsafe_writes_and_source_paths(project: Path) -> None:
     source = project / "sources" / "evidence.pdf"
     source.write_bytes(b"%PDF-1.4\n% test\n")
-    client, _fake = _client(project)
+    client, fake = _client(project)
     with client:
         served = client.get("/api/source-file?path=evidence.pdf")
         traversal = client.get("/api/source-file?path=../secret.pdf")
@@ -567,9 +567,20 @@ def test_the_workspace_rejects_unsafe_writes_and_source_paths(project: Path) -> 
             headers={"Origin": "https://example.com"},
             json={"query": "test"},
         )
+        other_workspace = client.post(
+            "/api/search",
+            headers={"Origin": "http://127.0.0.1:5052"},
+            json={"query": "test"},
+        )
         unknown = client.post(
             "/api/search",
             json={"query": "test", "unsupported": True},
+        )
+        assert fake.calls == []
+        same_origin = client.post(
+            "/api/search",
+            headers={"Origin": LOOPBACK_BASE_URL},
+            json={"query": "evidence"},
         )
 
     assert served.status_code == 200
@@ -577,7 +588,10 @@ def test_the_workspace_rejects_unsafe_writes_and_source_paths(project: Path) -> 
     assert traversal.status_code == 400
     assert non_json.status_code == 415
     assert cross_origin.status_code == 403
+    assert other_workspace.status_code == 403
     assert unknown.status_code == 400
+    assert same_origin.status_code == 200
+    assert [operation for operation, _ in fake.calls] == ["search"]
 
 
 def test_a_service_failure_becomes_a_safe_message(
@@ -836,45 +850,27 @@ def test_the_workspace_reads_the_settings_the_server_resolved(project: Path) -> 
     assert service.calls == [("settings_read", {})]
 
 
-def test_the_workspace_serves_the_account_record_not_the_served_project(
+def test_the_workspace_cannot_discover_account_projects(
     project: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     from research_rag.project import registry
-    from research_rag.runtime.account import account_projects
-    from research_rag.surfaces.ui import ResearchUIAdapter
+    from research_rag.runtime import account
+    from research_rag.surfaces.ui import ResearchUIAdapter, UIRequestError
 
-    other = project.parent / "other-project"
-    (other / "sources").mkdir(parents=True)
     config = resolve_config(project, vanilla_executable=sys.executable)
-    served = ResearchUIAdapter(config, FakeResearchService())  # type: ignore[arg-type]
-    registry.register(config.project_id, config.project_name, config.project_root)
-    other_config = resolve_config(other, vanilla_executable=sys.executable)
-    registry.register(other_config.project_id, other_config.project_name, other)
     service = FakeResearchService()
     adapter = ResearchUIAdapter(config, service)  # type: ignore[arg-type]
 
-    result = asyncio.run(adapter.call("list_projects", {}))
+    def forbidden(*args: Any, **kwargs: Any) -> Any:
+        pytest.fail("The browser must not inspect account projects")
 
-    assert [entry["project_name"] for entry in result["projects"]] == [
-        "other-project",
-        "research-project",
-    ]
-    assert result["current"] == config.project_name
-    assert result["message"] == ""
-    for entry in result["projects"]:
-        # A project whose app is not up has no URL.
-        assert entry["running"] is False
-        assert entry["url"] is None
-        assert entry["attached_clients"] == 0
-        assert Path(entry["project_root"]).is_absolute()
-    # The terminal's listing and the browser's are one answer.
-    assert [entry["project_name"] for entry in account_projects()["projects"]] == [
-        "other-project",
-        "research-project",
-    ]
-    # A project this app does not serve has no service to answer for it.
+    monkeypatch.setattr(account, "account_projects", forbidden)
+    monkeypatch.setattr(registry, "load", forbidden)
+    with pytest.raises(UIRequestError) as refusal:
+        asyncio.run(adapter.call("list_projects", {}))
+    assert refusal.value.status_code == 404
     assert service.calls == []
-    assert served.config.project_name == config.project_name
 
 
 def test_the_agent_entry_is_the_text_the_doctor_prints(project: Path) -> None:

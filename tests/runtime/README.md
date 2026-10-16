@@ -3,7 +3,7 @@
 The serving process and the commands that need no project.
 Retrieval uses the direct backend without a gateway or framework runtime.
 
-- `test_app.py`: a real app on a loopback port. The agent endpoint answers once mounted, the workspace and agent surface share one service, a control settings write is refused from another site or without a JSON body, a client is listed once and can be disconnected, and a dropped session never reaches the tools.
+- `test_app.py`: real apps on loopback ports. Each workspace address stays bound to its own project. The agent endpoint answers once mounted, the workspace and agent surface share one service, a control settings write is refused from another site or without a JSON body, a client is listed once and can be disconnected, and a dropped session never reaches the tools.
 - `test_attached_workspace.py`: the pid, port, and tty records, a bare call that never starts a second app, a detached app named with its remedy, a process with no terminal refused, an app stopped when its terminal is lost, and a stop sweep that signals only a provably owned process.
 - `test_doctor.py`: a default run reports every check and changes nothing. Model provisioning runs against stand-ins; the deprecated runtime repair flag remains a no-op online and offline. Each desktop entry is checked for its project, bridge, and timeout.
 - `test_installation.py`: `install`, `uninstall`, and `--force`. A foreign command or entry is left alone unless forced, an entry for one project is replaced by one serving every project, and a path with spaces survives.

@@ -144,26 +144,6 @@ class FakeAdapter:
                 "included": arguments.get("included"),
                 "reason": arguments.get("reason"),
             },
-            "list_projects": {
-                "projects": [
-                    {
-                        "project_name": "thesis",
-                        "project_root": "/project",
-                        "running": True,
-                        "url": "http://127.0.0.1:5051",
-                        "attached_clients": 1,
-                    },
-                    {
-                        "project_name": "archive",
-                        "project_root": "/other/archive",
-                        "running": False,
-                        "url": None,
-                        "attached_clients": 0,
-                    },
-                ],
-                "current": "thesis",
-                "message": "",
-            },
             "agent_entry": {
                 "entry": (
                     '{\n  "mcp": {\n    "example": {"type": "local", '
@@ -243,7 +223,7 @@ def test_remote_qr_encodes_workspace_url_from_policy(
         assert 'href="http://192.168.1.20:5051/next/"' in response.text
         assert "https://" not in response.text
         assert not client.get("/api/ui").json()["capabilities"]["clients"]
-        assert not client.get("/api/ui").json()["capabilities"]["projects"]
+        assert "projects" not in client.get("/api/ui").json()["capabilities"]
         assert client.get("/api/ui").json()["source_open_mode"] == "browser"
 
 
@@ -263,8 +243,9 @@ def test_lan_policy_enforces_workspace_routes_writes_and_originals(
         app, base_url="http://192.168.1.20:5051", client=("192.168.1.30", 50000)
     ) as client:
         assert client.get("/next/").status_code == 200
+        assert client.get("/api/projects").status_code == 404
+        assert adapter.calls == []
         for path in (
-            "/api/projects",
             "/api/clients",
             "/api/agent-entry",
             "/api/health",
@@ -362,7 +343,6 @@ def test_workspace_and_normalized_read_operations(tmp_path: Path) -> None:
     assert "applyProfile" in script.text
     assert set(profile.json()["capabilities"]) == {
         "clients",
-        "projects",
         "agent_entry",
         "updates",
     }
@@ -598,7 +578,7 @@ def test_only_the_local_panels_are_gated_by_the_profile(
     assert page.status_code == 200
     assert javascript.status_code == 200
     gated = set(re.findall(r'data-capability="([^"]+)"', page.text))
-    assert gated == {"clients", "projects", "agent_entry", "updates"}
+    assert gated == {"clients", "agent_entry", "updates"}
     # The language filter and the inventory that names the languages in a
     # project are one capability: a box a reader cannot fill from the status
     # beside it is a box that asks them to know the codes already listed.
@@ -700,15 +680,10 @@ def test_the_status_view_carries_the_generation_panel_and_its_dialog() -> None:
     assert "if (!generation.is_current)" in javascript
 
 
-def test_a_host_reports_the_projects_it_serves_and_its_own_client_entry(
+def test_a_host_has_no_project_listing_but_keeps_its_own_client_entry(
     tmp_path: Path,
 ) -> None:
-    """The selector and the entry are the host's own answer, forwarded whole.
-
-    Both take no argument this repository could add: which projects exist and
-    what a client's configuration says are the host's facts, so a route here that
-    named one would be a second place for it to be wrong.
-    """
+    """The browser can copy its client's entry, but cannot discover other projects."""
 
     adapter = FakeAdapter(_source(tmp_path))
     app = create_ui_app(adapter=adapter)
@@ -716,31 +691,12 @@ def test_a_host_reports_the_projects_it_serves_and_its_own_client_entry(
     with TestClient(
         app, base_url=LOOPBACK_BASE_URL, client=LOOPBACK_TEST_CLIENT
     ) as client:
-        assert client.get("/api/ui").json()["capabilities"]["projects"] is True
+        assert "projects" not in client.get("/api/ui").json()["capabilities"]
         projects = client.get("/api/projects")
+        assert adapter.calls == []
         entry = client.get("/api/agent-entry")
 
-    assert projects.status_code == 200
-    assert projects.json() == {
-        "projects": [
-            {
-                "project_name": "thesis",
-                "project_root": "/project",
-                "running": True,
-                "url": "http://127.0.0.1:5051",
-                "attached_clients": 1,
-            },
-            {
-                "project_name": "archive",
-                "project_root": "/other/archive",
-                "running": False,
-                "url": None,
-                "attached_clients": 0,
-            },
-        ],
-        "current": "thesis",
-        "message": "",
-    }
+    assert projects.status_code == 404
     # The entry is the host's text, and the text is what a client is handed: a
     # wrapper, a default, or a reformat here would be a client's configuration
     # this repository had edited.
@@ -751,8 +707,7 @@ def test_a_host_reports_the_projects_it_serves_and_its_own_client_entry(
             '"command": ["example", "mcp"]}\n  }\n}\n'
         )
     }
-    assert ("list_projects", {}) in adapter.calls
-    assert ("agent_entry", {}) in adapter.calls
+    assert adapter.calls == [("agent_entry", {})]
 
 
 def test_settings_are_read_and_written_through_the_adapter(tmp_path: Path) -> None:
