@@ -7,10 +7,6 @@ An item is done when the harness has produced its measurement and the validation
 * [arxiv.org/pdf/2602.07297](https://arxiv.org/pdf/2602.07297)
 * Hierarchical Navigable Small World and KNN
 
-## answers
-
-- [ ] **Ship `answer`.** Feature. `AGENTS.md` states its contract: white-box only, through DeepSeek, with the key in the account's credentials file. Build the renderer copy, the credentials file and `api-key`, the tool loop, the `answer` operation and command, and the workspace's Answer view.
-
 ## method
 
 * [ ] **Scalability of embeddings is questioned.** if most results are concentrated between 0.7 and 0.9 - there is not so much possibility to differentiate between good and better matches.

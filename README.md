@@ -6,9 +6,10 @@ research-rag is a research aid for students and researchers working with documen
 - Find passages through combined lexical and semantic search.
 - Read passages with source locators, review bibliography, and exclude unwanted evidence in the browser.
 - Work with the same corpus through the browser workspace, command line, or MCP-connected agents.
-- Results are evidence, not generated answers or verified quotations.
+- Search results are evidence, not verified quotations.
+- Ask for an answer that DeepSeek assembles from those passages, every sentence in their own wording.
 
-[Install](#install) · [Build a project](#build-a-project) · [Open the workspace](#open-the-workspace) · [Search statistics](#search-statistics) · [Connect an agent](#connect-an-agent) · [Features and limits](FEATURES.md)
+[Install](#install) · [Build a project](#build-a-project) · [Ask for an answer](#ask-for-an-answer) · [Open the workspace](#open-the-workspace) · [Search statistics](#search-statistics) · [Connect an agent](#connect-an-agent) · [Features and limits](FEATURES.md)
 
 ![Hybrid search over public-domain books, showing a query and a retrieved passage with its title, author, year, section locator, and reviewed tags](docs/screenshots/search.png)
 
@@ -16,6 +17,7 @@ research-rag is a research aid for students and researchers working with documen
 
 - Linux, Python 3.11 or 3.12, [uv](https://docs.astral.sh/uv/), and Git.
 - Internet access for initial model and tokenizer downloads. Cached installations can use `--offline`.
+- A DeepSeek API key, only for `answer`.
 - A systemd user session for PDF conversion.
 
 ## Install
@@ -62,6 +64,18 @@ research-rag --project-root "/path/to/project" search "How is evidence interpret
 
 - Search combines lexical and semantic retrieval with reranking.
 - Passages contain cleaned source text. Check the original at the locator before quoting.
+
+## Ask for an answer
+
+```bash
+research-rag api-key set
+research-rag --project-root "/path/to/project" answer "How is evidence interpreted?"
+```
+
+- `api-key set` asks for a DeepSeek API key without echoing it, and keeps it for this account.
+- DeepSeek searches the project and assembles the answer. Every sentence is the wording of a retrieved passage, cited by label, and a link no passage states shows as a gap.
+- The question and every passage retrieved are sent to DeepSeek. The answer says how many.
+- `--verbose` adds each sentence's provenance and the reasoning. The workspace's **Answer** button shows both, folded.
 
 ## Open the workspace
 
@@ -122,7 +136,7 @@ research-rag --project-root "/path/to/project" doctor --mcp-entry
 
 - `research-rag --help` or `research-rag help`: the command reference, without a project.
 - `research-rag COMMAND --help`: arguments and examples for one command.
-- `research-rag help TOPIC`: workflow guidance for `agents`, `filters`, or `settings`.
+- `research-rag help TOPIC`: workflow guidance for `agents`, `answers`, `filters`, or `settings`.
 - Extraction is text only. A PDF with a text layer is indexed as that text; a PDF with no text layer or a password is refused.
   - Scanned PDFs need OCR performed outside this app. Add the recognised copy to the sources directory and run `ingest`.
   - PDF cleaning repairs recoverable text and marks gaps where text is lost. Extraction and text-quality checks are described in [Features and limits](FEATURES.md).

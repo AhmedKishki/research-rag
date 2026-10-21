@@ -287,6 +287,27 @@ search.
 `doctor` reports which layer a value came from, and the file path it would be
 changed in.
 """,
+    "answers": """\
+`answer` asks DeepSeek to answer a question from this project. DeepSeek searches
+the selected generation as often as the question needs and submits a derivation:
+exact spans of the passages it retrieved and the operations applied to them. The
+app renders every sentence from that wording and marks a link no passage states as
+a gap. A derivation it cannot render goes back to DeepSeek, and an answer that
+never renders is reported without one.
+
+The question, the instructions, and every passage the answer retrieves are sent to
+the address in answers.base_url. The answer says how many passages went, and
+--verbose names each one beside the provenance and the reasoning. runtime.offline
+refuses an answer before anything is sent.
+
+`api-key set` keeps the key for this account in credentials.json beside the
+settings, readable by this account alone, and RESEARCH_RAG_DEEPSEEK_API_KEY
+overrides it. The key is not a setting: `config` does not print it and no project
+holds it. Every project on the account answers with it.
+
+The search filters bound every search an answer makes. answers.max_searches,
+answers.max_attempts, and answers.timeout_seconds bound what one answer may do.
+""",
     "agents": """\
 The app serves MCP at /mcp on its own port, so a client that can open a socket
 needs only the URL. A client that speaks only stdio uses `research-rag mcp

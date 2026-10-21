@@ -74,6 +74,19 @@ the retired gateway exposes no upstream tools.
     artifact revision a09144355adeed5f58c8ed011d209bf8ee5a1fec
     https://huggingface.co/Xenova/ms-marco-MiniLM-L-6-v2
 
+WHITE-BOX SYNTHESIS RENDERER
+
+src/research_rag/answers/render.py, pieces.py, ops.py, and checks.py copy the
+white-box-synthesis renderer by this project's author, licensed here under the
+Apache License, Version 2.0, with this repository's own code:
+
+    agent-skills, skills/white-box-synthesis/scripts
+    commit 7236e5a
+    https://github.com/AhmedKishki/agent-skills
+
+`answer` sends a question and retrieved passages to DeepSeek's API under the
+account holder's own agreement with DeepSeek. No DeepSeek code is included.
+
 DOCUMENT EXTRACTION COMPONENTS
 
 PDF page probing and EPUB section extraction depend on components that are

@@ -337,6 +337,12 @@ research-rag \
 - It holds one entry per project: `project_id`, `project_name`, `project_root`, and `registered_at`. It holds no corpus, index, review, or derived state.
 - Deleting the register is always safe, because `research-rag init` restores the names. A deleted project costs only its name in the file.
 - A damaged register is reported, not guessed at. An entry that is not a pointer is skipped, so one unreadable project cannot hide the rest.
+- The account's DeepSeek key is `~/.config/research-rag/credentials.json`, written with mode 0600.
+  - It holds `{"schema_version": 1, "deepseek": {"api_key": "…"}}`. A cleared key leaves `"deepseek": {}`.
+  - It is account state, not project state. Moving a project does not move it, and no project file names it.
+  - `RESEARCH_RAG_DEEPSEEK_API_KEY` overrides it.
+  - A hand edit is read at the next answer. A later `schema_version`, an unknown provider or field, or a value that is not a string is refused by name, without the key.
+  - `doctor` warns when other accounts can read it.
 
 ## Moving a project
 
