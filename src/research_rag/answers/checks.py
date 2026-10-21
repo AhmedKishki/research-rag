@@ -1,6 +1,6 @@
 """Check the argument chain, its links and the per-source checks.
 
-Copied from github.com/AhmedKishki/agent-skills @ 7236e5a,
+Copied from github.com/AhmedKishki/agent-skills @ 2a3a28f,
 `skills/white-box-synthesis/scripts/checks.py`. The copy is deliberate; carry a fix
 to both copies.
 """
@@ -55,6 +55,7 @@ def check_step(step, index, sources, allowed):
 
 def check_argument(derivation, sources):
     """Return steps by id after checking the chain reaches Z without loops."""
+    derivation.update(check_apparatus(derivation))
     steps = derivation.get("steps") or []
     ids = [s.get("id") for s in steps]
     if not steps or None in ids or len(set(ids)) != len(ids):

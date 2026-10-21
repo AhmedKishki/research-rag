@@ -1,6 +1,6 @@
 """Render a white-box derivation: Synthesis, References, Provenance, Reasoning.
 
-Copied from github.com/AhmedKishki/agent-skills @ 7236e5a,
+Copied from github.com/AhmedKishki/agent-skills @ 2a3a28f,
 `skills/white-box-synthesis/scripts/render.py`. The copy is deliberate: this app
 depends on no other project by its author. Carry a fix to both copies.
 
@@ -11,7 +11,7 @@ parts apart for a caller that lays them out itself.
 
 import re
 
-from .checks import check_apparatus, check_argument, check_sources, coverage
+from .checks import check_argument, check_sources, coverage
 from .ops import Rejected
 from .pieces import build_sentence, load_sources
 
@@ -47,7 +47,6 @@ def render_parts(d):
 
 
 def _render(d):
-    d = {**d, **check_apparatus(d)}
     sources = load_sources(d.get("sources"))
     steps = check_argument(d, sources)
     results = check_sources(d, sources)
