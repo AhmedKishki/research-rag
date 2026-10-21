@@ -7,13 +7,9 @@ An item is done when the harness has produced its measurement and the validation
 * [arxiv.org/pdf/2602.07297](https://arxiv.org/pdf/2602.07297)
 * Hierarchical Navigable Small World and KNN
 
-## generating
+## answers
 
-* [ ] White box LLM with API generation. The generate request goes to an LLM under the hood, and the LLM is responsible for assembling the evidence and formulating the reply. The LLM can have a prompt ready to help it know how to produce the output, how to best search, and so on. Additionally we can add a white box option, where the LLM must utilise the outputs from the RAG for the answer, and never invent a connection. Invented wording must enter via [AI authored: here is the ai authored content].
-* [ ] Use the white-box-synthesis: [github.com/AhmedKishki/draft-writing-skill/blob/main/references/tools/white-box-synthesis.md](https://github.com/AhmedKishki/draft-writing-skill/blob/main/references/tools/white-box-synthesis.md)
-* [ ] For white box synthesis, the user question, the RAG search results enter as synthesis materials. Note that the RAG may be queried as many times as desired to fomulate a solution. Also note that synthesis can not be mindless but must preserve causality, and the answer must follow a clear logical chain.
-* [ ] Alternatively a default black box synthesis can just give the LLM full authority
-* [ ] For all generation modes, citation to the sources is a must, and the citation must be inferred from the RAG outputs. Apply citations only when a source carries a strong claim.
+- [ ] **Ship `answer`.** Feature. `AGENTS.md` states its contract: white-box only, through DeepSeek, with the key in the account's credentials file. Build the renderer copy, the credentials file and `api-key`, the tool loop, the `answer` operation and command, and the workspace's Answer view.
 
 ## method
 
@@ -27,10 +23,6 @@ An item is done when the harness has produced its measurement and the validation
 
 ## agents
 
-- [ ] **Add answer generation as its own operation with an API.** Feature. It changes the contract and needs a choice before code. `ROADMAP.md` holds the design and the open questions.
-  - It is a separate endpoint, not an argument on `search`.
-  - The eight agent tools and the one resource do not grow for it.
-  - The evidence-only contract in `AGENTS.md` holds until the choice is made.
 - [ ] **Measure the payload difference the app makes.** Nothing states the lean and full search sizes. Measure them against the running app, including the workspace, agent, and control surfaces' own overhead.
 
 ## app

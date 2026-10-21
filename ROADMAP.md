@@ -13,21 +13,11 @@
 
 ## Answers
 
-- Add a generation stage, through a local model or a hosted API.
-  - Today `search` returns passages, sources, and locators, and the reader writes the answer.
-  - This is a change of contract, not a missing feature.
-- Requirements:
-  - A provider behind a setting, because the CPU-only, offline, credential-free rule does not survive a network call or a GPU.
-  - An explicit statement of what leaves the machine: the query and the passages it retrieved.
-  - A citation contract, so a generated sentence names the passages it rests on.
-- A local model keeps retrieval offline but needs a GPU and a serving surface.
-- Constraints:
-  - The evidence stays in the payload with its locators.
-  - A generation is labelled as one.
-  - A request for an answer without evidence is refused, not answered from the model's memory.
-- Decisions first:
-  - Whether the app keeps returning evidence only and offers generation as a separate operation.
-  - What an answer looks like when the reranker found nothing. A model writing from a thin result set writes from its own knowledge.
+- `answer` is white-box only, through DeepSeek. Each idea below widens that contract.
+- A local model keeps the corpus on the machine but needs a GPU and a serving surface.
+- AI-authored links: a per-request switch that lets the model fill a gap as a marked `⟦AI-AUTHORED⟧` link.
+- A black-box mode: free prose that cites passages. It needs its own citation check and its own refusal of a thin result set.
+- Saved answers: each answer and its derivation under the project, so it can be reopened and rendered again. A new on-disk layout.
 
 ## Citations and quotation
 
