@@ -17,8 +17,10 @@ from typing import Any
 from ..corpus.docling_env import resolve_docling_env
 from ..corpus.pdf_backend import docling_cache_has_models, docling_cache_root
 from ..project.config import ResearchConfig, project_command, runtime_root_claim_problem
+from ..project.credentials import credentials_exposed, credentials_path, deepseek_key
 from ..project.embeddings import resolve_embedding_model
 from ..project.model_cache import snapshot_is_complete, snapshot_path
+from ..project.policy import ResearchError
 from ..project.rerankers import RERANKER_REQUIRED_FILES, resolve_reranker_model
 from ..project.settings_document import RESTART_SETTINGS
 from ..project.state_files import LOCK_FILE, process_alive
@@ -408,6 +410,39 @@ def _settings_files_check(config: ResearchConfig) -> Check:
     )
 
 
+def _answers_check() -> Check:
+    """Where the DeepSeek key lives, never its value, and never by asking DeepSeek."""
+
+    path = credentials_path()
+    try:
+        _key, origin = deepseek_key()
+    except ResearchError as exc:
+        return Check(
+            "answers", WARN, f"Answers are off: {exc}", f"rm {shlex.quote(str(path))}"
+        )
+    if credentials_exposed():
+        return Check(
+            "answers",
+            WARN,
+            f"{path} holds the DeepSeek key and other accounts on this machine can "
+            "read it.",
+            f"chmod 600 {shlex.quote(str(path))}",
+        )
+    if origin is None:
+        return Check(
+            "answers",
+            OK,
+            "No DeepSeek key is set, so answer is off. Set one with: "
+            "research-rag api-key set",
+        )
+    return Check(
+        "answers",
+        OK,
+        f"A DeepSeek key is set in the {origin}, so answer sends a question and "
+        "the passages it retrieves to DeepSeek.",
+    )
+
+
 def _code_currency_check() -> Check:
     """The versions are read through their module, so an answer follows the module
     it patched.
@@ -554,6 +589,7 @@ def health_report(
             ),
             _lock_check(config),
             _settings_files_check(config),
+            _answers_check(),
             (
                 Check(
                     "generation",

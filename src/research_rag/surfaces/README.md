@@ -4,7 +4,7 @@ The three front ends, and the transport that reaches the app.
 
 | Module | Holds |
 |---|---|
-| `cli/` | The command line: `__init__.py` runs a command and prints its answer; `help.py` and `parser.py` say what commands exist; `projects.py` resolves the project; `corpus.py` forwards an operation to the app or the local service; `serving.py` starts and stops the app; `installation.py` installs and updates |
+| `cli/` | The command line: `__init__.py` runs a command and prints its answer; `help.py` and `parser.py` say what commands exist; `projects.py` resolves the project; `corpus.py` forwards an operation to the app or the local service; `serving.py` starts and stops the app; `installation.py` installs and updates; `credentials.py` keeps the account's DeepSeek key |
 | `mcp.py` | The agent surface: the tools and the resource, declared once |
 | `ui.py` | This app's adapter over the workspace: the shared operations, and the few only the workspace serves |
 | `workspace/` | The browser workspace itself: the Starlette host, the contracts it and an adapter share, and its assets |

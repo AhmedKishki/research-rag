@@ -206,6 +206,14 @@ HELP_GROUPS: tuple[tuple[str, tuple[tuple[str, str], ...]], ...] = (
                     "release answer."
                 ),
             ),
+            (
+                "api-key",
+                (
+                    "Set, clear, or report the account's DeepSeek key, which "
+                    "answer needs. set reads it from a hidden prompt or from "
+                    "stdin, never from the command line, and nothing prints it."
+                ),
+            ),
         ),
     ),
 )

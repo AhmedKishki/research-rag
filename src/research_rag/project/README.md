@@ -9,6 +9,7 @@ What one project is, how it is configured, and the names its state is found by.
 | `settings_document.py` | The settings a reader is shown, with their layers and costs |
 | `settings_layers/` | The merge that wins per key, the coercion every layer shares, and the path helpers |
 | `registry.py` | The account's record of which projects exist |
+| `credentials.py` | The account's DeepSeek key: `credentials.json`, owner-only, with the environment overriding it |
 | `embeddings.py` | The embedding model catalogue: each model's pinned revision, dimension, token limit, and languages |
 | `rerankers.py` | The reranker catalogue and each model's pinned revision |
 | `model_cache.py` | Where a pinned model snapshot lives in the cache, and whether it is complete |
@@ -29,3 +30,6 @@ What one project is, how it is configured, and the names its state is found by.
 - `normalized_paths.py` owns stored-path validation; import it rather than copy it.
 - `policy.py` imports no other folder, so a command that runs without the retrieval stack can reach the failure type and the policy versions.
   `tests/gates/test_lightweight_imports.py` guards those commands.
+- The DeepSeek key is a credential, not a setting: it never enters `SETTINGS`,
+  a `config.toml`, or a message. `credentials.py` names the file and the field
+  it refuses, never the value.

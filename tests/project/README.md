@@ -12,6 +12,7 @@ Settings, the account register, and the names only this app may claim.
   - Change cost comes from what a generation records, not the registry's label.
   - It drives `ResearchService.settings_read` and `settings_write`.
 - `test_registry.py`: `projects.json`. Resolution by name or id, a shared name refused, a prefix refused as a guess, a damaged record reported, and a non-pointer entry skipped.
+- `test_credentials.py`: the account's DeepSeek key. Written owner-only beside the settings, the environment wins, a key that cannot be a bearer token is refused, and a file this app cannot read is refused by field without repeating the key.
 - `test_embeddings.py`: every embedding model carries a download repository, pinned revision, dimension, token limit, and licence, and none claims a language it does not serve.
 - `test_rerankers.py`: every reranker is pinned to a revision, and an unknown name is refused with the choices.
 - `test_data_roots.py`: `USER_CONFIG_DIRECTORY`, `SETTINGS_ENVIRONMENT_PREFIX`, the model-cache default, the relocated-runtime record, and the pid, port, and tty file names, each against another product's name.

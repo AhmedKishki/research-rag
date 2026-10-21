@@ -60,3 +60,10 @@ backend = "auto"
 reranker_model = "Xenova/ms-marco-MiniLM-L-6-v2"
 embedding_inference_batch_size = 1
 exact_backend_chunk_limit = 200000
+
+[answers]
+model = "deepseek-flash"
+base_url = "https://api.deepseek.com"
+max_searches = 8
+max_attempts = 3
+timeout_seconds = 300

@@ -1056,4 +1056,23 @@ def _parser() -> argparse.ArgumentParser:
             "asked at most once, and any answer other than yes declines."
         ),
     )
+    credentials = add(
+        "api-key",
+        description=(
+            "Keep the account's DeepSeek key, which an answer sends with every "
+            "request. It lives in credentials.json beside the account's settings, "
+            "readable by this account alone, and RESEARCH_RAG_DEEPSEEK_API_KEY "
+            "overrides it. Every project on the account answers with it. Needs no "
+            "project."
+        ),
+    )
+    credentials.add_argument(
+        "action",
+        choices=("set", "clear", "status"),
+        help=(
+            "set reads the key from a hidden prompt, or one line of stdin when no "
+            "terminal is attached, so it never lands in shell history. clear "
+            "removes it. status says whether one is set and where, never what."
+        ),
+    )
     return parser

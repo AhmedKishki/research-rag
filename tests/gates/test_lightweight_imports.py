@@ -112,6 +112,7 @@ def _refused_a_missing_stack(completed: subprocess.CompletedProcess[str]) -> str
         ("config", ["--project-root", ".", "config"]),
         ("install", ["install", "--help"]),
         ("update", ["--offline", "update"]),
+        ("api-key", ["api-key", "status"]),
     ),
 )
 def test_a_command_that_only_reports_never_reaches_for_the_model_stack(
@@ -133,7 +134,7 @@ def test_a_command_that_only_reports_never_reaches_for_the_model_stack(
     )
     assert "Traceback" not in completed.stderr, completed.stderr
     assert "invalid choice" not in completed.stderr, completed.stderr
-    if name in {"--version", "help", "install"}:
+    if name in {"--version", "help", "install", "api-key"}:
         assert "STATUS=0" in completed.stderr, completed.stderr
 
 

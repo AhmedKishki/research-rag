@@ -36,6 +36,7 @@ from ...project.settings_document import describe_costs, describe_docs
 from ...project.settings_layers import describe_settings
 from ...runtime.control import ControlError, connect
 from .corpus import _operate, _operations
+from .credentials import _api_key
 from .help import HELP_TOPICS, _command_usage, _help_menu
 from .installation import _install, _update
 from .parser import _parser
@@ -138,13 +139,15 @@ async def _run(args: argparse.Namespace) -> CommandResult:
         return CommandResult(payload=await _projects(args))
     if args.command == "init":
         return CommandResult(payload=_init(args))
-    # Both of these are about the installation rather than a project, so they run
+    # These are about the installation or the account rather than a project, so they run
     # before one is resolved: resolving writes the project's portable state, and
     # a reader asking what is installed has no project yet.
     if args.command == "install":
         return CommandResult(payload=_install(args))
     if args.command == "update":
         return CommandResult(payload=await _update(args))
+    if args.command == "api-key":
+        return CommandResult(payload=_api_key(args))
     config = _resolve(args)
     apply_process_priority(config.nice)
     _configure_logging(config)

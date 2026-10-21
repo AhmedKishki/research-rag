@@ -7,6 +7,7 @@ subprocess creation and normal service scopes hold the direct lexical backend.
 from __future__ import annotations
 
 import asyncio
+import io
 import json
 import logging
 import os
@@ -1080,3 +1081,46 @@ def test_config_writes_the_project_file_through_the_workspace_check(
     assert config("--write", "chunking.size=200", "--confirm").payload["changed"] == [
         "chunking.size"
     ]
+
+
+def test_api_key_set_reads_the_key_from_stdin_and_never_prints_it(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    from research_rag.project.credentials import deepseek_key
+
+    monkeypatch.setattr("sys.stdin", io.StringIO("sk-from-stdin\n"))
+    cli_module.main(["api-key", "set"])
+    printed = capsys.readouterr().out
+
+    assert deepseek_key() == ("sk-from-stdin", "account file")
+    assert "sk-from-stdin" not in printed
+    assert json.loads(printed)["deepseek"]["set"] is True
+
+
+def test_api_key_status_and_clear_name_where_the_key_lives(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    from research_rag.project.credentials import credentials_path, set_deepseek_key
+
+    set_deepseek_key("sk-held")
+    cli_module.main(["api-key", "status"])
+    held = json.loads(capsys.readouterr().out)["deepseek"]
+    cli_module.main(["api-key", "clear"])
+    cleared = json.loads(capsys.readouterr().out)["deepseek"]
+    monkeypatch.setenv("RESEARCH_RAG_DEEPSEEK_API_KEY", "sk-environment")
+    cli_module.main(["api-key", "status"])
+    environment = json.loads(capsys.readouterr().out)["deepseek"]
+
+    assert held == {
+        "set": True,
+        "origin": "account file",
+        "path": str(credentials_path()),
+    }
+    assert cleared["set"] is False
+    assert environment["origin"] == "environment"
+
+
+def test_api_key_takes_no_key_on_the_command_line() -> None:
+    assert _args("api-key", "set").action == "set"
+    with pytest.raises(SystemExit):
+        _args("api-key", "set", "sk-in-shell-history")

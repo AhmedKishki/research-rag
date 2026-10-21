@@ -247,6 +247,9 @@ def _an_account_directory_of_this_run(
     monkeypatch.setenv("XDG_CONFIG_HOME", str(account / "config"))
     monkeypatch.setenv("XDG_DATA_HOME", str(account / "data"))
     monkeypatch.setenv("XDG_CACHE_HOME", str(real_cache))
+    # An account's DeepSeek key is account state too; a developer's own must not
+    # reach a test.
+    monkeypatch.delenv("RESEARCH_RAG_DEEPSEEK_API_KEY", raising=False)
 
 
 @pytest.fixture

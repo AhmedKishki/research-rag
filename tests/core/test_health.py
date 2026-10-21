@@ -19,6 +19,7 @@ import research_rag.core.health as health_module
 import research_rag.core.version as version_module
 from research_rag.core.health import Check, HealthReport, health_report
 from research_rag.project.config import ResearchConfig, resolve_config
+from research_rag.project.credentials import credentials_path, set_deepseek_key
 from research_rag.project.embeddings import (
     EMBEDDING_MODELS,
     EmbeddingModel,
@@ -40,6 +41,7 @@ EXPECTED_CHECKS = (
     "reranker_model",
     "lock",
     "settings_files",
+    "answers",
     "generation",
     "capacity",
     "code_currency",
@@ -618,3 +620,34 @@ def test_a_missing_docling_is_a_future_build_warning_never_a_blocker(
     assert check.state == "warn"
     assert "--prefetch-models" in (check.remedy_command or "")
     assert [entry["check"] for entry in report.blocked_by] == []
+
+
+def test_the_answer_key_is_reported_by_where_it_lives_never_by_its_value(
+    healthy: ResearchConfig,
+) -> None:
+    unset = _report(healthy).named("answers")
+    set_deepseek_key("sk-health")
+    present = _report(healthy).named("answers")
+
+    assert (unset.state, present.state) == ("ok", "ok")
+    assert "research-rag api-key set" in unset.reason
+    assert "account file" in present.reason
+    assert "sk-health" not in present.reason
+
+
+@pytest.mark.parametrize("problem", ["readable by others", "unreadable"])
+def test_a_credentials_file_to_fix_degrades_and_names_the_fix(
+    healthy: ResearchConfig, problem: str
+) -> None:
+    set_deepseek_key("sk-health")
+    path = credentials_path()
+    if problem == "readable by others":
+        path.chmod(0o644)
+    else:
+        path.write_text("{", encoding="utf-8")
+
+    check = _report(healthy).named("answers")
+
+    assert check.state == "warn"
+    assert str(path) in (check.remedy_command or "") + check.reason
+    assert "sk-health" not in check.reason
