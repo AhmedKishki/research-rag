@@ -2917,6 +2917,15 @@ textarea:disabled {
   background: var(--bg-card);
 }
 
+.answer-panel .result-summary {
+  margin-top: 0;
+}
+
+.answer-panel .answer-label {
+  color: var(--accent-ink);
+  font-weight: 600;
+}
+
 .answer-synthesis p {
   margin: 0 0 var(--space-sm);
   color: var(--text-primary);
