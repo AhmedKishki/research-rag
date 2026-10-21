@@ -63,6 +63,7 @@ exact_backend_chunk_limit = 200000
 
 [synthesis]
 model = "deepseek-flash"
+reasoning = "high"
 base_url = "https://api.deepseek.com"
 max_searches = 8
 max_attempts = 3

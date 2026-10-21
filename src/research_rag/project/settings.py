@@ -58,6 +58,9 @@ LEAN_TOOL_DETAIL = "lean"
 FULL_TOOL_DETAIL = "full"
 TOOL_DETAIL_MODES = (LEAN_TOOL_DETAIL, FULL_TOOL_DETAIL)
 LOG_LEVELS = ("debug", "info", "warn", "error")
+# DeepSeek's reasoning_effort levels. Its "medium" is an alias of "high", so it
+# is not offered as a level of its own; "none" turns thinking off.
+REASONING_LEVELS = ("none", "low", "high", "max")
 DENSE_BACKENDS = ("auto", "exact", "qdrant")
 # Which reader turns a PDF into extraction units. `docling` is the only
 # operational reader: it converts through a separate, resource-bounded worker.
@@ -834,6 +837,20 @@ SETTINGS: tuple[Setting, ...] = (
         env="RESEARCH_RAG_SYNTHESIS_MODEL",
     ),
     Setting(
+        key="synthesis.reasoning",
+        field="synthesis_reasoning",
+        kind=str,
+        layer="runtime",
+        doc=(
+            "How hard DeepSeek reasons before each turn of a synthesis: none turns "
+            "thinking off, and low, high, and max spend more time and tokens in "
+            "turn. A synthesis can choose its own level."
+        ),
+        choices=REASONING_LEVELS,
+        normalize_case=True,
+        env="RESEARCH_RAG_SYNTHESIS_REASONING",
+    ),
+    Setting(
         key="synthesis.base_url",
         field="synthesis_base_url",
         kind=str,
@@ -976,6 +993,7 @@ class EffectiveSettings:
     embedding_inference_batch_size: int
     exact_backend_chunk_limit: int
     synthesis_model: str
+    synthesis_reasoning: str
     synthesis_base_url: str
     synthesis_max_searches: int
     synthesis_max_attempts: int

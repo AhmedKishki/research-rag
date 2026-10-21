@@ -729,6 +729,9 @@ class StatusWorkflow:
             # of the project.
             report = await asyncio.to_thread(health_report, self.config, payload)
             payload.update(report.as_status_fields())
+            # The level a synthesis reasons at unless it chooses one, so the
+            # workspace's control starts where the settings stand.
+            payload["synthesis_reasoning"] = self.config.settings.synthesis_reasoning
             activity = self.synthesis_activity()  # type: ignore[attr-defined]
             if activity is not None:
                 payload["synthesis_activity"] = activity

@@ -12,6 +12,7 @@ from ...project.config import (
 )
 from ...project.policy import RETRIEVAL_METHODS
 from ...project.rerankers import RERANKER_MODEL_CHOICES
+from ...project.settings import REASONING_LEVELS
 from .help import _HELP_SUMMARIES, HELP_EXAMPLES, HELP_GROUPS, HELP_TOPICS
 from .projects import PROJECT_NAME_ENV
 
@@ -414,6 +415,17 @@ def _parser() -> argparse.ArgumentParser:
         "question",
         metavar="QUESTION",
         help="The question to answer. Quote it when it carries spaces.",
+    )
+    synthesis.add_argument(
+        "--reasoning",
+        choices=REASONING_LEVELS,
+        default=None,
+        type=str.lower,
+        help=(
+            "How hard DeepSeek reasons before each turn: none turns thinking off, "
+            "and low, high, and max spend more time and tokens in turn (default: "
+            "the synthesis.reasoning setting, high unless changed)."
+        ),
     )
     synthesis.add_argument(
         "--verbose",

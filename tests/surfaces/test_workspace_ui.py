@@ -2963,6 +2963,7 @@ renderSynthesis({
   sources: [
     { label: "S1", chunk_id: "c-1", source_id: "s-1", title: "Example Book", authors: ["Lee"], locator: { page: 3 } },
     { label: "S2", chunk_id: "c-2", source_id: "s-2", title: "Sample Study", authors: [], locator: { page: 9 } },
+    { label: "S9", chunk_id: "c-9", source_id: "s-9", title: "Left Out Entirely", authors: [], locator: { page: 1 } },
   ],
   sent: { endpoint: "https://api.deepseek.com", chunk_ids: ["c-1", "c-2", "c-3"] },
   usage: { prompt_tokens: 1200, completion_tokens: 300 },
@@ -2987,6 +2988,8 @@ result.failed = text(document.getElementById("synthesis-panel"));
 
     assert result["hidden"] is False
     assert "Prices rose" in result["text"]
+    # A source the derivation only left out is not a reference.
+    assert "Left Out Entirely" not in result["text"]
     assert "Sent to DeepSeek" in result["text"] and "3 passages" in result["text"]
     assert result["gap"].startswith("⟦GAP:")
     assert result["cite"].endswith("c-1")
@@ -3016,3 +3019,65 @@ def test_the_key_field_sends_the_key_once_and_never_shows_it(tmp_path: Path) -> 
         {"api_key": "sk-typed"},
     )
     assert result["cleared"] == ""
+
+
+def test_one_button_runs_the_mode_the_toggle_selects(tmp_path: Path) -> None:
+    result = _drive_page(
+        tmp_path,
+        """
+(async () => {
+  const query = document.getElementById("query");
+  query.value = "What is commodity fetishism?";
+  document.getElementById("top-k").value = "10";
+  document.getElementById("reasoning").value = "max";
+  const event = { preventDefault() {} };
+  setMode("search");
+  await search(event);
+  const button = document.getElementById("search-button");
+  result.searchLabel = button.textContent;
+  setMode("synthesise");
+  result.synthesiseLabel = button.textContent;
+  result.topKHidden = document.getElementById("top-k-field").hidden;
+  result.reasoningHidden = document.getElementById("reasoning-field").hidden;
+  await search(event);
+  result.requests = requests
+    .filter((entry) => entry.method === "POST")
+    .map((entry) => [entry.path, JSON.parse(entry.body)]);
+  setMode("search");
+  result.back = [button.textContent, document.getElementById("reasoning-field").hidden];
+})();
+""",
+    )
+
+    assert result["searchLabel"] == "Search"
+    assert result["synthesiseLabel"] == "Synthesise"
+    assert (result["topKHidden"], result["reasoningHidden"]) == (True, False)
+    assert [path for path, _ in result["requests"]] == [
+        "/api/search",
+        "/api/synthesise",
+    ]
+    assert result["requests"][1][1] == {
+        "question": "What is commodity fetishism?",
+        "reasoning": "max",
+    }
+    assert result["back"] == ["Search", True]
+
+
+def test_the_search_form_has_one_submit_and_a_mode_toggle() -> None:
+    page = (
+        Path(__file__).parents[2]
+        / "src/research_rag/surfaces/workspace/static/index.html"
+    ).read_text(encoding="utf-8")
+    form = page.split('<form id="search-form"', 1)[1].split("</form>", 1)[0]
+
+    assert form.count("<button") == 1
+    assert sorted(re.findall(r'name="mode" value="([a-z]+)"', form)) == [
+        "search",
+        "synthesise",
+    ]
+    assert re.findall(r'<option value="([a-z]+)"', form) == [
+        "none",
+        "low",
+        "high",
+        "max",
+    ]

@@ -2907,6 +2907,43 @@ textarea:disabled {
   .remote-content .button { min-height: 44px; }
 }
 
+/* Search and Synthesise share one button; the toggle beside it decides which runs. */
+.mode-toggle {
+  display: inline-flex;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+}
+
+.mode-option {
+  display: flex;
+  align-items: center;
+  cursor: pointer;
+}
+
+.mode-option input {
+  position: absolute;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.mode-option span {
+  padding: var(--space-2xs) var(--space-xs);
+  color: var(--text-secondary);
+  font-size: var(--text-sm);
+}
+
+.mode-option input:checked + span {
+  background: var(--accent-soft);
+  color: var(--accent-ink);
+  font-weight: 600;
+}
+
+.mode-option input:focus-visible + span {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
 /* A synthesis reads as prose, each citation goes to its passage,
    and a gap stands out as the open link it is. */
 .synthesis-panel {

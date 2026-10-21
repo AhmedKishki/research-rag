@@ -35,12 +35,14 @@ class DeepSeek:
         *,
         base_url: str,
         model: str,
+        reasoning: str,
         key: str,
         timeout_seconds: float,
         transport: httpx.AsyncBaseTransport | None = None,
     ) -> None:
         self.base_url = base_url.rstrip("/")
         self.model = model
+        self.reasoning = reasoning
         self._timeout = timeout_seconds
         self._client = httpx.AsyncClient(
             base_url=self.base_url,
@@ -63,7 +65,12 @@ class DeepSeek:
     async def complete(
         self, messages: list[dict[str, Any]], tools: list[dict[str, Any]]
     ) -> Turn:
-        body = {"model": self.model, "messages": messages, "tools": tools}
+        body = {
+            "model": self.model,
+            "reasoning_effort": self.reasoning,
+            "messages": messages,
+            "tools": tools,
+        }
         try:
             response = await self._client.post("/chat/completions", json=body)
         except httpx.TimeoutException:

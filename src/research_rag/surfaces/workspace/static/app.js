@@ -1,6 +1,7 @@
 "use strict";
 
 const state = {
+  mode: "search",
   profile: null,
   status: null,
   sources: [],
@@ -237,7 +238,6 @@ function setBusy(active, message = "Working…") {
     element.disabled = active;
   });
   byId("refresh-button").disabled = active;
-  byId("synthesise-button").disabled = active;
   byId("ingest-button").disabled = active;
   byId("rebuild-button").disabled = active;
   // A generation's Load and Remove are ordinary buttons rather than gated
@@ -305,7 +305,26 @@ function changeSummary(changes) {
 
 function syncSearchButton(status) {
   byId("search-button").disabled = !status.ready || state.busy;
-  byId("synthesise-button").disabled = !status.ready || state.busy;
+  // The reasoning control starts at the project's setting until a reader picks
+  // a level of their own.
+  const reasoning = byId("reasoning");
+  if (status.synthesis_reasoning && !reasoning.dataset.chosen) {
+    reasoning.value = status.synthesis_reasoning;
+  }
+}
+
+// Search and Synthesise share the question, the filters, and the one button; the
+// toggle decides which runs. A synthesis is never put in the address, so a reload
+// does not send the question to DeepSeek again.
+function setMode(mode) {
+  state.mode = mode === "synthesise" ? "synthesise" : "search";
+  const synthesising = state.mode === "synthesise";
+  byId("search-button").textContent = synthesising ? "Synthesise" : "Search";
+  byId("top-k-field").hidden = synthesising;
+  byId("reasoning-field").hidden = !synthesising;
+  byId("search-hint").textContent = synthesising
+    ? "Ctrl+Enter synthesises. The question and the passages it finds are sent to DeepSeek."
+    : "Ctrl+Enter searches from the query box.";
 }
 
 // What the server says a client is, beside the name it gave itself: the program
@@ -2327,6 +2346,10 @@ function clearResults() {
 // returns to the search before it and a reload runs this one again.
 async function search(event) {
   event.preventDefault();
+  if (state.mode === "synthesise") {
+    await runSynthesis();
+    return;
+  }
   const query = byId("query").value.trim();
   if (!query) return;
   state.searchedQuery = query;
@@ -2405,6 +2428,18 @@ function synthesisParagraph(text, sources) {
   return paragraph;
 }
 
+// The labels a synthesis cites, in the order it first cites them. A source the
+// derivation only left out is in the verbose payload, not in the references.
+function citedLabels(text) {
+  const labels = [];
+  for (const match of String(text || "").matchAll(/\[(S\d+(?:; S\d+)*)\]/g)) {
+    match[1].split("; ").forEach((label) => {
+      if (!labels.includes(label)) labels.push(label);
+    });
+  }
+  return labels;
+}
+
 function synthesisReference(source) {
   const item = node("li");
   item.append(node("span", "", `[${source.label}] `));
@@ -2439,6 +2474,7 @@ function renderSynthesis(payload) {
   const gaps = Number(payload.gaps || 0);
   const meta = [
     payload.model,
+    payload.reasoning_level ? `${payload.reasoning_level} reasoning` : null,
     payload.generated ? `${gaps} gap${gaps === 1 ? "" : "s"}` : null,
   ].filter(Boolean);
   header.append(node("div", "result-meta", meta.join(" · ")));
@@ -2458,7 +2494,10 @@ function renderSynthesis(payload) {
     );
     panel.append(node("h3", "", "References"));
     const references = node("ol", "synthesis-references");
-    (payload.sources || []).forEach((source) => references.append(synthesisReference(source)));
+    const bySource = new Map((payload.sources || []).map((source) => [source.label, source]));
+    citedLabels(payload.synthesis).forEach((label) => {
+      if (bySource.has(label)) references.append(synthesisReference(bySource.get(label)));
+    });
     panel.append(references);
     panel.append(synthesisFold("Provenance", payload.provenance));
     panel.append(synthesisFold("Reasoning", payload.reasoning));
@@ -2524,7 +2563,7 @@ function watchSynthesis() {
 async function runSynthesis() {
   const question = byId("query").value.trim();
   if (!question) return;
-  const payload = { question };
+  const payload = { question, reasoning: byId("reasoning").value };
   for (const [name, field] of FILTER_PARAMS) {
     const values = listValue(byId(field).value);
     if (values.length) payload[name] = values;
@@ -3967,7 +4006,12 @@ function initialize() {
     void copyText(command, "Update command copied.");
   });
   byId("search-form").addEventListener("submit", search);
-  byId("synthesise-button").addEventListener("click", runSynthesis);
+  document.querySelectorAll('input[name="mode"]').forEach((radio) => {
+    radio.addEventListener("change", () => setMode(radio.value));
+  });
+  byId("reasoning").addEventListener("change", (event) => {
+    event.target.dataset.chosen = "true";
+  });
   byId("api-key-form").addEventListener("submit", saveApiKey);
   byId("api-key-clear").addEventListener("click", clearApiKey);
   // The query box is multi-line, so Enter keeps adding a line and Ctrl+Enter

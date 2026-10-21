@@ -356,7 +356,11 @@ async def test_the_advertised_contract_and_handshake(project: Path) -> None:
     assert set(schemas["search"]["required"]) == {"query"}
     assert schemas["search"]["properties"]["top_k"]["minimum"] == 1
     assert schemas["search"]["properties"]["top_k"]["maximum"] == 50
-    assert tuple(schemas["synthesise"]["properties"]) == ("question", "verbose")
+    assert tuple(schemas["synthesise"]["properties"]) == (
+        "question",
+        "reasoning",
+        "verbose",
+    )
     assert set(schemas["synthesise"]["required"]) == {"question"}
     assert schemas["synthesise"]["properties"]["verbose"]["default"] is False
     assert set(schemas["get_passage"]["properties"]) == {"chunk_id"}
@@ -599,7 +603,12 @@ async def test_a_synthesis_shows_provenance_and_reasoning_only_when_verbose(
     service = _Service()
     async with _client(project, service) as client:
         answer = await client.call_tool(
-            "synthesise", {"question": "Why did it dissolve?", "verbose": verbose}
+            "synthesise",
+            {
+                "question": "Why did it dissolve?",
+                "reasoning": "low",
+                "verbose": verbose,
+            },
         )
 
     assert answer.data["synthesis"] == "It dissolved because its members left [S1]."
@@ -610,3 +619,4 @@ async def test_a_synthesis_shows_provenance_and_reasoning_only_when_verbose(
     )
     assert service.calls[0][0] == "synthesise"
     assert service.calls[0][1]["question"] == "Why did it dissolve?"
+    assert service.calls[0][1]["reasoning"] == "low"

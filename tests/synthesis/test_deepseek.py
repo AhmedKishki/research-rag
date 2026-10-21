@@ -24,6 +24,7 @@ def _client(handler: Any) -> DeepSeek:
     return DeepSeek(
         base_url="https://api.deepseek.test",
         model="deepseek-flash",
+        reasoning="max",
         key=KEY,
         timeout_seconds=30,
         transport=httpx.MockTransport(handler),
@@ -70,6 +71,7 @@ async def test_a_turn_sends_the_model_messages_and_tools_and_returns_the_message
     assert request.headers["authorization"] == f"Bearer {KEY}"
     body = json.loads(request.content)
     assert body["model"] == "deepseek-flash"
+    assert body["reasoning_effort"] == "max"
     assert body["messages"] == [{"role": "user", "content": "Why?"}]
     assert body["tools"] == TOOLS
     assert turn.message == message

@@ -410,6 +410,7 @@ async def _operate(
         payload = await operations.call(
             "synthesise",
             question=args.question,
+            reasoning=args.reasoning,
             categories_any=args.category,
             projects_any=args.project,
             keywords=args.keyword,

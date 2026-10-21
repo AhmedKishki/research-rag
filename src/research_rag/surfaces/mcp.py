@@ -13,7 +13,7 @@ from __future__ import annotations
 import json
 import logging
 from collections.abc import Awaitable, Callable, Mapping
-from typing import TYPE_CHECKING, Annotated, Any, TypeAlias, TypeVar
+from typing import TYPE_CHECKING, Annotated, Any, Literal, TypeAlias, TypeVar
 
 from fastmcp import FastMCP
 from fastmcp.exceptions import ToolError
@@ -52,6 +52,15 @@ SynthesisQuestion: TypeAlias = Annotated[
     str,
     Field(
         description="The question to answer from this project's corpus.", min_length=1
+    ),
+]
+SynthesisReasoning: TypeAlias = Annotated[
+    Literal["none", "low", "high", "max"] | None,
+    Field(
+        description=(
+            "How hard DeepSeek reasons: none is fastest, max most thorough. "
+            "Omit for the project's setting."
+        )
     ),
 ]
 SynthesisVerbose: TypeAlias = Annotated[
@@ -594,7 +603,9 @@ def create_mcp(
         }
     )
     async def synthesise(
-        question: SynthesisQuestion, verbose: SynthesisVerbose = False
+        question: SynthesisQuestion,
+        reasoning: SynthesisReasoning = None,
+        verbose: SynthesisVerbose = False,
     ) -> dict[str, Any]:
         """Synthesise an answer from this corpus, white-box, through DeepSeek.
 
@@ -606,7 +617,9 @@ def create_mcp(
         """
 
         result = await _service_call(
-            lambda instance: run(instance, "synthesise", {"question": question})
+            lambda instance: run(
+                instance, "synthesise", {"question": question, "reasoning": reasoning}
+            )
         )
         return result if verbose else _present("synthesise", result)
 

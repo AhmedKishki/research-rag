@@ -1143,7 +1143,14 @@ def test_synthesise_carries_its_filters_and_shows_the_rest_only_when_verbose(
     verbose: bool,
 ) -> None:
     operations = Operations()
-    argv = ["synthesise", "Why did it dissolve?", "--author", "Mensah"]
+    argv = [
+        "synthesise",
+        "Why did it dissolve?",
+        "--author",
+        "Mensah",
+        "--reasoning",
+        "low",
+    ]
 
     payload = asyncio.run(
         _operate(_args(*argv, *(["--verbose"] if verbose else [])), operations)
@@ -1154,6 +1161,7 @@ def test_synthesise_carries_its_filters_and_shows_the_rest_only_when_verbose(
         "synthesise",
         {
             "question": "Why did it dissolve?",
+            "reasoning": "low",
             "categories_any": None,
             "projects_any": None,
             "keywords": None,

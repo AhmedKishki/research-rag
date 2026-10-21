@@ -198,7 +198,11 @@ OPERATIONS: dict[str, Operation] = {
     ),
     # DeepSeek chooses each query; the reader's filters bound every one.
     "synthesise": Operation(
-        (Argument("question", str, required=True), *_texts(*_SEARCH_FILTERS)),
+        (
+            Argument("question", str, required=True),
+            Argument("reasoning", str),
+            *_texts(*_SEARCH_FILTERS),
+        ),
         lambda service, a: service.synthesise(a.pop("question"), **a),
     ),
     "credentials_read": Operation((), lambda service, _: service.credentials_read()),

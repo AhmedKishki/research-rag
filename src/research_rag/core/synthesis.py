@@ -14,6 +14,7 @@ from typing import TYPE_CHECKING, Any
 
 from ..project.credentials import clear_deepseek_key, deepseek_key, set_deepseek_key
 from ..project.policy import ResearchError
+from ..project.settings import REASONING_LEVELS
 from ..synthesis.deepseek import PROVIDER, DeepSeek
 from ..synthesis.loop import Limits, run_synthesis
 from .admission import as_caller
@@ -29,12 +30,19 @@ class SynthesisWorkflow:
     config: ResearchConfig
     _synthesis_activity: dict[str, Any] | None
 
-    async def synthesise(self, question: str, **filters: Any) -> dict[str, Any]:
+    async def synthesise(
+        self, question: str, *, reasoning: str | None = None, **filters: Any
+    ) -> dict[str, Any]:
         question = question.strip()
         if not question:
             raise ResearchError("question must not be empty")
         self.refresh_settings()  # type: ignore[attr-defined]
         settings = self.config.settings
+        level = (reasoning or settings.synthesis_reasoning).strip().casefold()
+        if level not in REASONING_LEVELS:
+            raise ResearchError(
+                f"reasoning must be none, low, high, or max, not {reasoning!r}"
+            )
         if settings.offline:
             raise ResearchError(
                 "runtime.offline is on, and a synthesis sends the question and the "
@@ -79,6 +87,7 @@ class SynthesisWorkflow:
             async with DeepSeek(
                 base_url=settings.synthesis_base_url,
                 model=settings.synthesis_model,
+                reasoning=level,
                 key=key,
                 timeout_seconds=settings.synthesis_timeout_seconds,
             ) as client:
@@ -98,7 +107,12 @@ class SynthesisWorkflow:
         finally:
             self._synthesis_activity = None
         result["sent"] = {"endpoint": settings.synthesis_base_url, **result["sent"]}
-        return {"provider": PROVIDER, "model": settings.synthesis_model, **result}
+        return {
+            "provider": PROVIDER,
+            "model": settings.synthesis_model,
+            "reasoning_level": level,
+            **result,
+        }
 
     def synthesis_activity(self) -> dict[str, Any] | None:
         """What a running synthesis is doing, for a reader waiting on it."""

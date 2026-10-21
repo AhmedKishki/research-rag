@@ -106,6 +106,7 @@ def test_an_argument_is_refused_by_name(name, payload, refusal) -> None:
 def test_a_synthesis_takes_a_question_and_the_search_filters() -> None:
     assert arguments("synthesise", {"question": "Why?", "titles_any": "Atlas"}) == {
         "question": "Why?",
+        "reasoning": None,
         "categories_any": None,
         "projects_any": None,
         "keywords": None,

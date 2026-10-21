@@ -152,18 +152,30 @@
             </label>
 
             <div class="search-controls">
-              <label class="compact-field" for="top-k">
+              <div class="mode-toggle" role="radiogroup" aria-label="Search or synthesise">
+                <label class="mode-option"><input type="radio" name="mode" value="search" checked><span>Search</span></label>
+                <label class="mode-option"><input type="radio" name="mode" value="synthesise"><span>Synthesise</span></label>
+              </div>
+
+              <label id="top-k-field" class="compact-field" for="top-k">
                 <span>Results</span>
                 <input id="top-k" name="top_k" type="number" min="1" max="50" step="1" value="10" inputmode="numeric" required>
+              </label>
+
+              <label id="reasoning-field" class="compact-field" for="reasoning" hidden>
+                <span>Reasoning</span>
+                <select id="reasoning" name="reasoning">
+                  <option value="none">None</option>
+                  <option value="low">Low</option>
+                  <option value="high" selected>High</option>
+                  <option value="max">Max</option>
+                </select>
               </label>
 
               <button id="search-button" class="button button-primary search-submit" type="submit">
                 Search
               </button>
-              <button id="synthesise-button" class="button search-submit" type="button">
-                Synthesise
-              </button>
-              <small class="search-hint">Ctrl+Enter searches from the query box. Synthesise sends the question and the passages it finds to DeepSeek.</small>
+              <small id="search-hint" class="search-hint">Ctrl+Enter searches from the query box.</small>
             </div>
           </form>
 
