@@ -221,6 +221,16 @@ CASES = [
         "same source",
     ),
     (
+        "a note given as one sentence renders",
+        lambda d: d.update(notes="One note."),
+        None,
+    ),
+    (
+        "a conflict given as an object",
+        lambda d: d.update(conflicts=[{"sentence": "S1 and S2 differ."}]),
+        "conflicts must be a list of sentences",
+    ),
+    (
         "end-stop on a question",
         lambda d: (
             d["sources"]["S2"].update(text="Did incomes fall by a third?"),
@@ -288,3 +298,16 @@ def test_the_worked_example_renders_the_four_parts_word_for_word() -> None:
 def test_a_malformed_derivation_is_refused_not_raised(malformed: Any) -> None:
     with pytest.raises(Rejected):
         render(malformed)
+
+
+def test_a_note_given_as_one_sentence_is_one_note() -> None:
+    d = copy.deepcopy(BASE)
+    d.update(
+        notes="All steps are part steps.", conflicts="S1 and S2 differ on the date."
+    )
+
+    reasoning = render_parts(d)["reasoning"]
+
+    assert reasoning.count("- Note:") == 1
+    assert "- Note: All steps are part steps." in reasoning
+    assert "  - S1 and S2 differ on the date." in reasoning

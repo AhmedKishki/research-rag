@@ -43,9 +43,9 @@ There are no AI-authored links. A link no source states is a gap.
 - `sentences`: the answer, in chain order. Each has `step` (an id, or a list of ids), optional `paragraph: true`, and `pieces`.
 - A piece is `{"source", "text", "ops"}`. `text` is an exact span of whole words from that source. Add `occurrence` when the span appears more than once.
 - `excluded`: sentences that bear on the question but were left out, each `{"source", "text", "reason"}`.
-- `conflicts`: sentences naming each conflict between sources and its effect on Z.
+- `conflicts`: a list of strings, each one sentence naming a conflict between sources and its effect on Z. `[]` when there is none.
 - `checks`: one `{"source", "result"}` for every label in `sources`. Check the whole answer against that source: each span says what the source says at its scope, no link credits it with a relation it does not state, and nothing goes against its claims.
-- `notes`: optional.
+- `notes`: optional, a list of strings, each one sentence.
 
 # Operations
 

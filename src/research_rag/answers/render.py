@@ -11,7 +11,7 @@ parts apart for a caller that lays them out itself.
 
 import re
 
-from .checks import check_argument, check_sources, coverage
+from .checks import check_apparatus, check_argument, check_sources, coverage
 from .ops import Rejected
 from .pieces import build_sentence, load_sources
 
@@ -47,6 +47,7 @@ def render_parts(d):
 
 
 def _render(d):
+    d = {**d, **check_apparatus(d)}
     sources = load_sources(d.get("sources"))
     steps = check_argument(d, sources)
     results = check_sources(d, sources)

@@ -85,6 +85,18 @@ def check_sources(derivation, sources):
     return results
 
 
+def check_apparatus(derivation):
+    """Return notes and conflicts as lists of sentences. One bare sentence is a list of one."""
+    out = {}
+    for field in ("notes", "conflicts"):
+        value = derivation.get(field) or []
+        value = [value] if isinstance(value, str) else value
+        if not isinstance(value, list) or not all(isinstance(v, str) for v in value):
+            raise Rejected(f"{field} must be a list of sentences.")
+        out[field] = value
+    return out
+
+
 def coverage(src, spans):
     """Count the source's sentences that a used span touches."""
     found = [
