@@ -48,13 +48,13 @@ SearchQuery: TypeAlias = Annotated[
         min_length=1,
     ),
 ]
-AnswerQuestion: TypeAlias = Annotated[
+SynthesisQuestion: TypeAlias = Annotated[
     str,
     Field(
         description="The question to answer from this project's corpus.", min_length=1
     ),
 ]
-AnswerVerbose: TypeAlias = Annotated[
+SynthesisVerbose: TypeAlias = Annotated[
     bool,
     Field(
         description=(
@@ -593,12 +593,12 @@ def create_mcp(
             "openWorldHint": True,
         }
     )
-    async def answer(
-        question: AnswerQuestion, verbose: AnswerVerbose = False
+    async def synthesise(
+        question: SynthesisQuestion, verbose: SynthesisVerbose = False
     ) -> dict[str, Any]:
-        """Answer from this corpus by white-box synthesis, through DeepSeek.
+        """Synthesise an answer from this corpus, white-box, through DeepSeek.
 
-        Call only when the user asks for a generated answer: it sends the question
+        Call only when the user asks for a synthesis: it sends the question
         and every retrieved passage to DeepSeek and spends the user's credit.
         Every sentence is the exact wording of a cited passage; a link no passage
         states is a `⟦GAP⟧`. Returns the synthesis and references; `verbose`
@@ -606,9 +606,9 @@ def create_mcp(
         """
 
         result = await _service_call(
-            lambda instance: run(instance, "answer", {"question": question})
+            lambda instance: run(instance, "synthesise", {"question": question})
         )
-        return result if verbose else _present("answer", result)
+        return result if verbose else _present("synthesise", result)
 
     @app.tool(
         annotations={

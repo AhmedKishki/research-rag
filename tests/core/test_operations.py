@@ -103,8 +103,8 @@ def test_an_argument_is_refused_by_name(name, payload, refusal) -> None:
         arguments(name, payload)
 
 
-def test_an_answer_takes_a_question_and_the_search_filters() -> None:
-    assert arguments("answer", {"question": "Why?", "titles_any": "Atlas"}) == {
+def test_a_synthesis_takes_a_question_and_the_search_filters() -> None:
+    assert arguments("synthesise", {"question": "Why?", "titles_any": "Atlas"}) == {
         "question": "Why?",
         "categories_any": None,
         "projects_any": None,
@@ -116,4 +116,4 @@ def test_an_answer_takes_a_question_and_the_search_filters() -> None:
         "exclude_source_ids": None,
     }
     with pytest.raises(ResearchError, match="question"):
-        arguments("answer", {"question": "  "})
+        arguments("synthesise", {"question": "  "})

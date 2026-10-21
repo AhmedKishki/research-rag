@@ -2,7 +2,7 @@
 
 ## Scope
 
-- Project-scoped PDF/EPUB/MOBI evidence retrieval, and white-box answers rendered only from that evidence.
+- Project-scoped PDF/EPUB/MOBI evidence retrieval, and white-box syntheses rendered only from that evidence.
 - One process and port per project, shared by the workspace, MCP, and CLI. Loopback is the default; explicit home-LAN mode exposes only the workspace.
 - Ship the project MCP surfaces, workspace, and settings layer here. Do not depend on a sibling project.
 
@@ -60,7 +60,7 @@
   - `corpus/docling_env.py` owns the separately installed Docling runtime pins.
   - Keep the `bm25s` non-ASCII stopword fork until upstream fixes round-tripping. Reject invalid lists promptly.
   - The Docling worker's page-label probe falls back to the physical page on `Page.get_label()`'s `IndexError`. Narrow the guard when upstream issue 5140 closes.
-- `answers/render.py`, `ops.py`, `pieces.py`, and `checks.py` copy the white-box-synthesis renderer from `AhmedKishki/agent-skills`. The copy is deliberate; carry a fix to both.
+- `synthesis/render.py`, `ops.py`, `pieces.py`, and `checks.py` copy the white-box-synthesis renderer from `AhmedKishki/agent-skills`. The copy is deliberate; carry a fix to both.
 
 ## Rules
 
@@ -89,17 +89,17 @@
   - A second `ingest` during a build is refused with the build's phase, not queued.
 - For an uninitialized project, open the session with only `status`, an `init` remedy in `blocked_by`, and no corpus tools.
   - `tests/surfaces/test_bridge.py` covers this surface in `surfaces/mcp.py`.
-- `answer` is the one operation that writes an answer. It is white-box only.
+- `synthesise` is the one operation that writes an answer. It is white-box only.
   - DeepSeek's API is its only provider. A set key enables it in every project on the account. `runtime.offline` refuses it.
   - The model reads the corpus through `search` and `get_passage` and submits a derivation. It never writes answer prose.
   - The app builds a derivation's sources from the passages the run retrieved. The model names a source by its label only.
-  - `answers/render.py` renders the derivation and rejects wording no source supplies. A rejected derivation returns to the model up to `answers.max_attempts` times and is never shown.
-  - A missing link is a `⟦GAP⟧`. No AI-authored link enters an answer.
+  - `synthesis/render.py` renders the derivation and rejects wording no source supplies. A rejected derivation returns to the model up to `synthesis.max_attempts` times and is never shown.
+  - A missing link is a `⟦GAP⟧`. No AI-authored link enters a synthesis.
   - When no source supplies a step, the result is `generated: false` and carries no model text.
   - The question, the system prompt, and every passage the run retrieves leave the machine. Each result names the endpoint and how many passages it sent; a verbose result names their `chunk_id`s.
-  - Answers are not saved.
-  - An agent's `answer` returns the synthesis, the references, and what was sent; `verbose` adds the rest. The command line answers the same way, and the workspace shows everything with provenance and reasoning collapsed.
-  - The agent instructions say to call `answer` only when the user asks for a generated answer.
+  - Syntheses are not saved.
+  - An agent's `synthesise` returns the synthesis, the references, and what was sent; `verbose` adds the rest. The command line synthesises the same way, and the workspace shows everything with provenance and reasoning collapsed.
+  - The agent instructions say to call `synthesise` only when the user asks for a synthesis.
 - No bundle operations exist. `export_bundle` and `import_bundle` are not available.
 
 ### The state a reader must be able to trust
@@ -161,7 +161,7 @@
 - Ship the workspace in `surfaces/workspace/` with its adapter, source authorization, and host.
   - Confine each browser workspace to its serving project and address. Never list, open, start, or switch to another project from the browser. The command line owns account-wide project selection.
   - A LAN viewer is not shown the panels that act on this machine. `ResearchUIAdapter._arguments` removes unsupported arguments.
-  - A LAN viewer may run `answer`. It never sees or sets the key.
+  - A LAN viewer may run `synthesise`. It never sees or sets the key.
   - Call `ResearchService`. Never read generation artifacts directly. Allowlisted originals are the sole file-serving exception.
 - Browser and control writes must be same-origin and JSON-only, with no caller-selected output paths. Control and MCP remain loopback-only.
   - Explicit home-LAN mode accepts private IPv4 peers and detected local-interface hosts. Remote browser writes require an exact validated HTTP origin; cross-site writes are refused.
@@ -234,7 +234,7 @@ Terminal ── control ───┘      ├── the workspace and its adapte
                                ├── agent tools and resources (surfaces/mcp.py)
                                ├── control API (runtime/control.py)
                                ├── client registry (runtime/app.py)
-                               ├── answers (answers/), the one call that leaves
+                               ├── synthesis (synthesis/), the one call that leaves
                                │   the machine: HTTPS to DeepSeek
                                │
                                └── the engine, using direct compatible chunk/BM25
@@ -244,7 +244,7 @@ Terminal ── control ───┘      ├── the workspace and its adapte
 ### Layer ownership
 
 - Each source folder owns one concern. Its boundaries are in its README, and its tests are in the matching test folder.
-- Folders are layered, lowest first: `storage`, `project`, `corpus`, `retrieval`, `generations`, `answers`, `core`, `runtime`, `surfaces`. A module imports from its own folder and the folders below it.
+- Folders are layered, lowest first: `storage`, `project`, `corpus`, `retrieval`, `generations`, `synthesis`, `core`, `runtime`, `surfaces`. A module imports from its own folder and the folders below it.
   - `runtime/app.py` composes the surfaces it serves, and `runtime/control.py` reads the workspace's write guard. These are the only upward imports.
   - `tests/gates/test_architecture.py` enforces the order.
 - Update test paths when renaming folders.

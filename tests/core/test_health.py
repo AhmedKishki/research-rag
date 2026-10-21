@@ -41,7 +41,7 @@ EXPECTED_CHECKS = (
     "reranker_model",
     "lock",
     "settings_files",
-    "answers",
+    "synthesis",
     "generation",
     "capacity",
     "code_currency",
@@ -622,12 +622,12 @@ def test_a_missing_docling_is_a_future_build_warning_never_a_blocker(
     assert [entry["check"] for entry in report.blocked_by] == []
 
 
-def test_the_answer_key_is_reported_by_where_it_lives_never_by_its_value(
+def test_the_synthesis_key_is_reported_by_where_it_lives_never_by_its_value(
     healthy: ResearchConfig,
 ) -> None:
-    unset = _report(healthy).named("answers")
+    unset = _report(healthy).named("synthesis")
     set_deepseek_key("sk-health")
-    present = _report(healthy).named("answers")
+    present = _report(healthy).named("synthesis")
 
     assert (unset.state, present.state) == ("ok", "ok")
     assert "research-rag api-key set" in unset.reason
@@ -646,7 +646,7 @@ def test_a_credentials_file_to_fix_degrades_and_names_the_fix(
     else:
         path.write_text("{", encoding="utf-8")
 
-    check = _report(healthy).named("answers")
+    check = _report(healthy).named("synthesis")
 
     assert check.state == "warn"
     assert str(path) in (check.remedy_command or "") + check.reason

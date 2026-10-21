@@ -397,25 +397,25 @@ def _parser() -> argparse.ArgumentParser:
     )
     _add_search_filters(find)
 
-    answer = add(
-        "answer",
+    synthesis = add(
+        "synthesise",
         description=(
             "Answer a question by white-box synthesis. DeepSeek searches this "
             "project as often as the question needs and submits a derivation; the "
             "app renders every sentence from the exact wording of a retrieved "
             "passage, and marks a link no passage states as a gap. The question "
             "and every passage retrieved are sent to DeepSeek with the account's "
-            "key, which `api-key` sets. The answer and its references print by "
+            "key, which `api-key` sets. The synthesis and its references print by "
             "default; --verbose adds the provenance, the reasoning, the sources, "
             "and what was sent."
         ),
     )
-    answer.add_argument(
+    synthesis.add_argument(
         "question",
         metavar="QUESTION",
         help="The question to answer. Quote it when it carries spaces.",
     )
-    answer.add_argument(
+    synthesis.add_argument(
         "--verbose",
         action="store_true",
         help=(
@@ -424,7 +424,7 @@ def _parser() -> argparse.ArgumentParser:
             "passage sent."
         ),
     )
-    _add_search_filters(answer)
+    _add_search_filters(synthesis)
 
     add(
         "sources",
@@ -1022,10 +1022,10 @@ def _parser() -> argparse.ArgumentParser:
     credentials = add(
         "api-key",
         description=(
-            "Keep the account's DeepSeek key, which an answer sends with every "
+            "Keep the account's DeepSeek key, which a synthesis sends with every "
             "request. It lives in credentials.json beside the account's settings, "
             "readable by this account alone, and RESEARCH_RAG_DEEPSEEK_API_KEY "
-            "overrides it. Every project on the account answers with it. Needs no "
+            "overrides it. Every project on the account synthesises with it. Needs no "
             "project."
         ),
     )
@@ -1042,7 +1042,7 @@ def _parser() -> argparse.ArgumentParser:
 
 
 def _add_search_filters(parser: argparse.ArgumentParser) -> None:
-    """The reviewed-metadata filters a search and an answer both take."""
+    """The reviewed-metadata filters a search and a synthesis both take."""
 
     filters = parser.add_argument_group(
         "Filters",

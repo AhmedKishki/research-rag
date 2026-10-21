@@ -15,7 +15,7 @@
 | BM25 index and search (`retriever_retriever_init`, `retriever_bm25_index`, `retriever_bm25_search`) | Compatible direct implementation | Supplies the lexical half on CPU through the pinned bm25s fork, with the same saved index layout and stopword semantics. |
 | FAISS, Qdrant, Milvus backends (`retriever_init(index_backend=...)`) | No | Replaced by FastEmbed CPU embeddings with an exact scan of portable vectors, or an embedded Qdrant collection. |
 | Reranking (`reranker_init`, `reranker_rerank`) | No | Replaced by a FastEmbed CPU cross-encoder. |
-| Prompt assembly and answer generation | No | Replaced by `answer`: DeepSeek submits a white-box derivation, and the app renders it from the retrieved wording. |
+| Prompt assembly and answer generation | No | Replaced by `synthesise`: DeepSeek submits a white-box derivation, and the app renders it from the retrieved wording. |
 | Routing, memory, benchmark, evaluation | No | Left out. They serve multi-corpus pipelines, conversational memory, and boxed-answer scoring. Retrieval quality is measured offline against a judged set. |
 | Web-search retrieval | No | Left out. It would send the query to a third party and mix outside text into project evidence. |
 | Web interface | No | Replaced by the bundled workspace. |
@@ -122,15 +122,15 @@
 | Copy-based portability | A project moves, is shared, or is archived with ordinary file tools. There is no export format. |
 | Editable project settings | The workspace and `research-rag config` show every effective value with its description, source layer, and change cost. A browser save and `research-rag config --write` write the project's `config.toml` through one service call, and a running app takes the value at once. A hand edit to any settings file reaches a running app at its next call. Both refuse a value a higher layer supplied, name the keys that force a rebuild before writing, and preserve keys they did not change. |
 
-### Answers
+### Synthesis
 
 | Feature | What it does |
 |---|---|
-| White-box answer | `answer` has DeepSeek search the selected generation as often as the question needs, within `answers.max_searches`, and submit a derivation. A copy of the white-box-synthesis renderer turns it into the answer: every sentence replays the exact wording of a retrieved passage, and a link no passage states shows as a `⟦GAP⟧`. A refused derivation goes back to the model up to `answers.max_attempts` times and is never shown. The model names passages by label, and the app supplies their text. |
-| What leaves the machine | The question, the system prompt, and every passage the answer's searches and reads return go to `answers.base_url`, which must be https. Each answer names the endpoint and how many passages it sent. `runtime.offline` refuses an answer before anything is sent. |
-| Three front ends | `research-rag answer` and the `answer` agent tool return the synthesis and its references, and `verbose` adds the provenance, the reasoning, each source with its chunk id, the searches, and token usage. The workspace's Answer button shows all of it, with the provenance and reasoning folded. A LAN viewer may answer. |
-| The DeepSeek key | `research-rag api-key set` and the workspace's Config view store it for the account in `credentials.json`, readable by its owner alone, and `RESEARCH_RAG_DEEPSEEK_API_KEY` overrides it. A set key enables answers in every project. Nothing prints the key, and a LAN viewer never sees or sets it. |
-| One answer at a time | A second answer while one runs is refused with its phase. `status` reports the running answer's phase, searches, and attempt, and its searches count under `answer`. |
+| White-box synthesis | `synthesise` has DeepSeek search the selected generation as often as the question needs, within `synthesis.max_searches`, and submit a derivation. A copy of the white-box-synthesis renderer turns it into the synthesis: every sentence replays the exact wording of a retrieved passage, and a link no passage states shows as a `⟦GAP⟧`. A refused derivation goes back to the model up to `synthesis.max_attempts` times and is never shown. The model names passages by label, and the app supplies their text. |
+| What leaves the machine | The question, the system prompt, and every passage the synthesis's searches and reads return go to `synthesis.base_url`, which must be https. Each synthesis names the endpoint and how many passages it sent. `runtime.offline` refuses a synthesis before anything is sent. |
+| Three front ends | `research-rag synthesise` and the `synthesise` agent tool return the synthesis and its references, and `verbose` adds the provenance, the reasoning, each source with its chunk id, the searches, and token usage. The workspace's Answer button shows all of it, with the provenance and reasoning folded. A LAN viewer may synthesise. |
+| The DeepSeek key | `research-rag api-key set` and the workspace's Config view store it for the account in `credentials.json`, readable by its owner alone, and `RESEARCH_RAG_DEEPSEEK_API_KEY` overrides it. A set key enables synthesis in every project. Nothing prints the key, and a LAN viewer never sees or sets it. |
+| One synthesis at a time | A second synthesis while one runs is refused with its phase. `status` reports the running synthesis's phase, searches, and attempt, and its searches count under `synthesise`. |
 
 ### Installation and updates
 
@@ -172,13 +172,13 @@
 
 ## What this app does not do
 
-- **No free-written answers.** An answer is white-box only: no black-box mode, no AI-authored link, no local model, and no saved answer. `ROADMAP.md` covers each.
+- **No free-written answers.** A synthesis is white-box only: no black-box mode, no AI-authored link, no local model, and no saved synthesis. `ROADMAP.md` covers each.
 - **No quote-safe transcripts.** Text is cleaned for retrieval, so a quotation comes from the original.
 - **MOBI limits.** DRM/encrypted books, dictionaries, Print Replica, PalmDOC-only containers, unsupported encodings, detected corruption in selected text or container structure, and files exceeding parser safety limits are refused. In a dual book, the unused rendition receives structural header, bounds, compression-identifier, and DRM checks only; its compressed body and KF8 reconstruction indexes are not validated. MOBI extraction requires Unix `resource` support. It does not decrypt, render images, or infer printed pages.
 - **No judgement of its own.** It never decides what is true and never excludes a source by itself. Duplicate and metadata decisions are reviewed and reversible.
 - **No OCR.** Extraction reads only an existing text layer. Scanned PDFs need OCR performed outside this app, and PDFs with no readable text and password-protected PDFs are refused. Docling runs with OCR and every enrichment disabled and fails closed when its resource boundary is missing.
 - **Conservative cleanup.** Docling labels can be wrong or incomplete. Unrecognised apparatus, references without strong bibliographic signals, and garbled text without detectable corruption can remain. Synthetic tests and the recorded comparisons do not establish cleanup precision or recall. Existing legacy PDF artifacts retain their original processing until explicitly reprocessed.
-- **No external service for evidence.** No hosted embedding API and no vector database server. Models download once and cache locally. Only `answer` calls an outside service, DeepSeek, with a key the account set.
+- **No external service for evidence.** No hosted embedding API and no vector database server. Models download once and cache locally. Only `synthesise` calls an outside service, DeepSeek, with a key the account set.
 - **No cached freshness.** A directory signature cannot see a source replaced in place, so a cached verdict could call a changed corpus current. `MEASUREMENTS.md` describes the one switch that skips the check, which no reader-facing surface may set.
 - **English by default.**
   - Extraction is language-neutral. The two language-dependent stages are settings.

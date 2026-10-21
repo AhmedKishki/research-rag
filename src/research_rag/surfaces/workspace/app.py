@@ -188,7 +188,7 @@ _OPERATION_ROUTES = (
     ("/api/status", "GET", "status"),
     ("/api/sources", "GET", "list_sources"),
     ("/api/search", "POST", "search"),
-    ("/api/answer", "POST", "answer"),
+    ("/api/synthesise", "POST", "synthesise"),
     ("/api/credentials", "GET", "credentials_read"),
     ("/api/credentials", "POST", "credentials_write"),
     ("/api/passages/{chunk_id:str}", "GET", "get_passage"),

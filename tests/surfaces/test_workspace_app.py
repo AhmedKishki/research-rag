@@ -63,7 +63,7 @@ class FakeAdapter:
                 "context": [],
             },
             "ingest": {"generation_id": "generation-2", "chunk_count": 2},
-            "answer": {"generated": True, "synthesis": "Evidence [S1]."},
+            "synthesise": {"generated": True, "synthesis": "Evidence [S1]."},
             "credentials_read": {"deepseek": {"set": False, "origin": None}},
             "credentials_write": {"deepseek": {"set": True, "origin": "account file"}},
             "set_source_metadata": {"requires_ingest": True},
@@ -275,10 +275,10 @@ def test_lan_policy_enforces_workspace_routes_writes_and_originals(
             ).status_code
             == 200
         )
-        # A LAN viewer may answer, and never sees or sets the key.
+        # A LAN viewer may synthesise, and never sees or sets the key.
         origin = {"Origin": "http://192.168.1.20:5051"}
         assert (
-            client.post("/api/answer", json={"question": "Why?"}, headers=origin)
+            client.post("/api/synthesise", json={"question": "Why?"}, headers=origin)
         ).status_code == 200
         assert client.get("/api/credentials").status_code == 403
         assert (
@@ -852,7 +852,7 @@ def test_a_chunk_inclusion_write_is_same_origin_and_json_only(
     assert not any(operation == "set_chunk_inclusion" for operation, _ in adapter.calls)
 
 
-def test_an_answer_and_the_key_are_forwarded_through_the_adapter(
+def test_a_synthesis_and_the_key_are_forwarded_through_the_adapter(
     tmp_path: Path,
 ) -> None:
     adapter = FakeAdapter(_source(tmp_path))
@@ -862,7 +862,7 @@ def test_an_answer_and_the_key_are_forwarded_through_the_adapter(
         app, base_url=LOOPBACK_BASE_URL, client=LOOPBACK_TEST_CLIENT
     ) as client:
         answered = client.post(
-            "/api/answer", json={"question": "Why?", "titles_any": ["Atlas"]}
+            "/api/synthesise", json={"question": "Why?", "titles_any": ["Atlas"]}
         )
         read = client.get("/api/credentials")
         written = client.post("/api/credentials", json={"api_key": "sk-workspace"})
@@ -871,7 +871,7 @@ def test_an_answer_and_the_key_are_forwarded_through_the_adapter(
     assert read.json() == {"deepseek": {"set": False, "origin": None}}
     assert written.json()["deepseek"]["set"] is True
     assert adapter.calls == [
-        ("answer", {"question": "Why?", "titles_any": ["Atlas"]}),
+        ("synthesise", {"question": "Why?", "titles_any": ["Atlas"]}),
         ("credentials_read", {}),
         ("credentials_write", {"api_key": "sk-workspace"}),
     ]

@@ -1,7 +1,7 @@
-"""`ResearchService.answer`: what it refuses before DeepSeek, and what it records.
+"""`ResearchService.synthesise`: what it refuses before DeepSeek, and what it records.
 
 DeepSeek is a scripted stand-in that reads the passages the app labelled and
-copies one whole, so the answer renders from the corpus this test built.
+copies one whole, so the synthesis renders from the corpus this test built.
 """
 
 from __future__ import annotations
@@ -14,12 +14,12 @@ from typing import Any, ClassVar, Self
 
 import pytest
 
-import research_rag.core.answers as answers_module
-from research_rag.answers.deepseek import Turn
+import research_rag.core.synthesis as synthesis_module
 from research_rag.core.service import ResearchService
 from research_rag.project.config import resolve_config
 from research_rag.project.credentials import set_deepseek_key
 from research_rag.project.policy import ResearchError
+from research_rag.synthesis.deepseek import Turn
 from tests.conftest import write_pdf
 from tests.service_helpers import make_service
 
@@ -44,7 +44,7 @@ def _call(name: str, arguments: dict[str, Any]) -> Turn:
 def _copy_the_first_passage(messages: list[dict[str, Any]]) -> Turn:
     found = json.loads(messages[-1]["content"])["passages"]
     if not found:
-        return _call("no_answer", {})
+        return _call("no_synthesis", {})
     first = found[0]
     return _call(
         "submit_derivation",
@@ -74,7 +74,7 @@ def _copy_the_first_passage(messages: list[dict[str, Any]]) -> Turn:
 
 
 class ScriptedDeepSeek:
-    """Stands in for `answers.deepseek.DeepSeek`: search once, then copy."""
+    """Stands in for `synthesis.deepseek.DeepSeek`: search once, then copy."""
 
     made: ClassVar[list[dict[str, Any]]] = []
     gate: ClassVar[asyncio.Event | None] = None
@@ -104,7 +104,7 @@ def deepseek(monkeypatch: pytest.MonkeyPatch) -> type[ScriptedDeepSeek]:
     ScriptedDeepSeek.made = []
     ScriptedDeepSeek.gate = None
     ScriptedDeepSeek.asked = None
-    monkeypatch.setattr(answers_module, "DeepSeek", ScriptedDeepSeek)
+    monkeypatch.setattr(synthesis_module, "DeepSeek", ScriptedDeepSeek)
     set_deepseek_key("sk-core")
     return ScriptedDeepSeek
 
@@ -120,12 +120,12 @@ async def _built(project: Path) -> ResearchService:
     return service
 
 
-def test_an_answer_renders_from_the_corpus_and_names_what_it_sent(
+def test_a_synthesis_renders_from_the_corpus_and_names_what_it_sent(
     project: Path, deepseek: type[ScriptedDeepSeek]
 ) -> None:
     async def scenario() -> tuple[dict[str, Any], dict[str, Any]]:
         service = await _built(project)
-        result = await service.answer("What is cobalt evidence about?")
+        result = await service.synthesise("What is cobalt evidence about?")
         return result, await service.search_history()
 
     result, history = asyncio.run(scenario())
@@ -137,15 +137,15 @@ def test_an_answer_renders_from_the_corpus_and_names_what_it_sent(
     assert result["sent"]["chunk_ids"] == [result["sources"][0]["chunk_id"]]
     assert deepseek.made[0]["key"] == "sk-core"
     assert "sk-core" not in json.dumps(result)
-    assert [entry["caller"] for entry in history["searches"]] == ["answer"]
+    assert [entry["caller"] for entry in history["searches"]] == ["synthesise"]
 
 
-def test_the_readers_filters_bound_every_search_an_answer_makes(
+def test_the_readers_filters_bound_every_search_a_synthesis_makes(
     project: Path, deepseek: type[ScriptedDeepSeek]
 ) -> None:
     async def scenario() -> dict[str, Any]:
         service = await _built(project)
-        return await service.answer("What is cobalt?", titles_any=["Another Book"])
+        return await service.synthesise("What is cobalt?", titles_any=["Another Book"])
 
     result = asyncio.run(scenario())
 
@@ -162,7 +162,7 @@ def test_the_readers_filters_bound_every_search_an_answer_makes(
         ("no generation", "ingest"),
     ],
 )
-def test_an_answer_is_refused_before_anything_leaves_the_machine(
+def test_a_synthesis_is_refused_before_anything_leaves_the_machine(
     project: Path,
     deepseek: type[ScriptedDeepSeek],
     condition: str,
@@ -182,30 +182,30 @@ def test_an_answer_is_refused_before_anything_leaves_the_machine(
             from research_rag.project.credentials import clear_deepseek_key
 
             clear_deepseek_key()
-        await service.answer("What is cobalt?")
+        await service.synthesise("What is cobalt?")
 
     with pytest.raises(ResearchError, match=named):
         asyncio.run(scenario())
     assert deepseek.made == []
 
 
-def test_a_second_answer_is_refused_while_one_runs_and_status_shows_its_phase(
+def test_a_second_synthesis_is_refused_while_one_runs_and_status_shows_its_phase(
     project: Path, deepseek: type[ScriptedDeepSeek]
 ) -> None:
     async def scenario() -> tuple[dict[str, Any], str, dict[str, Any]]:
         service = await _built(project)
         deepseek.gate = asyncio.Event()
         deepseek.asked = asyncio.Event()
-        first = asyncio.create_task(service.answer("What is cobalt?"))
+        first = asyncio.create_task(service.synthesise("What is cobalt?"))
         await deepseek.asked.wait()
         status = await service.status()
         with pytest.raises(ResearchError) as refused:
-            await service.answer("And labour?")
+            await service.synthesise("And labour?")
         deepseek.gate.set()
         return status, str(refused.value), await first
 
     status, refusal, first = asyncio.run(scenario())
 
-    assert status["answer_activity"]["phase"] == "asking"
+    assert status["synthesis_activity"]["phase"] == "asking"
     assert "already running" in refusal
     assert first["generated"] is True

@@ -410,7 +410,7 @@ def _settings_files_check(config: ResearchConfig) -> Check:
     )
 
 
-def _answers_check() -> Check:
+def _synthesis_check() -> Check:
     """Where the DeepSeek key lives, never its value, and never by asking DeepSeek."""
 
     path = credentials_path()
@@ -418,11 +418,14 @@ def _answers_check() -> Check:
         _key, origin = deepseek_key()
     except ResearchError as exc:
         return Check(
-            "answers", WARN, f"Answers are off: {exc}", f"rm {shlex.quote(str(path))}"
+            "synthesis",
+            WARN,
+            f"Synthesis is off: {exc}",
+            f"rm {shlex.quote(str(path))}",
         )
     if credentials_exposed():
         return Check(
-            "answers",
+            "synthesis",
             WARN,
             f"{path} holds the DeepSeek key and other accounts on this machine can "
             "read it.",
@@ -430,15 +433,15 @@ def _answers_check() -> Check:
         )
     if origin is None:
         return Check(
-            "answers",
+            "synthesis",
             OK,
-            "No DeepSeek key is set, so answer is off. Set one with: "
+            "No DeepSeek key is set, so synthesise is off. Set one with: "
             "research-rag api-key set",
         )
     return Check(
-        "answers",
+        "synthesis",
         OK,
-        f"A DeepSeek key is set in the {origin}, so answer sends a question and "
+        f"A DeepSeek key is set in the {origin}, so synthesise sends a question and "
         "the passages it retrieves to DeepSeek.",
     )
 
@@ -589,7 +592,7 @@ def health_report(
             ),
             _lock_check(config),
             _settings_files_check(config),
-            _answers_check(),
+            _synthesis_check(),
             (
                 Check(
                     "generation",

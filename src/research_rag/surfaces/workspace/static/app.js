@@ -237,7 +237,7 @@ function setBusy(active, message = "Working…") {
     element.disabled = active;
   });
   byId("refresh-button").disabled = active;
-  byId("answer-button").disabled = active;
+  byId("synthesise-button").disabled = active;
   byId("ingest-button").disabled = active;
   byId("rebuild-button").disabled = active;
   // A generation's Load and Remove are ordinary buttons rather than gated
@@ -305,7 +305,7 @@ function changeSummary(changes) {
 
 function syncSearchButton(status) {
   byId("search-button").disabled = !status.ready || state.busy;
-  byId("answer-button").disabled = !status.ready || state.busy;
+  byId("synthesise-button").disabled = !status.ready || state.busy;
 }
 
 // What the server says a client is, beside the name it gave itself: the program
@@ -2352,7 +2352,7 @@ async function runSearch() {
     if (values.length) payload[name] = values;
   }
   setBusy(true, "Searching evidence…");
-  byId("answer-panel").hidden = true;
+  byId("synthesis-panel").hidden = true;
   try {
     state.hits = new Map();
     renderResults(await api("/api/search", { method: "POST", body: JSON.stringify(payload) }));
@@ -2372,17 +2372,17 @@ async function runSearch() {
   }
 }
 
-// An answer's sentences are rendered from the passages it cites, so each
+// A synthesis's sentences are rendered from the passages it cites, so each
 // citation goes to its passage, and a gap is marked as the open link it is.
-const ANSWER_MARKS = /(\[S\d+(?:; S\d+)*\]|⟦[^⟧]*⟧)/;
+const SYNTHESIS_MARKS = /(\[S\d+(?:; S\d+)*\]|⟦[^⟧]*⟧)/;
 
-function answerParagraph(text, sources) {
+function synthesisParagraph(text, sources) {
   const labels = new Map((sources || []).map((source) => [source.label, source]));
   const paragraph = node("p");
-  for (const part of String(text).split(ANSWER_MARKS)) {
+  for (const part of String(text).split(SYNTHESIS_MARKS)) {
     if (!part) continue;
     if (part.startsWith("⟦")) {
-      paragraph.append(node("mark", "answer-gap", part));
+      paragraph.append(node("mark", "synthesis-gap", part));
       continue;
     }
     const cited = part.match(/^\[(S\d+(?:; S\d+)*)\]$/);
@@ -2396,7 +2396,7 @@ function answerParagraph(text, sources) {
       const source = labels.get(label);
       paragraph.append(
         source?.chunk_id
-          ? entityLink(label, passageHref(source.chunk_id), "answer-label")
+          ? entityLink(label, passageHref(source.chunk_id), "synthesis-label")
           : node("span", "", label),
       );
     });
@@ -2405,7 +2405,7 @@ function answerParagraph(text, sources) {
   return paragraph;
 }
 
-function answerReference(source) {
+function synthesisReference(source) {
   const item = node("li");
   item.append(node("span", "", `[${source.label}] `));
   const title = inlineText(source.title) || source.source_path || "Untitled source";
@@ -2421,21 +2421,21 @@ function answerReference(source) {
   return item;
 }
 
-// The provenance and the reasoning are what a reader checks an answer by, and
+// The provenance and the reasoning are what a reader checks a synthesis by, and
 // not what they read it for, so both start folded.
-function answerFold(title, text) {
+function synthesisFold(title, text) {
   const fold = node("details", "identifier-drawer");
   fold.append(node("summary", "drawer-note", title));
-  fold.append(node("pre", "answer-apparatus", text || ""));
+  fold.append(node("pre", "synthesis-apparatus", text || ""));
   return fold;
 }
 
-function renderAnswer(payload) {
-  const panel = byId("answer-panel");
+function renderSynthesis(payload) {
+  const panel = byId("synthesis-panel");
   panel.replaceChildren();
   panel.hidden = false;
   const header = node("div", "result-summary");
-  header.append(node("h2", "", payload.generated ? "Answer" : "No answer"));
+  header.append(node("h2", "", payload.generated ? "Synthesis" : "No synthesis"));
   const gaps = Number(payload.gaps || 0);
   const meta = [
     payload.model,
@@ -2444,10 +2444,10 @@ function renderAnswer(payload) {
   header.append(node("div", "result-meta", meta.join(" · ")));
   panel.append(header);
   if (payload.generated) {
-    const synthesis = node("div", "answer-synthesis");
+    const synthesis = node("div", "synthesis-synthesis");
     String(payload.synthesis || "")
       .split(/\n\n+/)
-      .forEach((text) => synthesis.append(answerParagraph(text, payload.sources)));
+      .forEach((text) => synthesis.append(synthesisParagraph(text, payload.sources)));
     panel.append(synthesis);
     panel.append(
       node(
@@ -2457,13 +2457,13 @@ function renderAnswer(payload) {
       ),
     );
     panel.append(node("h3", "", "References"));
-    const references = node("ol", "answer-references");
-    (payload.sources || []).forEach((source) => references.append(answerReference(source)));
+    const references = node("ol", "synthesis-references");
+    (payload.sources || []).forEach((source) => references.append(synthesisReference(source)));
     panel.append(references);
-    panel.append(answerFold("Provenance", payload.provenance));
-    panel.append(answerFold("Reasoning", payload.reasoning));
+    panel.append(synthesisFold("Provenance", payload.provenance));
+    panel.append(synthesisFold("Reasoning", payload.reasoning));
   } else {
-    panel.append(node("p", "no-records", payload.reason || "No answer was given."));
+    panel.append(node("p", "no-records", payload.reason || "No synthesis was given."));
   }
   const sent = payload.sent || {};
   const count = (sent.chunk_ids || []).length;
@@ -2480,7 +2480,7 @@ function renderAnswer(payload) {
   );
 }
 
-const ANSWER_PHASES = {
+const SYNTHESIS_PHASES = {
   starting: "Starting",
   asking: "Waiting for DeepSeek",
   searching: "Searching",
@@ -2488,10 +2488,10 @@ const ANSWER_PHASES = {
   rendering: "Checking the derivation",
 };
 
-function answerActivity(activity) {
+function synthesisActivity(activity) {
   const searches = (activity.searches || []).length;
   const parts = [
-    ANSWER_PHASES[activity.phase] || activity.phase,
+    SYNTHESIS_PHASES[activity.phase] || activity.phase,
     `${searches} search${searches === 1 ? "" : "es"}`,
   ];
   if (activity.attempt) parts.push(`attempt ${activity.attempt}`);
@@ -2499,18 +2499,18 @@ function answerActivity(activity) {
   return parts.join(" · ");
 }
 
-// An answer takes minutes, so the busy line follows what the app reports it is
+// A synthesis takes minutes, so the busy line follows what the app reports it is
 // doing rather than an animation alone.
-function watchAnswer() {
+function watchSynthesis() {
   let stopped = false;
   let timer = null;
   const tick = async () => {
     if (stopped) return;
     try {
-      const activity = (await api("/api/status"))?.answer_activity;
-      if (activity && !stopped) byId("busy-message").textContent = answerActivity(activity);
+      const activity = (await api("/api/status"))?.synthesis_activity;
+      if (activity && !stopped) byId("busy-message").textContent = synthesisActivity(activity);
     } catch (_error) {
-      // The answer's own request reports a failure.
+      // The synthesis's own request reports a failure.
     }
     if (!stopped) timer = window.setTimeout(tick, 2000);
   };
@@ -2521,7 +2521,7 @@ function watchAnswer() {
   };
 }
 
-async function runAnswer() {
+async function runSynthesis() {
   const question = byId("query").value.trim();
   if (!question) return;
   const payload = { question };
@@ -2531,10 +2531,10 @@ async function runAnswer() {
   }
   clearResults();
   byId("search-empty").hidden = true;
-  setBusy(true, "Answering through DeepSeek…");
-  const stop = watchAnswer();
+  setBusy(true, "Synthesising through DeepSeek…");
+  const stop = watchSynthesis();
   try {
-    renderAnswer(await api("/api/answer", { method: "POST", body: JSON.stringify(payload) }));
+    renderSynthesis(await api("/api/synthesise", { method: "POST", body: JSON.stringify(payload) }));
   } catch (error) {
     toast(error.message, true);
   } finally {
@@ -2548,7 +2548,7 @@ function renderApiKey(payload) {
   const key = payload?.deepseek || {};
   byId("api-key-status").textContent = key.set
     ? `A key is set, from the ${key.origin}.`
-    : "No key is set, so Answer is off.";
+    : "No key is set, so Synthesise is off.";
   byId("api-key-clear").disabled = !(key.set && key.origin === "account file");
 }
 
@@ -2561,7 +2561,7 @@ async function loadApiKey() {
   }
 }
 
-// The key goes to the server once and the field is emptied before the answer
+// The key goes to the server once and the field is emptied before the reply
 // comes back, so the page never holds or shows it after this call.
 async function saveApiKey(event) {
   event?.preventDefault();
@@ -3967,7 +3967,7 @@ function initialize() {
     void copyText(command, "Update command copied.");
   });
   byId("search-form").addEventListener("submit", search);
-  byId("answer-button").addEventListener("click", runAnswer);
+  byId("synthesise-button").addEventListener("click", runSynthesis);
   byId("api-key-form").addEventListener("submit", saveApiKey);
   byId("api-key-clear").addEventListener("click", clearApiKey);
   // The query box is multi-line, so Enter keeps adding a line and Ctrl+Enter

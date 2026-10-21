@@ -71,8 +71,8 @@ where = ["src"]
 [tool.setuptools.package-data]
 # The default settings ship with the package: the code has no copy of them.
 "research_rag.project" = ["default.toml"]
-# The system prompt an answer sends ships beside the loop that sends it.
-"research_rag.answers" = ["prompt.md"]
+# The system prompt a synthesis sends ships beside the loop that sends it.
+"research_rag.synthesis" = ["prompt.md"]
 # The workspace's assets ship with the code that serves them, so a wheel holds
 # one copy of each.
 "research_rag.surfaces.workspace" = ["static/*.css", "static/*.html", "static/*.js"]

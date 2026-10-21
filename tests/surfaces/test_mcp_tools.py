@@ -30,7 +30,7 @@ TOOLS = (
     "status",
     "ingest",
     "search",
-    "answer",
+    "synthesise",
     "find_source",
     "get_passage",
     "set_source_inclusion",
@@ -64,8 +64,8 @@ class _Service:
     async def search(self, query: str, **arguments: Any) -> dict[str, Any]:
         return self._record("search", {"query": query, **arguments})
 
-    async def answer(self, question: str, **filters: Any) -> dict[str, Any]:
-        return self._record("answer", {"question": question, **filters})
+    async def synthesise(self, question: str, **filters: Any) -> dict[str, Any]:
+        return self._record("synthesise", {"question": question, **filters})
 
     async def find_source(self, *, query: str, limit: int) -> dict[str, Any]:
         return self._record("find_source", {"query": query, "limit": limit})
@@ -112,7 +112,7 @@ class _Service:
             "message": "Everything is current.",
         }
 
-    def _answer(self, arguments: dict[str, Any]) -> dict[str, Any]:
+    def _synthesise(self, arguments: dict[str, Any]) -> dict[str, Any]:
         return {
             "provider": "deepseek",
             "model": "deepseek-flash",
@@ -356,9 +356,9 @@ async def test_the_advertised_contract_and_handshake(project: Path) -> None:
     assert set(schemas["search"]["required"]) == {"query"}
     assert schemas["search"]["properties"]["top_k"]["minimum"] == 1
     assert schemas["search"]["properties"]["top_k"]["maximum"] == 50
-    assert tuple(schemas["answer"]["properties"]) == ("question", "verbose")
-    assert set(schemas["answer"]["required"]) == {"question"}
-    assert schemas["answer"]["properties"]["verbose"]["default"] is False
+    assert tuple(schemas["synthesise"]["properties"]) == ("question", "verbose")
+    assert set(schemas["synthesise"]["required"]) == {"question"}
+    assert schemas["synthesise"]["properties"]["verbose"]["default"] is False
     assert set(schemas["get_passage"]["properties"]) == {"chunk_id"}
     assert set(schemas["find_source"]["properties"]) == {"query", "limit"}
 
@@ -398,13 +398,13 @@ async def test_the_advertised_contract_and_handshake(project: Path) -> None:
         assert tools[name].annotations.idempotentHint is True, name
     assert tools["set_source_metadata"].annotations.readOnlyHint is False
     assert tools["set_source_metadata"].annotations.destructiveHint is False
-    # An answer is the one call that reaches past this machine, and it writes
+    # A synthesis is the one call that reaches past this machine, and it writes
     # nothing a reader keeps.
-    assert tools["answer"].annotations.openWorldHint is True
-    assert tools["answer"].annotations.readOnlyHint is True
-    assert tools["answer"].annotations.idempotentHint is False
+    assert tools["synthesise"].annotations.openWorldHint is True
+    assert tools["synthesise"].annotations.readOnlyHint is True
+    assert tools["synthesise"].annotations.idempotentHint is False
     for tool in tools.values():
-        if tool.name != "answer":
+        if tool.name != "synthesise":
             assert tool.annotations.openWorldHint is False, tool.name
 
     lowered = instructions.lower()
@@ -593,13 +593,13 @@ async def test_an_unexpected_failure_is_logged_with_its_traceback(
 
 
 @pytest.mark.parametrize("verbose", [False, True])
-async def test_an_answer_shows_provenance_and_reasoning_only_when_verbose(
+async def test_a_synthesis_shows_provenance_and_reasoning_only_when_verbose(
     project: Path, verbose: bool
 ) -> None:
     service = _Service()
     async with _client(project, service) as client:
         answer = await client.call_tool(
-            "answer", {"question": "Why did it dissolve?", "verbose": verbose}
+            "synthesise", {"question": "Why did it dissolve?", "verbose": verbose}
         )
 
     assert answer.data["synthesis"] == "It dissolved because its members left [S1]."
@@ -608,5 +608,5 @@ async def test_an_answer_shows_provenance_and_reasoning_only_when_verbose(
         verbose,
         verbose,
     )
-    assert service.calls[0][0] == "answer"
+    assert service.calls[0][0] == "synthesise"
     assert service.calls[0][1]["question"] == "Why did it dissolve?"

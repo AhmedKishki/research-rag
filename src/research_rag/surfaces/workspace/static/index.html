@@ -160,10 +160,10 @@
               <button id="search-button" class="button button-primary search-submit" type="submit">
                 Search
               </button>
-              <button id="answer-button" class="button search-submit" type="button">
-                Answer
+              <button id="synthesise-button" class="button search-submit" type="button">
+                Synthesise
               </button>
-              <small class="search-hint">Ctrl+Enter searches from the query box. Answer sends the question and the passages it finds to DeepSeek.</small>
+              <small class="search-hint">Ctrl+Enter searches from the query box. Synthesise sends the question and the passages it finds to DeepSeek.</small>
             </div>
           </form>
 
@@ -294,7 +294,7 @@
             <div id="result-meta" class="result-meta"></div>
           </div>
 
-          <div id="answer-panel" class="answer-panel" aria-live="polite" hidden></div>
+          <div id="synthesis-panel" class="synthesis-panel" aria-live="polite" hidden></div>
 
           <p id="results-notice" class="semantic-text-label" hidden></p>
 
@@ -479,7 +479,7 @@
           <div id="credentials-panel" class="settings-panel" data-capability="credentials" hidden>
             <h2>DeepSeek API key</h2>
             <p class="form-note measure">
-              Answer sends the question and every passage it retrieves to DeepSeek with this key.
+              Synthesise sends the question and every passage it retrieves to DeepSeek with this key.
               It is kept for this account in credentials.json, readable by you alone, and is never shown here.
             </p>
             <p id="api-key-status" class="form-note">Not read yet.</p>

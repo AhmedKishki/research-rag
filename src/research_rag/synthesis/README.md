@@ -1,11 +1,11 @@
-# `answers`
+# `synthesis`
 
-The white-box answer: a derivation a model submits, rendered from exact source
+The white-box synthesis: a derivation a model submits, rendered from exact source
 wording or refused.
 
 | Module | Holds |
 |---|---|
-| `loop.py` | `run_answer`: the four tools DeepSeek answers through, the labelled passages, and the bounds on searches, attempts and time |
+| `loop.py` | `run_synthesis`: the four tools DeepSeek answers through, the labelled passages, and the bounds on searches, attempts and time |
 | `deepseek.py` | `DeepSeek`: one connection to the chat-completions endpoint, and a refusal named with its remedy |
 | `prompt.md` | The system prompt: the white-box procedure, condensed from the skill's references for these tools |
 | `render.py` | `render` and `render_parts`: the four parts of a reply, rendered from a derivation, or `Rejected` |

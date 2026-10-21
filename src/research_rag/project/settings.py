@@ -823,63 +823,63 @@ SETTINGS: tuple[Setting, ...] = (
         env="RESEARCH_RAG_EXACT_BACKEND_CHUNK_LIMIT",
     ),
     Setting(
-        key="answers.model",
-        field="answers_model",
+        key="synthesis.model",
+        field="synthesis_model",
         kind=str,
         layer="runtime",
         doc=(
-            "The DeepSeek model an answer asks. DeepSeek retires model names, so "
+            "The DeepSeek model a synthesis asks. DeepSeek retires model names, so "
             "this follows its model list rather than this app's release."
         ),
-        env="RESEARCH_RAG_ANSWERS_MODEL",
+        env="RESEARCH_RAG_SYNTHESIS_MODEL",
     ),
     Setting(
-        key="answers.base_url",
-        field="answers_base_url",
+        key="synthesis.base_url",
+        field="synthesis_base_url",
         kind=str,
         layer="runtime",
         doc=(
-            "Where an answer sends the question and the passages it retrieves. "
+            "Where a synthesis sends the question and the passages it retrieves. "
             "It must be https, because the key travels with every request."
         ),
-        env="RESEARCH_RAG_ANSWERS_BASE_URL",
+        env="RESEARCH_RAG_SYNTHESIS_BASE_URL",
     ),
     Setting(
-        key="answers.max_searches",
-        field="answers_max_searches",
+        key="synthesis.max_searches",
+        field="synthesis_max_searches",
         kind=int,
         layer="runtime",
         doc=(
-            "How many searches and passage reads one answer may run. Each sends "
+            "How many searches and passage reads one synthesis may run. Each sends "
             "its passages to DeepSeek, so it bounds both cost and what leaves the "
             "machine."
         ),
         minimum=1,
         maximum=32,
-        env="RESEARCH_RAG_ANSWERS_MAX_SEARCHES",
+        env="RESEARCH_RAG_SYNTHESIS_MAX_SEARCHES",
     ),
     Setting(
-        key="answers.max_attempts",
-        field="answers_max_attempts",
+        key="synthesis.max_attempts",
+        field="synthesis_max_attempts",
         kind=int,
         layer="runtime",
         doc=(
-            "How many derivations one answer may submit. A refused derivation goes "
-            "back to the model with the refusal; after the last, no answer is given."
+            "How many derivations one synthesis may submit. A refused derivation goes "
+            "back to the model with the refusal; after the last, no synthesis is given."
         ),
         minimum=1,
         maximum=10,
-        env="RESEARCH_RAG_ANSWERS_MAX_ATTEMPTS",
+        env="RESEARCH_RAG_SYNTHESIS_MAX_ATTEMPTS",
     ),
     Setting(
-        key="answers.timeout_seconds",
-        field="answers_timeout_seconds",
+        key="synthesis.timeout_seconds",
+        field="synthesis_timeout_seconds",
         kind=int,
         layer="runtime",
-        doc="How long one answer may run, searches and model turns together.",
+        doc="How long one synthesis may run, searches and model turns together.",
         minimum=10,
         maximum=3600,
-        env="RESEARCH_RAG_ANSWERS_TIMEOUT_SECONDS",
+        env="RESEARCH_RAG_SYNTHESIS_TIMEOUT_SECONDS",
     ),
 )
 
@@ -975,11 +975,11 @@ class EffectiveSettings:
     bm25_stopwords: str
     embedding_inference_batch_size: int
     exact_backend_chunk_limit: int
-    answers_model: str
-    answers_base_url: str
-    answers_max_searches: int
-    answers_max_attempts: int
-    answers_timeout_seconds: int
+    synthesis_model: str
+    synthesis_base_url: str
+    synthesis_max_searches: int
+    synthesis_max_attempts: int
+    synthesis_timeout_seconds: int
 
     @classmethod
     def from_values(cls, values: Mapping[str, Any]) -> EffectiveSettings:
@@ -1025,13 +1025,13 @@ class EffectiveSettings:
                 "chunking.overlap must be below chunking.size: "
                 f"{settings.chunk_overlap} >= {settings.chunk_size}"
             )
-        if not settings.answers_base_url.startswith("https://"):
+        if not settings.synthesis_base_url.startswith("https://"):
             raise SettingsError(
-                "answers.base_url must be an https address, because the DeepSeek key "
-                f"travels with every request: {settings.answers_base_url!r}"
+                "synthesis.base_url must be an https address, because the DeepSeek key "
+                f"travels with every request: {settings.synthesis_base_url!r}"
             )
-        if not settings.answers_model.strip():
-            raise SettingsError("answers.model must name a DeepSeek model")
+        if not settings.synthesis_model.strip():
+            raise SettingsError("synthesis.model must name a DeepSeek model")
         if settings.minimum_candidates > settings.maximum_candidates:
             raise SettingsError(
                 "retrieval.minimum_candidates must not exceed "

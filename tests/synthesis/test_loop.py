@@ -1,4 +1,4 @@
-"""One answer's tool loop, with a scripted model and an in-memory corpus.
+"""One synthesis's tool loop, with a scripted model and an in-memory corpus.
 
 The model is a list of turns, so each test states exactly what DeepSeek said
 and asserts what the app did with it.
@@ -14,9 +14,9 @@ from typing import Any
 
 import pytest
 
-from research_rag.answers.deepseek import Turn
-from research_rag.answers.loop import Limits, run_answer
 from research_rag.project.policy import ResearchError
+from research_rag.synthesis.deepseek import Turn
+from research_rag.synthesis.loop import Limits, run_synthesis
 
 QUESTION = "Why did the cooperative dissolve?"
 HITS = {
@@ -160,10 +160,10 @@ class Model:
         return [json.loads(m["content"]) for m in last if m["role"] == "tool"]
 
 
-async def _answer(model: Model, corpus: Corpus | None = None, **limits: Any) -> Any:
+async def _synthesise(model: Model, corpus: Corpus | None = None, **limits: Any) -> Any:
     corpus = corpus or Corpus()
     reported: list[tuple[str, dict[str, Any]]] = []
-    result = await run_answer(
+    result = await run_synthesis(
         QUESTION,
         search=corpus.search,
         read=corpus.read,
@@ -174,12 +174,12 @@ async def _answer(model: Model, corpus: Corpus | None = None, **limits: Any) -> 
     return result, reported
 
 
-def test_a_derivation_from_retrieved_passages_renders_the_answer() -> None:
+def test_a_derivation_from_retrieved_passages_renders_the_synthesis() -> None:
     model = Model(
         _call("search", {"query": "cooperative dissolved"}), _submit(DERIVATION)
     )
 
-    result, reported = asyncio.run(_answer(model))
+    result, reported = asyncio.run(_synthesise(model))
 
     assert result["generated"] is True
     assert result["synthesis"] == (
@@ -215,7 +215,7 @@ def test_source_text_comes_from_the_retrieval_never_from_the_model() -> None:
         _submit(DERIVATION, 2),
     )
 
-    result, _ = asyncio.run(_answer(model))
+    result, _ = asyncio.run(_synthesise(model))
 
     (refusal,) = model.tool_results()[-1:]
     assert "not found" in refusal["refused"]
@@ -249,18 +249,18 @@ def test_a_derivation_outside_the_white_box_is_refused_to_the_model(
         _call("search", {"query": "cooperative"}), _submit(bad), _submit(bad, 2)
     )
 
-    result, _ = asyncio.run(_answer(model))
+    result, _ = asyncio.run(_synthesise(model))
 
     assert named in model.tool_results()[-1]["refused"]
     assert result["generated"] is False
 
 
-def test_attempts_exhausted_give_no_answer_and_no_model_text() -> None:
+def test_attempts_exhausted_give_no_synthesis_and_no_model_text() -> None:
     bad = copy.deepcopy(DERIVATION)
     bad["sentences"][0]["pieces"][0]["text"] = PROSE
     model = Model(_call("search", {"query": "q"}), _submit(bad), _submit(bad, 2))
 
-    result, _ = asyncio.run(_answer(model))
+    result, _ = asyncio.run(_synthesise(model))
 
     assert result["generated"] is False
     assert "2 attempts" in result["reason"]
@@ -274,23 +274,25 @@ def test_searches_beyond_the_bound_are_refused_to_the_model() -> None:
     model = Model(
         _call("search", {"query": "first"}),
         _call("search", {"query": "second"}, 2),
-        _call("no_answer", {}),
+        _call("no_synthesis", {}),
     )
 
-    result, _ = asyncio.run(_answer(model, corpus, max_searches=1))
+    result, _ = asyncio.run(_synthesise(model, corpus, max_searches=1))
 
     assert corpus.queries == [("first", 8)]
     assert "searches" in model.tool_results()[-1]["refused"]
     assert result["generated"] is False
 
 
-def test_no_answer_ends_without_an_answer() -> None:
-    model = Model(_call("search", {"query": "q"}), _call("no_answer", {}))
+def test_no_synthesis_ends_without_one() -> None:
+    model = Model(_call("search", {"query": "q"}), _call("no_synthesis", {}))
 
-    result, _ = asyncio.run(_answer(model))
+    result, _ = asyncio.run(_synthesise(model))
 
     assert result["generated"] is False
-    assert result["reason"] == "No retrieved passage supplies a step toward an answer."
+    assert (
+        result["reason"] == "No retrieved passage supplies a step toward a synthesis."
+    )
 
 
 def test_reading_around_a_passage_labels_its_neighbours_but_not_an_excluded_one() -> (
@@ -300,10 +302,10 @@ def test_reading_around_a_passage_labels_its_neighbours_but_not_an_excluded_one(
     model = Model(
         _call("search", {"query": "q"}),
         _call("read_passage", {"label": "S1"}),
-        _call("no_answer", {}),
+        _call("no_synthesis", {}),
     )
 
-    result, _ = asyncio.run(_answer(model, corpus))
+    result, _ = asyncio.run(_synthesise(model, corpus))
 
     assert corpus.reads == ["c-1"]
     read = model.tool_results()[-1]
@@ -314,7 +316,7 @@ def test_reading_around_a_passage_labels_its_neighbours_but_not_an_excluded_one(
 def test_prose_outside_a_tool_is_discarded_and_the_model_asked_again() -> None:
     model = Model(_call("search", {"query": "q"}), _prose(), _submit(DERIVATION))
 
-    result, _ = asyncio.run(_answer(model))
+    result, _ = asyncio.run(_synthesise(model))
 
     assert result["generated"] is True
     assert model.requests[-1][-1]["role"] == "user"
@@ -332,7 +334,7 @@ def test_a_provider_failure_ends_the_answer_and_says_what_was_sent() -> None:
 
     model = Failing(_call("search", {"query": "q"}))
 
-    result, _ = asyncio.run(_answer(model))
+    result, _ = asyncio.run(_synthesise(model))
 
     assert result["generated"] is False
     assert result["reason"].startswith("DeepSeek failed")
@@ -345,7 +347,7 @@ def test_an_answer_that_runs_out_of_time_says_so() -> None:
             await asyncio.sleep(5)
             raise AssertionError("unreachable")
 
-    result, _ = asyncio.run(_answer(Slow(), timeout_seconds=0.05))
+    result, _ = asyncio.run(_synthesise(Slow(), timeout_seconds=0.05))
 
     assert result["generated"] is False
     assert "0.05 seconds" in result["reason"]

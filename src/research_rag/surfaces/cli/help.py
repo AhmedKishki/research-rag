@@ -96,9 +96,9 @@ HELP_GROUPS: tuple[tuple[str, tuple[tuple[str, str], ...]], ...] = (
                 ),
             ),
             (
-                "answer",
+                "synthesise",
                 (
-                    "Answer a question from the passages DeepSeek retrieves here, "
+                    "Synthesise an answer from the passages DeepSeek retrieves here, "
                     "every sentence rendered from their exact wording and every "
                     "missing link marked as a gap. It sends the question and the "
                     "passages to DeepSeek; --verbose shows the provenance and the "
@@ -220,7 +220,7 @@ HELP_GROUPS: tuple[tuple[str, tuple[tuple[str, str], ...]], ...] = (
                 "api-key",
                 (
                     "Set, clear, or report the account's DeepSeek key, which "
-                    "answer needs. set reads it from a hidden prompt or from "
+                    "synthesise needs. set reads it from a hidden prompt or from "
                     "stdin, never from the command line, and nothing prints it."
                 ),
             ),
@@ -287,26 +287,26 @@ search.
 `doctor` reports which layer a value came from, and the file path it would be
 changed in.
 """,
-    "answers": """\
-`answer` asks DeepSeek to answer a question from this project. DeepSeek searches
+    "synthesis": """\
+`synthesise` asks DeepSeek to answer a question from this project. DeepSeek searches
 the selected generation as often as the question needs and submits a derivation:
 exact spans of the passages it retrieved and the operations applied to them. The
 app renders every sentence from that wording and marks a link no passage states as
-a gap. A derivation it cannot render goes back to DeepSeek, and an answer that
+a gap. A derivation it cannot render goes back to DeepSeek, and a synthesis that
 never renders is reported without one.
 
-The question, the instructions, and every passage the answer retrieves are sent to
-the address in answers.base_url. The answer says how many passages went, and
+The question, the instructions, and every passage the synthesis retrieves are sent to
+the address in synthesis.base_url. The synthesis says how many passages went, and
 --verbose names each one beside the provenance and the reasoning. runtime.offline
-refuses an answer before anything is sent.
+refuses a synthesis before anything is sent.
 
 `api-key set` keeps the key for this account in credentials.json beside the
 settings, readable by this account alone, and RESEARCH_RAG_DEEPSEEK_API_KEY
 overrides it. The key is not a setting: `config` does not print it and no project
-holds it. Every project on the account answers with it.
+holds it. Every project on the account synthesises with it.
 
-The search filters bound every search an answer makes. answers.max_searches,
-answers.max_attempts, and answers.timeout_seconds bound what one answer may do.
+The search filters bound every search a synthesis makes. synthesis.max_searches,
+synthesis.max_attempts, and synthesis.timeout_seconds bound what one synthesis may do.
 """,
     "agents": """\
 The app serves MCP at /mcp on its own port, so a client that can open a socket
@@ -342,7 +342,7 @@ shows the same list, so an agent ended in the browser is gone from the terminal
 too.
 
 An agent gets nine tools and one resource, and every answer is the lean
-projection unless `answer` is asked to be verbose: a question at a time, no inventory, no scores. `status` is a verdict
+projection unless `synthesise` is asked to be verbose: a question at a time, no inventory, no scores. `status` is a verdict
 naming the call that closes a gap, not the whole corpus state. The full payload is
 `status --verbose` here and the workspace there.
 

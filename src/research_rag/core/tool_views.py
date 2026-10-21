@@ -504,10 +504,10 @@ def lean_source_metadata(payload: Mapping[str, Any]) -> dict[str, Any]:
     return result
 
 
-def lean_answer(payload: Mapping[str, Any]) -> dict[str, Any]:
-    """Keep the answer, its references, and what was sent; `verbose` keeps the rest.
+def lean_synthesis(payload: Mapping[str, Any]) -> dict[str, Any]:
+    """Keep the synthesis, its references, and what was sent; `verbose` keeps the rest.
 
-    A failed answer keeps its reason. The provenance, the reasoning, the sources,
+    A failed synthesis keeps its reason. The provenance, the reasoning, the sources,
     and the searches stay in the full payload, one argument away.
     """
 
@@ -526,7 +526,7 @@ def lean_answer(payload: Mapping[str, Any]) -> dict[str, Any]:
 
 
 _PROJECTORS: dict[str, Callable[[Mapping[str, Any]], dict[str, Any]]] = {
-    "answer": lean_answer,
+    "synthesise": lean_synthesis,
     "status": lean_status,
     "ingest": lean_ingest,
     "search": lean_search,

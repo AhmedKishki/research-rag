@@ -13,8 +13,8 @@ from typing import Any
 
 import pytest
 
-from research_rag.answers.ops import Rejected
-from research_rag.answers.render import render, render_parts
+from research_rag.synthesis.ops import Rejected
+from research_rag.synthesis.render import render, render_parts
 
 FIXTURES = Path(__file__).with_name("fixtures")
 BASE = json.loads((FIXTURES / "mill.json").read_text(encoding="utf-8"))

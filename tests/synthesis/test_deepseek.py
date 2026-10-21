@@ -8,8 +8,8 @@ from typing import Any
 import httpx
 import pytest
 
-from research_rag.answers.deepseek import DeepSeek
 from research_rag.project.policy import ResearchError
+from research_rag.synthesis.deepseek import DeepSeek
 
 KEY = "sk-never-printed"
 TOOLS = [{"type": "function", "function": {"name": "search", "parameters": {}}}]
@@ -131,7 +131,7 @@ async def test_an_endpoint_that_does_not_answer_is_named(
 
 
 @pytest.mark.anyio
-async def test_an_answer_without_a_message_is_refused() -> None:
+async def test_a_reply_without_a_message_is_refused() -> None:
     def handler(request: httpx.Request) -> httpx.Response:
         return httpx.Response(200, json={"choices": []})
 

@@ -1,4 +1,4 @@
-"""One answer: DeepSeek searches the corpus and submits a derivation.
+"""One synthesis: DeepSeek searches the corpus and submits a derivation.
 
 The model is given four tools and answers only through them. A search or a read
 labels each passage it returns once, `S1`, `S2`, …, and that labelled passage is
@@ -7,7 +7,7 @@ from what this run retrieved, whatever the model put there. The renderer then
 replays the derivation or refuses it, and a refusal goes back to the model.
 
 Nothing the model writes reaches the reader except through the renderer. An
-answer that fails says why in the app's own words, and every result says which
+synthesis that fails says why in the app's own words, and every result says which
 passages were sent.
 """
 
@@ -37,10 +37,10 @@ SYSTEM_PROMPT = files(__package__).joinpath("prompt.md").read_text(encoding="utf
 RETRIEVAL_NOTE = "Retrieval result, wording not checked against the original"
 DEFAULT_TOP_K = 8
 MAXIMUM_TOP_K = 20
-NO_ANSWER = "No retrieved passage supplies a step toward an answer."
+NO_SYNTHESIS = "No retrieved passage supplies a step toward a synthesis."
 _NUDGE = (
     "Reply only by calling a tool: search, read_passage, submit_derivation, "
-    "or no_answer."
+    "or no_synthesis."
 )
 
 TOOLS: list[dict[str, Any]] = [
@@ -90,8 +90,8 @@ TOOLS: list[dict[str, Any]] = [
     {
         "type": "function",
         "function": {
-            "name": "no_answer",
-            "description": "End the answer: no retrieved passage supplies any step.",
+            "name": "no_synthesis",
+            "description": "End the synthesis: no retrieved passage supplies any step.",
             "parameters": {"type": "object", "properties": {}},
         },
     },
@@ -107,7 +107,7 @@ class Limits:
     @property
     def max_turns(self) -> int:
         # Every retrieval and every attempt is a turn, plus room for a turn
-        # that called no tool and the one that ends the answer.
+        # that called no tool and the one that ends the synthesis.
         return self.max_searches + self.max_attempts + 4
 
 
@@ -118,7 +118,7 @@ class _Outcome:
 
 
 class _Run:
-    """What one answer has retrieved, sent, spent, and been refused."""
+    """What one synthesis has retrieved, sent, spent, and been refused."""
 
     def __init__(
         self, question: str, search: Search, read: Read, limits: Limits, report: Report
@@ -143,8 +143,8 @@ class _Run:
             return await self._read_tool(arguments)
         if name == "submit_derivation":
             return self._submit_tool(arguments)
-        if name == "no_answer":
-            return _Outcome({"ended": True}, self.failed(NO_ANSWER))
+        if name == "no_synthesis":
+            return _Outcome({"ended": True}, self.failed(NO_SYNTHESIS))
         return _Outcome({"refused": f"There is no tool named {name!r}."})
 
     async def _search_tool(self, arguments: Mapping[str, Any]) -> _Outcome:
@@ -175,7 +175,9 @@ class _Run:
     async def _read_tool(self, arguments: Mapping[str, Any]) -> _Outcome:
         label = str(arguments.get("label") or "")
         if label not in self.passages:
-            return _Outcome({"refused": f"{label!r} was not retrieved in this answer."})
+            return _Outcome(
+                {"refused": f"{label!r} was not retrieved in this synthesis."}
+            )
         refusal = self._retrieval_refusal()
         if refusal:
             return refusal
@@ -243,7 +245,7 @@ class _Run:
         unknown = [label for label in labels if label not in self.passages]
         if unknown:
             raise Rejected(
-                f"{', '.join(unknown)} was not retrieved in this answer; "
+                f"{', '.join(unknown)} was not retrieved in this synthesis; "
                 "name only labels a search or read returned."
             )
         derivation = {
@@ -265,9 +267,9 @@ class _Run:
         return _Outcome(
             {
                 "refused": (
-                    f"This answer has used its {self.limits.max_searches} searches "
+                    f"This synthesis has used its {self.limits.max_searches} searches "
                     "and reads. Submit a derivation from the passages retrieved, or "
-                    "call no_answer."
+                    "call no_synthesis."
                 )
             }
         )
@@ -387,7 +389,7 @@ def _arguments(call: Mapping[str, Any]) -> tuple[str, dict[str, Any]]:
     return name, arguments if isinstance(arguments, dict) else {}
 
 
-async def run_answer(
+async def run_synthesis(
     question: str,
     *,
     search: Search,
@@ -396,7 +398,7 @@ async def run_answer(
     limits: Limits,
     report: Report,
 ) -> dict[str, Any]:
-    """Run one answer and return its result, generated or not."""
+    """Run one synthesis and return its result, generated or not."""
 
     run = _Run(question, search, read, limits, report)
     messages: list[dict[str, Any]] = [
@@ -428,7 +430,7 @@ async def run_answer(
                         return outcome.final
     except TimeoutError:
         return run.failed(
-            f"The answer did not finish within {limits.timeout_seconds:g} seconds."
+            f"The synthesis did not finish within {limits.timeout_seconds:g} seconds."
         )
     except ResearchError as exc:
         return run.failed(str(exc))

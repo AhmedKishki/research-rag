@@ -2907,9 +2907,9 @@ textarea:disabled {
   .remote-content .button { min-height: 44px; }
 }
 
-/* The answer: the synthesis reads as prose, each citation goes to its passage,
+/* A synthesis reads as prose, each citation goes to its passage,
    and a gap stands out as the open link it is. */
-.answer-panel {
+.synthesis-panel {
   margin: var(--space-lg) 0 var(--space-sm);
   padding: var(--space-md);
   border: 1px solid var(--border-subtle);
@@ -2917,35 +2917,35 @@ textarea:disabled {
   background: var(--bg-card);
 }
 
-.answer-panel .result-summary {
+.synthesis-panel .result-summary {
   margin-top: 0;
 }
 
-.answer-panel .answer-label {
+.synthesis-panel .synthesis-label {
   color: var(--accent-ink);
   font-weight: 600;
 }
 
-.answer-synthesis p {
+.synthesis-synthesis p {
   margin: 0 0 var(--space-sm);
   color: var(--text-primary);
   line-height: 1.6;
 }
 
-.answer-gap {
+.synthesis-gap {
   padding: 0 0.2em;
   border-radius: var(--radius-sm);
   background: var(--warning-soft);
   color: var(--warning);
 }
 
-.answer-references {
+.synthesis-references {
   margin: 0 0 var(--space-sm);
   padding-left: var(--space-md);
   color: var(--text-secondary);
 }
 
-.answer-apparatus {
+.synthesis-apparatus {
   margin: var(--space-2xs) 0 0;
   font-family: var(--font-mono);
   font-size: var(--text-xs);

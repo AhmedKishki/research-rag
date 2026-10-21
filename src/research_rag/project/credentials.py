@@ -4,7 +4,7 @@ A setting travels with a project and is printed by `config`; a key must do
 neither. It lives in `credentials.json` beside the account's `config.toml`,
 written readable by its owner alone, or in `RESEARCH_RAG_DEEPSEEK_API_KEY`,
 which wins. It is read on every call, so a running app takes a new key at its
-next answer. `STORAGE.md` owns the file's fields.
+next synthesis. `STORAGE.md` owns the file's fields.
 
 No message here repeats a key: a refusal names the file and the field.
 """

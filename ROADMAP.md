@@ -11,13 +11,13 @@
 - Adoption would be a component swap behind the `DenseBackend` boundary plus a new manifest backend name.
   - The source and retrieval integration tests in `AGENTS.md` must accept it before any generation selects it.
 
-## Answers
+## Synthesis
 
-- `answer` is white-box only, through DeepSeek. Each idea below widens that contract.
+- `synthesise` is white-box only, through DeepSeek. Each idea below widens that contract.
 - A local model keeps the corpus on the machine but needs a GPU and a serving surface.
 - AI-authored links: a per-request switch that lets the model fill a gap as a marked `⟦AI-AUTHORED⟧` link.
 - A black-box mode: free prose that cites passages. It needs its own citation check and its own refusal of a thin result set.
-- Saved answers: each answer and its derivation under the project, so it can be reopened and rendered again. A new on-disk layout.
+- Saved syntheses: each synthesis and its derivation under the project, so it can be reopened and rendered again. A new on-disk layout.
 
 ## Citations and quotation
 

@@ -30,7 +30,6 @@ from ..retrieval.lexical import LexicalBackend
 from ..retrieval.search import SearchWorkflow
 from ..storage.durable_io import StorageError, read_json
 from .admission import Admission, AdmissionTimeout
-from .answers import AnswerWorkflow
 from .records import (
     load_chunk_exclusions,
     load_current_generation,
@@ -41,6 +40,7 @@ from .records import (
 from .review import ReviewWorkflow
 from .stats import StatsWorkflow
 from .status import StatusWorkflow
+from .synthesis import SynthesisWorkflow
 
 LOGGER = logging.getLogger(__name__)
 
@@ -60,7 +60,7 @@ SEARCH_QUEUE_SECONDS = 45
 # The numbers that shape it live in the settings file, so fusion weights, gates,
 # batch sizes, and budgets are tunable without editing code.
 class ResearchService(
-    AnswerWorkflow,
+    SynthesisWorkflow,
     IngestionWorkflow,
     ReviewWorkflow,
     SearchWorkflow,
@@ -141,8 +141,8 @@ class ResearchService(
             timeout=PROJECT_LOCK_TIMEOUT_SECONDS,
         )
         self._loaded_generation: str | None = None
-        # What a running answer is doing; one answer runs at a time.
-        self._answer_activity: dict[str, Any] | None = None
+        # What a running synthesis is doing; one runs at a time.
+        self._synthesis_activity: dict[str, Any] | None = None
         # Reads take neither lock above, so a search, a passage, the source list,
         # and the status answer while a build runs. Two things are still shared
         # with a build. The lexical backend holds one BM25 retriever, which a build

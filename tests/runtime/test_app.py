@@ -35,7 +35,7 @@ OPERATIONS = (
     "status",
     "ingest",
     "search",
-    "answer",
+    "synthesise",
     "find_source",
     "get_passage",
     "set_source_inclusion",

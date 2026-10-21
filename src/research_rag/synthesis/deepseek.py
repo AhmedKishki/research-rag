@@ -1,4 +1,4 @@
-"""DeepSeek's chat completions, for the turns of one answer.
+"""DeepSeek's chat completions, for the turns of one synthesis.
 
 The key travels in the Authorization header and nowhere else, and no message
 here repeats it. With tools, DeepSeek needs each assistant message sent back
@@ -28,7 +28,7 @@ class Turn:
 
 
 class DeepSeek:
-    """One connection to `{base_url}/chat/completions`, opened for one answer."""
+    """One connection to `{base_url}/chat/completions`, opened for one synthesis."""
 
     def __init__(
         self,
@@ -70,7 +70,7 @@ class DeepSeek:
             raise ResearchError(
                 f"DeepSeek at {self.base_url} did not answer within "
                 f"{self._timeout:g} seconds. Ask again, or raise "
-                "answers.timeout_seconds."
+                "synthesis.timeout_seconds."
             ) from None
         except httpx.HTTPError as exc:
             raise ResearchError(

@@ -7,7 +7,7 @@ The service the three surfaces call, and the answers it gives when it cannot.
 | `service.py` | `ResearchService`: the composition root, the write and search queues, the read lease, and the BM25 retriever lock |
 | `operations.py` | Every operation a surface forwards: its arguments, their bounds, and the service call |
 | `admission.py` | `Admission`: a fixed number of turns handed out to waiting callers in rounds, each wait bounded |
-| `answers.py` | `AnswerWorkflow`: one answer, refused before anything leaves the machine when offline, keyless, unbuilt or busy, and the account's key read and written for the workspace |
+| `synthesis.py` | `SynthesisWorkflow`: one synthesis, refused before anything leaves the machine when offline, keyless, unbuilt or busy, and the account's key read and written for the workspace |
 | `review.py` | `ReviewWorkflow`: what a reader decided about a source, a passage, or a metadata field |
 | `review_state.py` | The four write operations over the three review files |
 | `source_inventory.py` | Every source the project can name, and the catalog that remembers them |

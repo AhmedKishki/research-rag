@@ -72,8 +72,8 @@ class RecordingService:
     async def list_sources(self, **filters: Any) -> dict[str, Any]:
         return self._record("list_sources", filters)
 
-    async def answer(self, question: str, **filters: Any) -> dict[str, Any]:
-        self.calls.append(("answer", {"question": question, **filters}))
+    async def synthesise(self, question: str, **filters: Any) -> dict[str, Any]:
+        self.calls.append(("synthesise", {"question": question, **filters}))
         return {
             "generated": True,
             "synthesis": "It dissolved [S1].",
@@ -1139,11 +1139,11 @@ def test_api_key_takes_no_key_on_the_command_line() -> None:
 
 
 @pytest.mark.parametrize("verbose", [False, True])
-def test_answer_carries_its_filters_and_shows_the_rest_only_when_verbose(
+def test_synthesise_carries_its_filters_and_shows_the_rest_only_when_verbose(
     verbose: bool,
 ) -> None:
     operations = Operations()
-    argv = ["answer", "Why did it dissolve?", "--author", "Mensah"]
+    argv = ["synthesise", "Why did it dissolve?", "--author", "Mensah"]
 
     payload = asyncio.run(
         _operate(_args(*argv, *(["--verbose"] if verbose else [])), operations)
@@ -1151,7 +1151,7 @@ def test_answer_carries_its_filters_and_shows_the_rest_only_when_verbose(
 
     (call,) = operations.service.calls
     assert call == (
-        "answer",
+        "synthesise",
         {
             "question": "Why did it dissolve?",
             "categories_any": None,

@@ -729,7 +729,7 @@ class StatusWorkflow:
             # of the project.
             report = await asyncio.to_thread(health_report, self.config, payload)
             payload.update(report.as_status_fields())
-            activity = self.answer_activity()  # type: ignore[attr-defined]
+            activity = self.synthesis_activity()  # type: ignore[attr-defined]
             if activity is not None:
-                payload["answer_activity"] = activity
+                payload["synthesis_activity"] = activity
             return payload

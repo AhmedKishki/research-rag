@@ -26,7 +26,7 @@ LAYERS = (
     "corpus",
     "retrieval",
     "generations",
-    "answers",
+    "synthesis",
     "core",
     "runtime",
     "surfaces",

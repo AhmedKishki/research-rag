@@ -1,9 +1,9 @@
-"""`AnswerWorkflow`: one white-box answer, and the account's key behind it.
+"""`SynthesisWorkflow`: one white-box synthesis, and the account's key behind it.
 
-An answer is refused before anything leaves the machine when this app is
-offline, holds no key, has no generation to search, or is already answering.
+A synthesis is refused before anything leaves the machine when this app is
+offline, holds no key, has no generation to search, or is already synthesising.
 Otherwise DeepSeek searches the selected generation through `search`, under the
-reader's filters, and the result names what was sent. `answers/loop.py` holds
+reader's filters, and the result names what was sent. `synthesis/loop.py` holds
 the loop; this module holds what the service lends it.
 """
 
@@ -12,24 +12,24 @@ from __future__ import annotations
 import time
 from typing import TYPE_CHECKING, Any
 
-from ..answers.deepseek import PROVIDER, DeepSeek
-from ..answers.loop import Limits, run_answer
 from ..project.credentials import clear_deepseek_key, deepseek_key, set_deepseek_key
 from ..project.policy import ResearchError
+from ..synthesis.deepseek import PROVIDER, DeepSeek
+from ..synthesis.loop import Limits, run_synthesis
 from .admission import as_caller
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
     from ..project.config import ResearchConfig
 
-#: The caller every search an answer makes is counted under.
-ANSWER_CALLER = "answer"
+#: The caller every search a synthesis makes is counted under.
+SYNTHESIS_CALLER = "synthesise"
 
 
-class AnswerWorkflow:
+class SynthesisWorkflow:
     config: ResearchConfig
-    _answer_activity: dict[str, Any] | None
+    _synthesis_activity: dict[str, Any] | None
 
-    async def answer(self, question: str, **filters: Any) -> dict[str, Any]:
+    async def synthesise(self, question: str, **filters: Any) -> dict[str, Any]:
         question = question.strip()
         if not question:
             raise ResearchError("question must not be empty")
@@ -37,7 +37,7 @@ class AnswerWorkflow:
         settings = self.config.settings
         if settings.offline:
             raise ResearchError(
-                "runtime.offline is on, and an answer sends the question and the "
+                "runtime.offline is on, and a synthesis sends the question and the "
                 "passages it retrieves to DeepSeek. Turn it off with: "
                 "research-rag config --write runtime.offline=false"
             )
@@ -49,14 +49,14 @@ class AnswerWorkflow:
             )
         if self._load_current_optional() is None:  # type: ignore[attr-defined]
             raise ResearchError("No knowledge base exists; call ingest first")
-        if self._answer_activity is not None:
+        if self._synthesis_activity is not None:
             raise ResearchError(
-                "An answer is already running "
-                f"({self._answer_activity['phase']}); ask again once it finishes."
+                "A synthesis is already running "
+                f"({self._synthesis_activity['phase']}); ask again once it finishes."
             )
         started = time.monotonic()
         activity: dict[str, Any] = {"phase": "starting", "searches": [], "attempt": 0}
-        self._answer_activity = activity
+        self._synthesis_activity = activity
 
         def report(phase: str, detail: dict[str, Any]) -> None:
             activity.update(
@@ -77,37 +77,37 @@ class AnswerWorkflow:
 
         try:
             async with DeepSeek(
-                base_url=settings.answers_base_url,
-                model=settings.answers_model,
+                base_url=settings.synthesis_base_url,
+                model=settings.synthesis_model,
                 key=key,
-                timeout_seconds=settings.answers_timeout_seconds,
+                timeout_seconds=settings.synthesis_timeout_seconds,
             ) as client:
-                with as_caller(ANSWER_CALLER):
-                    result = await run_answer(
+                with as_caller(SYNTHESIS_CALLER):
+                    result = await run_synthesis(
                         question,
                         search=search,
                         read=read,
                         complete=client.complete,
                         limits=Limits(
-                            max_searches=settings.answers_max_searches,
-                            max_attempts=settings.answers_max_attempts,
-                            timeout_seconds=settings.answers_timeout_seconds,
+                            max_searches=settings.synthesis_max_searches,
+                            max_attempts=settings.synthesis_max_attempts,
+                            timeout_seconds=settings.synthesis_timeout_seconds,
                         ),
                         report=report,
                     )
         finally:
-            self._answer_activity = None
-        result["sent"] = {"endpoint": settings.answers_base_url, **result["sent"]}
-        return {"provider": PROVIDER, "model": settings.answers_model, **result}
+            self._synthesis_activity = None
+        result["sent"] = {"endpoint": settings.synthesis_base_url, **result["sent"]}
+        return {"provider": PROVIDER, "model": settings.synthesis_model, **result}
 
-    def answer_activity(self) -> dict[str, Any] | None:
-        """What a running answer is doing, for a reader waiting on it."""
+    def synthesis_activity(self) -> dict[str, Any] | None:
+        """What a running synthesis is doing, for a reader waiting on it."""
 
-        if self._answer_activity is None:
+        if self._synthesis_activity is None:
             return None
         return {
-            **self._answer_activity,
-            "searches": list(self._answer_activity["searches"]),
+            **self._synthesis_activity,
+            "searches": list(self._synthesis_activity["searches"]),
         }
 
     async def credentials_read(self) -> dict[str, Any]:

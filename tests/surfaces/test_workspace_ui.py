@@ -2946,13 +2946,13 @@ result.withoutId = state.view;
     assert result["withoutId"] == "sources"
 
 
-def test_an_answer_links_its_sources_marks_its_gaps_and_folds_its_apparatus(
+def test_a_synthesis_links_its_sources_marks_its_gaps_and_folds_its_apparatus(
     tmp_path: Path,
 ) -> None:
     result = _drive_page(
         tmp_path,
         """
-renderAnswer({
+renderSynthesis({
   generated: true,
   model: "deepseek-flash",
   synthesis: "Prices rose [S1]. Incomes fell [S2]. ⟦GAP: fall (B) → closure (Z): unstated⟧",
@@ -2967,21 +2967,21 @@ renderAnswer({
   sent: { endpoint: "https://api.deepseek.com", chunk_ids: ["c-1", "c-2", "c-3"] },
   usage: { prompt_tokens: 1200, completion_tokens: 300 },
 });
-const panel = document.getElementById("answer-panel");
+const panel = document.getElementById("synthesis-panel");
 const folds = [];
 (function walk(node) {
   if (node.tagName === "details") folds.push({ text: text(node), open: Boolean(node.open) });
   (node.children || []).forEach(walk);
 })(panel);
-const gap = find(panel, (node) => (node.className || "").includes("answer-gap"));
+const gap = find(panel, (node) => (node.className || "").includes("synthesis-gap"));
 const cite = find(panel, (node) => node.tagName === "a" && node.textContent === "S1");
 result.hidden = panel.hidden;
 result.text = text(panel);
 result.folds = folds;
 result.gap = gap ? gap.textContent : null;
 result.cite = cite ? cite.href : null;
-renderAnswer({ generated: false, reason: "No retrieved passage supplies a step toward an answer.", sent: { endpoint: "https://api.deepseek.com", chunk_ids: [] } });
-result.failed = text(document.getElementById("answer-panel"));
+renderSynthesis({ generated: false, reason: "No retrieved passage supplies a step toward a synthesis.", sent: { endpoint: "https://api.deepseek.com", chunk_ids: [] } });
+result.failed = text(document.getElementById("synthesis-panel"));
 """,
     )
 

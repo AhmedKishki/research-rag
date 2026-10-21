@@ -341,7 +341,7 @@ research-rag \
   - It holds `{"schema_version": 1, "deepseek": {"api_key": "…"}}`. A cleared key leaves `"deepseek": {}`.
   - It is account state, not project state. Moving a project does not move it, and no project file names it.
   - `RESEARCH_RAG_DEEPSEEK_API_KEY` overrides it.
-  - A hand edit is read at the next answer. A later `schema_version`, an unknown provider or field, or a value that is not a string is refused by name, without the key.
+  - A hand edit is read at the next synthesis. A later `schema_version`, an unknown provider or field, or a value that is not a string is refused by name, without the key.
   - `doctor` warns when other accounts can read it.
 
 ## Moving a project

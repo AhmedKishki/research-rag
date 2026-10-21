@@ -464,33 +464,33 @@ def test_apply_process_priority_reports_a_refusal_instead_of_raising(
     assert apply_process_priority(10) is None
 
 
-def test_an_answer_setting_is_a_runtime_value_outside_the_fingerprint(
+def test_a_synthesis_setting_is_a_runtime_value_outside_the_fingerprint(
     tmp_path: Path,
 ) -> None:
     baseline, _ = _resolve(tmp_path, environ={})
     changed, provenance = _resolve(
         tmp_path,
-        overrides=["answers.max_searches=3"],
-        environ={"RESEARCH_RAG_ANSWERS_MODEL": "deepseek-v4-pro"},
+        overrides=["synthesis.max_searches=3"],
+        environ={"RESEARCH_RAG_SYNTHESIS_MODEL": "deepseek-v4-pro"},
     )
 
-    assert (baseline.answers_model, baseline.answers_base_url) == (
+    assert (baseline.synthesis_model, baseline.synthesis_base_url) == (
         "deepseek-flash",
         "https://api.deepseek.com",
     )
-    assert (changed.answers_model, changed.answers_max_searches) == (
+    assert (changed.synthesis_model, changed.synthesis_max_searches) == (
         "deepseek-v4-pro",
         3,
     )
-    assert provenance["answers.model"].startswith("environment")
-    assert {s.layer for s in SETTINGS if s.key.startswith("answers.")} == {"runtime"}
+    assert provenance["synthesis.model"].startswith("environment")
+    assert {s.layer for s in SETTINGS if s.key.startswith("synthesis.")} == {"runtime"}
     assert retrieval_policy_fingerprint(changed) == retrieval_policy_fingerprint(
         baseline
     )
 
 
-def test_an_answer_endpoint_must_be_https(tmp_path: Path) -> None:
+def test_a_synthesis_endpoint_must_be_https(tmp_path: Path) -> None:
     with pytest.raises(SettingsError, match="https"):
         _resolve(
-            tmp_path, overrides=["answers.base_url=http://api.example"], environ={}
+            tmp_path, overrides=["synthesis.base_url=http://api.example"], environ={}
         )

@@ -8,8 +8,8 @@ import pytest
 
 from research_rag.core.service import ResearchError
 from research_rag.core.tool_views import (
-    lean_answer,
     lean_ingest,
+    lean_synthesis,
     present_tool_response,
 )
 from research_rag.project.config import ConfigurationError, resolve_config
@@ -1460,7 +1460,7 @@ def test_the_lean_answer_is_a_small_share_of_the_payload_it_projects() -> None:
             )
 
 
-ANSWER = {
+SYNTHESIS = {
     "provider": "deepseek",
     "model": "deepseek-flash",
     "generated": True,
@@ -1483,11 +1483,11 @@ ANSWER = {
     ("payload", "kept"),
     [
         (
-            ANSWER,
+            SYNTHESIS,
             {
                 "generated": True,
-                "synthesis": ANSWER["synthesis"],
-                "references": ANSWER["references"],
+                "synthesis": SYNTHESIS["synthesis"],
+                "references": SYNTHESIS["references"],
                 "gaps": 0,
             },
         ),
@@ -1495,7 +1495,7 @@ ANSWER = {
             {
                 **{
                     k: v
-                    for k, v in ANSWER.items()
+                    for k, v in SYNTHESIS.items()
                     if k
                     not in {
                         "synthesis",
@@ -1515,11 +1515,13 @@ ANSWER = {
     ],
     ids=["generated", "not generated"],
 )
-def test_a_lean_answer_is_the_answer_its_references_and_what_was_sent(
+def test_a_lean_synthesis_is_the_synthesis_its_references_and_what_was_sent(
     payload: dict, kept: dict
 ) -> None:
-    assert lean_answer(payload) == {
+    assert lean_synthesis(payload) == {
         **kept,
         "sent": {"endpoint": "https://api.deepseek.com", "passages": 2},
     }
-    assert present_tool_response("answer", payload, detail=FULL_TOOL_DETAIL) == payload
+    assert (
+        present_tool_response("synthesise", payload, detail=FULL_TOOL_DETAIL) == payload
+    )
