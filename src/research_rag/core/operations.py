@@ -196,6 +196,16 @@ OPERATIONS: dict[str, Operation] = {
             a.pop("query"), **{"rerank": True, **a}, include_staleness=True
         ),
     ),
+    # DeepSeek chooses each query; the reader's filters bound every one.
+    "answer": Operation(
+        (Argument("question", str, required=True), *_texts(*_SEARCH_FILTERS)),
+        lambda service, a: service.answer(a.pop("question"), **a),
+    ),
+    "credentials_read": Operation((), lambda service, _: service.credentials_read()),
+    "credentials_write": Operation(
+        (Argument("api_key", str), Argument("clear", bool, default=False)),
+        lambda service, a: service.credentials_write(**a),
+    ),
     "list_sources": Operation(
         _texts("categories", "categories_any", "projects", "projects_any", "keywords"),
         lambda service, a: service.list_sources(**a),

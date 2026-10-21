@@ -850,8 +850,9 @@ SETTINGS: tuple[Setting, ...] = (
         kind=int,
         layer="runtime",
         doc=(
-            "How many searches one answer may run. Each sends its passages to "
-            "DeepSeek, so it bounds both cost and what leaves the machine."
+            "How many searches and passage reads one answer may run. Each sends "
+            "its passages to DeepSeek, so it bounds both cost and what leaves the "
+            "machine."
         ),
         minimum=1,
         maximum=32,

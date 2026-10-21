@@ -17,7 +17,7 @@ research-rag-gateway has been retired.
 
 This app no longer proxies UltraRAG's MCP servers, so there is no gateway to
 start, no UltraRAG runtime to install, and no optional 'legacy' dependency to
-add. The app serves its own eight evidence-retrieval tools itself.
+add. The app serves its own nine agent tools itself.
 
 Use the app's own agent surface instead:
 

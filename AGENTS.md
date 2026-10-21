@@ -71,7 +71,7 @@
 - No original source document is edited or written. `sources/` is the authority for a quotation.
 - `text` in a result is cleaned semantic text, never a transcript.
 - A result carries no per-passage quotation flag. The cleaned-text rule is stated once in the contract, not repeated on every passage.
-- An agent gets eight tools and one resource with bounded answers, never a corpus inventory.
+- An agent gets nine tools and one resource with bounded answers, never a corpus inventory.
   - The workspace and CLI `sources` own inventory access.
 - A generation the app cannot serve is stated as `hybrid_ready: false` beside `generation_upgrade_required`. The old generation stays searchable with a warning.
   - Report an upgrade requirement only for a serving incompatibility, not a newer extraction, cleaning, or ranking policy. Preserve compatible generations; expose policy differences through verbose diagnostics and DEBUG logs.
@@ -96,9 +96,10 @@
   - `answers/render.py` renders the derivation and rejects wording no source supplies. A rejected derivation returns to the model up to `answers.max_attempts` times and is never shown.
   - A missing link is a `⟦GAP⟧`. No AI-authored link enters an answer.
   - When no source supplies a step, the result is `generated: false` and carries no model text.
-  - The question, the system prompt, and every passage the run retrieves leave the machine. Each result names the endpoint and the `chunk_id`s it sent.
+  - The question, the system prompt, and every passage the run retrieves leave the machine. Each result names the endpoint and how many passages it sent; a verbose result names their `chunk_id`s.
   - Answers are not saved.
-  - `answer` is not an agent tool.
+  - An agent's `answer` returns the synthesis, the references, and what was sent; `verbose` adds the rest. The command line answers the same way, and the workspace shows everything with provenance and reasoning collapsed.
+  - The agent instructions say to call `answer` only when the user asks for a generated answer.
 - No bundle operations exist. `export_bundle` and `import_bundle` are not available.
 
 ### The state a reader must be able to trust

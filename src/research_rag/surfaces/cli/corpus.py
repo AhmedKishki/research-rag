@@ -404,6 +404,24 @@ async def _operate(
         if args.method is not None:
             search["retrieval_method"] = args.method
         return await operations.call("search", query=args.query, **search)
+    if command == "answer":
+        from ...core.tool_views import lean_answer
+
+        payload = await operations.call(
+            "answer",
+            question=args.question,
+            categories_any=args.category,
+            projects_any=args.project,
+            keywords=args.keyword,
+            languages_any=args.language,
+            authors_any=args.author,
+            titles_any=args.title,
+            source_ids=args.source_id,
+            exclude_source_ids=args.exclude_source_id,
+        )
+        # The answer and its references are what a reader asked for; the
+        # apparatus behind them is one flag away, as for an agent.
+        return dict(payload) if args.verbose else lean_answer(payload)
     if command == "sources":
         return await operations.call("list_sources")
     if command == "passage":

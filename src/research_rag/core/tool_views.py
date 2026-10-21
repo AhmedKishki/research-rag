@@ -504,7 +504,29 @@ def lean_source_metadata(payload: Mapping[str, Any]) -> dict[str, Any]:
     return result
 
 
+def lean_answer(payload: Mapping[str, Any]) -> dict[str, Any]:
+    """Keep the answer, its references, and what was sent; `verbose` keeps the rest.
+
+    A failed answer keeps its reason. The provenance, the reasoning, the sources,
+    and the searches stay in the full payload, one argument away.
+    """
+
+    result: dict[str, Any] = {"generated": bool(payload.get("generated"))}
+    if result["generated"]:
+        for key in ("synthesis", "references", "gaps"):
+            result[key] = payload.get(key)
+    else:
+        result["reason"] = payload.get("reason")
+    sent = payload.get("sent") or {}
+    result["sent"] = {
+        "endpoint": sent.get("endpoint"),
+        "passages": len(sent.get("chunk_ids") or []),
+    }
+    return result
+
+
 _PROJECTORS: dict[str, Callable[[Mapping[str, Any]], dict[str, Any]]] = {
+    "answer": lean_answer,
     "status": lean_status,
     "ingest": lean_ingest,
     "search": lean_search,

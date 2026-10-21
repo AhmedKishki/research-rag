@@ -14,6 +14,10 @@ Workflow:
 4. Use get_passage for surrounding context and find_source for a named work's
    source_id, source path, and inclusion state. Source paths address review tools;
    source_id narrows searches; chunk_id addresses a passage in the selected generation.
+5. Call answer only when the user asks for a generated answer. It sends the
+   question and retrieved passages to DeepSeek and spends the user's credit.
+   Every sentence is cited source wording; report each ⟦GAP⟧ as unestablished.
+   Set verbose for provenance and reasoning.
 
 Safeguards:
 - Every passage is cleaned text, not a transcript.

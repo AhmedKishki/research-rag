@@ -395,73 +395,36 @@ def _parser() -> argparse.ArgumentParser:
             "costs. Diagnostic, like --method."
         ),
     )
-    filters = find.add_argument_group(
-        "Filters",
-        "Each is repeatable, each reads the reviewed metadata at query time, and\n"
-        "none is applied when given nothing. A filter decides what the answer\n"
-        "may contain; it does not change the ranking.",
-    )
-    filters.add_argument(
-        "--category",
-        metavar="CATEGORY",
-        action="append",
-        help="Keep results carrying any of these categories.",
-    )
-    filters.add_argument(
-        "--project",
-        metavar="TAG",
-        action="append",
-        help=(
-            "Keep results carrying any of these project tags from the reviewed "
-            "metadata. This filters the answer; the global --project chose which "
-            "project to search."
+    _add_search_filters(find)
+
+    answer = add(
+        "answer",
+        description=(
+            "Answer a question by white-box synthesis. DeepSeek searches this "
+            "project as often as the question needs and submits a derivation; the "
+            "app renders every sentence from the exact wording of a retrieved "
+            "passage, and marks a link no passage states as a gap. The question "
+            "and every passage retrieved are sent to DeepSeek with the account's "
+            "key, which `api-key` sets. The answer and its references print by "
+            "default; --verbose adds the provenance, the reasoning, the sources, "
+            "and what was sent."
         ),
     )
-    filters.add_argument(
-        "--keyword",
-        metavar="KEYWORD",
-        action="append",
-        help="Keep results carrying every one of these keywords.",
+    answer.add_argument(
+        "question",
+        metavar="QUESTION",
+        help="The question to answer. Quote it when it carries spaces.",
     )
-    filters.add_argument(
-        "--language",
-        metavar="CODE",
-        action="append",
-        help="Keep results written in any of these ISO 639 codes.",
-    )
-    filters.add_argument(
-        "--author",
-        metavar="NAME",
-        action="append",
+    answer.add_argument(
+        "--verbose",
+        action="store_true",
         help=(
-            "Keep results whose source has one of these names among its authors, "
-            "matched as a case-insensitive substring."
+            "Also print the provenance of each sentence, the reasoning, each "
+            "source with its chunk id and locator, the searches, and every "
+            "passage sent."
         ),
     )
-    filters.add_argument(
-        "--title",
-        metavar="PHRASE",
-        action="append",
-        help=(
-            "Keep results whose source title contains one of these phrases, "
-            "matched as a case-insensitive substring."
-        ),
-    )
-    filters.add_argument(
-        "--source-id",
-        metavar="SOURCE_ID",
-        action="append",
-        help=(
-            "Search only these stable source ids, as `sources` reports them. "
-            "Repeatable."
-        ),
-    )
-    filters.add_argument(
-        "--exclude-source-id",
-        metavar="SOURCE_ID",
-        action="append",
-        help="Search everything except these stable source ids. Repeatable.",
-    )
+    _add_search_filters(answer)
 
     add(
         "sources",
@@ -1076,3 +1039,75 @@ def _parser() -> argparse.ArgumentParser:
         ),
     )
     return parser
+
+
+def _add_search_filters(parser: argparse.ArgumentParser) -> None:
+    """The reviewed-metadata filters a search and an answer both take."""
+
+    filters = parser.add_argument_group(
+        "Filters",
+        "Each is repeatable, each reads the reviewed metadata at query time, and\n"
+        "none is applied when given nothing. A filter decides what the answer\n"
+        "may contain; it does not change the ranking.",
+    )
+    filters.add_argument(
+        "--category",
+        metavar="CATEGORY",
+        action="append",
+        help="Keep results carrying any of these categories.",
+    )
+    filters.add_argument(
+        "--project",
+        metavar="TAG",
+        action="append",
+        help=(
+            "Keep results carrying any of these project tags from the reviewed "
+            "metadata. This filters the answer; the global --project chose which "
+            "project to search."
+        ),
+    )
+    filters.add_argument(
+        "--keyword",
+        metavar="KEYWORD",
+        action="append",
+        help="Keep results carrying every one of these keywords.",
+    )
+    filters.add_argument(
+        "--language",
+        metavar="CODE",
+        action="append",
+        help="Keep results written in any of these ISO 639 codes.",
+    )
+    filters.add_argument(
+        "--author",
+        metavar="NAME",
+        action="append",
+        help=(
+            "Keep results whose source has one of these names among its authors, "
+            "matched as a case-insensitive substring."
+        ),
+    )
+    filters.add_argument(
+        "--title",
+        metavar="PHRASE",
+        action="append",
+        help=(
+            "Keep results whose source title contains one of these phrases, "
+            "matched as a case-insensitive substring."
+        ),
+    )
+    filters.add_argument(
+        "--source-id",
+        metavar="SOURCE_ID",
+        action="append",
+        help=(
+            "Search only these stable source ids, as `sources` reports them. "
+            "Repeatable."
+        ),
+    )
+    filters.add_argument(
+        "--exclude-source-id",
+        metavar="SOURCE_ID",
+        action="append",
+        help="Search everything except these stable source ids. Repeatable.",
+    )

@@ -53,7 +53,7 @@ TOP_ENTRIES = 20
 def caller_kind(caller: str) -> str:
     """What kind of caller a fairness key names, for a list a reader scans."""
 
-    if caller in {"workspace", "command line"}:
+    if caller in {"workspace", "command line", "answer"}:
         return caller
     return "unknown" if caller in {"", "anonymous"} else "agent"
 

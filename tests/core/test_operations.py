@@ -101,3 +101,19 @@ def test_a_query_string_is_read_as_each_arguments_kind() -> None:
 def test_an_argument_is_refused_by_name(name, payload, refusal) -> None:
     with pytest.raises(ResearchError, match=refusal):
         arguments(name, payload)
+
+
+def test_an_answer_takes_a_question_and_the_search_filters() -> None:
+    assert arguments("answer", {"question": "Why?", "titles_any": "Atlas"}) == {
+        "question": "Why?",
+        "categories_any": None,
+        "projects_any": None,
+        "keywords": None,
+        "languages_any": None,
+        "authors_any": None,
+        "titles_any": ["Atlas"],
+        "source_ids": None,
+        "exclude_source_ids": None,
+    }
+    with pytest.raises(ResearchError, match="question"):
+        arguments("answer", {"question": "  "})

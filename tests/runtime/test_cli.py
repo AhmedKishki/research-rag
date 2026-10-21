@@ -72,6 +72,18 @@ class RecordingService:
     async def list_sources(self, **filters: Any) -> dict[str, Any]:
         return self._record("list_sources", filters)
 
+    async def answer(self, question: str, **filters: Any) -> dict[str, Any]:
+        self.calls.append(("answer", {"question": question, **filters}))
+        return {
+            "generated": True,
+            "synthesis": "It dissolved [S1].",
+            "references": "- [S1] Mensah.",
+            "provenance": "1. S1: verbatim",
+            "reasoning": "- Z: it dissolved.",
+            "gaps": 0,
+            "sent": {"endpoint": "https://api.deepseek.com", "chunk_ids": ["c-1"]},
+        }
+
     async def use_generation(self, generation_id: str) -> dict[str, Any]:
         return self._record("use_generation", {"generation_id": generation_id})
 
@@ -1124,3 +1136,34 @@ def test_api_key_takes_no_key_on_the_command_line() -> None:
     assert _args("api-key", "set").action == "set"
     with pytest.raises(SystemExit):
         _args("api-key", "set", "sk-in-shell-history")
+
+
+@pytest.mark.parametrize("verbose", [False, True])
+def test_answer_carries_its_filters_and_shows_the_rest_only_when_verbose(
+    verbose: bool,
+) -> None:
+    operations = Operations()
+    argv = ["answer", "Why did it dissolve?", "--author", "Mensah"]
+
+    payload = asyncio.run(
+        _operate(_args(*argv, *(["--verbose"] if verbose else [])), operations)
+    )
+
+    (call,) = operations.service.calls
+    assert call == (
+        "answer",
+        {
+            "question": "Why did it dissolve?",
+            "categories_any": None,
+            "projects_any": None,
+            "keywords": None,
+            "languages_any": None,
+            "authors_any": ["Mensah"],
+            "titles_any": None,
+            "source_ids": None,
+            "exclude_source_ids": None,
+        },
+    )
+    assert payload["synthesis"] == "It dissolved [S1]."
+    assert payload["references"] == "- [S1] Mensah."
+    assert ("provenance" in payload, "reasoning" in payload) == (verbose, verbose)

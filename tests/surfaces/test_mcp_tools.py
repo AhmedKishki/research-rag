@@ -30,6 +30,7 @@ TOOLS = (
     "status",
     "ingest",
     "search",
+    "answer",
     "find_source",
     "get_passage",
     "set_source_inclusion",
@@ -62,6 +63,9 @@ class _Service:
 
     async def search(self, query: str, **arguments: Any) -> dict[str, Any]:
         return self._record("search", {"query": query, **arguments})
+
+    async def answer(self, question: str, **filters: Any) -> dict[str, Any]:
+        return self._record("answer", {"question": question, **filters})
 
     async def find_source(self, *, query: str, limit: int) -> dict[str, Any]:
         return self._record("find_source", {"query": query, "limit": limit})
@@ -106,6 +110,20 @@ class _Service:
             "blocked_by": [],
             "degraded": [],
             "message": "Everything is current.",
+        }
+
+    def _answer(self, arguments: dict[str, Any]) -> dict[str, Any]:
+        return {
+            "provider": "deepseek",
+            "model": "deepseek-flash",
+            "generated": True,
+            "synthesis": "It dissolved because its members left [S1].",
+            "references": "- [S1] Mensah, *Grain Cooperatives*, p. 112.",
+            "provenance": "1. S1: verbatim",
+            "reasoning": "- Z: it dissolved.",
+            "gaps": 0,
+            "sources": [{"label": "S1", "chunk_id": "c-1"}],
+            "sent": {"endpoint": "https://api.deepseek.com", "chunk_ids": ["c-1"]},
         }
 
     def _ingest(self, arguments: dict[str, Any]) -> dict[str, Any]:
@@ -338,6 +356,9 @@ async def test_the_advertised_contract_and_handshake(project: Path) -> None:
     assert set(schemas["search"]["required"]) == {"query"}
     assert schemas["search"]["properties"]["top_k"]["minimum"] == 1
     assert schemas["search"]["properties"]["top_k"]["maximum"] == 50
+    assert tuple(schemas["answer"]["properties"]) == ("question", "verbose")
+    assert set(schemas["answer"]["required"]) == {"question"}
+    assert schemas["answer"]["properties"]["verbose"]["default"] is False
     assert set(schemas["get_passage"]["properties"]) == {"chunk_id"}
     assert set(schemas["find_source"]["properties"]) == {"query", "limit"}
 
@@ -377,8 +398,14 @@ async def test_the_advertised_contract_and_handshake(project: Path) -> None:
         assert tools[name].annotations.idempotentHint is True, name
     assert tools["set_source_metadata"].annotations.readOnlyHint is False
     assert tools["set_source_metadata"].annotations.destructiveHint is False
+    # An answer is the one call that reaches past this machine, and it writes
+    # nothing a reader keeps.
+    assert tools["answer"].annotations.openWorldHint is True
+    assert tools["answer"].annotations.readOnlyHint is True
+    assert tools["answer"].annotations.idempotentHint is False
     for tool in tools.values():
-        assert tool.annotations.openWorldHint is False, tool.name
+        if tool.name != "answer":
+            assert tool.annotations.openWorldHint is False, tool.name
 
     lowered = instructions.lower()
     for tool_name in TOOLS:
@@ -563,3 +590,23 @@ async def test_an_unexpected_failure_is_logged_with_its_traceback(
     assert "serving terminal" in answer.content[0].text
     (record,) = [item for item in caplog.records if item.exc_info]
     assert isinstance(record.exc_info[1], KeyError)
+
+
+@pytest.mark.parametrize("verbose", [False, True])
+async def test_an_answer_shows_provenance_and_reasoning_only_when_verbose(
+    project: Path, verbose: bool
+) -> None:
+    service = _Service()
+    async with _client(project, service) as client:
+        answer = await client.call_tool(
+            "answer", {"question": "Why did it dissolve?", "verbose": verbose}
+        )
+
+    assert answer.data["synthesis"] == "It dissolved because its members left [S1]."
+    assert answer.data["references"].startswith("- [S1] Mensah")
+    assert ("provenance" in answer.data, "reasoning" in answer.data) == (
+        verbose,
+        verbose,
+    )
+    assert service.calls[0][0] == "answer"
+    assert service.calls[0][1]["question"] == "Why did it dissolve?"

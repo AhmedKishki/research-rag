@@ -1,4 +1,4 @@
-"""The agent surface: eight tools and one resource over one project.
+"""The agent surface: nine tools and one resource over one project.
 
 The tools reach the app's one `ResearchService` through a projection built for
 this reader: every answer is lean, and the workspace and the command line want
@@ -46,6 +46,21 @@ SearchQuery: TypeAlias = Annotated[
     Field(
         description="Research question, exact phrase, name, or concept to retrieve.",
         min_length=1,
+    ),
+]
+AnswerQuestion: TypeAlias = Annotated[
+    str,
+    Field(
+        description="The question to answer from this project's corpus.", min_length=1
+    ),
+]
+AnswerVerbose: TypeAlias = Annotated[
+    bool,
+    Field(
+        description=(
+            "Also return each sentence's provenance, the reasoning, the sources "
+            "with chunk_ids, the searches, and every passage sent."
+        )
     ),
 ]
 TopK: TypeAlias = Annotated[
@@ -376,7 +391,7 @@ def create_blocked_mcp(
 
 
 def create_unserved_mcp(config: ResearchConfig, reason: str) -> FastMCP[Any]:
-    """The same eight tools, answering for a project no app is serving.
+    """The same nine tools, answering for a project no app is serving.
 
     The bridge uses it while the app is down, so an agent that connected before
     the app started still holds the whole tool list and finds each call working
@@ -569,6 +584,31 @@ def create_mcp(
                 )
             ),
         )
+
+    @app.tool(
+        annotations={
+            "readOnlyHint": True,
+            "destructiveHint": False,
+            "idempotentHint": False,
+            "openWorldHint": True,
+        }
+    )
+    async def answer(
+        question: AnswerQuestion, verbose: AnswerVerbose = False
+    ) -> dict[str, Any]:
+        """Answer from this corpus by white-box synthesis, through DeepSeek.
+
+        Call only when the user asks for a generated answer: it sends the question
+        and every retrieved passage to DeepSeek and spends the user's credit.
+        Every sentence is the exact wording of a cited passage; a link no passage
+        states is a `⟦GAP⟧`. Returns the synthesis and references; `verbose`
+        adds provenance and reasoning. `generated: false` carries the reason.
+        """
+
+        result = await _service_call(
+            lambda instance: run(instance, "answer", {"question": question})
+        )
+        return result if verbose else _present("answer", result)
 
     @app.tool(
         annotations={

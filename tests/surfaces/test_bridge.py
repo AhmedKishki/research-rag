@@ -222,7 +222,7 @@ async def test_the_bridge_holds_every_tool_whether_or_not_an_app_is_up(
         with pytest.raises(ToolError, match="start"):
             await client.call_tool("get_passage", {"chunk_id": "chk_one"})
 
-    assert down == up and len(down) == 8
+    assert down == up and len(down) == 9
     assert blocked["blocked_by"][0]["check"] == "app.serving"
     assert "AI and fetishism" in blocked["blocked_by"][0]["remedy"]
     assert answered["hits"][0]["chunk_id"] == "chk_one"

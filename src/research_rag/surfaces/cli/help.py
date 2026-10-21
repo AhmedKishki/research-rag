@@ -96,6 +96,16 @@ HELP_GROUPS: tuple[tuple[str, tuple[tuple[str, str], ...]], ...] = (
                 ),
             ),
             (
+                "answer",
+                (
+                    "Answer a question from the passages DeepSeek retrieves here, "
+                    "every sentence rendered from their exact wording and every "
+                    "missing link marked as a gap. It sends the question and the "
+                    "passages to DeepSeek; --verbose shows the provenance and the "
+                    "reasoning."
+                ),
+            ),
+            (
                 "passage",
                 "One passage and its neighbours, for reading around a result.",
             ),
@@ -310,8 +320,8 @@ an argument. `clients` lists the agents and `disconnect` ends one; the workspace
 shows the same list, so an agent ended in the browser is gone from the terminal
 too.
 
-An agent gets eight tools and one resource, and every answer is the lean
-projection: a question at a time, no inventory, no scores. `status` is a verdict
+An agent gets nine tools and one resource, and every answer is the lean
+projection unless `answer` is asked to be verbose: a question at a time, no inventory, no scores. `status` is a verdict
 naming the call that closes a gap, not the whole corpus state. The full payload is
 `status --verbose` here and the workspace there.
 

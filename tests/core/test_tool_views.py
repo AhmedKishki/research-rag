@@ -7,7 +7,11 @@ from pathlib import Path
 import pytest
 
 from research_rag.core.service import ResearchError
-from research_rag.core.tool_views import lean_ingest, present_tool_response
+from research_rag.core.tool_views import (
+    lean_answer,
+    lean_ingest,
+    present_tool_response,
+)
 from research_rag.project.config import ConfigurationError, resolve_config
 from research_rag.project.embeddings import (
     DEFAULT_EMBEDDING_MODEL,
@@ -1454,3 +1458,68 @@ def test_the_lean_answer_is_a_small_share_of_the_payload_it_projects() -> None:
             assert lean_bytes < 0.25 * full_bytes, (
                 f"{operation} answered {lean_bytes} of {full_bytes} bytes"
             )
+
+
+ANSWER = {
+    "provider": "deepseek",
+    "model": "deepseek-flash",
+    "generated": True,
+    "question": "Why?",
+    "synthesis": "It dissolved because its members left [S1].",
+    "references": "- [S1] Mensah, *Grain Cooperatives*, p. 112.",
+    "provenance": "1. S1: verbatim",
+    "reasoning": "- Z: it dissolved.",
+    "gaps": 0,
+    "sources": [{"label": "S1", "chunk_id": "c-1", "text": "..."}],
+    "derivation": {"steps": []},
+    "searches": [{"query": "dissolve", "returned": 3}],
+    "generation_ids": ["g-1"],
+    "sent": {"endpoint": "https://api.deepseek.com", "chunk_ids": ["c-1", "c-2"]},
+    "usage": {"prompt_tokens": 10},
+}
+
+
+@pytest.mark.parametrize(
+    ("payload", "kept"),
+    [
+        (
+            ANSWER,
+            {
+                "generated": True,
+                "synthesis": ANSWER["synthesis"],
+                "references": ANSWER["references"],
+                "gaps": 0,
+            },
+        ),
+        (
+            {
+                **{
+                    k: v
+                    for k, v in ANSWER.items()
+                    if k
+                    not in {
+                        "synthesis",
+                        "references",
+                        "provenance",
+                        "reasoning",
+                        "gaps",
+                        "sources",
+                        "derivation",
+                    }
+                },
+                "generated": False,
+                "reason": "No retrieved passage supplies a step.",
+            },
+            {"generated": False, "reason": "No retrieved passage supplies a step."},
+        ),
+    ],
+    ids=["generated", "not generated"],
+)
+def test_a_lean_answer_is_the_answer_its_references_and_what_was_sent(
+    payload: dict, kept: dict
+) -> None:
+    assert lean_answer(payload) == {
+        **kept,
+        "sent": {"endpoint": "https://api.deepseek.com", "passages": 2},
+    }
+    assert present_tool_response("answer", payload, detail=FULL_TOOL_DETAIL) == payload
