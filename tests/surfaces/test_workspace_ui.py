@@ -2306,6 +2306,7 @@ def test_a_load_draws_nothing_the_profile_has_not_allowed() -> None:
         "clients",
         "agent_entry",
         "updates",
+        "credentials",
     }
     for tag in gated:
         assert re.search(r"\shidden(?:\s|>)", tag), tag
@@ -2943,3 +2944,75 @@ result.withoutId = state.view;
     assert result["pushed"] is True
     # A source address with no source in it is not a view of anything.
     assert result["withoutId"] == "sources"
+
+
+def test_an_answer_links_its_sources_marks_its_gaps_and_folds_its_apparatus(
+    tmp_path: Path,
+) -> None:
+    result = _drive_page(
+        tmp_path,
+        """
+renderAnswer({
+  generated: true,
+  model: "deepseek-flash",
+  synthesis: "Prices rose [S1]. Incomes fell [S2]. ⟦GAP: fall (B) → closure (Z): unstated⟧",
+  references: "- [S1] Lee, *Example Book*, p. 3.",
+  provenance: "1. S1: verbatim",
+  reasoning: "- Z: prices rose and incomes fell.",
+  gaps: 1,
+  sources: [
+    { label: "S1", chunk_id: "c-1", source_id: "s-1", title: "Example Book", authors: ["Lee"], locator: { page: 3 } },
+    { label: "S2", chunk_id: "c-2", source_id: "s-2", title: "Sample Study", authors: [], locator: { page: 9 } },
+  ],
+  sent: { endpoint: "https://api.deepseek.com", chunk_ids: ["c-1", "c-2", "c-3"] },
+  usage: { prompt_tokens: 1200, completion_tokens: 300 },
+});
+const panel = document.getElementById("answer-panel");
+const folds = [];
+(function walk(node) {
+  if (node.tagName === "details") folds.push({ text: text(node), open: Boolean(node.open) });
+  (node.children || []).forEach(walk);
+})(panel);
+const gap = find(panel, (node) => (node.className || "").includes("answer-gap"));
+const cite = find(panel, (node) => node.tagName === "a" && node.textContent === "S1");
+result.hidden = panel.hidden;
+result.text = text(panel);
+result.folds = folds;
+result.gap = gap ? gap.textContent : null;
+result.cite = cite ? cite.href : null;
+renderAnswer({ generated: false, reason: "No retrieved passage supplies a step toward an answer.", sent: { endpoint: "https://api.deepseek.com", chunk_ids: [] } });
+result.failed = text(document.getElementById("answer-panel"));
+""",
+    )
+
+    assert result["hidden"] is False
+    assert "Prices rose" in result["text"]
+    assert "Sent to DeepSeek" in result["text"] and "3 passages" in result["text"]
+    assert result["gap"].startswith("⟦GAP:")
+    assert result["cite"].endswith("c-1")
+    assert [fold["open"] for fold in result["folds"]] == [False, False]
+    assert "1. S1: verbatim" in result["folds"][0]["text"]
+    assert "No retrieved passage supplies a step" in result["failed"]
+
+
+def test_the_key_field_sends_the_key_once_and_never_shows_it(tmp_path: Path) -> None:
+    result = _drive_page(
+        tmp_path,
+        """
+(async () => {
+  state.profile = { capabilities: { credentials: true } };
+  const field = document.getElementById("api-key-input");
+  field.value = "sk-typed";
+  await saveApiKey();
+  result.requests = requests.filter((entry) => entry.path === "/api/credentials");
+  result.cleared = field.value;
+})();
+""",
+    )
+
+    (sent,) = result["requests"]
+    assert (sent["method"], json.loads(sent["body"])) == (
+        "POST",
+        {"api_key": "sk-typed"},
+    )
+    assert result["cleared"] == ""

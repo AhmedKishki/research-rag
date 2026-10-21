@@ -268,7 +268,7 @@ def test_the_workspace_serves_the_page_and_read_apis(project: Path) -> None:
 
     assert health.json()["project_root"] == str(project)
     assert profile.json()["capabilities"] == dict.fromkeys(
-        ("clients", "agent_entry", "updates"), True
+        ("clients", "agent_entry", "updates", "credentials"), True
     )
     # The quote rule is stated once in the README, not on every passage a browser renders.
     assert "not for direct quotation" not in json.dumps(profile.json()).lower()

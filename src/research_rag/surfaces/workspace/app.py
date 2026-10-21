@@ -33,7 +33,7 @@ _ASSETS = {
 MAX_ERROR_LENGTH = 1200
 # The panels that act on this machine. A LAN viewer is not shown them, and the
 # network policy refuses their routes to it.
-LOCAL_PANELS = ("clients", "agent_entry", "updates")
+LOCAL_PANELS = ("clients", "agent_entry", "updates", "credentials")
 
 
 async def _adapter_call(
@@ -188,6 +188,9 @@ _OPERATION_ROUTES = (
     ("/api/status", "GET", "status"),
     ("/api/sources", "GET", "list_sources"),
     ("/api/search", "POST", "search"),
+    ("/api/answer", "POST", "answer"),
+    ("/api/credentials", "GET", "credentials_read"),
+    ("/api/credentials", "POST", "credentials_write"),
     ("/api/passages/{chunk_id:str}", "GET", "get_passage"),
     ("/api/ingest", "POST", "ingest"),
     ("/api/source-metadata", "POST", "set_source_metadata"),

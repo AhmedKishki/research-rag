@@ -26,6 +26,8 @@ LOCAL_ONLY_PATHS = (
     "/api/updates",
     "/api/open-source",
     "/api/health",
+    # The account's DeepSeek key. A LAN viewer may answer, never see or set it.
+    "/api/credentials",
 )
 
 

@@ -63,6 +63,9 @@ class FakeAdapter:
                 "context": [],
             },
             "ingest": {"generation_id": "generation-2", "chunk_count": 2},
+            "answer": {"generated": True, "synthesis": "Evidence [S1]."},
+            "credentials_read": {"deepseek": {"set": False, "origin": None}},
+            "credentials_write": {"deepseek": {"set": True, "origin": "account file"}},
             "set_source_metadata": {"requires_ingest": True},
             "set_source_inclusion": {"included": arguments.get("included")},
             "remove_generation": {
@@ -272,6 +275,16 @@ def test_lan_policy_enforces_workspace_routes_writes_and_originals(
             ).status_code
             == 200
         )
+        # A LAN viewer may answer, and never sees or sets the key.
+        origin = {"Origin": "http://192.168.1.20:5051"}
+        assert (
+            client.post("/api/answer", json={"question": "Why?"}, headers=origin)
+        ).status_code == 200
+        assert client.get("/api/credentials").status_code == 403
+        assert (
+            client.post("/api/credentials", json={"clear": True}, headers=origin)
+        ).status_code == 403
+        assert [name for name, _ in adapter.calls if name.startswith("cred")] == []
         original = client.get("/api/source-file", params={"path": "evidence.pdf"})
         assert original.status_code == 200
         assert original.content == source.read_bytes()
@@ -345,6 +358,7 @@ def test_workspace_and_normalized_read_operations(tmp_path: Path) -> None:
         "clients",
         "agent_entry",
         "updates",
+        "credentials",
     }
     assert health.json()["project_root"] == "/project"
     assert status.json()["generation_id"] == "generation-1"
@@ -578,7 +592,7 @@ def test_only_the_local_panels_are_gated_by_the_profile(
     assert page.status_code == 200
     assert javascript.status_code == 200
     gated = set(re.findall(r'data-capability="([^"]+)"', page.text))
-    assert gated == {"clients", "agent_entry", "updates"}
+    assert gated == {"clients", "agent_entry", "updates", "credentials"}
     # The language filter and the inventory that names the languages in a
     # project are one capability: a box a reader cannot fill from the status
     # beside it is a box that asks them to know the codes already listed.
@@ -836,3 +850,28 @@ def test_a_chunk_inclusion_write_is_same_origin_and_json_only(
     assert cross_origin.status_code == 403
     assert form_encoded.status_code == 415
     assert not any(operation == "set_chunk_inclusion" for operation, _ in adapter.calls)
+
+
+def test_an_answer_and_the_key_are_forwarded_through_the_adapter(
+    tmp_path: Path,
+) -> None:
+    adapter = FakeAdapter(_source(tmp_path))
+    app = create_ui_app(adapter=adapter)
+
+    with TestClient(
+        app, base_url=LOOPBACK_BASE_URL, client=LOOPBACK_TEST_CLIENT
+    ) as client:
+        answered = client.post(
+            "/api/answer", json={"question": "Why?", "titles_any": ["Atlas"]}
+        )
+        read = client.get("/api/credentials")
+        written = client.post("/api/credentials", json={"api_key": "sk-workspace"})
+
+    assert answered.json() == {"generated": True, "synthesis": "Evidence [S1]."}
+    assert read.json() == {"deepseek": {"set": False, "origin": None}}
+    assert written.json()["deepseek"]["set"] is True
+    assert adapter.calls == [
+        ("answer", {"question": "Why?", "titles_any": ["Atlas"]}),
+        ("credentials_read", {}),
+        ("credentials_write", {"api_key": "sk-workspace"}),
+    ]
