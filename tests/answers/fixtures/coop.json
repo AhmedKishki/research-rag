@@ -1,0 +1,31 @@
+{
+  "query": "Why did the cooperative dissolve?",
+  "sources": {
+    "S1": {"author": "Mensah", "title": "Grain Cooperatives", "locator": "p. 112",
+           "text": "In 2009 the cooperative dissolved and its warehouse was sold."},
+    "S2": {"title": "field-notes.pdf", "note": "Retrieval result, wording not checked against the original",
+           "text": "The cooperative dissolved because its members left."}
+  },
+  "conclusion": "The cooperative dissolved in 2009 because its members left.",
+  "steps": [
+    {"id": "A", "claim": "members left", "supports": "B", "relation": "cause", "status": "stated",
+     "licence": {"source": "S2", "text": "The cooperative dissolved because its members left."},
+     "why": "it is the only cause any source gives"},
+    {"id": "B", "claim": "the cooperative dissolved in 2009", "supports": "Z", "status": "part",
+     "why": "it is the event the query asks about"}
+  ],
+  "sentences": [
+    {"step": ["A", "B"], "pieces": [
+      {"source": "S1", "text": "In 2009 the cooperative dissolved and its warehouse was sold.",
+       "ops": [{"op": "DELETE", "text": " and its warehouse was sold."}]},
+      {"source": "S2", "text": "because", "link": "A"},
+      {"source": "S2", "text": "its members left."}]}
+  ],
+  "excluded": [{"source": "S1", "text": "its warehouse was sold",
+                "reason": "a consequence of the dissolution, not needed for its cause"}],
+  "conflicts": [],
+  "checks": [
+    {"source": "S1", "result": "Keeps the date and the event. Credits S1 with no cause."},
+    {"source": "S2", "result": "The cause is S2's own relation between the same words, the cooperative dissolved."}
+  ]
+}

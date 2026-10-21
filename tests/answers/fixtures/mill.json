@@ -1,0 +1,31 @@
+{
+  "query": "What happened to prices and incomes in the town after the mill closed?",
+  "sources": {
+    "S1": {"author": "Lee", "title": "Example Book", "locator": "p. 3",
+           "text": "As noted earlier, prices in the town rose sharply after the mill closed in 1990."},
+    "S2": {"author": "Diaz", "title": "Sample Study", "locator": "ch. 2",
+           "note": "Retrieval result, wording not checked against the original",
+           "text": "Household incomes in the town fell by a third between 1990 and 1992."}
+  },
+  "conclusion": "After the mill closed, prices in the town rose and household incomes fell.",
+  "steps": [
+    {"id": "A", "claim": "prices rose after the closure", "supports": "Z", "status": "part",
+     "why": "it answers the prices part of the query and dates the rise after the closure"},
+    {"id": "B", "claim": "incomes fell 1990 to 1992", "supports": "Z", "relation": "sequence", "status": "gap",
+     "why": "it is the only claim about incomes",
+     "missing": "income fall from 1990 to 1992 (B) → after the mill closed (Z): no source places the fall after the closure or links it to the mill"}
+  ],
+  "sentences": [
+    {"step": "A", "pieces": [{"source": "S1",
+      "text": "As noted earlier, prices in the town rose sharply after the mill closed in 1990.",
+      "ops": [{"op": "DELETE", "text": "As noted earlier, "}, {"op": "NORMALISE", "rule": "case", "to": "upper"}]}]},
+    {"step": "B", "pieces": [{"source": "S2",
+      "text": "Household incomes in the town fell by a third between 1990 and 1992."}]}
+  ],
+  "excluded": [],
+  "conflicts": [],
+  "checks": [
+    {"source": "S1", "result": "Keeps the rise, its degree and its date. Credits S1 with nothing about incomes."},
+    {"source": "S2", "result": "Keeps the figure and the period. The gap records that S2 does not mention the mill."}
+  ]
+}
