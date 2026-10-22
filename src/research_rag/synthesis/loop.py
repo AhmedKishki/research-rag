@@ -22,6 +22,7 @@ from importlib.resources import files
 from typing import Any
 
 from ..project.policy import ResearchError
+from .citations import source_citations
 from .deepseek import Turn
 from .ops import Rejected
 from .render import render_parts
@@ -208,6 +209,13 @@ class _Run:
         try:
             derivation = self._derivation(submitted)
             parts = render_parts(derivation)
+            kept = source_citations(parts["synthesis"])
+            if kept:
+                raise Rejected(
+                    "The synthesis keeps citations its passages carried: "
+                    + ", ".join(repr(citation) for citation in kept)
+                    + ". DELETE each one; the passage label is the citation."
+                )
         except Rejected as exc:
             self.refusals.append(f"Attempt {self.attempts}: {exc}")
             left = self.limits.max_attempts - self.attempts

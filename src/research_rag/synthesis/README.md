@@ -6,6 +6,7 @@ wording or refused.
 | Module | Holds |
 |---|---|
 | `loop.py` | `run_synthesis`: the four tools DeepSeek answers through, the labelled passages, and the bounds on searches, attempts and time |
+| `citations.py` | `source_citations`: a page, author–year, bracketed, or footnote citation a passage carried into a rendered synthesis |
 | `deepseek.py` | `DeepSeek`: one connection to the chat-completions endpoint, and a refusal named with its remedy |
 | `prompt.md` | The system prompt: the white-box procedure, condensed from the skill's references for these tools |
 | `render.py` | `render` and `render_parts`: the four parts of a reply, rendered from a derivation, or `Rejected` |

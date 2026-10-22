@@ -305,6 +305,10 @@ settings, readable by this account alone, and RESEARCH_RAG_DEEPSEEK_API_KEY
 overrides it. The key is not a setting: `config` does not print it and no project
 holds it. Every project on the account synthesises with it.
 
+Each sentence cites its passage by label, such as [S3], and nothing else: a
+page, author-year, bracketed, or footnote citation a passage carried is deleted,
+and --verbose shows each deletion in the provenance.
+
 --reasoning chooses how hard DeepSeek thinks: low, high, or max, with the
 synthesis.reasoning setting as the default. low is fastest and cheapest; a
 synthesis that never renders lists each refusal under --verbose.

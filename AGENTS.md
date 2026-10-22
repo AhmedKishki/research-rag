@@ -95,6 +95,7 @@
   - The app builds a derivation's sources from the passages the run retrieved. The model names a source by its label only.
   - `synthesis/render.py` renders the derivation and rejects wording no source supplies. A rejected derivation returns to the model up to `synthesis.max_attempts` times and is never shown.
   - A missing link is a `⟦GAP⟧`. No AI-authored link enters a synthesis.
+  - A sentence's passage label, such as `[S3]`, is its only citation. `synthesis/citations.py` finds a citation a passage carried, and the model deletes it, recorded in provenance. The white-box-synthesis renderer copy does not apply this rule.
   - When no source supplies a step, or no attempt renders, the result is `generated: false` and carries no synthesis. A verbose result lists the rule each refused attempt broke, which may quote the wording the model tried.
   - The question, the system prompt, and every passage the run retrieves leave the machine. Each result names the endpoint and how many passages it sent; a verbose result names their `chunk_id`s.
   - A synthesis reasons at `synthesis.reasoning` unless the caller chooses `low`, `high`, or `max`. Thinking is never off: a derivation without it rarely renders.

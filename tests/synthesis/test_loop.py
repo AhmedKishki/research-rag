@@ -360,3 +360,31 @@ def test_an_answer_that_runs_out_of_time_says_so() -> None:
 
     assert result["generated"] is False
     assert "0.05 seconds" in result["reason"]
+
+
+def test_a_citation_the_passage_carried_is_refused_until_deleted() -> None:
+    cited = {
+        **HITS,
+        "c-2": {
+            **HITS["c-2"],
+            "text": "The cooperative dissolved because its members left (Mensah 2010: 4).",
+        },
+    }
+    kept = copy.deepcopy(DERIVATION)
+    kept["steps"][0]["licence"]["text"] = cited["c-2"]["text"]
+    kept["sentences"][0]["pieces"][2]["text"] = "its members left (Mensah 2010: 4)."
+    deleted = copy.deepcopy(kept)
+    deleted["sentences"][0]["pieces"][2]["ops"] = [
+        {"op": "DELETE", "text": " (Mensah 2010: 4)"}
+    ]
+    model = Model(
+        _call("search", {"query": "cooperative"}), _submit(kept), _submit(deleted, 2)
+    )
+
+    result, _ = asyncio.run(_synthesise(model, Corpus(cited)))
+
+    (refused,) = result["refusals"]
+    assert "(Mensah 2010: 4)" in refused and "DELETE" in refused
+    assert result["generated"] is True
+    assert "Mensah 2010" not in result["synthesis"]
+    assert 'DELETE " (Mensah 2010: 4)"' in result["provenance"]
