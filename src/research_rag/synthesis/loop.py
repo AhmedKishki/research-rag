@@ -423,7 +423,8 @@ def _record_deviations(parts: dict[str, Any]) -> None:
     while end < len(lines) and lines[end].startswith("  - "):
         end += 1
     lines[start:end] = [
-        f"  - Sentence {d['sentence']}: {d['reason']} Waived: {' '.join(d['waived'])}"
+        f"  - Sentence {d['sentence']}: {d['reason']} "
+        + (f"Waived: {' '.join(d['waived'])}" if d["waived"] else "No rule needed it.")
         for d in parts["deviations"]
     ] or ["  - None."]
     parts["reasoning"] = "\n".join(lines)

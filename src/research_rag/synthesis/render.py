@@ -1,6 +1,6 @@
 """Render a white-box derivation: Synthesis, References, Provenance, Reasoning.
 
-Copied from github.com/AhmedKishki/agent-skills @ 7dfca79,
+Copied from github.com/AhmedKishki/agent-skills @ ea68182,
 `skills/white-box-synthesis/scripts/render.py`. The copy is deliberate: this app
 depends on no other project by its author. Carry a fix to both copies.
 
@@ -82,10 +82,8 @@ def _render(d):
         if sentence.get("paragraph") and paras[-1]:
             paras.append([])
         paras[-1].append(text)
-        prov.append(
-            f"{n}. {line}"
-            + (f" · DEVIATION: {sentence['deviation']}" if waived else "")
-        )
+        why = sentence.get("deviation")
+        prov.append(f"{n}. {line}" + (f" · DEVIATION: {why}" if why else ""))
         refs += labels
         for label, span in used:
             spans.setdefault(label, []).append(span)
@@ -102,7 +100,7 @@ def _render(d):
         "deviations": [
             {"sentence": n, "reason": s["deviation"], "waived": w}
             for n, s, *_, w in built
-            if w
+            if s.get("deviation")
         ],
         "sentences": [
             {"sentence": n, "text": text, "deviation": s.get("deviation") or None}

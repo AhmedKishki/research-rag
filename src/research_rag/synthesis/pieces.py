@@ -1,6 +1,6 @@
 """Replay each piece's operations and join pieces into sentences.
 
-Copied from github.com/AhmedKishki/agent-skills @ 7dfca79,
+Copied from github.com/AhmedKishki/agent-skills @ ea68182,
 `skills/white-box-synthesis/scripts/pieces.py`. The copy is deliberate; carry a fix
 to both copies.
 """
@@ -99,5 +99,7 @@ def join_pieces(sentence, steps, sources, pairs):
         guideline(f"{out[:40]!r} must start with a capital: NORMALISE case to upper.")
     mark = "[" + "; ".join(labels) + "]"
     end = re.search(r"[.?!][”’\"')\]]*$", out)
+    if not end:
+        guideline(f"{out[-40:]!r} must end with a full stop: NORMALISE end-stop.")
     out = f"{out[: end.start()]} {mark}{end.group()}" if end else f"{out} {mark}"
     return out, labels, " + ".join(prov), spans

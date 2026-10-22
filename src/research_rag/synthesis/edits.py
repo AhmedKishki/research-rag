@@ -1,6 +1,6 @@
 """INFLECT and NORMALISE on their closed lists. Neither adds a word no source wrote.
 
-Copied from github.com/AhmedKishki/agent-skills @ 7dfca79,
+Copied from github.com/AhmedKishki/agent-skills @ ea68182,
 `skills/white-box-synthesis/scripts/edits.py`. The copy is deliberate; carry a fix
 to both copies.
 """

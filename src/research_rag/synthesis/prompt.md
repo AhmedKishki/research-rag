@@ -78,13 +78,15 @@ Each piece is one COPY of an exact source span plus these operations, in order. 
 - One answer sentence normally comes from one source sentence.
 - Pieces from different source sentences join only through a connective copied from the licence of a `stated` link: a piece `{"source": <the licence's source>, "text": "because", "link": <the step id>}`. Two content pieces never touch without one.
 - DELETE the first piece's full stop and lower-case the next piece with NORMALISE `case`.
+- Every sentence ends with a full stop: when a span stops before its sentence's full stop, add NORMALISE `end-stop`.
+- A span that starts inside a passage's sentence keeps that sentence's frame, such as "Stated thus, …" or "X argues that". Dropping the frame turns the passage's report of a view into a bare claim.
 - Every sentence starts with a capital letter. After a DELETE at the start of a piece, add NORMALISE `case` with `"to": "upper"`.
 
 # Deviations
 
-- A sentence that breaks a rule on form states why in `"deviation"`. These rules may bend: a span or DELETE edge inside a word, a DELETE that merges two words, a punctuation change beyond quote glyphs, the end-stop and semicolon conditions, two pieces joined without a licensed connective, a connective without a stated link or from another source than its licence, chain order, a capital at the start, and a passage's own citation.
+- A sentence that breaks a rule on form states why in `"deviation"`. These rules may bend: a span or DELETE edge inside a word, a DELETE that merges two words, a punctuation change beyond quote glyphs, the end-stop and semicolon conditions, two pieces joined without a licensed connective, a connective without a stated link or from another source than its licence, chain order, a capital at the start, a full stop at the end, and a passage's own citation.
 - These never bend: exact copying from a retrieved passage, an INFLECT or NORMALISE that changes a word, adding any word, the chain's structure, and a check for every source.
-- A deviation without a reason is refused. Never give one to go against a passage.
+- Every stated deviation is shown to the reader, whether or not a rule needed it, so state one only when a rule does. A deviation without a reason is refused. Never give one to go against a passage.
 
 # Example
 

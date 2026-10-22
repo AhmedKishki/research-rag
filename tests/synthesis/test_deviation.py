@@ -91,6 +91,20 @@ CASES = [
         ),
         "punctuation only",
     ),
+    ("a deviation with nothing to waive recorded", lambda d: _sentence(d, 0), None),
+    (
+        "a missing full stop refused",
+        lambda d: _piece(d, 1).update(text=_piece(d, 1)["text"][:-1]),
+        "must end with a full stop",
+    ),
+    (
+        "a missing full stop waived",
+        lambda d: (
+            _sentence(d, 1),
+            _piece(d, 1).update(text=_piece(d, 1)["text"][:-1]),
+        ),
+        None,
+    ),
     (
         "a deviation without a reason",
         lambda d: (
@@ -131,3 +145,25 @@ def test_the_parts_name_each_deviation_and_each_sentence() -> None:
     assert any("splits a word" in waived for waived in deviation["waived"])
     assert [s["deviation"] for s in parts["sentences"]] == [None, WHY]
     assert parts["sentences"][0]["text"].startswith("Prices in the town")
+
+
+def test_a_deviation_that_waived_nothing_is_still_recorded() -> None:
+    d = copy.deepcopy(BASE)
+    _sentence(d, 0)
+
+    parts = render_parts(d)
+
+    assert parts["deviations"] == [{"sentence": 1, "reason": WHY, "waived": []}]
+    assert (
+        "1. S1: " in parts["provenance"] and f"DEVIATION: {WHY}" in parts["provenance"]
+    )
+    assert f"  - Sentence 1: {WHY} No rule needed it." in parts["reasoning"]
+
+
+def test_an_end_stop_restores_the_full_stop_a_span_left_behind() -> None:
+    d = copy.deepcopy(BASE)
+    _piece(d, 1).update(
+        text=_piece(d, 1)["text"][:-1], ops=[{"op": "NORMALISE", "rule": "end-stop"}]
+    )
+
+    assert "between 1990 and 1992 [S2]." in render_parts(d)["synthesis"]

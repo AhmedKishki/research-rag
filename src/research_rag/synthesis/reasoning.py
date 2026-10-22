@@ -1,6 +1,6 @@
 """Write the References and the Reasoning: the agent's own wording, never a source.
 
-Copied from github.com/AhmedKishki/agent-skills @ 7dfca79,
+Copied from github.com/AhmedKishki/agent-skills @ ea68182,
 `skills/white-box-synthesis/scripts/reasoning.py`. The copy is deliberate; carry a fix
 to both copies.
 """
@@ -56,9 +56,10 @@ def reasoning(d, steps, sources, results, spans, built):
     )
     lines += ["- Source checks:"] + [f"  - {k}: {v}" for k, v in results.items()]
     devs = [
-        f"  - Sentence {n}: {s['deviation']} Waived: {' '.join(w)}"
+        f"  - Sentence {n}: {s['deviation']} "
+        + (f"Waived: {' '.join(w)}" if w else "No rule needed it.")
         for n, s, *_, w in built
-        if w
+        if s.get("deviation")
     ]
     lines += ["- Deviations:"] + (devs or ["  - None."])
     lines += [f"- Note: {note}" for note in d.get("notes", [])]

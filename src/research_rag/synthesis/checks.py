@@ -1,6 +1,6 @@
 """Check the argument chain, its links and the per-source checks.
 
-Copied from github.com/AhmedKishki/agent-skills @ 7dfca79,
+Copied from github.com/AhmedKishki/agent-skills @ ea68182,
 `skills/white-box-synthesis/scripts/checks.py`. The copy is deliberate; carry a fix
 to both copies.
 """

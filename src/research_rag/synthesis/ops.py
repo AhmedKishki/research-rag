@@ -1,6 +1,6 @@
 """Load sources, COPY exact spans, and hold the deviation a sentence states.
 
-Copied from github.com/AhmedKishki/agent-skills @ 7dfca79,
+Copied from github.com/AhmedKishki/agent-skills @ ea68182,
 `skills/white-box-synthesis/scripts/ops.py`. The copy is deliberate; carry a fix
 to both copies.
 """
