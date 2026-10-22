@@ -2981,7 +2981,7 @@ result.text = text(panel);
 result.folds = folds;
 result.gap = gap ? gap.textContent : null;
 result.cite = cite ? cite.href : null;
-renderSynthesis({ generated: false, reason: "No retrieved passage supplies a step toward a synthesis.", sent: { endpoint: "https://api.deepseek.com", chunk_ids: [] } });
+renderSynthesis({ generated: false, reason: "No derivation passed the renderer in 3 attempts.", refusals: ["Attempt 1: Sentence 2: unknown step"], sent: { endpoint: "https://api.deepseek.com", chunk_ids: [] } });
 result.failed = text(document.getElementById("synthesis-panel"));
 """,
     )
@@ -2995,7 +2995,8 @@ result.failed = text(document.getElementById("synthesis-panel"));
     assert result["cite"].endswith("c-1")
     assert [fold["open"] for fold in result["folds"]] == [False, False]
     assert "1. S1: verbatim" in result["folds"][0]["text"]
-    assert "No retrieved passage supplies a step" in result["failed"]
+    assert "No derivation passed the renderer" in result["failed"]
+    assert "Attempt 1: Sentence 2: unknown step" in result["failed"]
 
 
 def test_the_key_field_sends_the_key_once_and_never_shows_it(tmp_path: Path) -> None:
@@ -3076,7 +3077,6 @@ def test_the_search_form_has_one_submit_and_a_mode_toggle() -> None:
         "synthesise",
     ]
     assert re.findall(r'<option value="([a-z]+)"', form) == [
-        "none",
         "low",
         "high",
         "max",

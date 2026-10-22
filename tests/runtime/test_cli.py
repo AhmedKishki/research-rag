@@ -1175,3 +1175,9 @@ def test_synthesise_carries_its_filters_and_shows_the_rest_only_when_verbose(
     assert payload["synthesis"] == "It dissolved [S1]."
     assert payload["references"] == "- [S1] Mensah."
     assert ("provenance" in payload, "reasoning" in payload) == (verbose, verbose)
+
+
+def test_synthesise_offers_no_reasoning_below_low() -> None:
+    assert _args("synthesise", "Why?", "--reasoning", "LOW").reasoning == "low"
+    with pytest.raises(SystemExit):
+        _args("synthesise", "Why?", "--reasoning", "none")

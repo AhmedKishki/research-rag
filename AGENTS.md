@@ -95,9 +95,9 @@
   - The app builds a derivation's sources from the passages the run retrieved. The model names a source by its label only.
   - `synthesis/render.py` renders the derivation and rejects wording no source supplies. A rejected derivation returns to the model up to `synthesis.max_attempts` times and is never shown.
   - A missing link is a `⟦GAP⟧`. No AI-authored link enters a synthesis.
-  - When no source supplies a step, the result is `generated: false` and carries no model text.
+  - When no source supplies a step, or no attempt renders, the result is `generated: false` and carries no synthesis. A verbose result lists the rule each refused attempt broke, which may quote the wording the model tried.
   - The question, the system prompt, and every passage the run retrieves leave the machine. Each result names the endpoint and how many passages it sent; a verbose result names their `chunk_id`s.
-  - A synthesis reasons at `synthesis.reasoning` unless the caller chooses `none`, `low`, `high`, or `max`.
+  - A synthesis reasons at `synthesis.reasoning` unless the caller chooses `low`, `high`, or `max`. Thinking is never off: a derivation without it rarely renders.
   - Syntheses are not saved.
   - An agent's `synthesise` returns the synthesis, the references, and what was sent; `verbose` adds the rest. The command line synthesises the same way, and the workspace shows everything with provenance and reasoning collapsed.
   - The agent instructions say to call `synthesise` only when the user asks for a synthesis.

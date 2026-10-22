@@ -6,9 +6,10 @@ the only text a derivation may copy: the app builds the derivation's sources
 from what this run retrieved, whatever the model put there. The renderer then
 replays the derivation or refuses it, and a refusal goes back to the model.
 
-Nothing the model writes reaches the reader except through the renderer. An
-synthesis that fails says why in the app's own words, and every result says which
-passages were sent.
+Nothing the model writes reaches the reader as an answer except through the
+renderer. A synthesis that fails says why in the app's own words, a verbose
+result lists the rule each refused attempt broke, which may quote the wording
+the model tried, and every result says which passages were sent.
 """
 
 from __future__ import annotations
@@ -133,6 +134,7 @@ class _Run:
         self.searches: list[dict[str, Any]] = []
         self.retrievals = 0
         self.attempts = 0
+        self.refusals: list[str] = []
         self.generation_ids: list[str] = []
         self.usage: dict[str, int] = {}
 
@@ -207,6 +209,7 @@ class _Run:
             derivation = self._derivation(submitted)
             parts = render_parts(derivation)
         except Rejected as exc:
+            self.refusals.append(f"Attempt {self.attempts}: {exc}")
             left = self.limits.max_attempts - self.attempts
             if left <= 0:
                 return _Outcome(
@@ -339,6 +342,7 @@ class _Run:
     def _disclosure(self) -> dict[str, Any]:
         return {
             "searches": self.searches,
+            "refusals": self.refusals,
             "generation_ids": self.generation_ids,
             "sent": {
                 "chunk_ids": [

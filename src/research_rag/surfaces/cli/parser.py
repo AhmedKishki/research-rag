@@ -422,9 +422,9 @@ def _parser() -> argparse.ArgumentParser:
         default=None,
         type=str.lower,
         help=(
-            "How hard DeepSeek reasons before each turn: none turns thinking off, "
-            "and low, high, and max spend more time and tokens in turn (default: "
-            "the synthesis.reasoning setting, high unless changed)."
+            "How hard DeepSeek reasons before each turn: low, high, or max, each "
+            "spending more time and tokens than the one before (default: the "
+            "synthesis.reasoning setting, high unless changed)."
         ),
     )
     synthesis.add_argument(
@@ -432,8 +432,8 @@ def _parser() -> argparse.ArgumentParser:
         action="store_true",
         help=(
             "Also print the provenance of each sentence, the reasoning, each "
-            "source with its chunk id and locator, the searches, and every "
-            "passage sent."
+            "source with its chunk id and locator, the searches, the rule each "
+            "refused attempt broke, and every passage sent."
         ),
     )
     _add_search_filters(synthesis)

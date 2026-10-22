@@ -41,7 +41,7 @@ class SynthesisWorkflow:
         level = (reasoning or settings.synthesis_reasoning).strip().casefold()
         if level not in REASONING_LEVELS:
             raise ResearchError(
-                f"reasoning must be none, low, high, or max, not {reasoning!r}"
+                f"reasoning must be low, high, or max, not {reasoning!r}"
             )
         if settings.offline:
             raise ResearchError(

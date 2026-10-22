@@ -363,6 +363,8 @@ async def test_the_advertised_contract_and_handshake(project: Path) -> None:
     )
     assert set(schemas["synthesise"]["required"]) == {"question"}
     assert schemas["synthesise"]["properties"]["verbose"]["default"] is False
+    reasoning = schemas["synthesise"]["properties"]["reasoning"]["anyOf"][0]
+    assert reasoning["enum"] == ["low", "high", "max"]
     assert set(schemas["get_passage"]["properties"]) == {"chunk_id"}
     assert set(schemas["find_source"]["properties"]) == {"query", "limit"}
 

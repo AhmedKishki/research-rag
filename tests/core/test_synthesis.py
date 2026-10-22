@@ -212,7 +212,7 @@ def test_a_second_synthesis_is_refused_while_one_runs_and_status_shows_its_phase
 
 
 @pytest.mark.parametrize(
-    ("chosen", "sent"), [(None, "high"), ("none", "none"), ("max", "max")]
+    ("chosen", "sent"), [(None, "high"), ("low", "low"), ("max", "max")]
 )
 def test_a_synthesis_reasons_at_the_level_chosen_or_the_setting(
     project: Path, deepseek: type[ScriptedDeepSeek], chosen: str | None, sent: str
@@ -232,8 +232,8 @@ def test_a_reasoning_level_deepseek_lacks_is_refused_before_anything_is_sent(
 ) -> None:
     async def scenario() -> None:
         service = await _built(project)
-        await service.synthesise("What is cobalt?", reasoning="mid")
+        await service.synthesise("What is cobalt?", reasoning="none")
 
-    with pytest.raises(ResearchError, match="none, low, high, or max"):
+    with pytest.raises(ResearchError, match="low, high, or max"):
         asyncio.run(scenario())
     assert deepseek.made == []

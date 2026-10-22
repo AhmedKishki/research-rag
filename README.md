@@ -75,7 +75,7 @@ research-rag --project-root "/path/to/project" synthesise "How is evidence inter
 - `api-key set` asks for a DeepSeek API key without echoing it, and keeps it for this account.
 - DeepSeek searches the project and assembles the synthesis. Every sentence is the wording of a retrieved passage, cited by label, and a link no passage states shows as a gap.
 - The question and every passage retrieved are sent to DeepSeek. The synthesis says how many.
-- `--reasoning none|low|high|max` sets how hard DeepSeek thinks, `high` unless the `synthesis.reasoning` setting says otherwise. `none` is fastest and cheapest.
+- `--reasoning low|high|max` sets how hard DeepSeek thinks, `high` unless the `synthesis.reasoning` setting says otherwise. `low` is fastest and cheapest.
 - `--verbose` adds each sentence's provenance and the reasoning.
 - In the workspace, switch the search box from **Search** to **Synthesise** and pick a reasoning level. Provenance and reasoning start folded.
 

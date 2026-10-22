@@ -58,9 +58,10 @@ LEAN_TOOL_DETAIL = "lean"
 FULL_TOOL_DETAIL = "full"
 TOOL_DETAIL_MODES = (LEAN_TOOL_DETAIL, FULL_TOOL_DETAIL)
 LOG_LEVELS = ("debug", "info", "warn", "error")
-# DeepSeek's reasoning_effort levels. Its "medium" is an alias of "high", so it
-# is not offered as a level of its own; "none" turns thinking off.
-REASONING_LEVELS = ("none", "low", "high", "max")
+# The reasoning_effort levels a synthesis may ask DeepSeek for. "none" turns
+# thinking off, and a derivation without it rarely passes the renderer, so low is
+# the floor. "medium" is an alias of "high", so it is not a level of its own.
+REASONING_LEVELS = ("low", "high", "max")
 DENSE_BACKENDS = ("auto", "exact", "qdrant")
 # Which reader turns a PDF into extraction units. `docling` is the only
 # operational reader: it converts through a separate, resource-bounded worker.
@@ -842,9 +843,9 @@ SETTINGS: tuple[Setting, ...] = (
         kind=str,
         layer="runtime",
         doc=(
-            "How hard DeepSeek reasons before each turn of a synthesis: none turns "
-            "thinking off, and low, high, and max spend more time and tokens in "
-            "turn. A synthesis can choose its own level."
+            "How hard DeepSeek reasons before each turn of a synthesis: low, high, "
+            "or max, each spending more time and tokens than the one before. A "
+            "synthesis can choose its own level."
         ),
         choices=REASONING_LEVELS,
         normalize_case=True,

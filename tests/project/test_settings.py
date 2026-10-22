@@ -496,10 +496,12 @@ def test_a_synthesis_endpoint_must_be_https(tmp_path: Path) -> None:
         )
 
 
-def test_a_synthesis_reasons_at_one_of_deepseeks_four_levels(tmp_path: Path) -> None:
+def test_a_synthesis_reasons_at_one_of_three_levels(tmp_path: Path) -> None:
     default, _ = _resolve(tmp_path, environ={})
     chosen, _ = _resolve(tmp_path, overrides=["synthesis.reasoning=MAX"], environ={})
 
     assert (default.synthesis_reasoning, chosen.synthesis_reasoning) == ("high", "max")
     with pytest.raises(SettingsError, match="must be one of"):
         _resolve(tmp_path, overrides=["synthesis.reasoning=medium"], environ={})
+    with pytest.raises(SettingsError, match="must be one of"):
+        _resolve(tmp_path, overrides=["synthesis.reasoning=none"], environ={})

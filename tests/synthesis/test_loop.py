@@ -221,7 +221,12 @@ def test_source_text_comes_from_the_retrieval_never_from_the_model() -> None:
     assert "not found" in refusal["refused"]
     assert refusal["attempts_left"] == 1
     assert result["generated"] is True
-    assert "thriving" not in json.dumps(result)
+    # The refused attempt is named for a reader who asks; nothing else carries it.
+    (refused,) = result["refusals"]
+    assert refused.startswith("Attempt 1: ") and "not found" in refused
+    assert "thriving" not in json.dumps(
+        {k: v for k, v in result.items() if k != "refusals"}
+    )
 
 
 @pytest.mark.parametrize(
@@ -265,7 +270,11 @@ def test_attempts_exhausted_give_no_synthesis_and_no_model_text() -> None:
     assert result["generated"] is False
     assert "2 attempts" in result["reason"]
     assert "synthesis" not in result
-    assert PROSE not in json.dumps(result)
+    assert [r.split(":", 1)[0] for r in result["refusals"]] == [
+        "Attempt 1",
+        "Attempt 2",
+    ]
+    assert PROSE not in json.dumps({k: v for k, v in result.items() if k != "refusals"})
     assert result["sent"] == {"chunk_ids": ["c-1", "c-2"]}
 
 

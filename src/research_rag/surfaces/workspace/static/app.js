@@ -2504,6 +2504,11 @@ function renderSynthesis(payload) {
   } else {
     panel.append(node("p", "no-records", payload.reason || "No synthesis was given."));
   }
+  // Each refused attempt names the rule it broke, so a synthesis that failed,
+  // or passed late, can be read for why.
+  if ((payload.refusals || []).length) {
+    panel.append(synthesisFold("Refused attempts", payload.refusals.join("\n")));
+  }
   const sent = payload.sent || {};
   const count = (sent.chunk_ids || []).length;
   const usage = payload.usage || {};

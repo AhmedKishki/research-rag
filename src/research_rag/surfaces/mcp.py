@@ -55,10 +55,10 @@ SynthesisQuestion: TypeAlias = Annotated[
     ),
 ]
 SynthesisReasoning: TypeAlias = Annotated[
-    Literal["none", "low", "high", "max"] | None,
+    Literal["low", "high", "max"] | None,
     Field(
         description=(
-            "How hard DeepSeek reasons: none is fastest, max most thorough. "
+            "How hard DeepSeek reasons: low is fastest, max most thorough. "
             "Omit for the project's setting."
         )
     ),
@@ -68,7 +68,8 @@ SynthesisVerbose: TypeAlias = Annotated[
     Field(
         description=(
             "Also return each sentence's provenance, the reasoning, the sources "
-            "with chunk_ids, the searches, and every passage sent."
+            "with chunk_ids, the searches, each refused attempt, and every "
+            "passage sent."
         )
     ),
 ]

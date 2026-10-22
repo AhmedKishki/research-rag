@@ -305,8 +305,9 @@ settings, readable by this account alone, and RESEARCH_RAG_DEEPSEEK_API_KEY
 overrides it. The key is not a setting: `config` does not print it and no project
 holds it. Every project on the account synthesises with it.
 
---reasoning chooses how hard DeepSeek thinks: none, low, high, or max, with the
-synthesis.reasoning setting as the default. none is fastest and cheapest.
+--reasoning chooses how hard DeepSeek thinks: low, high, or max, with the
+synthesis.reasoning setting as the default. low is fastest and cheapest; a
+synthesis that never renders lists each refusal under --verbose.
 
 The search filters bound every search a synthesis makes. synthesis.max_searches,
 synthesis.max_attempts, and synthesis.timeout_seconds bound what one synthesis may do.
