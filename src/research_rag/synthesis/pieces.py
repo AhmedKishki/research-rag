@@ -1,6 +1,6 @@
 """COPY source spans, replay their operations and join pieces into sentences.
 
-Copied from github.com/AhmedKishki/agent-skills @ 2a3a28f,
+Copied from github.com/AhmedKishki/agent-skills @ a08197f,
 `skills/white-box-synthesis/scripts/pieces.py`. The copy is deliberate; carry a fix
 to both copies.
 """
@@ -107,6 +107,10 @@ def build_sentence(sentence, steps, sources, pairs):
     out = ""
     for text in texts:
         out += ("" if not out or re.match(r"[,.;:!?)\]”’]", text) else " ") + text
+    if (lead := re.search(r"[^\W\d_]", out)) and lead.group().islower():
+        raise Rejected(
+            f"{out[:40]!r} must start with a capital: NORMALISE case to upper."
+        )
     mark = "[" + "; ".join(labels) + "]"
     end = re.search(r"[.?!][”’\"')\]]*$", out)
     out = f"{out[: end.start()]} {mark}{end.group()}" if end else f"{out} {mark}"

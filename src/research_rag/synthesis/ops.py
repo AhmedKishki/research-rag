@@ -1,6 +1,6 @@
 """Replay DELETE, INFLECT and NORMALISE on exact source spans.
 
-Copied from github.com/AhmedKishki/agent-skills @ 2a3a28f,
+Copied from github.com/AhmedKishki/agent-skills @ a08197f,
 `skills/white-box-synthesis/scripts/ops.py`. The copy is deliberate; carry a fix
 to both copies.
 """

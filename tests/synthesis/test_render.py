@@ -226,6 +226,11 @@ CASES = [
         None,
     ),
     (
+        "a sentence left starting lowercase",
+        lambda d: _piece(d, 0)["ops"].pop(),
+        "must start with a capital",
+    ),
+    (
         "a conflict given as an object",
         lambda d: d.update(conflicts=[{"sentence": "S1 and S2 differ."}]),
         "conflicts must be a list of sentences",

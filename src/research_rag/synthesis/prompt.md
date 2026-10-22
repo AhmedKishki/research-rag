@@ -64,6 +64,7 @@ Each piece is one COPY of an exact source span plus these operations, in order. 
 - One answer sentence normally comes from one source sentence.
 - Pieces from different source sentences join only through a connective copied from the licence of a `stated` link: a piece `{"source": <the licence's source>, "text": "because", "link": <the step id>}`. Two content pieces never touch without one.
 - DELETE the first piece's full stop and lower-case the next piece with NORMALISE `case`.
+- Every sentence starts with a capital letter. After a DELETE at the start of a piece, add NORMALISE `case` with `"to": "upper"`.
 
 # Example
 

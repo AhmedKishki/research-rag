@@ -81,7 +81,7 @@ white-box-synthesis renderer by this project's author, licensed here under the
 Apache License, Version 2.0, with this repository's own code:
 
     agent-skills, skills/white-box-synthesis/scripts
-    commit 2a3a28f
+    commit a08197f
     https://github.com/AhmedKishki/agent-skills
 
 `synthesise` sends a question and retrieved passages to DeepSeek's API under the
