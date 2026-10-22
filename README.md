@@ -7,7 +7,7 @@ research-rag is a research aid for students and researchers working with documen
 - Read passages with source locators, review bibliography, and exclude unwanted evidence in the browser.
 - Work with the same corpus through the browser workspace, command line, or MCP-connected agents.
 - Search results are evidence, not verified quotations.
-- Synthesise an answer that DeepSeek assembles from those passages, every sentence in their own wording.
+- Synthesise an answer by [white-box synthesis](https://github.com/AhmedKishki/agent-skills/tree/main/skills/white-box-synthesis), with sentence-level provenance and an explicit reasoning record.
 
 [Install](#install) · [Build a project](#build-a-project) · [Synthesise an answer](#synthesise-an-answer) · [Open the workspace](#open-the-workspace) · [Search statistics](#search-statistics) · [Connect an agent](#connect-an-agent) · [Features and limits](FEATURES.md)
 

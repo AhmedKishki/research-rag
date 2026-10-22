@@ -1663,7 +1663,7 @@ wheels = [
 
 [[package]]
 name = "research-rag"
-version = "4.0.0"
+version = "5.0.0"
 source = { editable = "." }
 dependencies = [
     { name = "beautifulsoup4" },

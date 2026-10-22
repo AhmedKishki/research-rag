@@ -4,8 +4,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "research-rag"
-version = "4.0.0"
-description = "A browser workspace for reviewing research evidence over a project's own PDF, EPUB and MOBI corpus"
+version = "5.0.0"
+description = "A research workspace for local evidence retrieval and white-box synthesis with provenance and reasoning"
 readme = "README.md"
 license = "Apache-2.0"
 license-files = ["LICENSE", "NOTICE"]
@@ -48,7 +48,7 @@ research-rag = "research_rag.surfaces.cli:main"
 # Retired command names kept so an old wrapper or client fails with guidance
 # instead of a missing executable. Each parses the historical flags and prints
 # a migration notice; neither starts a process, imports UltraRAG, or writes a
-# file. The app serves its own eight tools through `research-rag mcp`.
+# file. The app serves its own nine tools through `research-rag mcp`.
 research-rag-gateway = "research_rag.gateway.server:main"
 research-rag-runtime = "research_rag.gateway.runtime:main"
 
