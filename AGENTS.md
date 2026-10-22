@@ -60,7 +60,7 @@
   - `corpus/docling_env.py` owns the separately installed Docling runtime pins.
   - Keep the `bm25s` non-ASCII stopword fork until upstream fixes round-tripping. Reject invalid lists promptly.
   - The Docling worker's page-label probe falls back to the physical page on `Page.get_label()`'s `IndexError`. Narrow the guard when upstream issue 5140 closes.
-- `synthesis/render.py`, `ops.py`, `pieces.py`, and `checks.py` copy the white-box-synthesis renderer from `AhmedKishki/agent-skills`. The copy is deliberate; carry a fix to both.
+- `synthesis/render.py`, `ops.py`, `edits.py`, `pieces.py`, `checks.py`, and `reasoning.py` copy the white-box-synthesis renderer from `AhmedKishki/agent-skills`. The copy is deliberate; carry a fix to both.
 
 ## Rules
 
@@ -93,9 +93,12 @@
   - DeepSeek's API is its only provider. A set key enables it in every project on the account. `runtime.offline` refuses it.
   - The model reads the corpus through `search` and `get_passage` and submits a derivation. It never writes answer prose.
   - The app builds a derivation's sources from the passages the run retrieved. The model names a source by its label only.
+  - The model's first duty is that the synthesis goes against no retrieved passage. It records one check per source it uses. The check is the model's, best effort; the reader judges adequacy.
   - `synthesis/render.py` renders the derivation and rejects wording no source supplies. A rejected derivation returns to the model up to `synthesis.max_attempts` times and is never shown.
+  - The renderer's form rules are strong guidelines. A sentence breaks one only by stating a deviation, which provenance, the Reasoning, and `deviations` record. Exact copying, adding no word, AI-link permission, the chain's structure, and the source checks never bend.
+  - The model always submits what the passages support, marking the rest as gaps. `no_synthesis` is for a question no passage bears on.
   - A missing link is a `⟦GAP⟧`. No AI-authored link enters a synthesis.
-  - A sentence's passage label, such as `[S3]`, is its only citation. `synthesis/citations.py` finds a citation a passage carried, and the model deletes it, recorded in provenance. The white-box-synthesis renderer copy does not apply this rule.
+  - A sentence's passage label, such as `[S3]`, is its only citation. `synthesis/citations.py` finds a citation a passage carried, and the model deletes it, recorded in provenance, unless the sentence states a deviation. The white-box-synthesis renderer copy does not apply this rule.
   - When no source supplies a step, or no attempt renders, the result is `generated: false` and carries no synthesis. A verbose result lists the rule each refused attempt broke, which may quote the wording the model tried.
   - The question, the system prompt, and every passage the run retrieves leave the machine. Each result names the endpoint and how many passages it sent; a verbose result names their `chunk_id`s.
   - A synthesis reasons at `synthesis.reasoning` unless the caller chooses `low`, `high`, or `max`. Thinking is never off: a derivation without it rarely renders.

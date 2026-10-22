@@ -40,6 +40,10 @@ RETRIEVAL_NOTE = "Retrieval result, wording not checked against the original"
 DEFAULT_TOP_K = 8
 MAXIMUM_TOP_K = 20
 NO_SYNTHESIS = "No retrieved passage supplies a step toward a synthesis."
+_LAST_ATTEMPT = (
+    " This is the last attempt: keep every sentence that renders, drop or give a "
+    "deviation to any that does not, and mark each link it leaves as a gap."
+)
 _NUDGE = (
     "Reply only by calling a tool: search, read_passage, submit_derivation, "
     "or no_synthesis."
@@ -209,13 +213,7 @@ class _Run:
         try:
             derivation = self._derivation(submitted)
             parts = render_parts(derivation)
-            kept = source_citations(parts["synthesis"])
-            if kept:
-                raise Rejected(
-                    "The synthesis keeps citations its passages carried: "
-                    + ", ".join(repr(citation) for citation in kept)
-                    + ". DELETE each one; the passage label is the citation."
-                )
+            _hold_citations(parts)
         except Rejected as exc:
             self.refusals.append(f"Attempt {self.attempts}: {exc}")
             left = self.limits.max_attempts - self.attempts
@@ -227,7 +225,8 @@ class _Run:
                         f"{self.attempts} attempts."
                     ),
                 )
-            return _Outcome({"refused": str(exc), "attempts_left": left})
+            refused = str(exc) + (_LAST_ATTEMPT if left == 1 else "")
+            return _Outcome({"refused": refused, "attempts_left": left})
         labels = list(derivation["sources"])
         return _Outcome(
             {"rendered": True},
@@ -367,6 +366,67 @@ class _Run:
             "reason": reason,
             **self._disclosure(),
         }
+
+
+def _hold_citations(parts: dict[str, Any]) -> None:
+    """Refuse a citation a passage carried, unless its sentence states a deviation.
+
+    A sentence's passage label is its citation. A citation kept under a deviation
+    is recorded like any rule a deviation waives: in `deviations`, on the
+    sentence's provenance line, and in the Reasoning.
+    """
+
+    refused = []
+    deviations = {d["sentence"]: d for d in parts["deviations"]}
+    for sentence in parts.pop("sentences"):
+        kept = source_citations(sentence["text"])
+        if not kept:
+            continue
+        if not sentence["deviation"]:
+            refused += kept
+            continue
+        entry = deviations.setdefault(
+            sentence["sentence"],
+            {
+                "sentence": sentence["sentence"],
+                "reason": sentence["deviation"],
+                "waived": [],
+            },
+        )
+        entry["waived"] += [
+            f"Keeps the citation {c!r} its passage carried." for c in kept
+        ]
+    if refused:
+        raise Rejected(
+            "The synthesis keeps citations its passages carried: "
+            + ", ".join(repr(citation) for citation in refused)
+            + ". DELETE each one, since the passage label is the citation, or give "
+            "the sentence a deviation saying why."
+        )
+    parts["deviations"] = [deviations[n] for n in sorted(deviations)]
+    _record_deviations(parts)
+
+
+def _record_deviations(parts: dict[str, Any]) -> None:
+    """Write `deviations` into the provenance lines and the Reasoning's list."""
+
+    marked = {d["sentence"]: d["reason"] for d in parts["deviations"]}
+    lines = parts["provenance"].split("\n")
+    for i, line in enumerate(lines):
+        number = line.split(". ", 1)[0]
+        if number.isdigit() and int(number) in marked and "· DEVIATION:" not in line:
+            lines[i] = f"{line} · DEVIATION: {marked[int(number)]}"
+    parts["provenance"] = "\n".join(lines)
+    lines = parts["reasoning"].split("\n")
+    start = lines.index("- Deviations:") + 1
+    end = start
+    while end < len(lines) and lines[end].startswith("  - "):
+        end += 1
+    lines[start:end] = [
+        f"  - Sentence {d['sentence']}: {d['reason']} Waived: {' '.join(d['waived'])}"
+        for d in parts["deviations"]
+    ] or ["  - None."]
+    parts["reasoning"] = "\n".join(lines)
 
 
 def _locator(locator: Any) -> str | None:

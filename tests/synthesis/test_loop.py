@@ -388,3 +388,45 @@ def test_a_citation_the_passage_carried_is_refused_until_deleted() -> None:
     assert result["generated"] is True
     assert "Mensah 2010" not in result["synthesis"]
     assert 'DELETE " (Mensah 2010: 4)"' in result["provenance"]
+
+
+def test_a_citation_a_sentence_keeps_with_a_deviation_is_recorded_not_refused() -> None:
+    cited = {
+        **HITS,
+        "c-2": {
+            **HITS["c-2"],
+            "text": "The cooperative dissolved because its members left (Mensah 2010: 4).",
+        },
+    }
+    kept = copy.deepcopy(DERIVATION)
+    kept["steps"][0]["licence"]["text"] = cited["c-2"]["text"]
+    kept["sentences"][0]["pieces"][2]["text"] = "its members left (Mensah 2010: 4)."
+    kept["sentences"][0]["deviation"] = "The page is part of the quoted claim."
+    model = Model(_call("search", {"query": "cooperative"}), _submit(kept))
+
+    result, _ = asyncio.run(_synthesise(model, Corpus(cited)))
+
+    assert result["generated"] is True
+    assert result["refusals"] == []
+    (deviation,) = result["deviations"]
+    assert deviation["reason"] == "The page is part of the quoted claim."
+    assert any("(Mensah 2010: 4)" in waived for waived in deviation["waived"])
+    assert "sentences" not in result
+    assert "1. S1: " in result["provenance"]
+    assert "· DEVIATION: The page is part of the quoted claim." in result["provenance"]
+    assert (
+        "- Deviations:\n  - Sentence 1: The page is part of the quoted claim."
+        in (result["reasoning"])
+    )
+
+
+def test_the_last_attempt_is_told_to_keep_what_renders_and_mark_gaps() -> None:
+    bad = copy.deepcopy(DERIVATION)
+    bad["sentences"][0]["pieces"][0]["text"] = PROSE
+    model = Model(_call("search", {"query": "q"}), _submit(bad), _submit(DERIVATION, 2))
+
+    asyncio.run(_synthesise(model))
+
+    refusal = model.tool_results()[-1]
+    assert refusal["attempts_left"] == 1
+    assert "last attempt" in refusal["refused"] and "gap" in refusal["refused"]

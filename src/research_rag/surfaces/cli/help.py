@@ -309,6 +309,11 @@ Each sentence cites its passage by label, such as [S3], and nothing else: a
 page, author-year, bracketed, or footnote citation a passage carried is deleted,
 and --verbose shows each deletion in the provenance.
 
+DeepSeek's first duty is to go against no passage, and it always answers with
+what the passages support, marking the rest as gaps. The rules on form are strong
+guidelines: a sentence may break one by stating a deviation, which the provenance
+and the reasoning record. Exact copying and adding no word never bend.
+
 --reasoning chooses how hard DeepSeek thinks: low, high, or max, with the
 synthesis.reasoning setting as the default. low is fastest and cheapest; a
 synthesis that never renders lists each refusal under --verbose.

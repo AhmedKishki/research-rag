@@ -1,14 +1,13 @@
 """Check the argument chain, its links and the per-source checks.
 
-Copied from github.com/AhmedKishki/agent-skills @ d7d06da,
+Copied from github.com/AhmedKishki/agent-skills @ 7dfca79,
 `skills/white-box-synthesis/scripts/checks.py`. The copy is deliberate; carry a fix
 to both copies.
 """
 
 import re
 
-from .ops import Rejected
-from .pieces import copy_span
+from .ops import Rejected, copy_span
 
 STATUSES = {"part", "stated", "gap", "ai"}
 

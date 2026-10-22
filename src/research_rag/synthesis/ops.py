@@ -1,6 +1,6 @@
-"""Replay DELETE, INFLECT and NORMALISE on exact source spans.
+"""Load sources, COPY exact spans, and hold the deviation a sentence states.
 
-Copied from github.com/AhmedKishki/agent-skills @ d7d06da,
+Copied from github.com/AhmedKishki/agent-skills @ 7dfca79,
 `skills/white-box-synthesis/scripts/ops.py`. The copy is deliberate; carry a fix
 to both copies.
 """
@@ -9,38 +9,22 @@ import re
 
 MARKER = re.compile(r"⟦[^⟧]*⟧|\[(?:GAP|AI[ -]?authored)\b[^\]]*\]", re.IGNORECASE)
 QUOTES = str.maketrans("‘’“”", "''\"\"")
-PAIRS = {
-    ("is", "are"),
-    ("was", "were"),
-    ("has", "have"),
-    ("does", "do"),
-    ("this", "these"),
-    ("that", "those"),
-    ("a", "an"),
-}
-PRONOUNS = {
-    "he",
-    "she",
-    "it",
-    "they",
-    "him",
-    "her",
-    "them",
-    "this",
-    "these",
-    "that",
-    "those",
-    "its",
-    "their",
-    "his",
-    "hers",
-    "theirs",
-}
-POSSESSIVE = {"its", "their", "his", "her", "hers", "theirs"}
+# The deviation the sentence being built states. A form rule it breaks is recorded
+# here instead of refused; the rules on copying and invention never read it.
+WAIVER = {"reason": None, "waived": []}
 
 
 class Rejected(ValueError):
-    """A derivation step that the closed rules do not license."""
+    """A derivation step that the rules do not license."""
+
+
+def guideline(message):
+    """Refuse a form-rule break unless the sentence being built states why."""
+    if not WAIVER["reason"]:
+        raise Rejected(
+            f"{message} Fix it, or give the sentence a deviation saying why."
+        )
+    WAIVER["waived"].append(message)
 
 
 def is_word(ch):
@@ -59,82 +43,32 @@ def find(text, needle, occurrence=1, what="span"):
     end = start + len(needle)
     for i in (start, end):
         if 0 < i < len(text) and is_word(text[i - 1]) and is_word(text[i]):
-            raise Rejected(f"{what} {needle!r} splits a word.")
+            guideline(f"{what} {needle!r} splits a word.")
+            break
     return start, end
 
 
-def agrees(old, new):
-    """True when old -> new is an agreement change on the closed list."""
-    a, b = old.lower(), new.lower()
-    if old[:1].isupper() != new[:1].isupper():
-        return False
-    for x, y in ((a, b), (b, a)):
-        if (x, y) in PAIRS or y in (x + "s", x + "es"):
-            return True
-        if x.endswith("y") and y == x[:-1] + "ies":
-            return True
-    return False
+def load_sources(raw):
+    if not isinstance(raw, dict) or not raw:
+        raise Rejected("sources must be a non-empty object keyed by label.")
+    out = {}
+    for label, meta in raw.items():
+        text = re.sub(r"\s+", " ", str(meta.get("text", ""))).strip()
+        if not text:
+            raise Rejected(f"{label}: source text is empty.")
+        clean = MARKER.sub(lambda m: "\0" * len(m.group()), text)
+        out[label] = dict(meta, text=text, clean=clean)
+    return out
 
 
-def inflect(text, op, ctx):
-    kind, old, new = op.get("kind"), op.get("from", ""), op.get("to", "")
-    start, end = find(text, old, op.get("occurrence", 1), "INFLECT from")
-    if kind == "agreement":
-        if not agrees(old, new):
-            raise Rejected(f"INFLECT {old!r} -> {new!r} is not on the agreement list.")
-    elif kind == "antecedent":
-        if old.lower() not in PRONOUNS:
-            raise Rejected(f"INFLECT antecedent: {old!r} is not a listed pronoun.")
-        ends = ("'s", "’s", "'", "’", "") if old.lower() in POSSESSIVE else ("",)
-        bases = [new[: len(new) - len(s)] for s in ends if s and new.endswith(s)]
-        if not any(b and b in ctx["source"] for b in bases + [new]):
-            raise Rejected(
-                f"INFLECT antecedent {new!r} is not copied from the same source."
-            )
-    else:
-        raise Rejected(
-            f"INFLECT kind {kind!r} is not allowed (agreement or antecedent)."
-        )
-    return text[:start] + new + text[end:], f'INFLECT {kind} "{old}" → "{new}"'
-
-
-def normalise(text, op, ctx):
-    rule = op.get("rule")
-    if rule == "case":
-        i = next((k for k, ch in enumerate(text) if ch.isalpha()), None)
-        if i is None or op.get("to") not in ("upper", "lower"):
-            raise Rejected("NORMALISE case needs a letter and to: upper or lower.")
-        ch = text[i].upper() if op["to"] == "upper" else text[i].lower()
-        return text[:i] + ch + text[i + 1 :], f'NORMALISE case "{text[i]}" → "{ch}"'
-    if rule == "quotes":
-        result = op.get("result", "")
-        if result.translate(QUOTES) != text.translate(QUOTES):
-            raise Rejected("NORMALISE quotes may change quote glyphs only.")
-        return result, "NORMALISE quote glyphs"
-    if rule == "end-stop":
-        if not ctx["declarative"]:
-            raise Rejected(
-                "NORMALISE end-stop: the source sentence does not end with a full stop."
-            )
-        return text.rstrip(",;: ") + ".", "NORMALISE end-stop"
-    if rule == "semicolon":
-        start, end = find(text, ";", op.get("occurrence", 1), "NORMALISE semicolon")
-        rest = text[end:].lstrip()
-        if not rest[:1].isalpha():
-            raise Rejected("NORMALISE semicolon must be followed by a clause.")
-        return text[:start] + ". " + rest[0].upper() + rest[
-            1:
-        ], "NORMALISE semicolon → full stop"
-    if rule in ("pair", "space"):
-        old, new = op.get("from", ""), op.get("to", "")
-        if rule == "pair" and {"from": old, "to": new} not in ctx["pairs"]:
-            raise Rejected(f"NORMALISE pair {old!r} -> {new!r} is not declared.")
-        if rule == "space" and not " ".join(new.split()) == new != old == new.replace(
-            " ", ""
-        ):
-            raise Rejected(
-                f"NORMALISE space {old!r} -> {new!r} may only insert spaces."
-            )
-        start, end = find(text, old, op.get("occurrence", 1), f"NORMALISE {rule}")
-        return text[:start] + new + text[end:], f'NORMALISE {rule} "{old}" → "{new}"'
-    raise Rejected(f"NORMALISE rule {rule!r} is not on the closed list.")
+def copy_span(sources, label, text, occurrence=1, within=None):
+    """Locate an exact span. Spans inside AI-authored or gap markers are refused."""
+    if label not in sources:
+        raise Rejected(f"Unknown source {label!r}.")
+    src = sources[label]
+    lo, hi = within or (0, len(src["text"]))
+    start, end = find(src["text"][lo:hi], text, occurrence, f"{label} COPY")
+    start, end = start + lo, end + lo
+    if "\0" in src["clean"][start:end]:
+        raise Rejected(f"{label}: {text!r} overlaps an AI-authored or gap marker.")
+    return start, end

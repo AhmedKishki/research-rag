@@ -9,14 +9,16 @@ wording or refused.
 | `citations.py` | `source_citations`: a page, author–year, bracketed, or footnote citation a passage carried into a rendered synthesis |
 | `deepseek.py` | `DeepSeek`: one connection to the chat-completions endpoint, and a refusal named with its remedy |
 | `prompt.md` | The system prompt: the white-box procedure, condensed from the skill's references for these tools |
-| `render.py` | `render` and `render_parts`: the four parts of a reply, rendered from a derivation, or `Rejected` |
-| `pieces.py` | COPY of an exact source span, its operations replayed, and pieces joined into a sentence |
-| `ops.py` | DELETE, INFLECT and NORMALISE on their closed lists, and `Rejected` |
+| `render.py` | `render` and `render_parts`: the four parts of a reply, each deviation and each sentence, rendered from a derivation, or `Rejected` |
+| `ops.py` | Sources loaded, an exact span copied, `Rejected`, and the waiver a sentence's deviation sets for a form rule |
+| `edits.py` | INFLECT and NORMALISE on their closed lists |
+| `pieces.py` | A piece's operations replayed, and pieces joined into a sentence |
 | `checks.py` | The argument chain, its links, and the per-source checks |
+| `reasoning.py` | The References and the Reasoning, with each deviation and what it waived |
 
 ## Rules
 
-- `render.py`, `pieces.py`, `ops.py` and `checks.py` copy the white-box-synthesis
+- `render.py`, `ops.py`, `edits.py`, `pieces.py`, `checks.py` and `reasoning.py` copy the white-box-synthesis
   renderer from `AhmedKishki/agent-skills`; each docstring names the commit.
   Change their logic only to carry a fix that the skill also takes.
 - Every character a reply holds outside a marker replays from a source span. A

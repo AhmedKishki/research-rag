@@ -1,39 +1,14 @@
-"""COPY source spans, replay their operations and join pieces into sentences.
+"""Replay each piece's operations and join pieces into sentences.
 
-Copied from github.com/AhmedKishki/agent-skills @ d7d06da,
+Copied from github.com/AhmedKishki/agent-skills @ 7dfca79,
 `skills/white-box-synthesis/scripts/pieces.py`. The copy is deliberate; carry a fix
 to both copies.
 """
 
 import re
 
-from .ops import MARKER, Rejected, find, inflect, is_word, normalise
-
-
-def load_sources(raw):
-    if not isinstance(raw, dict) or not raw:
-        raise Rejected("sources must be a non-empty object keyed by label.")
-    out = {}
-    for label, meta in raw.items():
-        text = re.sub(r"\s+", " ", str(meta.get("text", ""))).strip()
-        if not text:
-            raise Rejected(f"{label}: source text is empty.")
-        clean = MARKER.sub(lambda m: "\0" * len(m.group()), text)
-        out[label] = dict(meta, text=text, clean=clean)
-    return out
-
-
-def copy_span(sources, label, text, occurrence=1, within=None):
-    """Locate an exact span. Spans inside AI-authored or gap markers are refused."""
-    if label not in sources:
-        raise Rejected(f"Unknown source {label!r}.")
-    src = sources[label]
-    lo, hi = within or (0, len(src["text"]))
-    start, end = find(src["text"][lo:hi], text, occurrence, f"{label} COPY")
-    start, end = start + lo, end + lo
-    if "\0" in src["clean"][start:end]:
-        raise Rejected(f"{label}: {text!r} overlaps an AI-authored or gap marker.")
-    return start, end
+from .edits import inflect, normalise
+from .ops import WAIVER, Rejected, copy_span, find, guideline, is_word
 
 
 def replay(piece, sources, pairs, within=None):
@@ -54,7 +29,7 @@ def replay(piece, sources, pairs, within=None):
             s, e = find(text, op.get("text", ""), op.get("occurrence", 1), "DELETE")
             text = text[:s] + text[e:]
             if 0 < s < len(text) and is_word(text[s - 1]) and is_word(text[s]):
-                raise Rejected(f"DELETE {op['text']!r} would merge two words.")
+                guideline(f"DELETE {op['text']!r} would merge two words.")
             notes.append(f'DELETE "{op["text"]}"')
         elif kind == "INFLECT":
             text, note = inflect(text, op, ctx)
@@ -73,7 +48,16 @@ def replay(piece, sources, pairs, within=None):
 
 
 def build_sentence(sentence, steps, sources, pairs):
-    """Return (text, labels, provenance, spans). Joins need a licensed connective."""
+    """Return (text, labels, provenance, spans, waived): the rules its deviation waived."""
+    WAIVER.update(reason=sentence.get("deviation"), waived=[])
+    try:
+        return join_pieces(sentence, steps, sources, pairs) + (WAIVER["waived"],)
+    finally:
+        WAIVER.update(reason=None, waived=[])
+
+
+def join_pieces(sentence, steps, sources, pairs):
+    """Join the pieces of one sentence. Pieces join through a licensed connective."""
     pieces = sentence.get("pieces") or []
     texts, labels, prov, spans, last_content = [], [], [], [], None
     for i, piece in enumerate(pieces):
@@ -82,18 +66,22 @@ def build_sentence(sentence, steps, sources, pairs):
             step = steps.get(link) or {}
             lic = step.get("licence") or {}
             if step.get("status") != "stated":
-                raise Rejected(
+                guideline(
                     f"Connective {piece.get('text')!r} needs a stated link on {link!r}."
                 )
-            if piece.get("source") != lic.get("source"):
-                raise Rejected("A connective must be copied from its licence's source.")
-            within = copy_span(
-                sources, lic["source"], lic.get("text", ""), lic.get("occurrence", 1)
-            )
-            tag = f" connective for {link} → {step['supports']}"
+            elif piece.get("source") != lic.get("source"):
+                guideline("A connective must be copied from its licence's source.")
+            else:
+                within = copy_span(
+                    sources,
+                    lic["source"],
+                    lic.get("text", ""),
+                    lic.get("occurrence", 1),
+                )
+            tag = f" connective for {link} → {step.get('supports')}"
         else:
             if last_content == i - 1:
-                raise Rejected(
+                guideline(
                     "Two content pieces are joined without a licensed connective."
                 )
             last_content = i
@@ -108,9 +96,7 @@ def build_sentence(sentence, steps, sources, pairs):
     for text in texts:
         out += ("" if not out or re.match(r"[,.;:!?)\]”’]", text) else " ") + text
     if (lead := re.search(r"[^\W\d_]", out)) and lead.group().islower():
-        raise Rejected(
-            f"{out[:40]!r} must start with a capital: NORMALISE case to upper."
-        )
+        guideline(f"{out[:40]!r} must start with a capital: NORMALISE case to upper.")
     mark = "[" + "; ".join(labels) + "]"
     end = re.search(r"[.?!][”’\"')\]]*$", out)
     out = f"{out[: end.start()]} {mark}{end.group()}" if end else f"{out} {mark}"

@@ -76,12 +76,13 @@ the retired gateway exposes no upstream tools.
 
 WHITE-BOX SYNTHESIS RENDERER
 
-src/research_rag/synthesis/render.py, pieces.py, ops.py, and checks.py copy the
+src/research_rag/synthesis/render.py, ops.py, edits.py, pieces.py, checks.py, and
+reasoning.py copy the
 white-box-synthesis renderer by this project's author, licensed here under the
 Apache License, Version 2.0, with this repository's own code:
 
     agent-skills, skills/white-box-synthesis/scripts
-    commit d7d06da
+    commit 7dfca79
     https://github.com/AhmedKishki/agent-skills
 
 `synthesise` sends a question and retrieved passages to DeepSeek's API under the
