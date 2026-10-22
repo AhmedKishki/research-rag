@@ -58,6 +58,7 @@ Each piece is one COPY of an exact source span plus these operations, in order. 
 - `{"op": "NORMALISE", "rule": "quotes", "result": …}` changes quotation-mark glyphs only.
 - `{"op": "NORMALISE", "rule": "end-stop"}` ends a sentence with a full stop, only when its source sentence ends with one.
 - `{"op": "NORMALISE", "rule": "semicolon"}` turns a semicolon between two full clauses into a full stop and a capital.
+- `{"op": "NORMALISE", "rule": "space", "from": "byMarx", "to": "by Marx"}` inserts spaces into one word the extraction ran together, and changes nothing else. A span or a DELETE cannot start or end inside a word, so repair a merged word first, then cut at the new space.
 
 # Joins
 

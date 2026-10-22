@@ -1,6 +1,6 @@
 """COPY source spans, replay their operations and join pieces into sentences.
 
-Copied from github.com/AhmedKishki/agent-skills @ a08197f,
+Copied from github.com/AhmedKishki/agent-skills @ d7d06da,
 `skills/white-box-synthesis/scripts/pieces.py`. The copy is deliberate; carry a fix
 to both copies.
 """

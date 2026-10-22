@@ -56,6 +56,17 @@ def _join(d: dict[str, Any], connective: str = "because", source: str = "S3") ->
     ]
 
 
+def _merged(d: dict[str, Any], spaced: str) -> None:
+    """S2 as an extraction that ran two words together, repaired by one operation."""
+
+    text = "Household incomesin the town fell by a third between 1990 and 1992."
+    d["sources"]["S2"]["text"] = text
+    _piece(d, 1).update(
+        text=text,
+        ops=[{"op": "NORMALISE", "rule": "space", "from": "incomesin", "to": spaced}],
+    )
+
+
 def _replace(d: dict[str, Any], other: dict[str, Any]) -> None:
     d.clear()
     d.update(copy.deepcopy(other))
@@ -225,6 +236,12 @@ CASES = [
         lambda d: d.update(notes="One note."),
         None,
     ),
+    ("a merged word spaced", lambda d: _merged(d, "incomes in"), None),
+    (
+        "a space rule that changes a letter",
+        lambda d: _merged(d, "incomes on"),
+        "only insert spaces",
+    ),
     (
         "a sentence left starting lowercase",
         lambda d: _piece(d, 0)["ops"].pop(),
@@ -316,3 +333,13 @@ def test_a_note_given_as_one_sentence_is_one_note() -> None:
     assert reasoning.count("- Note:") == 1
     assert "- Note: All steps are part steps." in reasoning
     assert "  - S1 and S2 differ on the date." in reasoning
+
+
+def test_a_merged_word_spaced_is_recorded_in_the_provenance() -> None:
+    d = copy.deepcopy(BASE)
+    _merged(d, "incomes in")
+
+    parts = render_parts(d)
+
+    assert "Household incomes in the town fell by a third" in parts["synthesis"]
+    assert '2. S2: NORMALISE space "incomesin" → "incomes in"' in parts["provenance"]

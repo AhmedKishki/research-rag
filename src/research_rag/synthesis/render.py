@@ -1,6 +1,6 @@
 """Render a white-box derivation: Synthesis, References, Provenance, Reasoning.
 
-Copied from github.com/AhmedKishki/agent-skills @ a08197f,
+Copied from github.com/AhmedKishki/agent-skills @ d7d06da,
 `skills/white-box-synthesis/scripts/render.py`. The copy is deliberate: this app
 depends on no other project by its author. Carry a fix to both copies.
 
